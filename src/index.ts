@@ -52,8 +52,10 @@ Follow these rules:
 - Make the prompt explicitly address the AI assistant and specify the desired output format if relevant.
 - Call out important requirements, constraints, and edge cases so the AI can follow them precisely.
 - If there are code blocks:
-  - Preserve language and structure, but remove or sanitize any sensitive details (e.g. API keys, secrets, tokens, passwords, private URLs, or personally identifiable information) and replace them with safe placeholders such as <API_KEY>, <TOKEN>, <PASSWORD>, <ORG_URL>.
+  - Preserve language and structure.
   - Keep placeholders consistent and descriptive.
+- Do not go for answering the prompt yourself; focus on improving the prompt only. 
+- Do not omit any details from the original text; ensure all user requirements are included.
 - Do not add extra commentary about what you changed; just return the final improved prompt text that the user can send directly to an AI coding assistant.
 `;
 
