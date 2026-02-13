@@ -3,6 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import OpenAI from 'openai';
 import winston from 'winston';
+import util from 'util';
 import { EnhanceCommand } from './types';
 import { readTaskPrompt } from './read-task-prompt';
 
@@ -15,8 +16,33 @@ const logger = winston.createLogger({
   level: process.env.LOG_LEVEL || 'info',
   format: winston.format.combine(
     winston.format.timestamp(),
-    winston.format.printf(({ level, message, timestamp }) => {
-      return `${timestamp} [${level}] ${message}`;
+    winston.format.metadata({ fillExcept: ['timestamp', 'level', 'message'] }),
+    winston.format.printf((info) => {
+      const { level, message, timestamp, metadata } = info as {
+        level: string;
+        message: string;
+        timestamp: string;
+        metadata?: unknown;
+      };
+
+      const isLocal = process.env.LOCAL === 'true';
+
+      let metaString = '';
+      if (
+        metadata &&
+        (typeof metadata === 'object' ? Object.keys(metadata as object).length > 0 : true)
+      ) {
+        if (isLocal) {
+          metaString = `\n${util.inspect(metadata, { colors: true, depth: null, breakLength: 80 })}`;
+        } else {
+          metaString = ` ${JSON.stringify(metadata)}`;
+        }
+      }
+
+      const base = `${timestamp} [${level}] ${message}`;
+      return isLocal
+        ? winston.format.colorize().colorize(level, `${base}${metaString}`)
+        : `${base}${metaString}`;
     }),
   ),
   transports: [new winston.transports.Console()],
