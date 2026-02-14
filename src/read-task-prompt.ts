@@ -9,19 +9,18 @@ import { Logger } from 'winston';
  */
 export function readTaskPrompt(logger: Logger): string {
   const mdFilePath = path.resolve(process.cwd(), 'custom_task.md');
-  const txtFilePath = path.resolve(process.cwd(), 'custom_task.txt');
 
   // Try reading custom_task.md first
   if (fs.existsSync(mdFilePath)) {
     try {
       const prompt = fs.readFileSync(mdFilePath, 'utf-8');
-      console.log('Read prompt from custom_task.md');
       return prompt;
     } catch (err) {
       logger.error(`Failed to read custom_task.md: ${err}`);
     }
   }
 
+  const txtFilePath = path.resolve(process.cwd(), 'custom_task.txt');
   // If custom_task.md is not found or unreadable, try custom_task.txt
   if (fs.existsSync(txtFilePath)) {
     try {
