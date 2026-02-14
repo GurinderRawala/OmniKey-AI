@@ -1,12 +1,11 @@
 ## OmniKey AI
 
-OmniKey AI is a macOS menu bar app plus a small TypeScript backend that helps you quickly rewrite selected text using OpenAI.
+OmniKey AI is a cross‑platform helper (macOS menu bar app and Windows tray app) plus a small TypeScript backend that helps you quickly rewrite selected text using OpenAI.
 
-Once everything is running, you can select any text on your Mac and trigger one of three commands:
+Once everything is running, you can select any text on your Mac or PC and trigger one of three commands:
 
-- `Cmd + E` – **Enhance prompt** (rewrite into a clearer, LLM‑friendly coding prompt).
-- `Cmd + G` – **Grammar** (fix grammar, spelling, and clarity only).
-- `Cmd + T` – **Custom task** (run your own custom system prompt).
+- macOS: `Cmd + E` / `Cmd + G` / `Cmd + T`.
+- Windows: `Ctrl + E` / `Ctrl + G` / `Ctrl + T`.
 
 The app sends the selected text to the backend, gets the rewritten result, and replaces your selection in place.
 
@@ -17,6 +16,11 @@ The app sends the selected text to the backend, gets the rewritten result, and r
 - **macOS app** (status bar app)
   - Lives in the menu bar with an "OK" icon.
   - Listens globally for `Cmd + E`, `Cmd + G`, and `Cmd + T`.
+  - Captures the currently selected text and replaces it with the processed result.
+
+- **windows app** (tray app)
+  - Runs in the Windows system tray with an icon.
+  - Listens globally for `Ctrl + E`, `Ctrl + G`, and `Ctrl + T`.
   - Captures the currently selected text and replaces it with the processed result.
 
 - **Backend API** (TypeScript + Express)
@@ -32,6 +36,8 @@ The app sends the selected text to the backend, gets the rewritten result, and r
 
 - macOS 13 or later.
 - Xcode installed (for the macOS app).
+- Windows 10 or later.
+- .NET 8.0 SDK installed (for the Windows tray app).
 - Node.js and Yarn installed (for the backend).
 - An OpenAI API key in `.env`.
 
@@ -75,6 +81,24 @@ The macOS app code is under `macOS/`.
 2. Run app in Xcode select my mac as destination.
 3. Run the app; you should see the **OK** icon in the menu bar.
 4. When prompted, grant **Accessibility** and (if requested) **Input Monitoring** permissions so the app can listen for shortcuts and perform copy/paste.
+
+---
+
+## windows App Setup
+
+From the repo root on a Windows machine:
+
+```bash
+cd windows
+
+# Build
+dotnet build
+
+# Run (Debug)
+dotnet run
+```
+
+When the app starts, you will see a tray icon with tooltip **OmniKey AI**. The main window stays hidden; the app is controlled entirely via global shortcuts and the tray icon menu.
 
 ---
 
