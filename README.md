@@ -1,6 +1,6 @@
-## Prompt Enhancer
+## OmniKey AI
 
-Prompt Enhancer is a macOS menu bar app plus a small TypeScript backend that helps you quickly rewrite selected text using OpenAI.
+OmniKey AI is a macOS menu bar app plus a small TypeScript backend that helps you quickly rewrite selected text using OpenAI.
 
 Once everything is running, you can select any text on your Mac and trigger one of three commands:
 
@@ -15,7 +15,7 @@ The app sends the selected text to the backend, gets the rewritten result, and r
 ## Components
 
 - **macOS app** (status bar app)
-  - Lives in the menu bar with a "PE" icon.
+  - Lives in the menu bar with an "OK" icon.
   - Listens globally for `Cmd + E`, `Cmd + G`, and `Cmd + T`.
   - Captures the currently selected text and replaces it with the processed result.
 
@@ -73,7 +73,7 @@ The macOS app code is under `PromptEnhancerApp/`.
 
 1. Open `PromptEnhancerApp/Package.swift` in Xcode.
 2. Select the `PromptEnhancerApp` scheme and your Mac as destination.
-3. Run the app; you should see the **PE** icon in the menu bar.
+3. Run the app; you should see the **OK** icon in the menu bar.
 4. When prompted, grant **Accessibility** and (if requested) **Input Monitoring** permissions so the app can listen for shortcuts and perform copy/paste.
 
 ---

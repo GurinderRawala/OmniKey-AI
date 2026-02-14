@@ -15,7 +15,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = statusBar.statusItem(withLength: NSStatusItem.squareLength)
         
         if let button = statusItem?.button {
-            button.title = "PE"
+            button.title = "OK"
             button.font = NSFont.systemFont(ofSize: 12)
         }
         
