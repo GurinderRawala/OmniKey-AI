@@ -3,3 +3,4 @@ dist/
 .env
 .vscode
 custom_task.txt
+custom_task.md

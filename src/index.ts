@@ -191,10 +191,7 @@ async function enhanceText(text: string, cmd: EnhanceCommand): Promise<string> {
       return trimmed;
     }
 
-    logger.info(`LLM response received for command "${cmd}", length: ${enhanced.length}`, {
-      response: enhanced,
-      completion,
-    });
+    logger.info(`LLM response received for command "${cmd}", length: ${enhanced.length}`);
 
     return parseImprovedTextResponse(enhanced);
   } catch (err) {
@@ -233,6 +230,24 @@ app.get('/health', (_req, res) => {
   res.json({ status: 'ok' });
 });
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   logger.info(`Enhancer API listening on http://localhost:${PORT}`);
 });
+
+function gracefulShutdown(signal: NodeJS.Signals) {
+  logger.info(`Received ${signal}. Starting graceful shutdown...`);
+
+  server.close((err) => {
+    if (err) {
+      logger.error('Error during HTTP server shutdown.', { error: err });
+      process.exitCode = 1;
+      return;
+    }
+
+    logger.info('HTTP server closed. Exiting process.');
+    process.exit(0);
+  });
+}
+
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));

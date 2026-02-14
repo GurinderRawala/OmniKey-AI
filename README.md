@@ -94,7 +94,7 @@ If no text is selected, the app shows a small notification asking you to select 
 
 The custom task uses a system prompt that you can configure with a plain text file.
 
-- Create a file named `custom_task.txt` in the **root** of this repository.
+- Create a file named `custom_task.md` or `custom_task.txt` in the **root** of this repository.
 - Put your full system prompt text in that file (for example, a detailed SQL or refactoring guideline).
-- The backend reads `custom_task.txt` and uses its contents as the system prompt for `/api/custom-task`.
-- If `custom_task.txt` is missing or unreadable, command will not work.
+- The backend reads custom task prompt from file and uses its contents as the system prompt for `/api/custom-task`.
+- If custom task instructions file is missing or unreadable, command will not work.
