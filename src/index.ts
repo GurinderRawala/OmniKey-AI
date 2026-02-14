@@ -70,6 +70,17 @@ function parseImprovedTextResponse(response: string): string {
   return response.trim();
 }
 
+const OUTPUT_FORMAT_INSTRUCTION = `
+<output_format>
+Return ONLY the revised version of given text, without any explanations or comments. Wrap in following XML tags:
+
+<improved_text>
+...final text here...
+</improved_text>
+
+Do not include any other commentary, explanations, or XML outside of <improved_text>...</improved_text>.
+</output_format>`;
+
 const enhancePromptSystemInstruction = `
 You are a prompt-writer for an AI coding assistant.
 
@@ -103,18 +114,7 @@ Your only job is to rewrite rough user text (often a messy or informal prompt) i
 - If the user asks for an answer (e.g., "solve this bug", "write this function"), you must keep that request as part of the improved prompt, not fulfill it.
 - Do not introduce new requirements, features, or examples that were not present in the original text.
 - Do not explain what you changed or why.
-</behavior_constraints>
-
-<output_format>
-Return ONLY the improved prompt, wrapped in the following XML tags:
-
-<improved_text>
-...final prompt here...
-</improved_text>
-
-Do not include any other commentary, explanations, or XML outside of <improved_text>...</improved_text>.
-</output_format>
-`;
+</behavior_constraints>`;
 
 const grammarPromptSystemInstruction = `
 You are a writing assistant that rewrites user text to improve grammar, spelling, punctuation, and clarity while preserving the original meaning, intent, and tone.
@@ -140,18 +140,7 @@ You are a writing assistant that rewrites user text to improve grammar, spelling
 - Do not remove important qualifiers, caveats, or constraints.
 - Do not add examples, analogies, or explanations that were not in the original.
 - Do not comment on the quality of the text or describe your changes.
-</behavior_constraints>
-
-<output_format>
-Return ONLY the corrected, polished version of the text, wrapped in the following XML tags:
-
-<improved_text>
-...final text here...
-</improved_text>
-
-Do not include any other commentary, explanations, or XML outside of <improved_text>...</improved_text>.
-</output_format>
-`;
+</behavior_constraints>`;
 
 const prompts: Record<EnhanceCommand, string> = {
   enhance: enhancePromptSystemInstruction,
@@ -175,10 +164,12 @@ async function enhanceText(text: string, cmd: EnhanceCommand): Promise<string> {
       return trimmed;
     }
 
+    const finalSystemPrompt = `${systemPrompt}\n${OUTPUT_FORMAT_INSTRUCTION}`;
+
     const completion = await openai.chat.completions.create({
       model: cmd === 'task' ? 'gpt-5.1' : 'gpt-4.1-mini',
       messages: [
-        { role: 'system', content: systemPrompt },
+        { role: 'system', content: finalSystemPrompt },
         { role: 'user', content: trimmed },
       ],
       temperature: 0.3,
