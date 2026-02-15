@@ -86,7 +86,7 @@ The macOS app code is under `macOS/`.
 
 ## windows App Setup
 
-Follow [setup](/windows/SETUP.md) or from the repo root on a Windows machine:
+Follow [setup](https://github.com/GurinderRawala/OmniKey-AI/blob/main/windows%2Fsetup.md) or from the repo root on a Windows machine:
 
 ```bash
 cd windows
