@@ -3,8 +3,12 @@ import AppKit
 class AppDelegate: NSObject, NSApplicationDelegate {
     var window: NSWindow?
     var statusItem: NSStatusItem?
+    private var taskInstructionsWindowController: TaskInstructionsWindowController?
     
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Allow the app to become active and receive key events for windows
+        NSApp.setActivationPolicy(.regular)
+
         setupMenuBar()
         KeyboardMonitor.shared.startMonitoring()
     }
@@ -27,9 +31,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "My Custom task (Cmd+T)...", action: nil, keyEquivalent: "t"))
         menu.addItem(NSMenuItem.separator())
+
+        let instructionsItem = NSMenuItem(title: "Task Instructions…", action: #selector(showTaskInstructionsWindowFromMenu), keyEquivalent: "")
+        instructionsItem.target = self
+        menu.addItem(instructionsItem)
+
+        menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q"))
         
         statusItem?.menu = menu
+    }
+
+    @objc private func showTaskInstructionsWindowFromMenu() {
+        showTaskInstructionsWindow()
+    }
+
+    private func showTaskInstructionsWindow() {
+        if taskInstructionsWindowController == nil {
+            taskInstructionsWindowController = TaskInstructionsWindowController()
+        }
+
+        NSApp.activate(ignoringOtherApps: true)
+        taskInstructionsWindowController?.showWindow(nil)
     }
     
     @objc func quit() {
