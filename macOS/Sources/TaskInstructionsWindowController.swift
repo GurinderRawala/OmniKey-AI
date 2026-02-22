@@ -14,46 +14,53 @@ final class TaskInstructionsWindow: NSWindow {
         return nil
     }
 
-    override func keyDown(with event: NSEvent) {
-        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        guard flags.contains(.command), let chars = event.charactersIgnoringModifiers else {
-            super.keyDown(with: event)
-            return
+    override func sendEvent(_ event: NSEvent) {
+        // Intercept Command-key shortcuts at the window level so they
+        // work even when SwiftUI's hosting view is first responder.
+        if event.type == .keyDown {
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            if flags.contains(.command), let chars = event.charactersIgnoringModifiers {
+
+                // Prefer the first responder if it's a text view, otherwise
+                // search our view hierarchy for any NSTextView (the SwiftUI
+                // TextEditor backing view).
+                let targetTextView: NSTextView?
+                if let tv = firstResponder as? NSTextView {
+                    targetTextView = tv
+                } else if let contentView = contentView {
+                    targetTextView = firstTextView(in: contentView)
+                } else {
+                    targetTextView = nil
+                }
+
+                if let textView = targetTextView {
+                    switch chars {
+                    case "v":
+                        textView.paste(nil)
+                        return
+                    case "c":
+                        textView.copy(nil)
+                        return
+                    case "x":
+                        textView.cut(nil)
+                        return
+                    case "a":
+                        textView.selectAll(nil)
+                        return
+                    case "z":
+                        textView.undoManager?.undo()
+                        return
+                    case "Z":
+                        textView.undoManager?.redo()
+                        return
+                    default:
+                        break
+                    }
+                }
+            }
         }
 
-        // Prefer the first responder if it's a text view, otherwise
-        // search our view hierarchy for any NSTextView (the SwiftUI
-        // TextEditor backing view).
-        let targetTextView: NSTextView?
-        if let tv = firstResponder as? NSTextView {
-            targetTextView = tv
-        } else if let contentView = contentView {
-            targetTextView = firstTextView(in: contentView)
-        } else {
-            targetTextView = nil
-        }
-
-        guard let textView = targetTextView else {
-            super.keyDown(with: event)
-            return
-        }
-
-        switch chars {
-        case "v":
-            textView.paste(nil)
-        case "c":
-            textView.copy(nil)
-        case "x":
-            textView.cut(nil)
-        case "a":
-            textView.selectAll(nil)
-        case "z":
-            textView.undoManager?.undo()
-        case "Z":
-            textView.undoManager?.redo()
-        default:
-            super.keyDown(with: event)
-        }
+        super.sendEvent(event)
     }
 }
 
