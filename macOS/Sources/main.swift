@@ -13,6 +13,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         setupMenuBar()
         KeyboardMonitor.shared.startMonitoring()
     }
+
+    // setupMainMenu removed; we keep OmniKey as an accessory app
+    // without a full menubar so that our HUD alerts continue to
+    // behave like a lightweight utility across displays.
     
     private func setupMenuBar() {
         // Create a status bar item

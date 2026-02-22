@@ -286,6 +286,19 @@ final class KeyboardMonitor {
     /// Use the Accessibility API to retrieve the currently selected text
     /// from the focused UI element in the active application.
     private func getGloballySelectedText() -> String? {
+        // If OmniKey itself is active and the key window has a text view
+        // as first responder (e.g. the Task Instructions TextEditor),
+        // read the selection directly from that NSTextView.
+        if NSApp.isActive, let textView = NSApp.keyWindow?.firstResponder as? NSTextView {
+            let range = textView.selectedRange()
+            if range.length > 0 {
+                let full = textView.string as NSString
+                let selectedText = full.substring(with: range)
+                print("[PromptEnhancer] Local NSTextView selected text (length: \(selectedText.count))")
+                return selectedText
+            }
+        }
+
         let systemWideElement = AXUIElementCreateSystemWide()
 
         var focusedValue: CFTypeRef?
@@ -343,10 +356,34 @@ final class KeyboardMonitor {
     }
 
     private func replaceSelectedText(with text: String) {
-        // Put enhanced text onto pasteboard
+        // If OmniKey's own window (e.g. Task Instructions) is active and
+        // the first responder is a text view, replace the selection
+        // directly instead of going through the pasteboard.
+        if NSApp.isActive, let textView = NSApp.keyWindow?.firstResponder as? NSTextView {
+            let range = textView.selectedRange()
+            let full = textView.string as NSString
+            let replacement = text
+
+            if let undoManager = textView.undoManager {
+                let oldString = textView.string
+                undoManager.registerUndo(withTarget: textView) { target in
+                    target.string = oldString
+                }
+                undoManager.setActionName("OmniKey Enhancement")
+            }
+
+            let newString = full.replacingCharacters(in: range, with: replacement)
+            textView.string = newString
+            // Move the insertion point to the end of the inserted text.
+            let insertionLocation = range.location + (replacement as NSString).length
+            textView.setSelectedRange(NSRange(location: insertionLocation, length: 0))
+            return
+        }
+
+        // Otherwise fall back to pasteboard + simulated Cmd+V for
+        // external apps.
         PasteboardManager.shared.setPasteboardText(text)
 
-        // Paste: Cmd+V
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             self.simulateKeyCombination(carbonKeyCode: CGKeyCode(9), flags: .maskCommand) // "V" is 9
         }
