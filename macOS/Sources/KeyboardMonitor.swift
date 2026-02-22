@@ -186,9 +186,6 @@ final class KeyboardMonitor {
     }
 
     private func execute(cmd: String) {
-         // Make sure our app can show UI
-        NSApp.activate(ignoringOtherApps: true)
-
         // First try Accessibility API to read globally selected text
         if let rawText = getGloballySelectedText() {
             let trimmed = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -358,14 +355,19 @@ final class KeyboardMonitor {
     // MARK: - UI
 
     private func showAlert(title: String, message: String) {
-        NSApp.activate(ignoringOtherApps: true)
+        // Choose the screen under the current mouse cursor so the
+        // HUD appears on the display the user is working on.
+        let mouseLocation = NSEvent.mouseLocation
+        let screen = NSScreen.screens.first { screen in
+            NSMouseInRect(mouseLocation, screen.frame, false)
+        } ?? NSScreen.main
 
-        guard let screen = NSScreen.main else { return }
+        guard let targetScreen = screen else { return }
 
         let width: CGFloat = 360
         let height: CGFloat = 90
-        let x = (screen.visibleFrame.midX - width / 2)
-        let y = screen.visibleFrame.maxY - height - 60
+        let x = (targetScreen.visibleFrame.midX - width / 2)
+        let y = targetScreen.visibleFrame.maxY - height - 60
         let frame = NSRect(x: x, y: y, width: width, height: height)
 
         let window = NSWindow(
@@ -380,6 +382,7 @@ final class KeyboardMonitor {
         window.level = .statusBar
         window.ignoresMouseEvents = true
         window.hasShadow = true
+        window.collectionBehavior = [.canJoinAllSpaces, .transient]
 
         let contentView = NSView(frame: NSRect(x: 0, y: 0, width: width, height: height))
         contentView.wantsLayer = true
@@ -405,7 +408,9 @@ final class KeyboardMonitor {
 
         window.contentView = contentView
         window.alphaValue = 0
-        window.makeKeyAndOrderFront(nil)
+        // We deliberately avoid making this window key so we don't
+        // steal focus from the frontmost app.
+        window.orderFrontRegardless()
 
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.15

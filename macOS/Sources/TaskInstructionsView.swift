@@ -26,7 +26,7 @@ Use OmniKey shortcuts to instantly enhance your writing:
 
             TextEditor(text: $instructions)
                 .font(.system(.body, design: .monospaced))
-                .frame(minHeight: 220)
+                .frame(minHeight: 320)
                 .overlay(
                     RoundedRectangle(cornerRadius: 4)
                         .stroke(Color(NSColor.separatorColor))
@@ -56,7 +56,7 @@ Use OmniKey shortcuts to instantly enhance your writing:
             }
         }
         .padding(24)
-        .frame(minWidth: 560, minHeight: 420)
+        .frame(minWidth: 800, minHeight: 560)
         .onAppear {
             fetchInstructions()
         }

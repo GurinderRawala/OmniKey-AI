@@ -6,8 +6,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var taskInstructionsWindowController: TaskInstructionsWindowController?
     
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Allow the app to become active and receive key events for windows
-        NSApp.setActivationPolicy(.regular)
+        // Keep the app as a menu-bar style utility while still
+        // allowing us to present windows when needed.
+        NSApp.setActivationPolicy(.accessory)
 
         setupMenuBar()
         KeyboardMonitor.shared.startMonitoring()
