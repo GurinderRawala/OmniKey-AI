@@ -1,9 +1,14 @@
 import AppKit
 
+extension Notification.Name {
+    static let omniKeyShowSubscriptionPaywall = Notification.Name("OmniKeyShowSubscriptionPaywall")
+}
+
 class AppDelegate: NSObject, NSApplicationDelegate {
     var window: NSWindow?
     var statusItem: NSStatusItem?
     private var taskInstructionsWindowController: TaskInstructionsWindowController?
+    private var subscriptionWindowController: SubscriptionWindowController?
     
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Keep the app as a menu-bar style utility while still
@@ -12,6 +17,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         setupMenuBar()
         KeyboardMonitor.shared.startMonitoring()
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(showSubscriptionWindow),
+            name: .omniKeyShowSubscriptionPaywall,
+            object: nil
+        )
+
+        Task {
+            let subscribed = await SubscriptionManager.shared.checkExistingSubscription()
+            if !subscribed {
+                await MainActor.run {
+                    self.showSubscriptionWindow()
+                }
+            }
+        }
     }
 
     // setupMainMenu removed; we keep OmniKey as an accessory app
@@ -58,6 +79,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         NSApp.activate(ignoringOtherApps: true)
         taskInstructionsWindowController?.showWindow(nil)
+    }
+
+    @objc private func showSubscriptionWindow() {
+        if subscriptionWindowController == nil {
+            subscriptionWindowController = SubscriptionWindowController()
+        }
+
+        NSApp.activate(ignoringOtherApps: true)
+        subscriptionWindowController?.showWindow(nil)
     }
     
     @objc func quit() {

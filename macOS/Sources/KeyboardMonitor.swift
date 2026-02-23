@@ -185,7 +185,12 @@ final class KeyboardMonitor {
         }
     }
 
-    private func execute(cmd: String) {
+    @MainActor private func execute(cmd: String) {
+        if !SubscriptionManager.shared.isSubscribed {
+            NotificationCenter.default.post(name: .omniKeyShowSubscriptionPaywall, object: nil)
+            return
+        }
+
         // First try Accessibility API to read globally selected text
         if let rawText = getGloballySelectedText() {
             let trimmed = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -204,17 +209,17 @@ final class KeyboardMonitor {
         copySelectedTextUsingPasteboardFallback(cmd: cmd)
     }
 
-    private func handleCommandG() {
+    @MainActor private func handleCommandG() {
         execute(cmd: "G")
     }
 
     // MARK: - Hotkey Action
 
-    private func handleCommandE() {
+    @MainActor private func handleCommandE() {
         execute(cmd: "E")
     }
 
-    private func handleCommandT() {
+    @MainActor private func handleCommandT() {
         execute(cmd: "T")
     }
 
