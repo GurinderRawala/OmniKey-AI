@@ -1,6 +1,0 @@
-.build/
-*.xcodeproj/
-.DS_Store
-*.swiftpm/
-*.playground
-.vscode/

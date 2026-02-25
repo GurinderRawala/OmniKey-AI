@@ -1,8 +1,10 @@
 import Foundation
+import Combine
 import StoreKit
+import AppKit
 
 @MainActor
-final class SubscriptionManager: ObservableObject {
+final class SubscriptionManager: NSObject, ObservableObject, SKRequestDelegate {
     static let shared = SubscriptionManager()
 
     @Published private(set) var isSubscribed: Bool = false
@@ -28,7 +30,11 @@ final class SubscriptionManager: ObservableObject {
 
     private let backendBaseURL = URL(string: "http://localhost:7172")!
 
-    private init() {
+    // In-flight receipt refresh state for SKReceiptRefreshRequest
+    private var receiptRefreshContinuation: CheckedContinuation<Void, Error>?
+    private var currentReceiptRefreshRequest: SKReceiptRefreshRequest?
+
+    private override init() {
         // On init, reflect any existing token as a tentative subscription state.
         if SubscriptionTokenStore.token != nil {
             isSubscribed = true
@@ -86,8 +92,8 @@ final class SubscriptionManager: ObservableObject {
     }
 
     /// Starts a purchase flow for the subscription product using StoreKit 2 and then
-    /// sends the resulting transaction JWS to the backend. On success, stores the
-    /// JWT from the backend and marks the user as subscribed.
+    /// sends the resulting App Store receipt to the backend for validation.
+    /// On success, stores the JWT from the backend and marks the user as subscribed.
     func purchase(email: String? = nil) async -> Bool {
         isLoading = true
         errorMessage = nil
@@ -104,14 +110,22 @@ final class SubscriptionManager: ObservableObject {
 
             switch result {
             case .success(let verificationResult):
-                let jws = verificationResult.jwsRepresentation
-
                 guard case .verified(let transaction) = verificationResult else {
                     errorMessage = "Unable to verify App Store transaction."
                     return false
                 }
 
-                let token = try await sendPurchaseToBackend(transactionJWS: jws, email: email)
+                // Ensure we have a fresh App Store receipt (requesting one from Apple
+                // if necessary) and send it to the backend for validation.
+                let receiptBase64: String
+                do {
+                    receiptBase64 = try await refreshAppStoreReceiptIfNeeded()
+                } catch {
+                    errorMessage = "Unable to refresh App Store receipt: \(error.localizedDescription)"
+                    return false
+                }
+
+                let token = try await sendPurchaseToBackend(receiptData: receiptBase64, email: email)
                 SubscriptionTokenStore.token = token
                 isSubscribed = true
 
@@ -132,6 +146,21 @@ final class SubscriptionManager: ObservableObject {
         } catch {
             errorMessage = "Purchase failed: \(error.localizedDescription)"
             return false
+        }
+    }
+
+    /// Opens the App Store subscriptions page so the user can
+    /// manage or cancel their OmniKey subscription at any time.
+    func manageSubscription() {
+        errorMessage = nil
+
+        guard let url = URL(string: "https://apps.apple.com/account/subscriptions") else {
+            errorMessage = "Unable to open subscription management. Please open the App Store > Account > Subscriptions to manage or cancel."
+            return
+        }
+
+        if !NSWorkspace.shared.open(url) {
+            errorMessage = "Unable to open subscription management. Please open the App Store > Account > Subscriptions to manage or cancel."
         }
     }
 
@@ -172,13 +201,13 @@ final class SubscriptionManager: ObservableObject {
         }
     }
 
-    private func sendPurchaseToBackend(transactionJWS: String, email: String?) async throws -> String {
+    private func sendPurchaseToBackend(receiptData: String, email: String?) async throws -> String {
         var request = URLRequest(url: backendBaseURL.appendingPathComponent("/api/subscription/purchase"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
         var body: [String: Any] = [
-            "transaction_jws": transactionJWS,
+            "receipt_data": receiptData,
         ]
         if let email, !email.isEmpty {
             body["email"] = email
@@ -204,6 +233,48 @@ final class SubscriptionManager: ObservableObject {
         }
 
         throw NSError(domain: "SubscriptionManager", code: -1, userInfo: [NSLocalizedDescriptionKey: "Missing token in server response"])
+    }
+
+    /// Ensures there is a current App Store receipt for this app. If the
+    /// receipt is missing or empty, this will issue an SKReceiptRefreshRequest
+    /// to ask the App Store to provide a new one, then load and return it as
+    /// a Base64-encoded string.
+    private func refreshAppStoreReceiptIfNeeded() async throws -> String {
+        if let receiptURL = Bundle.main.appStoreReceiptURL,
+           let data = try? Data(contentsOf: receiptURL),
+           !data.isEmpty {
+            return data.base64EncodedString()
+        }
+
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let request = SKReceiptRefreshRequest()
+            self.receiptRefreshContinuation = continuation
+            self.currentReceiptRefreshRequest = request
+            request.delegate = self
+            request.start()
+        }
+
+        guard let refreshedURL = Bundle.main.appStoreReceiptURL else {
+            throw NSError(domain: "SubscriptionManager", code: -1, userInfo: [NSLocalizedDescriptionKey: "Missing appStoreReceiptURL after refresh"])
+        }
+
+        let refreshedData = try Data(contentsOf: refreshedURL)
+        if refreshedData.isEmpty {
+            throw NSError(domain: "SubscriptionManager", code: -1, userInfo: [NSLocalizedDescriptionKey: "Empty App Store receipt after refresh"])
+        }
+
+        return refreshedData.base64EncodedString()
+    }
+    func requestDidFinish(_ request: SKRequest) {
+        receiptRefreshContinuation?.resume()
+        receiptRefreshContinuation = nil
+        currentReceiptRefreshRequest = nil
+    }
+
+    func request(_ request: SKRequest, didFailWithError error: Error) {
+        receiptRefreshContinuation?.resume(throwing: error)
+        receiptRefreshContinuation = nil
+        currentReceiptRefreshRequest = nil
     }
 }
 

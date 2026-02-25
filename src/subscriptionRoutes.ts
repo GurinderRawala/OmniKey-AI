@@ -3,13 +3,14 @@ import jwt from 'jsonwebtoken';
 import { randomUUID } from 'crypto';
 import { Logger } from 'winston';
 import { encryptToBase64, decryptFromBase64 } from './crypto';
-import { Subscription } from './models/subscription';
-import { verifyTransactionWithApple } from './appleVerification';
+import { Subscription, SubscriptionStatus } from './models/subscription';
+import { verifyReceiptWithApple } from './appleVerification';
 import { config } from './config';
 
 interface PurchaseBody {
-  transaction_jws?: string;
   email?: string;
+  // Base64‑encoded App Store receipt data
+  receipt_data?: string;
 }
 
 export interface SubscriptionJwtPayload {
@@ -48,13 +49,20 @@ export function createSubscriptionRouter(logger: Logger): express.Router {
 
     const body = req.body as PurchaseBody;
 
-    if (!body.transaction_jws || typeof body.transaction_jws !== 'string') {
-      logger.warn('Missing or invalid transaction_jws in purchase request.');
-      return res.status(400).json({ error: 'transaction_jws is required.' });
+    const hasReceiptData = body.receipt_data && typeof body.receipt_data === 'string';
+
+    if (!hasReceiptData) {
+      logger.warn('Missing purchase proof (receipt_data not provided).');
+      return res.status(400).json({ error: 'receipt_data must be provided.' });
     }
 
     try {
-      const status = await verifyTransactionWithApple(logger, body.transaction_jws);
+      let status: SubscriptionStatus;
+      let storedValue: string;
+
+      logger.info('Processing subscription purchase using App Store receipt path.');
+      status = await verifyReceiptWithApple(logger, body.receipt_data as string);
+      storedValue = `RCPT:${body.receipt_data as string}`;
 
       if (status !== 'active') {
         logger.warn('Subscription is not active after Apple verification.', { status });
@@ -63,7 +71,7 @@ export function createSubscriptionRouter(logger: Logger): express.Router {
           .json({ error: 'Subscription is not active.', subscriptionStatus: status });
       }
 
-      const encrypted = encryptToBase64(body.transaction_jws);
+      const encrypted = encryptToBase64(storedValue);
 
       const subscription = await Subscription.create({
         transactionJwsEncrypted: encrypted,
@@ -141,9 +149,20 @@ export function createSubscriptionRouter(logger: Logger): express.Router {
         return res.status(404).json({ error: 'Subscription not found.' });
       }
 
-      const transactionJws = decryptFromBase64(subscription.transactionJwsEncrypted);
+      const stored = decryptFromBase64(subscription.transactionJwsEncrypted);
 
-      const status = await verifyTransactionWithApple(logger, transactionJws);
+      let status: SubscriptionStatus;
+      if (stored.startsWith('RCPT:')) {
+        const receipt = stored.slice('RCPT:'.length);
+        logger.info('Refreshing subscription using stored App Store receipt.');
+        status = await verifyReceiptWithApple(logger, receipt);
+      } else {
+        // If we somehow have a legacy or malformed payload, treat as not active.
+        logger.warn('Stored subscription payload is not a receipt; marking as expired.', {
+          storedPrefix: stored.slice(0, 16),
+        });
+        status = 'expired';
+      }
       subscription.subscriptionStatus = status;
       await subscription.save();
 

@@ -1,7 +1,32 @@
-import AppKit
+@preconcurrency import AppKit
+import ServiceManagement
 
 extension Notification.Name {
     static let omniKeyShowSubscriptionPaywall = Notification.Name("OmniKeyShowSubscriptionPaywall")
+}
+
+enum LaunchAtLoginManager {
+    static var isEnabled: Bool {
+        if #available(macOS 13.0, *) {
+            return SMAppService.mainApp.status == .enabled
+        } else {
+            return false
+        }
+    }
+
+    static func setEnabled(_ enabled: Bool) {
+        guard #available(macOS 13.0, *) else { return }
+
+        do {
+            if enabled {
+                try SMAppService.mainApp.register()
+            } else {
+                try SMAppService.mainApp.unregister()
+            }
+        } catch {
+            NSLog("LaunchAtLoginManager error: %@", error.localizedDescription)
+        }
+    }
 }
 
 class AppDelegate: NSObject, NSApplicationDelegate {
@@ -9,11 +34,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem?
     private var taskInstructionsWindowController: TaskInstructionsWindowController?
     private var subscriptionWindowController: SubscriptionWindowController?
+    private var launchAtLoginMenuItem: NSMenuItem?
     
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Keep the app as a menu-bar style utility while still
-        // allowing us to present windows when needed.
-        NSApp.setActivationPolicy(.accessory)
+        // Present OmniKey as a regular app so users can easily
+        // find and relaunch it from the Dock / Applications.
+        NSApp.setActivationPolicy(.regular)
 
         setupMenuBar()
         KeyboardMonitor.shared.startMonitoring()
@@ -62,6 +88,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         instructionsItem.target = self
         menu.addItem(instructionsItem)
 
+        let subscriptionItem = NSMenuItem(title: "Subscription & Billing…", action: #selector(showSubscriptionWindowFromMenu), keyEquivalent: "")
+        subscriptionItem.target = self
+        menu.addItem(subscriptionItem)
+
+        let launchAtLoginItem = NSMenuItem(title: "Launch OmniKey at Login", action: #selector(toggleLaunchAtLogin(_:)), keyEquivalent: "")
+        launchAtLoginItem.target = self
+        launchAtLoginItem.state = LaunchAtLoginManager.isEnabled ? .on : .off
+        menu.addItem(launchAtLoginItem)
+        self.launchAtLoginMenuItem = launchAtLoginItem
+
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q"))
         
@@ -81,6 +117,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         taskInstructionsWindowController?.showWindow(nil)
     }
 
+    @objc private func showSubscriptionWindowFromMenu() {
+        showSubscriptionWindow()
+    }
+
     @objc private func showSubscriptionWindow() {
         if subscriptionWindowController == nil {
             subscriptionWindowController = SubscriptionWindowController()
@@ -88,6 +128,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         NSApp.activate(ignoringOtherApps: true)
         subscriptionWindowController?.showWindow(nil)
+    }
+
+    @objc private func toggleLaunchAtLogin(_ sender: NSMenuItem) {
+        let newValue = (sender.state == .off)
+        LaunchAtLoginManager.setEnabled(newValue)
+        sender.state = newValue ? .on : .off
+        launchAtLoginMenuItem?.state = sender.state
     }
     
     @objc func quit() {

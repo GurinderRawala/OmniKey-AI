@@ -51,10 +51,6 @@ export const config = {
   // Expiry in seconds
   jwtExpiresInSeconds: getNumberEnv('JWT_EXPIRES_IN_SECONDS', 3600),
 
-  // Apple StoreKit / App Store Server API
-  appleIssuerId: getEnv('APPLE_ISSUER_ID'),
-  appleKeyId: getEnv('APPLE_KEY_ID'),
-  applePrivateKey: getEnv('APPLE_PRIVATE_KEY'),
-  appleBundleId: getEnv('APPLE_BUNDLE_ID'),
-  appleVerifyUrl: getEnv('APPLE_VERIFY_URL'),
+  // Apple receipt validation shared secret (for auto‑renewable subscriptions)
+  appleSharedSecret: getEnv('APPLE_SHARED_SECRET'),
 };

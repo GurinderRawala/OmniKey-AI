@@ -1,96 +1,72 @@
 import axios from 'axios';
-import jwt from 'jsonwebtoken';
 import { Logger } from 'winston';
 import { SubscriptionStatus } from './models/subscription';
 import { config } from './config';
 
-interface AppleVerificationResponse {
-  // Shape simplified; adapt to real App Store Server API response as needed
-  data?: unknown;
+interface AppleReceiptVerifyResponse {
+  status: number;
+  // The real response contains many more fields; we only need status for now.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  receipt?: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  latest_receipt_info?: any[];
 }
 
-function buildAppleServerJwt(logger: Logger): string {
-  const issuerId = config.appleIssuerId;
-  const keyId = config.appleKeyId;
-  const rawPrivateKey = config.applePrivateKey;
-  const bundleId = config.appleBundleId;
+const APPLE_PRODUCTION_VERIFY_RECEIPT_URL = 'https://buy.itunes.apple.com/verifyReceipt';
+const APPLE_SANDBOX_VERIFY_RECEIPT_URL = 'https://sandbox.itunes.apple.com/verifyReceipt';
 
-  const privateKey = rawPrivateKey?.replace(/\\n/g, '\n');
-
-  if (!issuerId || !keyId || !privateKey || !bundleId) {
-    logger.error('Missing Apple App Store Server API credentials.');
-    throw new Error('Missing Apple App Store Server API credentials.');
-  }
-
-  const now = Math.floor(Date.now() / 1000);
-
-  const token = jwt.sign(
-    {
-      iss: issuerId,
-      iat: now,
-      exp: now + 60 * 5,
-      aud: 'appstoreconnect-v1',
-      bid: bundleId,
-    },
-    privateKey,
-    {
-      algorithm: 'ES256',
-      header: {
-        alg: 'ES256',
-        kid: keyId,
-        typ: 'JWT',
-      },
-    },
-  );
-
-  logger.debug('Built Apple Server JWT token for App Store verification.');
-  return token;
-}
-
-export async function verifyTransactionWithApple(
+export async function verifyReceiptWithApple(
   logger: Logger,
-  transactionJws: string,
+  base64Receipt: string,
 ): Promise<SubscriptionStatus> {
-  const baseUrl = config.appleVerifyUrl;
+  const sharedSecret = config.appleSharedSecret;
 
-  // If no Apple verify URL configured, assume active but log a warning.
-  if (!baseUrl) {
-    logger.warn('APPLE_VERIFY_URL not set; skipping real Apple verification and assuming active.');
+  // If no shared secret configured, skip real validation but log a warning.
+  if (!sharedSecret || config.isLocal) {
+    logger.warn('APPLE_SHARED_SECRET not set; skipping receipt validation and assuming active.');
     return 'active';
   }
 
-  const token = buildAppleServerJwt(logger);
+  const requestBody = {
+    'receipt-data': base64Receipt,
+    password: sharedSecret,
+    'exclude-old-transactions': true,
+  };
+
+  const callEndpoint = async (url: string): Promise<AppleReceiptVerifyResponse> => {
+    const resp = await axios.post<AppleReceiptVerifyResponse>(url, requestBody, {
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      timeout: 5000,
+    });
+    return resp.data;
+  };
 
   try {
-    logger.info('Verifying transaction with Apple.', { endpoint: baseUrl });
+    logger.info('Validating App Store receipt with Apple (production endpoint).');
+    let result = await callEndpoint(APPLE_PRODUCTION_VERIFY_RECEIPT_URL);
 
-    // This is a placeholder call; adjust the URL/path and payload to match
-    // the specific App Store Server API you are using.
-    const resp = await axios.post<AppleVerificationResponse>(
-      baseUrl,
-      { transactionJws },
-      {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        timeout: 5000,
-      },
-    );
+    // Handle sandbox / production mixups according to Apple status codes.
+    if (result.status === 21007) {
+      logger.info('Receipt is from sandbox environment; retrying against sandbox endpoint.');
+      result = await callEndpoint(APPLE_SANDBOX_VERIFY_RECEIPT_URL);
+    } else if (result.status === 21008) {
+      logger.info('Receipt is from production environment; retrying against production endpoint.');
+      result = await callEndpoint(APPLE_PRODUCTION_VERIFY_RECEIPT_URL);
+    }
 
-    // TODO: Parse resp.data to determine actual subscription status.
-    // For now, treat any 2xx as active.
-    if (resp.status >= 200 && resp.status < 300) {
-      logger.info('Apple verification returned success status code.', { statusCode: resp.status });
+    if (result.status === 0) {
+      logger.info('Apple receipt validation succeeded with status 0 (valid receipt).');
       return 'active';
     }
 
-    logger.warn('Apple verification returned non-success status code.', {
-      statusCode: resp.status,
+    logger.warn('Apple receipt validation failed with non‑zero status.', {
+      status: result.status,
     });
     return 'expired';
   } catch (err) {
-    logger.error('Error verifying transaction with Apple.', { error: err });
+    logger.error('Error validating receipt with Apple.', { error: err });
     return 'expired';
   }
 }

@@ -1,0 +1,405 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		CF9558B92F4E9368006A2C78 /* SubscriptionWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF9558B62F4E9368006A2C78 /* SubscriptionWindowController.swift */; };
+		CF9558BA2F4E9368006A2C78 /* SubscriptionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF9558B32F4E9368006A2C78 /* SubscriptionManager.swift */; };
+		CF9558BB2F4E9368006A2C78 /* SubscriptionTokenStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF9558B52F4E9368006A2C78 /* SubscriptionTokenStore.swift */; };
+		CF9558BC2F4E9368006A2C78 /* TaskInstructionsWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF9558B82F4E9368006A2C78 /* TaskInstructionsWindowController.swift */; };
+		CF9558BD2F4E9368006A2C78 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF9558B02F4E9368006A2C78 /* main.swift */; };
+		CF9558BE2F4E9368006A2C78 /* PasteboardManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF9558B12F4E9368006A2C78 /* PasteboardManager.swift */; };
+		CF9558BF2F4E9368006A2C78 /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF9558AE2F4E9368006A2C78 /* APIClient.swift */; };
+		CF9558C02F4E9368006A2C78 /* KeyboardMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF9558AF2F4E9368006A2C78 /* KeyboardMonitor.swift */; };
+		CF9558C12F4E9368006A2C78 /* TaskInstructionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF9558B72F4E9368006A2C78 /* TaskInstructionsView.swift */; };
+		CF9558C22F4E9368006A2C78 /* SubscriptionPaywallView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF9558B42F4E9368006A2C78 /* SubscriptionPaywallView.swift */; };
+		CF9558C62F4E941B006A2C78 /* StoreKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CF9558C52F4E941B006A2C78 /* StoreKit.framework */; };
+		CF9558CA2F4E97E2006A2C78 /* OmniKeyAI.storekit in Resources */ = {isa = PBXBuildFile; fileRef = CF9558C92F4E97E2006A2C78 /* OmniKeyAI.storekit */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		CF9558892F4E9262006A2C78 /* OmniKey.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = OmniKey.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		CF9558AE2F4E9368006A2C78 /* APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClient.swift; sourceTree = "<group>"; };
+		CF9558AF2F4E9368006A2C78 /* KeyboardMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardMonitor.swift; sourceTree = "<group>"; };
+		CF9558B02F4E9368006A2C78 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		CF9558B12F4E9368006A2C78 /* PasteboardManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PasteboardManager.swift; sourceTree = "<group>"; };
+		CF9558B32F4E9368006A2C78 /* SubscriptionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubscriptionManager.swift; sourceTree = "<group>"; };
+		CF9558B42F4E9368006A2C78 /* SubscriptionPaywallView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubscriptionPaywallView.swift; sourceTree = "<group>"; };
+		CF9558B52F4E9368006A2C78 /* SubscriptionTokenStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubscriptionTokenStore.swift; sourceTree = "<group>"; };
+		CF9558B62F4E9368006A2C78 /* SubscriptionWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubscriptionWindowController.swift; sourceTree = "<group>"; };
+		CF9558B72F4E9368006A2C78 /* TaskInstructionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskInstructionsView.swift; sourceTree = "<group>"; };
+		CF9558B82F4E9368006A2C78 /* TaskInstructionsWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskInstructionsWindowController.swift; sourceTree = "<group>"; };
+		CF9558C52F4E941B006A2C78 /* StoreKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = StoreKit.framework; path = System/Library/Frameworks/StoreKit.framework; sourceTree = SDKROOT; };
+		CF9558C92F4E97E2006A2C78 /* OmniKeyAI.storekit */ = {isa = PBXFileReference; lastKnownFileType = text; path = OmniKeyAI.storekit; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		CF9558862F4E9262006A2C78 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CF9558C62F4E941B006A2C78 /* StoreKit.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		CF9558802F4E9261006A2C78 = {
+			isa = PBXGroup;
+			children = (
+				CF9558C92F4E97E2006A2C78 /* OmniKeyAI.storekit */,
+				CF9558AE2F4E9368006A2C78 /* APIClient.swift */,
+				CF9558AF2F4E9368006A2C78 /* KeyboardMonitor.swift */,
+				CF9558B02F4E9368006A2C78 /* main.swift */,
+				CF9558B12F4E9368006A2C78 /* PasteboardManager.swift */,
+				CF9558B32F4E9368006A2C78 /* SubscriptionManager.swift */,
+				CF9558B42F4E9368006A2C78 /* SubscriptionPaywallView.swift */,
+				CF9558B52F4E9368006A2C78 /* SubscriptionTokenStore.swift */,
+				CF9558B62F4E9368006A2C78 /* SubscriptionWindowController.swift */,
+				CF9558B72F4E9368006A2C78 /* TaskInstructionsView.swift */,
+				CF9558B82F4E9368006A2C78 /* TaskInstructionsWindowController.swift */,
+				CF9558C42F4E941B006A2C78 /* Frameworks */,
+				CF95588A2F4E9262006A2C78 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		CF95588A2F4E9262006A2C78 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				CF9558892F4E9262006A2C78 /* OmniKey.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		CF9558C42F4E941B006A2C78 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				CF9558C52F4E941B006A2C78 /* StoreKit.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		CF9558882F4E9262006A2C78 /* OmniKey */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = CF9558942F4E9263006A2C78 /* Build configuration list for PBXNativeTarget "OmniKey" */;
+			buildPhases = (
+				CF9558852F4E9262006A2C78 /* Sources */,
+				CF9558862F4E9262006A2C78 /* Frameworks */,
+				CF9558872F4E9262006A2C78 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = OmniKey;
+			packageProductDependencies = (
+			);
+			productName = OmniKey;
+			productReference = CF9558892F4E9262006A2C78 /* OmniKey.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		CF9558812F4E9262006A2C78 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2620;
+				LastUpgradeCheck = 2620;
+				TargetAttributes = {
+					CF9558882F4E9262006A2C78 = {
+						CreatedOnToolsVersion = 26.2;
+					};
+				};
+			};
+			buildConfigurationList = CF9558842F4E9262006A2C78 /* Build configuration list for PBXProject "OmniKey" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = CF9558802F4E9261006A2C78;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = CF95588A2F4E9262006A2C78 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				CF9558882F4E9262006A2C78 /* OmniKey */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		CF9558872F4E9262006A2C78 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CF9558CA2F4E97E2006A2C78 /* OmniKeyAI.storekit in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		CF9558852F4E9262006A2C78 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CF9558B92F4E9368006A2C78 /* SubscriptionWindowController.swift in Sources */,
+				CF9558BA2F4E9368006A2C78 /* SubscriptionManager.swift in Sources */,
+				CF9558BB2F4E9368006A2C78 /* SubscriptionTokenStore.swift in Sources */,
+				CF9558BC2F4E9368006A2C78 /* TaskInstructionsWindowController.swift in Sources */,
+				CF9558BD2F4E9368006A2C78 /* main.swift in Sources */,
+				CF9558BE2F4E9368006A2C78 /* PasteboardManager.swift in Sources */,
+				CF9558BF2F4E9368006A2C78 /* APIClient.swift in Sources */,
+				CF9558C02F4E9368006A2C78 /* KeyboardMonitor.swift in Sources */,
+				CF9558C12F4E9368006A2C78 /* TaskInstructionsView.swift in Sources */,
+				CF9558C22F4E9368006A2C78 /* SubscriptionPaywallView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		CF9558922F4E9263006A2C78 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = VVJ24MPJZ6;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.7;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		CF9558932F4E9263006A2C78 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = VVJ24MPJZ6;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.7;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+			};
+			name = Release;
+		};
+		CF9558952F4E9263006A2C78 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = VVJ24MPJZ6;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_INCOMING_NETWORK_CONNECTIONS = NO;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = NO;
+				ENABLE_RESOURCE_ACCESS_BLUETOOTH = NO;
+				ENABLE_RESOURCE_ACCESS_CALENDARS = NO;
+				ENABLE_RESOURCE_ACCESS_CAMERA = NO;
+				ENABLE_RESOURCE_ACCESS_CONTACTS = NO;
+				ENABLE_RESOURCE_ACCESS_LOCATION = NO;
+				ENABLE_RESOURCE_ACCESS_PRINTING = NO;
+				ENABLE_RESOURCE_ACCESS_USB = NO;
+				ENABLE_USER_SELECTED_FILES = readonly;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.omnikeyai;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		CF9558962F4E9263006A2C78 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = VVJ24MPJZ6;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_INCOMING_NETWORK_CONNECTIONS = NO;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = NO;
+				ENABLE_RESOURCE_ACCESS_BLUETOOTH = NO;
+				ENABLE_RESOURCE_ACCESS_CALENDARS = NO;
+				ENABLE_RESOURCE_ACCESS_CAMERA = NO;
+				ENABLE_RESOURCE_ACCESS_CONTACTS = NO;
+				ENABLE_RESOURCE_ACCESS_LOCATION = NO;
+				ENABLE_RESOURCE_ACCESS_PRINTING = NO;
+				ENABLE_RESOURCE_ACCESS_USB = NO;
+				ENABLE_USER_SELECTED_FILES = readonly;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.omnikeyai;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		CF9558842F4E9262006A2C78 /* Build configuration list for PBXProject "OmniKey" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				CF9558922F4E9263006A2C78 /* Debug */,
+				CF9558932F4E9263006A2C78 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		CF9558942F4E9263006A2C78 /* Build configuration list for PBXNativeTarget "OmniKey" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				CF9558952F4E9263006A2C78 /* Debug */,
+				CF9558962F4E9263006A2C78 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = CF9558812F4E9262006A2C78 /* Project object */;
+}
