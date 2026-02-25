@@ -186,11 +186,6 @@ final class KeyboardMonitor {
     }
 
     @MainActor private func execute(cmd: String) {
-        if !SubscriptionManager.shared.isSubscribed {
-            NotificationCenter.default.post(name: .omniKeyShowSubscriptionPaywall, object: nil)
-            return
-        }
-
         // First try Accessibility API to read globally selected text
         if let rawText = getGloballySelectedText() {
             let trimmed = rawText.trimmingCharacters(in: .whitespacesAndNewlines)

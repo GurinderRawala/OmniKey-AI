@@ -9,7 +9,7 @@ import {
 } from './prompts';
 import { readTaskPrompt } from './read-task-prompt';
 import { config } from './config';
-import { AuthLocals } from './authMiddleware';
+import { AuthLocals, authMiddleware } from './authMiddleware';
 
 interface EnhanceRequestBody {
   text?: string;
@@ -26,6 +26,10 @@ function parseImprovedTextResponse(logger: Logger, response: string): string {
   return response.trim();
 }
 
+const openai = new OpenAI({
+  apiKey: config.openaiApiKey,
+});
+
 export function createFeatureRouter(logger: Logger): express.Router {
   const router = express.Router();
 
@@ -34,10 +38,6 @@ export function createFeatureRouter(logger: Logger): express.Router {
     grammar: grammarPromptSystemInstruction,
     task: readTaskPrompt(logger),
   };
-
-  const openai = new OpenAI({
-    apiKey: config.openaiApiKey,
-  });
 
   async function enhanceText(logger: Logger, text: string, cmd: EnhanceCommand): Promise<string> {
     const trimmed = text.trim();
@@ -104,14 +104,14 @@ export function createFeatureRouter(logger: Logger): express.Router {
   }
 
   // Main endpoints used by the macOS app
-  router.post('/enhance', makeEnhanceHandler('enhance'));
+  router.post('/enhance', authMiddleware, makeEnhanceHandler('enhance'));
 
   // Alias endpoint in case the client uses /api/enhancer
-  router.post('/enhancer', makeEnhanceHandler('enhance'));
+  router.post('/enhancer', authMiddleware, makeEnhanceHandler('enhance'));
 
-  router.post('/grammar', makeEnhanceHandler('grammar'));
+  router.post('/grammar', authMiddleware, makeEnhanceHandler('grammar'));
 
-  router.post('/custom-task', makeEnhanceHandler('task'));
+  router.post('/custom-task', authMiddleware, makeEnhanceHandler('task'));
 
   return router;
 }

@@ -28,10 +28,6 @@ class APIClient {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        if let token = SubscriptionTokenStore.token {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
         
         let payload: [String: String] = ["text": text]
         
@@ -76,10 +72,6 @@ class APIClient {
     func fetchTaskInstructions(completion: @escaping (Result<String, Error>) -> Void) {
         var request = URLRequest(url: getTaskInstructionsURL)
         request.httpMethod = "GET"
-
-        if let token = SubscriptionTokenStore.token {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
 
         let task = URLSession.shared.dataTask(with: request) { data, response, error in
             if let error = error {
@@ -147,10 +139,6 @@ class APIClient {
         var request = URLRequest(url: createTaskInstructionsURL)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        if let token = SubscriptionTokenStore.token {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
 
         let payload: [String: String] = ["instructions": instructions]
 

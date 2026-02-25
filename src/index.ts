@@ -15,7 +15,7 @@ app.use(express.json());
 
 app.use('/api/subscription', createSubscriptionRouter(logger));
 
-app.use('/api', authMiddleware, createFeatureRouter(logger));
+app.use('/api', createFeatureRouter(logger));
 
 app.post('/api/create-task-instructions', (req, res) => {
   logger.info('Received request for create-task-instructions endpoint.');

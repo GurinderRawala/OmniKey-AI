@@ -15,6 +15,12 @@ export function authMiddleware(req: Request, res: Response<any, AuthLocals>, nex
   const authHeader = req.headers.authorization;
   logger.defaultMeta = { traceId: randomUUID() };
 
+  if (config.isLocal) {
+    res.locals.logger = logger;
+    next();
+    return;
+  }
+
   if (!authHeader) {
     logger.warn('Missing Authorization header on feature route.');
     return res.status(401).json({ error: 'Missing bearer token.' });
