@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        StoreKit configuration for OmniKey.
+
+        Open this file in Xcode's StoreKit configuration editor and add
+        an auto-renewable subscription product whose identifier matches
+        the value used in SubscriptionManager (currently
+        "omnikeyproplan").
+
+        After configuring products, attach this file to your macOS
+        target's Run scheme under the "StoreKit Configuration" section
+        to enable StoreKit Testing.
+    -->
+</dict>
+</plist>

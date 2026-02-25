@@ -65,6 +65,7 @@ struct SubscriptionPaywallView: View {
                 } label: {
                     Text("Quit")
                 }
+                .accessibilityLabel("Quit OmniKey")
 
                 Spacer()
 
@@ -83,6 +84,7 @@ struct SubscriptionPaywallView: View {
                             .progressViewStyle(CircularProgressViewStyle())
                             .scaleEffect(0.8)
                             .frame(width: 80)
+                            .accessibilityLabel("Processing purchase")
                     } else {
                         Text("Start 7-day free trial")
                             .font(.system(size: 12, weight: .semibold))
@@ -93,6 +95,8 @@ struct SubscriptionPaywallView: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .disabled(isPurchasing || manager.isLoading)
+                .accessibilityLabel("Start 7-day free trial subscription")
+                .accessibilityHint("Starts your OmniKey Pro subscription with a 7-day free trial.")
             }
         }
         .padding(24)

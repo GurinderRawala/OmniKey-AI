@@ -9,8 +9,22 @@ final class SubscriptionManager: ObservableObject {
     @Published private(set) var isLoading: Bool = false
     @Published var errorMessage: String?
 
-    // Replace with your real product identifier from App Store Connect
-    private let productIdentifiers: [String] = ["com.example.omnikey.pro.monthly"]
+    /// The app's bundle identifier used for App Store distribution.
+    ///
+    /// Make sure this matches the bundle ID you configure in
+    /// Xcode and App Store Connect.
+    private let bundleIdentifier = "com.omnikeyai"
+
+    /// The auto-renewable subscription product identifier.
+    ///
+    /// Create a matching product in App Store Connect named
+    /// `omnikeyproplan` and, when using StoreKit Testing in Xcode,
+    /// add the same identifier to your `.storekit` configuration
+    /// file.
+    private let subscriptionProductId = "omnikeyproplan"
+
+    /// All product identifiers this client can purchase.
+    private lazy var productIdentifiers: [String] = [subscriptionProductId]
 
     private let backendBaseURL = URL(string: "http://localhost:7172")!
 
