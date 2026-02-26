@@ -4,3 +4,6 @@
 *.swiftpm/
 *.playground
 .vscode/
+OmniKeyAI.app
+OmniKeyAI.dmg
+OmniKeyAI.zip
