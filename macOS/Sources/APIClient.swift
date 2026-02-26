@@ -28,6 +28,9 @@ class APIClient {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = SubscriptionManager.shared.jwtToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
         
         let payload: [String: String] = ["text": text]
         
@@ -50,6 +53,26 @@ class APIClient {
             }
             
             do {
+                if let httpResponse = response as? HTTPURLResponse,
+                   !(200...299).contains(httpResponse.statusCode) {
+                    let error = NSError(
+                        domain: "APIClient",
+                        code: httpResponse.statusCode,
+                        userInfo: [NSLocalizedDescriptionKey: "Server returned status code \(httpResponse.statusCode)"]
+                    )
+
+                    if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
+                        // Mark the current JWT as invalid and notify the
+                        // app so it can reopen the key window and update
+                        // any status indicators.
+                        SubscriptionManager.shared.invalidateToken()
+                        NotificationCenter.default.post(name: .subscriptionUnauthorized, object: nil)
+                    }
+
+                    completion(.failure(error))
+                    return
+                }
+
                 if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                    let enhancedText = json["result"] as? String {
                     completion(.success(enhancedText))

@@ -3,12 +3,51 @@ import AppKit
 class AppDelegate: NSObject, NSApplicationDelegate {
     var window: NSWindow?
     var statusItem: NSStatusItem?
+    private var statusMenuItem: NSMenuItem?
     private var taskInstructionsWindowController: TaskInstructionsWindowController?
+    private var licenseWindowController: LicenseWindowController?
+    private var monitoringStarted = false
+    private var isAuthorized = false
+
+    static weak var shared: AppDelegate?
     
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         setupMenuBar()
-        KeyboardMonitor.shared.startMonitoring()
+
+        AppDelegate.shared = self
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleSubscriptionUnauthorizedNotification),
+            name: .subscriptionUnauthorized,
+            object: nil
+        )
+
+        // If we already have a stored subscription key, try to
+        // activate it and start monitoring only when authorized.
+        if SubscriptionManager.shared.hasStoredKey {
+            SubscriptionManager.shared.activateStoredKey { [weak self] success in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+
+                    if success {
+                        self.isAuthorized = true
+                        self.updateAuthStatusUI()
+                        self.startMonitoringIfNeeded()
+                    } else {
+                        self.isAuthorized = false
+                        self.updateAuthStatusUI()
+                        self.showLicenseWindow()
+                    }
+                }
+            }
+        } else {
+            // No key stored yet: prompt the user immediately.
+            isAuthorized = false
+            updateAuthStatusUI()
+            showLicenseWindow()
+        }
     }
     
     private func setupMenuBar() {
@@ -23,6 +62,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         // Create menu
         let menu = NSMenu()
+
+        let statusMenuItem = NSMenuItem(title: "Status: Checking…", action: nil, keyEquivalent: "")
+        statusMenuItem.isEnabled = false
+        menu.addItem(statusMenuItem)
+        menu.addItem(NSMenuItem.separator())
+        self.statusMenuItem = statusMenuItem
         menu.addItem(NSMenuItem(title: "Fix Prompt (Cmd+E)", action: nil, keyEquivalent: "e"))
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Fix Grammar (Cmd+G)", action: nil, keyEquivalent: "g"))
@@ -32,9 +77,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let instructionsItem = NSMenuItem(title: "Task Instructions", action: #selector(showTaskInstructionsWindowFromMenu), keyEquivalent: "")
         instructionsItem.target = self
         menu.addItem(instructionsItem)
+
+        let licenseItem = NSMenuItem(title: "Enter Subscription Key…", action: #selector(showLicenseWindowFromMenu), keyEquivalent: "")
+        licenseItem.target = self
+        menu.addItem(licenseItem)
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q"))
         
-        statusItem?.menu = menu
+        // Attach the menu to the status bar item so clicking the
+        // menu bar icon shows this menu.
+        self.statusItem?.menu = menu
     }
 
      @objc private func showTaskInstructionsWindowFromMenu() {
@@ -48,6 +99,53 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         NSApp.activate(ignoringOtherApps: true)
         taskInstructionsWindowController?.showWindow(nil)
+    }
+
+    @objc private func showLicenseWindowFromMenu() {
+        showLicenseWindow()
+    }
+
+    private func showLicenseWindow() {
+        if licenseWindowController == nil {
+            licenseWindowController = LicenseWindowController()
+        }
+
+        NSApp.activate(ignoringOtherApps: true)
+        licenseWindowController?.showWindow(nil)
+    }
+
+    /// Called when the user successfully activates a subscription key
+    /// from the license window.
+    func handleSuccessfulAuthorization() {
+        isAuthorized = true
+        updateAuthStatusUI()
+        startMonitoringIfNeeded()
+        licenseWindowController?.close()
+    }
+
+    private func startMonitoringIfNeeded() {
+        guard !monitoringStarted else { return }
+        monitoringStarted = true
+        KeyboardMonitor.shared.startMonitoring()
+    }
+
+    private func updateAuthStatusUI() {
+        let title: String
+        if isAuthorized {
+            title = "Status: Active"
+        } else if SubscriptionManager.shared.hasStoredKey {
+            title = "Status: Key Invalid/Expired"
+        } else {
+            title = "Status: Not Activated"
+        }
+
+        statusMenuItem?.title = title
+    }
+
+    @objc private func handleSubscriptionUnauthorizedNotification() {
+        isAuthorized = false
+        updateAuthStatusUI()
+        showLicenseWindow()
     }
     
     @objc func quit() {

@@ -50,7 +50,4 @@ export const config = {
   jwtSecret: getEnv('JWT_SECRET', true)!,
   // Expiry in seconds
   jwtExpiresInSeconds: getNumberEnv('JWT_EXPIRES_IN_SECONDS', 3600),
-
-  // Apple receipt validation shared secret (for auto‑renewable subscriptions)
-  appleSharedSecret: getEnv('APPLE_SHARED_SECRET'),
 };

@@ -1,16 +1,19 @@
 import express, { Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
-import { randomUUID } from 'crypto';
+import { randomBytes, randomUUID } from 'crypto';
 import { Logger } from 'winston';
-import { encryptToBase64, decryptFromBase64 } from './crypto';
-import { Subscription, SubscriptionStatus } from './models/subscription';
-import { verifyReceiptWithApple } from './appleVerification';
+import { Subscription } from './models/subscription';
 import { config } from './config';
 
-interface PurchaseBody {
+interface GenerateKeyBody {
   email?: string;
-  // Base64‑encoded App Store receipt data
-  receipt_data?: string;
+  // Optional ISO 8601 timestamp for when this key should expire.
+  // If omitted or null, the key does not expire.
+  expiresAt?: string | null;
+}
+
+interface ActivateBody {
+  key?: string;
 }
 
 export interface SubscriptionJwtPayload {
@@ -43,54 +46,100 @@ function extractBearerToken(req: Request): string | null {
 export function createSubscriptionRouter(logger: Logger): express.Router {
   const router = express.Router();
 
-  router.post('/purchase', async (req: Request, res: Response) => {
+  // Admin/backend endpoint to generate a new user subscription key.
+  // This is expected to be called after payment or trial creation logic
+  // (which will be added separately). The generated key is what the user
+  // will enter once into the desktop app.
+  router.post('/generate-key', async (req: Request, res: Response) => {
     logger.defaultMeta = { traceId: randomUUID() };
-    logger.info('Handling subscription purchase request.');
+    logger.info('Handling subscription key generation request.');
 
-    const body = req.body as PurchaseBody;
+    const body = req.body as GenerateKeyBody;
 
-    const hasReceiptData = body.receipt_data && typeof body.receipt_data === 'string';
+    try {
+      const rawKey = randomBytes(24).toString('base64url');
 
-    if (!hasReceiptData) {
-      logger.warn('Missing purchase proof (receipt_data not provided).');
-      return res.status(400).json({ error: 'receipt_data must be provided.' });
+      const expiresAt = body.expiresAt ? new Date(body.expiresAt) : null;
+
+      const subscription = await Subscription.create({
+        userKey: rawKey,
+        email: body.email ?? null,
+        subscriptionStatus: 'active',
+        userKeyExpiresAt: expiresAt,
+      });
+
+      logger.info('Subscription key generated successfully.', {
+        subscriptionId: subscription.id,
+      });
+
+      return res.json({
+        key: rawKey,
+        subscriptionId: subscription.id,
+        subscriptionStatus: subscription.subscriptionStatus,
+        expiresAt: subscription.userKeyExpiresAt?.toISOString() ?? null,
+      });
+    } catch (err) {
+      logger.error('Error handling /subscription/generate-key.', { error: err });
+      return res.status(500).json({ error: 'Internal server error.' });
+    }
+  });
+
+  // Endpoint used by the client once the user has entered their key in
+  // the app. Validates the key, checks expiry, and issues a JWT if the
+  // subscription is still valid.
+  router.post('/activate', async (req: Request, res: Response) => {
+    logger.defaultMeta = { traceId: randomUUID() };
+    logger.info('Handling subscription activation request using user key.');
+
+    const body = req.body as ActivateBody;
+
+    if (!body.key || typeof body.key !== 'string') {
+      logger.warn('Missing or invalid "key" in activation request body.');
+      return res.status(400).json({ error: 'A valid "key" must be provided.' });
     }
 
     try {
-      let status: SubscriptionStatus;
-      let storedValue: string;
+      const subscription = await Subscription.findOne({ where: { userKey: body.key } });
 
-      logger.info('Processing subscription purchase using App Store receipt path.');
-      status = await verifyReceiptWithApple(logger, body.receipt_data as string);
-      storedValue = `RCPT:${body.receipt_data as string}`;
-
-      if (status !== 'active') {
-        logger.warn('Subscription is not active after Apple verification.', { status });
+      if (!subscription) {
+        logger.warn('No subscription found for provided key.');
         return res
-          .status(400)
-          .json({ error: 'Subscription is not active.', subscriptionStatus: status });
+          .status(401)
+          .json({ error: 'Invalid subscription key.', subscriptionStatus: 'unknown' });
       }
 
-      const encrypted = encryptToBase64(storedValue);
+      const now = new Date();
+      if (subscription.userKeyExpiresAt && subscription.userKeyExpiresAt <= now) {
+        if (subscription.subscriptionStatus !== 'expired') {
+          subscription.subscriptionStatus = 'expired';
+          await subscription.save();
+        }
 
-      const subscription = await Subscription.create({
-        transactionJwsEncrypted: encrypted,
-        email: body.email ?? null,
-        subscriptionStatus: status,
-      });
+        logger.info('Subscription key has expired during activation.', {
+          subscriptionId: subscription.id,
+        });
 
-      const token = signSubscriptionJwt(logger, subscription.id, subscription.subscriptionStatus);
+        return res
+          .status(403)
+          .json({ error: 'Subscription has expired.', subscriptionStatus: 'expired' });
+      }
 
-      logger.info('Subscription purchase processed successfully.', {
+      // If the key has not expired, treat the subscription as valid and
+      // issue a JWT, regardless of past status values. We only block
+      // access if the subscription is expired.
+      const token = signSubscriptionJwt(logger, subscription.id, 'active');
+
+      logger.info('Subscription key activation successful.', {
         subscriptionId: subscription.id,
       });
 
       return res.json({
         token,
-        subscriptionStatus: subscription.subscriptionStatus,
+        subscriptionStatus: 'active',
+        expiresAt: subscription.userKeyExpiresAt?.toISOString() ?? null,
       });
     } catch (err) {
-      logger.error('Error handling /subscription/purchase.', { error: err });
+      logger.error('Error handling /subscription/activate.', { error: err });
       return res.status(500).json({ error: 'Internal server error.' });
     }
   });
@@ -109,19 +158,29 @@ export function createSubscriptionRouter(logger: Logger): express.Router {
       const decoded = jwt.verify(token, config.jwtSecret) as SubscriptionJwtPayload;
 
       const subscription = await Subscription.findByPk(decoded.sid);
-      if (!subscription || subscription.subscriptionStatus !== 'active') {
-        logger.info('Subscription inactive or not found during session check.', {
+      if (!subscription) {
+        logger.info('Subscription not found during session check.', {
           subscriptionId: decoded.sid,
-          status: subscription?.subscriptionStatus ?? 'unknown',
         });
-        return res.json({
-          subscribed: false,
-          subscriptionStatus: subscription?.subscriptionStatus ?? 'unknown',
+        return res.json({ subscribed: false, subscriptionStatus: 'unknown' });
+      }
+
+      const now = new Date();
+      if (subscription.userKeyExpiresAt && subscription.userKeyExpiresAt <= now) {
+        if (subscription.subscriptionStatus !== 'expired') {
+          subscription.subscriptionStatus = 'expired';
+          await subscription.save();
+        }
+
+        logger.info('Subscription expired during session check.', {
+          subscriptionId: subscription.id,
         });
+
+        return res.json({ subscribed: false, subscriptionStatus: 'expired' });
       }
 
       logger.info('Subscription session is active.', { subscriptionId: subscription.id });
-      return res.json({ subscribed: true, subscriptionStatus: subscription.subscriptionStatus });
+      return res.json({ subscribed: true, subscriptionStatus: 'active' });
     } catch (err) {
       logger.warn('Invalid or expired token during session check.', { error: err });
       return res.status(401).json({ subscribed: false, error: 'Invalid or expired token.' });
@@ -149,44 +208,30 @@ export function createSubscriptionRouter(logger: Logger): express.Router {
         return res.status(404).json({ error: 'Subscription not found.' });
       }
 
-      const stored = decryptFromBase64(subscription.transactionJwsEncrypted);
+      const now = new Date();
+      if (subscription.userKeyExpiresAt && subscription.userKeyExpiresAt <= now) {
+        if (subscription.subscriptionStatus !== 'expired') {
+          subscription.subscriptionStatus = 'expired';
+          await subscription.save();
+        }
 
-      let status: SubscriptionStatus;
-      if (stored.startsWith('RCPT:')) {
-        const receipt = stored.slice('RCPT:'.length);
-        logger.info('Refreshing subscription using stored App Store receipt.');
-        status = await verifyReceiptWithApple(logger, receipt);
-      } else {
-        // If we somehow have a legacy or malformed payload, treat as not active.
-        logger.warn('Stored subscription payload is not a receipt; marking as expired.', {
-          storedPrefix: stored.slice(0, 16),
-        });
-        status = 'expired';
-      }
-      subscription.subscriptionStatus = status;
-      await subscription.save();
-
-      if (status !== 'active') {
-        logger.warn('Subscription no longer active during refresh.', {
+        logger.warn('Subscription has expired during refresh.', {
           subscriptionId: subscription.id,
-          status,
         });
+
         return res
           .status(403)
-          .json({ error: 'Subscription no longer active.', subscriptionStatus: status });
+          .json({ error: 'Subscription has expired.', subscriptionStatus: 'expired' });
       }
 
-      const newToken = signSubscriptionJwt(
-        logger,
-        subscription.id,
-        subscription.subscriptionStatus,
-      );
+      const newToken = signSubscriptionJwt(logger, subscription.id, 'active');
 
       logger.info('Subscription refreshed successfully.', { subscriptionId: subscription.id });
 
       return res.json({
         token: newToken,
-        subscriptionStatus: subscription.subscriptionStatus,
+        subscriptionStatus: 'active',
+        expiresAt: subscription.userKeyExpiresAt?.toISOString() ?? null,
       });
     } catch (err) {
       logger.error('Error handling /subscription/refresh.', { error: err });
