@@ -2,6 +2,7 @@ import Foundation
 
 extension Notification.Name {
     static let subscriptionUnauthorized = Notification.Name("SubscriptionUnauthorizedNotification")
+    static let subscriptionExpired = Notification.Name("SubscriptionExpiredNotification")
 }
 
 /// Manages the persisted user subscription key and the in‑memory
@@ -75,6 +76,42 @@ final class SubscriptionManager {
             case .failure:
                 self.jwtToken = nil
                 completion(false)
+            }
+        }
+    }
+
+    enum ReactivationOutcome {
+        case success
+        case noStoredKey
+        case expired
+        case failure(Error)
+    }
+
+    /// Re-activate using the stored key (if any). This is used when
+    /// an API request returns 401/403 so we can transparently refresh
+    /// the short-lived JWT. If there is no stored key, or the server
+    /// reports the subscription as expired (403), the caller is
+    /// informed so it can show appropriate UI.
+    func reactivateStoredKeyIfNeeded(completion: @escaping (ReactivationOutcome) -> Void) {
+        guard let key = userKey else {
+            completion(.noStoredKey)
+            return
+        }
+
+        activate(key: key) { [weak self] result in
+            guard let self else { return }
+
+            switch result {
+            case .success(let token):
+                self.jwtToken = token
+                completion(.success)
+
+            case .failure(let error as NSError):
+                if error.domain == "SubscriptionManager", error.code == 403 {
+                    completion(.expired)
+                } else {
+                    completion(.failure(error))
+                }
             }
         }
     }

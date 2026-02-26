@@ -10,6 +10,8 @@ import {
 import { readTaskPrompt } from './read-task-prompt';
 import { config } from './config';
 import { AuthLocals, authMiddleware } from './authMiddleware';
+import { Subscription } from './models/subscription';
+import { SubscriptionUsage } from './models/subscriptionUsage';
 
 interface EnhanceRequestBody {
   text?: string;
@@ -39,7 +41,12 @@ export function createFeatureRouter(logger: Logger): express.Router {
     task: readTaskPrompt(logger),
   };
 
-  async function enhanceText(logger: Logger, text: string, cmd: EnhanceCommand): Promise<string> {
+  async function enhanceText(
+    logger: Logger,
+    text: string,
+    cmd: EnhanceCommand,
+    subscriptionId?: string,
+  ): Promise<string> {
     const trimmed = text.trim();
 
     if (!config.openaiApiKey) {
@@ -57,14 +64,41 @@ export function createFeatureRouter(logger: Logger): express.Router {
 
       const finalSystemPrompt = `${systemPrompt}\n${OUTPUT_FORMAT_INSTRUCTION}`;
 
+      const model = cmd === 'task' ? 'gpt-5.1' : 'gpt-4.1-mini';
+
       const completion = await openai.chat.completions.create({
-        model: cmd === 'task' ? 'gpt-5.1' : 'gpt-4.1-mini',
+        model,
         messages: [
           { role: 'system', content: finalSystemPrompt },
           { role: 'user', content: trimmed },
         ],
         temperature: 0.3,
       });
+
+      // Record token usage for this subscription and model, if usage
+      // data is available and we know which subscription made the call.
+      const usage = completion.usage;
+      if (usage && subscriptionId) {
+        try {
+          await SubscriptionUsage.create({
+            subscriptionId,
+            model,
+            promptTokens: usage.prompt_tokens ?? 0,
+            completionTokens: usage.completion_tokens ?? 0,
+            totalTokens: usage.total_tokens ?? 0,
+          });
+
+          await Subscription.increment('totalTokensUsed', {
+            by: usage.total_tokens ?? 0,
+            where: { id: subscriptionId },
+          });
+        } catch (err) {
+          logger.error('Failed to record subscription usage metrics.', {
+            error: err,
+            subscriptionId,
+          });
+        }
+      }
 
       const enhanced = completion.choices[0]?.message?.content?.trim();
 
@@ -84,7 +118,7 @@ export function createFeatureRouter(logger: Logger): express.Router {
 
   function makeEnhanceHandler(cmd: EnhanceCommand) {
     return async (req: Request, res: Response<any, AuthLocals>) => {
-      const { logger } = res.locals;
+      const { logger, subscription } = res.locals;
       const body = req.body as EnhanceRequestBody;
       logger.info(
         `Received request for command "${cmd}" with text length: ${
@@ -97,7 +131,9 @@ export function createFeatureRouter(logger: Logger): express.Router {
         return res.status(400).json({ error: 'Missing or empty "text" field in request body.' });
       }
 
-      const result = await enhanceText(logger, body.text, cmd);
+      const subscriptionId = subscription?.sid;
+
+      const result = await enhanceText(logger, body.text, cmd, subscriptionId);
 
       return res.json({ result });
     };

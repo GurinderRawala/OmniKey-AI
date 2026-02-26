@@ -24,6 +24,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             object: nil
         )
 
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleSubscriptionExpiredNotification),
+            name: .subscriptionExpired,
+            object: nil
+        )
+
         // If we already have a stored subscription key, try to
         // activate it and start monitoring only when authorized.
         if SubscriptionManager.shared.hasStoredKey {
@@ -146,6 +153,32 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         isAuthorized = false
         updateAuthStatusUI()
         showLicenseWindow()
+    }
+
+    @objc private func handleSubscriptionExpiredNotification() {
+        isAuthorized = false
+        SubscriptionManager.shared.clearSubscription()
+        updateAuthStatusUI()
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+
+            let alert = NSAlert()
+            alert.messageText = "Subscription expired"
+            alert.informativeText = "Your OmniKey subscription has expired. Please purchase a new subscription to continue using OmniKey."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "Buy Subscription")
+            alert.addButton(withTitle: "Cancel")
+
+            let response = alert.runModal()
+            if response == .alertFirstButtonReturn {
+                if let url = URL(string: "https://omnikey.ai") {
+                    NSWorkspace.shared.open(url)
+                }
+            }
+
+            self.showLicenseWindow()
+        }
     }
     
     @objc func quit() {

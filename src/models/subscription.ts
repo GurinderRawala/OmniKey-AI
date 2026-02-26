@@ -6,12 +6,14 @@ export type SubscriptionStatus = 'active' | 'expired' | 'canceled' | 'unknown';
 
 interface SubscriptionAttributes {
   id: string;
-  // Human-readable subscription key provided to the user.
-  userKey: string;
+  // Human-readable license key provided to the user.
+  licenseKey: string;
   email?: string | null;
   subscriptionStatus: SubscriptionStatus;
-  // When the subscription associated with this key expires. Null or undefined means no expiry.
-  userKeyExpiresAt?: Date | null;
+  // When the license associated with this key expires. Null or undefined means no expiry.
+  licenseKeyExpiresAt?: Date | null;
+  // Cumulative count of OpenAI tokens used by this subscription.
+  totalTokensUsed?: number;
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -26,10 +28,11 @@ export class Subscription
   implements SubscriptionAttributes
 {
   public id!: string;
-  public userKey!: string;
+  public licenseKey!: string;
   public email?: string | null;
   public subscriptionStatus!: SubscriptionStatus;
-  public userKeyExpiresAt?: Date | null;
+  public licenseKeyExpiresAt?: Date | null;
+  public totalTokensUsed?: number;
   public readonly createdAt!: Date;
   public readonly updatedAt!: Date;
 }
@@ -42,12 +45,10 @@ Subscription.init(
       allowNull: false,
       defaultValue: () => cuid(),
     },
-    userKey: {
+    licenseKey: {
       type: DataTypes.TEXT,
       allowNull: false,
-      // Re-use the existing column name so deployments with an existing
-      // subscriptions table do not require a manual migration.
-      field: 'transaction_jws',
+      field: 'license_key',
     },
     email: {
       type: DataTypes.STRING,
@@ -59,10 +60,16 @@ Subscription.init(
       defaultValue: 'unknown',
       field: 'subscription_status',
     },
-    userKeyExpiresAt: {
+    licenseKeyExpiresAt: {
       type: DataTypes.DATE,
       allowNull: true,
-      field: 'user_key_expires_at',
+      field: 'license_key_expires_at',
+    },
+    totalTokensUsed: {
+      type: DataTypes.BIGINT,
+      allowNull: false,
+      defaultValue: 0,
+      field: 'total_tokens_used',
     },
   },
   {

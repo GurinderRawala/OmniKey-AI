@@ -62,10 +62,10 @@ export function createSubscriptionRouter(logger: Logger): express.Router {
       const expiresAt = body.expiresAt ? new Date(body.expiresAt) : null;
 
       const subscription = await Subscription.create({
-        userKey: rawKey,
+        licenseKey: rawKey,
         email: body.email ?? null,
         subscriptionStatus: 'active',
-        userKeyExpiresAt: expiresAt,
+        licenseKeyExpiresAt: expiresAt,
       });
 
       logger.info('Subscription key generated successfully.', {
@@ -76,7 +76,7 @@ export function createSubscriptionRouter(logger: Logger): express.Router {
         key: rawKey,
         subscriptionId: subscription.id,
         subscriptionStatus: subscription.subscriptionStatus,
-        expiresAt: subscription.userKeyExpiresAt?.toISOString() ?? null,
+        expiresAt: subscription.licenseKeyExpiresAt?.toISOString() ?? null,
       });
     } catch (err) {
       logger.error('Error handling /subscription/generate-key.', { error: err });
@@ -99,7 +99,7 @@ export function createSubscriptionRouter(logger: Logger): express.Router {
     }
 
     try {
-      const subscription = await Subscription.findOne({ where: { userKey: body.key } });
+      const subscription = await Subscription.findOne({ where: { licenseKey: body.key } });
 
       if (!subscription) {
         logger.warn('No subscription found for provided key.');
@@ -109,7 +109,7 @@ export function createSubscriptionRouter(logger: Logger): express.Router {
       }
 
       const now = new Date();
-      if (subscription.userKeyExpiresAt && subscription.userKeyExpiresAt <= now) {
+      if (subscription.licenseKeyExpiresAt && subscription.licenseKeyExpiresAt <= now) {
         if (subscription.subscriptionStatus !== 'expired') {
           subscription.subscriptionStatus = 'expired';
           await subscription.save();
@@ -136,7 +136,7 @@ export function createSubscriptionRouter(logger: Logger): express.Router {
       return res.json({
         token,
         subscriptionStatus: 'active',
-        expiresAt: subscription.userKeyExpiresAt?.toISOString() ?? null,
+        expiresAt: subscription.licenseKeyExpiresAt?.toISOString() ?? null,
       });
     } catch (err) {
       logger.error('Error handling /subscription/activate.', { error: err });
@@ -166,7 +166,7 @@ export function createSubscriptionRouter(logger: Logger): express.Router {
       }
 
       const now = new Date();
-      if (subscription.userKeyExpiresAt && subscription.userKeyExpiresAt <= now) {
+      if (subscription.licenseKeyExpiresAt && subscription.licenseKeyExpiresAt <= now) {
         if (subscription.subscriptionStatus !== 'expired') {
           subscription.subscriptionStatus = 'expired';
           await subscription.save();
@@ -209,7 +209,7 @@ export function createSubscriptionRouter(logger: Logger): express.Router {
       }
 
       const now = new Date();
-      if (subscription.userKeyExpiresAt && subscription.userKeyExpiresAt <= now) {
+      if (subscription.licenseKeyExpiresAt && subscription.licenseKeyExpiresAt <= now) {
         if (subscription.subscriptionStatus !== 'expired') {
           subscription.subscriptionStatus = 'expired';
           await subscription.save();
@@ -231,7 +231,7 @@ export function createSubscriptionRouter(logger: Logger): express.Router {
       return res.json({
         token: newToken,
         subscriptionStatus: 'active',
-        expiresAt: subscription.userKeyExpiresAt?.toISOString() ?? null,
+        expiresAt: subscription.licenseKeyExpiresAt?.toISOString() ?? null,
       });
     } catch (err) {
       logger.error('Error handling /subscription/refresh.', { error: err });
