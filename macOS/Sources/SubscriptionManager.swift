@@ -51,7 +51,12 @@ final class SubscriptionManager {
                 self.defaults.set(trimmed, forKey: self.userKeyDefaultsKey)
                 completion(.success(()))
 
-            case .failure(let error):
+            case .failure(let error as NSError):
+                if error.domain == "SubscriptionManager", error.code == 403 {
+                    // Subscription has expired for this key – notify the app
+                    // so it can present the subscription window / purchase link.
+                    NotificationCenter.default.post(name: .subscriptionExpired, object: nil)
+                }
                 completion(.failure(error))
             }
         }
@@ -73,8 +78,13 @@ final class SubscriptionManager {
                 self.jwtToken = token
                 completion(true)
 
-            case .failure:
+            case .failure(let error as NSError):
                 self.jwtToken = nil
+                if error.domain == "SubscriptionManager", error.code == 403 {
+                    // Stored key is now expired; surface the subscription
+                    // expired flow so the user can renew.
+                    NotificationCenter.default.post(name: .subscriptionExpired, object: nil)
+                }
                 completion(false)
             }
         }
