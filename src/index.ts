@@ -1,11 +1,10 @@
 import express from 'express';
 import cors from 'cors';
-import { readTaskPrompt } from './read-task-prompt';
 import { createSubscriptionRouter } from './subscriptionRoutes';
 import { createFeatureRouter } from './featureRoutes';
 import { initDatabase } from './db';
 import { logger } from './logger';
-import { authMiddleware } from './authMiddleware';
+import { taskInstructionRouter  } from './taskInstructionRoutes';
 
 const app = express();
 const PORT = 7172;
@@ -15,20 +14,9 @@ app.use(express.json());
 
 app.use('/api/subscription', createSubscriptionRouter(logger));
 
-app.use('/api', createFeatureRouter(logger));
+app.use('/api/feature', createFeatureRouter());
 
-app.post('/api/create-task-instructions', (req, res) => {
-  logger.info('Received request for create-task-instructions endpoint.');
-  const { instructions } = req.body as { instructions?: string };
-  logger.info(`Task instructions length: ${instructions ? instructions.length : 0}`);
-  res.json({ message: 'task instructions saved' });
-});
-
-app.get('/api/get-task-instructions', (req, res) => {
-  logger.info('Received request for get-task-instructions endpoint.');
-  const instruction = readTaskPrompt(logger);
-  res.json({ instruction });
-});
+app.use('/api/instructions', taskInstructionRouter());
 
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok' });

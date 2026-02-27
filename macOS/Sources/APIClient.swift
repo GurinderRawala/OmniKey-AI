@@ -1,11 +1,11 @@
 import Foundation
 
 class APIClient {
-    private let enhancePromptURL = URL(string: "http://localhost:7172/api/enhance")!
-    private let enhanceGrammarURL = URL(string: "http://localhost:7172/api/grammar")!
-    private let customTaskURL = URL(string: "http://localhost:7172/api/custom-task")!
-    private let getTaskInstructionsURL = URL(string: "http://localhost:7172/api/get-task-instructions")!
-    private let createTaskInstructionsURL = URL(string: "http://localhost:7172/api/create-task-instructions")!
+    private let enhancePromptURL = URL(string: "http://localhost:7172/api/feature/enhance")!
+    private let enhanceGrammarURL = URL(string: "http://localhost:7172/api/feature/grammar")!
+    private let customTaskURL = URL(string: "http://localhost:7172/api/feature/custom-task")!
+    private let getTaskInstructionsURL = URL(string: "http://localhost:7172/api/instructions/get-task-instructions")!
+    private let createTaskInstructionsURL = URL(string: "http://localhost:7172/api/instructions/create-task-instructions")!
 
     func getURL(for cmd: String) -> URL? {
         switch cmd {
@@ -63,46 +63,19 @@ class APIClient {
                 return
             }
 
-            // Handle auth failures first so we can optionally
-            // re-activate using the stored license key.
-            if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
-                // If we've already attempted reauth for this request,
-                // fall back to the standard unauthorized handling.
-                guard allowReauth else {
-                    self.handleUnauthorized(statusCode: httpResponse.statusCode, completion: completion)
-                    return
-                }
-
-                SubscriptionManager.shared.reactivateStoredKeyIfNeeded { outcome in
-                    switch outcome {
-                    case .success:
-                        // We have a fresh JWT; retry the request once
-                        // with the new Authorization header.
-                        var retriedRequest = request
-                        if let token = SubscriptionManager.shared.jwtToken {
-                            retriedRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-                        }
-                        self.sendEnhanceRequest(with: retriedRequest, allowReauth: false, completion: completion)
-
-                    case .noStoredKey, .expired:
-                        // No key to re-activate, or server reports
-                        // the subscription as expired. Notify the app
-                        // so it can show a purchase link.
-                        NotificationCenter.default.post(name: .subscriptionExpired, object: nil)
-                        let error = NSError(
-                            domain: "APIClient",
-                            code: httpResponse.statusCode,
-                            userInfo: [NSLocalizedDescriptionKey: "Subscription expired or missing."]
-                        )
-                        completion(.failure(error))
-
-                    case .failure:
-                        // Re-activation failed for a non-expiry
-                        // reason; treat as a generic unauthorized.
-                        self.handleUnauthorized(statusCode: httpResponse.statusCode, completion: completion)
+            // Handle auth failures (401/403) with optional re-activation
+            if self.handleAuthFailure(
+                statusCode: httpResponse.statusCode,
+                allowReauth: allowReauth,
+                onRetry: {
+                    var retriedRequest = request
+                    if let token = SubscriptionManager.shared.jwtToken {
+                        retriedRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
                     }
-                }
-
+                    self.sendEnhanceRequest(with: retriedRequest, allowReauth: false, completion: completion)
+                },
+                completion: completion
+            ) {
                 return
             }
 
@@ -138,27 +111,23 @@ class APIClient {
         task.resume()
     }
 
-    private func handleUnauthorized(
-        statusCode: Int,
-        completion: @escaping (Result<String, Error>) -> Void
-    ) {
-        SubscriptionManager.shared.invalidateToken()
-        NotificationCenter.default.post(name: .subscriptionUnauthorized, object: nil)
-
-        let error = NSError(
-            domain: "APIClient",
-            code: statusCode,
-            userInfo: [NSLocalizedDescriptionKey: "Server returned status code \(statusCode)"]
-        )
-        completion(.failure(error))
-    }
-
     /// Fetches existing custom task instructions from the backend.
     /// If no instructions exist, the backend is expected to return an empty string
     /// or an empty JSON field, which this method normalizes to an empty string.
     func fetchTaskInstructions(completion: @escaping (Result<String, Error>) -> Void) {
+        fetchTaskInstructions(allowReauth: true, completion: completion)
+    }
+
+    private func fetchTaskInstructions(
+        allowReauth: Bool,
+        completion: @escaping (Result<String, Error>) -> Void
+    ) {
         var request = URLRequest(url: getTaskInstructionsURL)
         request.httpMethod = "GET"
+
+        if let token = SubscriptionManager.shared.jwtToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
 
         let task = URLSession.shared.dataTask(with: request) { data, response, error in
             if let error = error {
@@ -168,6 +137,17 @@ class APIClient {
 
             guard let httpResponse = response as? HTTPURLResponse else {
                 completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response"])))
+                return
+            }
+
+            if self.handleAuthFailure(
+                statusCode: httpResponse.statusCode,
+                allowReauth: allowReauth,
+                onRetry: {
+                    self.fetchTaskInstructions(allowReauth: false, completion: completion)
+                },
+                completion: completion
+            ) {
                 return
             }
 
@@ -193,18 +173,6 @@ class APIClient {
                         completion(.success(instructions))
                         return
                     }
-                    if let instruction = json["instruction"] as? String { // legacy singular field name
-                        completion(.success(instruction))
-                        return
-                    }
-                    if let prompt = json["prompt"] as? String { // alternative field name
-                        completion(.success(prompt))
-                        return
-                    }
-                    if let result = json["result"] as? String { // last-resort generic field
-                        completion(.success(result))
-                        return
-                    }
                 }
 
                 if let text = String(data: data, encoding: .utf8) {
@@ -221,11 +189,85 @@ class APIClient {
         task.resume()
     }
 
+    @discardableResult
+    private func handleAuthFailure<T>(
+        statusCode: Int,
+        allowReauth: Bool,
+        onRetry: @escaping () -> Void,
+        completion: @escaping (Result<T, Error>) -> Void
+    ) -> Bool {
+        // Only handle auth-related failures here.
+        guard statusCode == 401 || statusCode == 403 else {
+            return false
+        }
+
+        // If we've already attempted reauth for this request,
+        // fall back to the standard unauthorized handling.
+        guard allowReauth else {
+            handleUnauthorized(statusCode: statusCode, completion: completion)
+            return true
+        }
+
+        SubscriptionManager.shared.reactivateStoredKeyIfNeeded { outcome in
+            switch outcome {
+            case .success:
+                // We have a fresh JWT; let the caller retry once.
+                onRetry()
+
+            case .noStoredKey, .expired:
+                // No key to re-activate, or server reports the
+                // subscription as expired. Notify the app so it can
+                // show a purchase link.
+                NotificationCenter.default.post(name: .subscriptionExpired, object: nil)
+                let error = NSError(
+                    domain: "APIClient",
+                    code: statusCode,
+                    userInfo: [NSLocalizedDescriptionKey: "Subscription expired or missing."]
+                )
+                completion(.failure(error))
+
+            case .failure:
+                // Re-activation failed for a non-expiry reason;
+                // treat as a generic unauthorized.
+                self.handleUnauthorized(statusCode: statusCode, completion: completion)
+            }
+        }
+
+        return true
+    }
+
+    private func handleUnauthorized<T>(
+        statusCode: Int,
+        completion: @escaping (Result<T, Error>) -> Void
+    ) {
+        SubscriptionManager.shared.invalidateToken()
+        NotificationCenter.default.post(name: .subscriptionUnauthorized, object: nil)
+
+        let error = NSError(
+            domain: "APIClient",
+            code: statusCode,
+            userInfo: [NSLocalizedDescriptionKey: "Server returned status code \(statusCode)"]
+        )
+        completion(.failure(error))
+    }
+
     /// Persists custom task instructions to the backend.
     func saveTaskInstructions(_ instructions: String, completion: @escaping (Result<Void, Error>) -> Void) {
+        saveTaskInstructions(instructions, allowReauth: true, completion: completion)
+    }
+
+    private func saveTaskInstructions(
+        _ instructions: String,
+        allowReauth: Bool,
+        completion: @escaping (Result<Void, Error>) -> Void
+    ) {
         var request = URLRequest(url: createTaskInstructionsURL)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        if let token = SubscriptionManager.shared.jwtToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
 
         let payload: [String: String] = ["instructions": instructions]
 
@@ -244,6 +286,17 @@ class APIClient {
 
             guard let httpResponse = response as? HTTPURLResponse else {
                 completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response"])))
+                return
+            }
+
+            if self.handleAuthFailure(
+                statusCode: httpResponse.statusCode,
+                allowReauth: allowReauth,
+                onRetry: {
+                    self.saveTaskInstructions(instructions, allowReauth: false, completion: completion)
+                },
+                completion: completion
+            ) {
                 return
             }
 

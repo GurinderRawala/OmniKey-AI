@@ -16,11 +16,12 @@ interface SubscriptionAttributes {
   totalTokensUsed?: number;
   createdAt?: Date;
   updatedAt?: Date;
+  taskInstructions?: string | null;
 }
 
 interface SubscriptionCreationAttributes extends Optional<
   SubscriptionAttributes,
-  'id' | 'subscriptionStatus' | 'email' | 'createdAt' | 'updatedAt'
+  'id' | 'subscriptionStatus' | 'email' | 'createdAt' | 'updatedAt' | 'taskInstructions'
 > {}
 
 export class Subscription
@@ -35,6 +36,7 @@ export class Subscription
   public totalTokensUsed?: number;
   public readonly createdAt!: Date;
   public readonly updatedAt!: Date;
+  public taskInstructions?: string | null;
 }
 
 Subscription.init(
@@ -70,6 +72,11 @@ Subscription.init(
       allowNull: false,
       defaultValue: 0,
       field: 'total_tokens_used',
+    },
+    taskInstructions: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      field: 'task_instructions',
     },
   },
   {

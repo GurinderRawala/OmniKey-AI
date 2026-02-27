@@ -1,17 +1,18 @@
 import express, { Request, Response } from 'express';
 import OpenAI from 'openai';
 import { Logger } from 'winston';
+import zod from 'zod';
 import { EnhanceCommand } from './types';
 import {
   enhancePromptSystemInstruction,
   grammarPromptSystemInstruction,
   OUTPUT_FORMAT_INSTRUCTION,
 } from './prompts';
-import { readTaskPrompt } from './read-task-prompt';
 import { config } from './config';
 import { AuthLocals, authMiddleware } from './authMiddleware';
 import { Subscription } from './models/subscription';
 import { SubscriptionUsage } from './models/subscriptionUsage';
+import { decompressString } from './compression';
 
 interface EnhanceRequestBody {
   text?: string;
@@ -32,20 +33,28 @@ const openai = new OpenAI({
   apiKey: config.openaiApiKey,
 });
 
-export function createFeatureRouter(logger: Logger): express.Router {
-  const router = express.Router();
+const enhanceRequestSchema = zod.object({
+  text: zod.string().max(10000, 'Text must be at most 10000 characters long.'),
+});
 
-  const prompts: Record<EnhanceCommand, string> = {
-    enhance: enhancePromptSystemInstruction,
-    grammar: grammarPromptSystemInstruction,
-    task: readTaskPrompt(logger),
-  };
+async function findTaskInstructionsForSubscription(subscriptionId: string): Promise<string | null> {
+  const subscription = await Subscription.findByPk(subscriptionId);
+  if (!subscription) {
+    return null;
+  }
+
+  const decompressed = decompressString(subscription.taskInstructions);
+  return decompressed ?? null;
+}
+
+export function createFeatureRouter(): express.Router {
+  const router = express.Router();
 
   async function enhanceText(
     logger: Logger,
     text: string,
     cmd: EnhanceCommand,
-    subscriptionId?: string,
+    subscriptionId: string,
   ): Promise<string> {
     const trimmed = text.trim();
 
@@ -55,6 +64,12 @@ export function createFeatureRouter(logger: Logger): express.Router {
     }
 
     try {
+      const prompts: Record<EnhanceCommand, string> = {
+        enhance: enhancePromptSystemInstruction,
+        grammar: grammarPromptSystemInstruction,
+        task:
+          cmd === 'task' ? ((await findTaskInstructionsForSubscription(subscriptionId)) ?? '') : '',
+      };
       const systemPrompt = prompts[cmd];
 
       if (!systemPrompt) {
@@ -119,31 +134,23 @@ export function createFeatureRouter(logger: Logger): express.Router {
   function makeEnhanceHandler(cmd: EnhanceCommand) {
     return async (req: Request, res: Response<any, AuthLocals>) => {
       const { logger, subscription } = res.locals;
-      const body = req.body as EnhanceRequestBody;
-      logger.info(
-        `Received request for command "${cmd}" with text length: ${
-          body.text ? body.text.length : 0
-        }`,
-      );
+      try {
+        const body = enhanceRequestSchema.parse(req.body);
 
-      if (!body || typeof body.text !== 'string' || body.text.trim() === '') {
-        logger.warn('Enhance request missing or empty "text" field.');
-        return res.status(400).json({ error: 'Missing or empty "text" field in request body.' });
+        const subscriptionId = subscription.sid;
+
+        const result = await enhanceText(logger, body.text, cmd, subscriptionId);
+
+        return res.json({ result });
+      } catch (err) {
+        logger.error('Error processing enhance request.', { error: err });
+        return res.status(500).json({ error: 'Internal server error.' });
       }
-
-      const subscriptionId = subscription?.sid;
-
-      const result = await enhanceText(logger, body.text, cmd, subscriptionId);
-
-      return res.json({ result });
     };
   }
 
   // Main endpoints used by the macOS app
   router.post('/enhance', authMiddleware, makeEnhanceHandler('enhance'));
-
-  // Alias endpoint in case the client uses /api/enhancer
-  router.post('/enhancer', authMiddleware, makeEnhanceHandler('enhance'));
 
   router.post('/grammar', authMiddleware, makeEnhanceHandler('grammar'));
 

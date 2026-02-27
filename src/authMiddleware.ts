@@ -17,13 +17,13 @@ export function authMiddleware(req: Request, res: Response<any, AuthLocals>, nex
 
   if (!authHeader) {
     logger.warn('Missing Authorization header on feature route.');
-    return res.status(403).json({ error: 'Missing bearer token.' });
+    return res.status(401).json({ error: 'Missing bearer token.' });
   }
 
   const [scheme, token] = authHeader.split(' ');
   if (scheme !== 'Bearer' || !token) {
     logger.warn('Malformed Authorization header on feature route.');
-    return res.status(403).json({ error: 'Invalid authorization header.' });
+    return res.status(401).json({ error: 'Invalid authorization header.' });
   }
 
   try {
