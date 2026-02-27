@@ -37,16 +37,6 @@ const enhanceRequestSchema = zod.object({
   text: zod.string().max(10000, 'Text must be at most 10000 characters long.'),
 });
 
-async function findTaskInstructionsForSubscription(subscriptionId: string): Promise<string | null> {
-  const subscription = await Subscription.findByPk(subscriptionId);
-  if (!subscription) {
-    return null;
-  }
-
-  const decompressed = decompressString(subscription.taskInstructions);
-  return decompressed ?? null;
-}
-
 export function createFeatureRouter(): express.Router {
   const router = express.Router();
 
@@ -54,7 +44,7 @@ export function createFeatureRouter(): express.Router {
     logger: Logger,
     text: string,
     cmd: EnhanceCommand,
-    subscriptionId: string,
+    subscription: Subscription,
   ): Promise<string> {
     const trimmed = text.trim();
 
@@ -67,8 +57,7 @@ export function createFeatureRouter(): express.Router {
       const prompts: Record<EnhanceCommand, string> = {
         enhance: enhancePromptSystemInstruction,
         grammar: grammarPromptSystemInstruction,
-        task:
-          cmd === 'task' ? ((await findTaskInstructionsForSubscription(subscriptionId)) ?? '') : '',
+        task: decompressString(subscription.taskInstructions) ?? '',
       };
       const systemPrompt = prompts[cmd];
 
@@ -93,10 +82,10 @@ export function createFeatureRouter(): express.Router {
       // Record token usage for this subscription and model, if usage
       // data is available and we know which subscription made the call.
       const usage = completion.usage;
-      if (usage && subscriptionId) {
+      if (usage && subscription.id) {
         try {
           await SubscriptionUsage.create({
-            subscriptionId,
+            subscriptionId: subscription.id,
             model,
             promptTokens: usage.prompt_tokens ?? 0,
             completionTokens: usage.completion_tokens ?? 0,
@@ -105,12 +94,12 @@ export function createFeatureRouter(): express.Router {
 
           await Subscription.increment('totalTokensUsed', {
             by: usage.total_tokens ?? 0,
-            where: { id: subscriptionId },
+            where: { id: subscription.id },
           });
         } catch (err) {
           logger.error('Failed to record subscription usage metrics.', {
             error: err,
-            subscriptionId,
+            subscriptionId: subscription.id,
           });
         }
       }
@@ -137,9 +126,7 @@ export function createFeatureRouter(): express.Router {
       try {
         const body = enhanceRequestSchema.parse(req.body);
 
-        const subscriptionId = subscription.sid;
-
-        const result = await enhanceText(logger, body.text, cmd, subscriptionId);
+        const result = await enhanceText(logger, body.text, cmd, subscription);
 
         return res.json({ result });
       } catch (err) {
