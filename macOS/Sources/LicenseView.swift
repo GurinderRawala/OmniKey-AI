@@ -1,52 +1,69 @@
 import SwiftUI
 
 struct LicenseView: View {
+    @Environment(\.colorScheme) private var colorScheme
+
     @State private var key: String = SubscriptionManager.shared.userKey ?? ""
     @State private var statusMessage: String = ""
     @State private var isLoading: Bool = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Activate OmniKey")
-                .font(.system(size: 20, weight: .semibold))
+        ZStack {
+            NordTheme.windowBackground(colorScheme)
+                .ignoresSafeArea()
 
-            Text("Enter your OmniKey subscription key to unlock enhancements.")
-                .font(.system(size: 13))
-                .foregroundColor(.secondary)
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Activate OmniKey")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundColor(NordTheme.primaryText(colorScheme))
 
-            Text("Subscription Key")
-                .font(.system(size: 13, weight: .medium))
+                Text("Enter your OmniKey subscription key to unlock enhancements.")
+                    .font(.system(size: 13))
+                    .foregroundColor(NordTheme.secondaryText(colorScheme))
 
-            TextField("Paste your subscription key here", text: $key)
-                .textFieldStyle(RoundedBorderTextFieldStyle())
-                .font(.system(size: 13, design: .monospaced))
+                Text("Subscription Key")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(NordTheme.primaryText(colorScheme))
 
-            Text(statusMessage)
-                .font(.system(size: 11))
-                .foregroundColor(.secondary)
-                .lineLimit(2)
+                TextField("Paste your subscription key here", text: $key)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .font(.system(size: 13, design: .monospaced))
 
-            HStack {
-                Spacer()
+                Text(statusMessage)
+                    .font(.system(size: 11))
+                    .foregroundColor(NordTheme.secondaryText(colorScheme))
+                    .lineLimit(2)
 
-                if isLoading {
-                    ProgressView()
-                        .scaleEffect(0.7)
+                HStack {
+                    Spacer()
+
+                    if isLoading {
+                        ProgressView()
+                            .scaleEffect(0.7)
+                    }
+
+                    Button("Quit") {
+                        NSApplication.shared.terminate(nil)
+                    }
+
+                    Button("Activate") {
+                        activate()
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(isLoading || key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .tint(NordTheme.accent(colorScheme))
                 }
-
-                Button("Quit") {
-                    NSApplication.shared.terminate(nil)
-                }
-
-                Button("Activate") {
-                    activate()
-                }
-                .keyboardShortcut(.defaultAction)
-                .disabled(isLoading || key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
+            .padding(24)
+            .frame(maxWidth: 480)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(NordTheme.panelBackground(colorScheme))
+                    .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.5 : 0.12), radius: 18, x: 0, y: 14)
+            )
+            .padding(24)
         }
-        .padding(24)
-        .frame(minWidth: 480, minHeight: 220)
+        .frame(minWidth: 520, minHeight: 260)
     }
 
     private func activate() {

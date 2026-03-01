@@ -66,7 +66,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if let button = statusItem?.button {
             if let iconURL = Bundle.main.url(forResource: "MenuBarIcon", withExtension: "png"),
                let image = NSImage(contentsOf: iconURL) {
-                image.isTemplate = false
+                image.isTemplate = true
                 button.image = image
                 button.imagePosition = .imageOnly
             } else {
