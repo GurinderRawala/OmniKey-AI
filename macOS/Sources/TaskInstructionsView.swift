@@ -2,17 +2,6 @@ import SwiftUI
 
 struct TaskInstructionsView: View {
     @Environment(\.colorScheme) private var colorScheme
-    private struct TemplateItem {
-        let name: String
-        let content: String
-        let usesExisting: Bool
-
-        init(name: String, content: String, usesExisting: Bool = false) {
-            self.name = name
-            self.content = content
-            self.usesExisting = usesExisting
-        }
-    }
 
     @State private var instructions: String = ""
     @State private var originalInstructions: String = ""
@@ -22,55 +11,18 @@ struct TaskInstructionsView: View {
     @State private var selectedTemplateIndex: Int = 0
 
     private let apiClient = APIClient()
-    private let templates: [TemplateItem] = [
-        TemplateItem(
+    private let templates: [TaskTemplate] = [
+        TaskTemplate(
             name: "Existing instructions",
             content: "",
             usesExisting: true
         ),
-        TemplateItem(
+        TaskTemplate(
             name: "Start from scratch",
             content: ""
         ),
-        TemplateItem(
-            name: "Editor – polish my writing",
-            content: """
-<role>
-You are an expert writing editor who improves clarity, tone, and correctness.
-
-<context>
-The user is working inside a macOS app (OmniKey) and has selected some text.
-
-<task>
-Rewrite the selected text to be clearer, more concise, and professional while preserving the original meaning.
-"""
-        ),
-        TemplateItem(
-            name: "Summarizer – concise overview",
-            content: """
-<role>
-You are an expert summarization assistant.
-
-<context>
-The user will select long-form content such as emails, documents, or articles.
-
-<task>
-Produce a short, bullet-point summary that captures the key ideas and action items.
-"""
-        ),
-        TemplateItem(
-            name: "Brainstorm – ideas and variations",
-            content: """
-<role>
-You are a creative brainstorming partner.
-
-<context>
-The user is exploring different ways to phrase or approach a concept in their writing.
-
-<task>
-Generate several distinct variations and ideas, each on its own bullet, that the user can copy or refine.
-"""
-        )
+        EditorPolishTemplate.template,
+        SQLTemplate.template
     ]
 
     var body: some View {
