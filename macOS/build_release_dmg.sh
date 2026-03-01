@@ -15,6 +15,9 @@ BUILD_DIR="${SCRIPT_DIR}/.build/release"
 APP_BUNDLE="${SCRIPT_DIR}/${APP_NAME}.app"
 DMG_PATH="${SCRIPT_DIR}/${APP_NAME}.dmg"
 APP_ZIP="${SCRIPT_DIR}/${APP_NAME}.zip"
+# Use a dedicated macOS .iconset folder (no Contents.json) for iconutil
+ICONSET_DIR="${SCRIPT_DIR}/Sources/assets/MacAppIcon.iconset"
+
 
 info() { echo "[INFO] $*"; }
 err() { echo "[ERROR] $*" >&2; }
@@ -38,7 +41,26 @@ rm -rf "${APP_BUNDLE}"
 mkdir -p "${APP_BUNDLE}/Contents/MacOS"
 mkdir -p "${APP_BUNDLE}/Contents/Resources"
 
-# 3. Generate Info.plist
+# 3. Generate .icns app icon from AppIcon.iconset (if present)
+APP_ICON_ICNS="${APP_BUNDLE}/Contents/Resources/AppIcon.icns"
+if [[ -d "${ICONSET_DIR}" ]]; then
+  info "Generating .icns from AppIcon.iconset..."
+  iconutil -c icns "${ICONSET_DIR}" -o "${APP_ICON_ICNS}"
+else
+  info "AppIcon.iconset not found at ${ICONSET_DIR}, skipping icon generation."
+fi
+
+# 3b. Copy menu bar icon into Resources if present
+# Keep this in sync with the SwiftPM resources (Sources/assets)
+MENU_BAR_ICON_SRC="${SCRIPT_DIR}/Sources/assets/MenuBarIcon.png"
+if [[ -f "${MENU_BAR_ICON_SRC}" ]]; then
+  info "Copying MenuBarIcon.png into app bundle Resources..."
+  cp "${MENU_BAR_ICON_SRC}" "${APP_BUNDLE}/Contents/Resources/MenuBarIcon.png"
+else
+  info "MenuBarIcon.png not found at ${MENU_BAR_ICON_SRC}, status item will use text instead."
+fi
+
+# 4. Generate Info.plist
 INFO_PLIST="${APP_BUNDLE}/Contents/Info.plist"
 cat > "${INFO_PLIST}" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -49,6 +71,8 @@ cat > "${INFO_PLIST}" <<EOF
     <string>${APP_NAME}</string>
     <key>CFBundleExecutable</key>
     <string>${APP_NAME}</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundleIdentifier</key>
     <string>${BUNDLE_ID}</string>
     <key>CFBundleVersion</key>

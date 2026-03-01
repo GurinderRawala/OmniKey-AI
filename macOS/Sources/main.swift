@@ -4,6 +4,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var window: NSWindow?
     var statusItem: NSStatusItem?
     private var statusMenuItem: NSMenuItem?
+    private var taskInstructionsMenuItem: NSMenuItem?
     private var taskInstructionsWindowController: TaskInstructionsWindowController?
     private var licenseWindowController: LicenseWindowController?
     private var monitoringStarted = false
@@ -63,8 +64,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = statusBar.statusItem(withLength: NSStatusItem.squareLength)
         
         if let button = statusItem?.button {
-            button.title = "OK"
-            button.font = NSFont.systemFont(ofSize: 12)
+            if let iconURL = Bundle.main.url(forResource: "MenuBarIcon", withExtension: "png"),
+               let image = NSImage(contentsOf: iconURL) {
+                image.isTemplate = false
+                button.image = image
+                button.imagePosition = .imageOnly
+            } else {
+                button.title = "OK"
+                button.font = NSFont.systemFont(ofSize: 12)
+            }
         }
         
         // Create menu
@@ -75,17 +83,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(statusMenuItem)
         menu.addItem(NSMenuItem.separator())
         self.statusMenuItem = statusMenuItem
-        menu.addItem(NSMenuItem(title: "Fix Prompt (Cmd+E)", action: nil, keyEquivalent: "e"))
-        menu.addItem(NSMenuItem.separator())
-        menu.addItem(NSMenuItem(title: "Fix Grammar (Cmd+G)", action: nil, keyEquivalent: "g"))
-        menu.addItem(NSMenuItem.separator())
-        menu.addItem(NSMenuItem(title: "Custom task (Cmd+T)", action: nil, keyEquivalent: "t"))
-        menu.addItem(NSMenuItem.separator())
         let instructionsItem = NSMenuItem(title: "Task Instructions", action: #selector(showTaskInstructionsWindowFromMenu), keyEquivalent: "")
         instructionsItem.target = self
+        instructionsItem.isEnabled = false
         menu.addItem(instructionsItem)
-
-        let licenseItem = NSMenuItem(title: "Enter Subscription Key…", action: #selector(showLicenseWindowFromMenu), keyEquivalent: "")
+        self.taskInstructionsMenuItem = instructionsItem
+        let licenseItem = NSMenuItem(title: "Subscription", action: #selector(showLicenseWindowFromMenu), keyEquivalent: "")
         licenseItem.target = self
         menu.addItem(licenseItem)
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q"))
@@ -95,11 +98,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         self.statusItem?.menu = menu
     }
 
-     @objc private func showTaskInstructionsWindowFromMenu() {
+    @objc private func showTaskInstructionsWindowFromMenu() {
         showTaskInstructionsWindow()
     }
 
     private func showTaskInstructionsWindow() {
+        guard isAuthorized else {
+            showLicenseWindow()
+            return
+        }
+
         if taskInstructionsWindowController == nil {
             taskInstructionsWindowController = TaskInstructionsWindowController()
         }
@@ -139,14 +147,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func updateAuthStatusUI() {
         let title: String
         if isAuthorized {
-            title = "Status: Active"
+            title = "🟢 Active"
         } else if SubscriptionManager.shared.hasStoredKey {
-            title = "Status: Key Invalid/Expired"
+            title = "🔴 Key Expired"
         } else {
-            title = "Status: Not Activated"
+            title = "🔴 Not Activated"
         }
 
         statusMenuItem?.title = title
+        taskInstructionsMenuItem?.isEnabled = isAuthorized
     }
 
     @objc private func handleSubscriptionUnauthorizedNotification() {
