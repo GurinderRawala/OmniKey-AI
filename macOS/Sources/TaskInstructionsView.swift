@@ -192,7 +192,7 @@ Use OmniKey shortcuts to instantly enhance your writing:
             }
 
             TextEditor(text: $instructions)
-                .font(.system(.body, design: .monospaced))
+                .font(.system(size: 12, design: .monospaced))
                 .scrollContentBackground(.hidden)
                 .background(NordTheme.editorBackground(colorScheme))
         }

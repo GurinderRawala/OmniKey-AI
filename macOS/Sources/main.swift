@@ -5,10 +5,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem?
     private var statusMenuItem: NSMenuItem?
     private var taskInstructionsMenuItem: NSMenuItem?
+    private var manualMenuItem: NSMenuItem?
     private var taskInstructionsWindowController: TaskInstructionsWindowController?
     private var licenseWindowController: LicenseWindowController?
+    private var manualWindowController: ManualWindowController?
     private var monitoringStarted = false
     private var isAuthorized = false
+
+    private let manualShownUserDefaultsKey = "OmniKeyManualShown"
 
     static weak var shared: AppDelegate?
     
@@ -43,6 +47,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                         self.isAuthorized = true
                         self.updateAuthStatusUI()
                         self.startMonitoringIfNeeded()
+                        self.showManualIfFirstTime()
                     } else {
                         self.isAuthorized = false
                         self.updateAuthStatusUI()
@@ -88,6 +93,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         instructionsItem.isEnabled = false
         menu.addItem(instructionsItem)
         self.taskInstructionsMenuItem = instructionsItem
+        let manualItem = NSMenuItem(title: "Manual", action: #selector(showManualWindowFromMenu), keyEquivalent: "")
+        manualItem.target = self
+        menu.addItem(manualItem)
+        self.manualMenuItem = manualItem
         let licenseItem = NSMenuItem(title: "Subscription", action: #selector(showLicenseWindowFromMenu), keyEquivalent: "")
         licenseItem.target = self
         menu.addItem(licenseItem)
@@ -116,6 +125,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         taskInstructionsWindowController?.showWindow(nil)
     }
 
+    @objc private func showManualWindowFromMenu() {
+        showManualWindow()
+    }
+
+    private func showManualWindow() {
+        if manualWindowController == nil {
+            manualWindowController = ManualWindowController()
+        }
+
+        NSApp.activate(ignoringOtherApps: true)
+        manualWindowController?.showWindow(nil)
+    }
+
     @objc private func showLicenseWindowFromMenu() {
         showLicenseWindow()
     }
@@ -136,12 +158,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         updateAuthStatusUI()
         startMonitoringIfNeeded()
         licenseWindowController?.close()
+        showManualIfFirstTime()
     }
 
     private func startMonitoringIfNeeded() {
         guard !monitoringStarted else { return }
         monitoringStarted = true
         KeyboardMonitor.shared.startMonitoring()
+    }
+
+    private func showManualIfFirstTime() {
+        let defaults = UserDefaults.standard
+        if !defaults.bool(forKey: manualShownUserDefaultsKey) {
+            defaults.set(true, forKey: manualShownUserDefaultsKey)
+            defaults.synchronize()
+            showManualWindow()
+        }
     }
 
     private func updateAuthStatusUI() {
