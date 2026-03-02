@@ -4,10 +4,10 @@ import { createSubscriptionRouter } from './subscriptionRoutes';
 import { createFeatureRouter } from './featureRoutes';
 import { initDatabase } from './db';
 import { logger } from './logger';
-import { taskInstructionRouter  } from './taskInstructionRoutes';
+import { taskInstructionRouter } from './taskInstructionRoutes';
 
 const app = express();
-const PORT = 7172;
+const PORT = Number(process.env.PORT) || 8080;
 
 app.use(cors());
 app.use(express.json());
