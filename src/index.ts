@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import path from 'path';
 import { createSubscriptionRouter } from './subscriptionRoutes';
 import { createFeatureRouter } from './featureRoutes';
 import { initDatabase } from './db';
@@ -18,6 +19,20 @@ app.use('/api/subscription', createSubscriptionRouter(logger));
 app.use('/api/feature', createFeatureRouter());
 
 app.use('/api/instructions', taskInstructionRouter());
+
+app.get('/macos/download', (req, res) => {
+  const dmgPath = path.join(process.cwd(), 'macOS', 'OmniKeyAI.dmg');
+
+  res.download(dmgPath, 'OmniKeyAI.dmg', (err) => {
+    if (err) {
+      logger.error('Failed to send OmniKeyAI.dmg for download.', { error: err });
+
+      if (!res.headersSent) {
+        res.status(500).send('Unable to download file.');
+      }
+    }
+  });
+});
 
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok' });

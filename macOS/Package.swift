@@ -14,10 +14,6 @@ let package = Package(
             name: "OmniKeyAI",
             dependencies: [],
             path: "Sources",
-            resources: [
-                // Bundle assets like MenuBarIcon.png for use at runtime
-                .process("assets")
-            ],
             linkerSettings: [
                 .linkedFramework("Carbon")
             ]
