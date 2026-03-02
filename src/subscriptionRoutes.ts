@@ -36,6 +36,20 @@ function signSubscriptionJwt(logger: Logger, subscriptionId: string, status: str
   );
 }
 
+function superAdminAuthMiddleware(req: Request, res: Response, next: express.NextFunction) {
+  const authHeader = req.headers['authorization'];
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Missing or invalid Authorization header.' });
+  }
+
+  const token = authHeader.substring(7); // Remove "Bearer " prefix
+  if (token !== config.internalApiKey) {
+    return res.status(403).json({ error: 'Forbidden: Invalid API key.' });
+  }
+
+  next();
+}
+
 export function createSubscriptionRouter(logger: Logger): express.Router {
   const router = express.Router();
 
@@ -43,7 +57,7 @@ export function createSubscriptionRouter(logger: Logger): express.Router {
   // This is expected to be called after payment or trial creation logic
   // (which will be added separately). The generated key is what the user
   // will enter once into the desktop app.
-  router.post('/generate-key', async (req: Request, res: Response) => {
+  router.post('/generate-key', superAdminAuthMiddleware, async (req: Request, res: Response) => {
     logger.defaultMeta = { traceId: randomUUID() };
     logger.info('Handling subscription key generation request.');
 
