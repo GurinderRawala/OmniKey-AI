@@ -54,7 +54,7 @@ Subscription.init(
     },
     email: {
       type: DataTypes.STRING,
-      allowNull: true,
+      allowNull: false,
     },
     subscriptionStatus: {
       type: DataTypes.STRING,

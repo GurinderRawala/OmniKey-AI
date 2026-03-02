@@ -7,7 +7,7 @@ import { Subscription } from './models/subscription';
 import { config } from './config';
 
 interface GenerateKeyBody {
-  email?: string;
+  email: string;
   // Optional ISO 8601 timestamp for when this key should expire.
   // If omitted or null, the key does not expire.
   expiresAt?: string | null;
@@ -69,7 +69,7 @@ export function createSubscriptionRouter(logger: Logger): express.Router {
 
       const subscription = await Subscription.create({
         licenseKey: rawKey,
-        email: body.email ?? null,
+        email: body.email,
         subscriptionStatus: 'active',
         licenseKeyExpiresAt: expiresAt,
       });
