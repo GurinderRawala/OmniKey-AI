@@ -136,15 +136,6 @@ info "Copying binary into app bundle..."
 cp "${BINARY_PATH}" "${APP_BUNDLE}/Contents/MacOS/${APP_NAME}"
 chmod +x "${APP_BUNDLE}/Contents/MacOS/${APP_NAME}"
 
-# 5a. Copy MenuBarIcon.png into Resources so the status item can load it
-MENU_BAR_ICON_SRC="${SCRIPT_DIR}/Sources/assets/MenuBarIcon.png"
-if [[ -f "${MENU_BAR_ICON_SRC}" ]]; then
-  info "Copying MenuBarIcon.png into app Resources..."
-  cp "${MENU_BAR_ICON_SRC}" "${APP_BUNDLE}/Contents/Resources/MenuBarIcon.png"
-else
-  info "MenuBarIcon.png not found at ${MENU_BAR_ICON_SRC}; status bar icon will fall back to text."
-fi
-
 # 6. Codesign the app bundle
 info "Code signing app bundle with Developer ID certificate..."
 codesign --deep --force --options runtime \

@@ -64,12 +64,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = statusBar.statusItem(withLength: NSStatusItem.squareLength)
         
         if let button = statusItem?.button {
-            if
-                let url = Bundle.main.url(forResource: "MenuBarIcon", withExtension: "png"),
-                let image = NSImage(contentsOf: url)
-            {
-                image.isTemplate = true
-                button.image = image
+            if let statusImage = NSImage(named: "StatusBarIcon") {
+                statusImage.isTemplate = false
+                button.image = statusImage
                 button.imageScaling = .scaleProportionallyDown
                 button.imagePosition = .imageOnly
             } else {

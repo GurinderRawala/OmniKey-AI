@@ -1,19 +1,16 @@
 {
   "images" : [
     {
-      "filename" : "icon-mac-16x16.png",
       "idiom" : "mac",
       "scale" : "1x",
       "size" : "16x16"
     },
     {
-      "filename" : "icon-mac-32x32.png",
       "idiom" : "mac",
       "scale" : "2x",
       "size" : "16x16"
     },
     {
-      "filename" : "icon-mac-32x32 1.png",
       "idiom" : "mac",
       "scale" : "1x",
       "size" : "32x32"
@@ -24,37 +21,32 @@
       "size" : "32x32"
     },
     {
-      "filename" : "icon-mac-128x128.png",
       "idiom" : "mac",
       "scale" : "1x",
       "size" : "128x128"
     },
     {
-      "filename" : "icon-mac-256x256.png",
       "idiom" : "mac",
       "scale" : "2x",
       "size" : "128x128"
     },
     {
-      "filename" : "icon_256x256.png",
       "idiom" : "mac",
       "scale" : "1x",
       "size" : "256x256"
     },
     {
-      "filename" : "icon-mac-512x512.png",
       "idiom" : "mac",
       "scale" : "2x",
       "size" : "256x256"
     },
     {
-      "filename" : "icon_512x512.png",
       "idiom" : "mac",
       "scale" : "1x",
       "size" : "512x512"
     },
     {
-      "filename" : "icon-watchos-1024x1024.png",
+      "filename" : "Icon-iOS-Default-1024x1024@1x.png",
       "idiom" : "mac",
       "scale" : "2x",
       "size" : "512x512"
