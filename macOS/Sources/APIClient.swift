@@ -1,11 +1,31 @@
 import Foundation
 
 class APIClient {
-    private let enhancePromptURL = URL(string: "http://localhost:7172/api/feature/enhance")!
-    private let enhanceGrammarURL = URL(string: "http://localhost:7172/api/feature/grammar")!
-    private let customTaskURL = URL(string: "http://localhost:7172/api/feature/custom-task")!
-    private let getTaskInstructionsURL = URL(string: "http://localhost:7172/api/instructions/get-task-instructions")!
-    private let createTaskInstructionsURL = URL(string: "http://localhost:7172/api/instructions/create-task-instructions")!
+    /// Base URL resolution order:
+    /// 1. Environment variable `OMNIKEY_BACKEND_URL` at runtime
+    /// 2. Info.plist key `OMNIKEY_BACKEND_URL` (set by build_release_dmg.sh)
+    /// 3. Fallback to local development server at http://localhost:7071
+    static let baseURL: URL = {
+        if let env = ProcessInfo.processInfo.environment["OMNIKEY_BACKEND_URL"], !env.isEmpty,
+           let url = URL(string: env) {
+            return url
+        }
+
+        if let plistValue = Bundle.main.object(forInfoDictionaryKey: "OMNIKEY_BACKEND_URL") as? String,
+           !plistValue.isEmpty,
+           let url = URL(string: plistValue) {
+            return url
+        }
+
+        // Default local backend for development
+        return URL(string: "http://localhost:7071")!
+    }()
+
+    private let enhancePromptURL = APIClient.baseURL.appendingPathComponent("api/feature/enhance")
+    private let enhanceGrammarURL = APIClient.baseURL.appendingPathComponent("api/feature/grammar")
+    private let customTaskURL = APIClient.baseURL.appendingPathComponent("api/feature/custom-task")
+    private let getTaskInstructionsURL = APIClient.baseURL.appendingPathComponent("api/instructions/get-task-instructions")
+    private let createTaskInstructionsURL = APIClient.baseURL.appendingPathComponent("api/instructions/create-task-instructions")
 
     func getURL(for cmd: String) -> URL? {
         switch cmd {

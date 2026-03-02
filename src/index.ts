@@ -5,9 +5,10 @@ import { createFeatureRouter } from './featureRoutes';
 import { initDatabase } from './db';
 import { logger } from './logger';
 import { taskInstructionRouter } from './taskInstructionRoutes';
+import { config } from './config';
 
 const app = express();
-const PORT = Number(process.env.PORT) || 8080;
+const PORT = Number(config.port);
 
 app.use(cors());
 app.use(express.json());

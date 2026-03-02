@@ -51,4 +51,5 @@ export const config = {
   // Expiry in seconds
   jwtExpiresInSeconds: getNumberEnv('JWT_EXPIRES_IN_SECONDS', 2 * 60 * 60), // default 2 hours
   internalApiKey: getEnv('INTERNAL_API_KEY', true)!,
+  port: getNumberEnv('PORT', 8080),
 };

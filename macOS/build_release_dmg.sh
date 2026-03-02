@@ -9,6 +9,21 @@ DEVELOPER_NAME="Gurinder Singh"
 DEVELOPER_ID_CERT="Developer ID Application: ${DEVELOPER_NAME} (${TEAM_ID})"
 NOTARY_PROFILE="omnikey-notary"    # Notarytool keychain profile name
 
+# Backend base URL for the packaged app.
+#
+# Order of precedence at runtime (see APIClient):
+#   1. Environment variable OMNIKEY_BACKEND_URL
+#   2. Info.plist key OMNIKEY_BACKEND_URL (set here)
+#   3. Fallback to http://localhost:7071
+#
+# You can override this when building, e.g.:
+#   OMNIKEY_BACKEND_URL="https://my-custom-backend" ./build_release_dmg.sh
+#
+# NOTE: We intentionally do not hard-code the SaaS URL here.
+#       The value is taken from your local OMNIKEY_BACKEND_URL
+#       environment variable, falling back to localhost for dev.
+BACKEND_BASE_URL="${OMNIKEY_BACKEND_URL:-http://localhost:7071}"
+
 info() { echo "[INFO] $*"; }
 err()  { echo "[ERROR] $*" >&2; }
 
@@ -119,6 +134,10 @@ cat > "${INFO_PLIST}" <<EOF
     <string>APPL</string>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
+
+    <!-- Backend base URL used by APIClient (can be overridden by env OMNIKEY_BACKEND_URL) -->
+    <key>OMNIKEY_BACKEND_URL</key>
+    <string>${BACKEND_BASE_URL}</string>
 
     <!-- Run as a UIElement (menu bar style, no Dock icon). Remove if you want Dock icon. -->
     <key>LSUIElement</key>

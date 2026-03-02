@@ -1,10 +1,13 @@
 {
   "images" : [
     {
+      "idiom" : "mac",
+      "scale" : "1x"
+    },
+    {
       "filename" : "200x200.png",
       "idiom" : "mac",
-      "scale" : "2x",
-      "size" : "100x100"
+      "scale" : "2x"
     }
   ],
   "info" : {

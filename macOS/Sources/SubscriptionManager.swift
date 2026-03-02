@@ -150,15 +150,7 @@ final class SubscriptionManager {
     }
 
     private func activate(key: String, completion: @escaping (Result<String, Error>) -> Void) {
-        guard let url = URL(string: "http://localhost:7172/api/subscription/activate") else {
-            let error = NSError(
-                domain: "SubscriptionManager",
-                code: -1,
-                userInfo: [NSLocalizedDescriptionKey: "Invalid activation URL."]
-            )
-            completion(.failure(error))
-            return
-        }
+        let url = APIClient.baseURL.appendingPathComponent("api/subscription/activate")
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
