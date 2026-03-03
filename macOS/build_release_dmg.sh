@@ -127,9 +127,9 @@ cat > "${INFO_PLIST}" <<EOF
     <key>CFBundleIdentifier</key>
     <string>${BUNDLE_ID}</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>2</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0.0</string>
+    <string>1.0.1</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>LSMinimumSystemVersion</key>
@@ -164,6 +164,21 @@ EOF
 info "Copying binary into app bundle..."
 cp "${BINARY_PATH}" "${APP_BUNDLE}/Contents/MacOS/${APP_NAME}"
 chmod +x "${APP_BUNDLE}/Contents/MacOS/${APP_NAME}"
+
+# 5a. Embed Sparkle.framework used by the binary
+# SwiftPM links against Sparkle as a dynamic framework located in
+# ${BUILD_DIR}/Sparkle.framework. At runtime, the loader uses an
+# rpath of @loader_path, so we need Sparkle.framework next to the
+# executable (Contents/MacOS).
+SPARKLE_FRAMEWORK_SOURCE="${BUILD_DIR}/Sparkle.framework"
+if [[ -d "${SPARKLE_FRAMEWORK_SOURCE}" ]]; then
+  info "Embedding Sparkle.framework into app bundle..."
+  cp -R "${SPARKLE_FRAMEWORK_SOURCE}" "${APP_BUNDLE}/Contents/MacOS/"
+else
+  err "Sparkle.framework not found at ${SPARKLE_FRAMEWORK_SOURCE}"
+  err "Did SwiftPM finish fetching/building the Sparkle package?"
+  exit 1
+fi
 
 # 6. Codesign the app bundle
 info "Code signing app bundle with Developer ID certificate..."
