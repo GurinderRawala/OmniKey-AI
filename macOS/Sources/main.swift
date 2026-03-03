@@ -111,7 +111,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         let licenseItem = NSMenuItem(title: "Subscription", action: #selector(showLicenseWindowFromMenu), keyEquivalent: "")
         licenseItem.target = self
         menu.addItem(licenseItem)
-        let updateItem = NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdatesFromMenu), keyEquivalent: "")
+        let updateItem = NSMenuItem(title: "Check Updates", action: #selector(checkForUpdatesFromMenu), keyEquivalent: "")
         updateItem.target = self
         menu.addItem(updateItem)
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q"))
