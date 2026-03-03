@@ -1,6 +1,7 @@
 import AppKit
+import Sparkle
 
-class AppDelegate: NSObject, NSApplicationDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     var window: NSWindow?
     var statusItem: NSStatusItem?
     private var statusMenuItem: NSMenuItem?
@@ -12,6 +13,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var monitoringStarted = false
     private var isAuthorized = false
 
+    private var updaterController: SPUStandardUpdaterController?
+
     private let manualShownUserDefaultsKey = "OmniKeyManualShown"
 
     static weak var shared: AppDelegate?
@@ -19,6 +22,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         setupMenuBar()
+
+        // Set up Sparkle auto-updater; this will automatically
+        // check the SUFeedURL specified in Info.plist.
+        updaterController = SPUStandardUpdaterController(
+            startingUpdater: true,
+            updaterDelegate: self,
+            userDriverDelegate: nil
+        )
 
         AppDelegate.shared = self
 
@@ -100,11 +111,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let licenseItem = NSMenuItem(title: "Subscription", action: #selector(showLicenseWindowFromMenu), keyEquivalent: "")
         licenseItem.target = self
         menu.addItem(licenseItem)
+        let updateItem = NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdatesFromMenu), keyEquivalent: "")
+        updateItem.target = self
+        menu.addItem(updateItem)
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q"))
         
         // Attach the menu to the status bar item so clicking the
         // menu bar icon shows this menu.
         self.statusItem?.menu = menu
+    }
+
+    @objc private func checkForUpdatesFromMenu() {
+        updaterController?.checkForUpdates(nil)
     }
 
     @objc private func showTaskInstructionsWindowFromMenu() {

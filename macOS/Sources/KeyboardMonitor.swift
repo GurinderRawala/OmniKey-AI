@@ -10,6 +10,8 @@ final class KeyboardMonitor {
     private var hotKeyRef: EventHotKeyRef?
     private var eventHandlerRef: EventHandlerRef?
     private let apiClient = APIClient()
+    private var inProgressAlertTimer: Timer?
+    private let inProgressAlertInterval: TimeInterval = 10.0
 
     // "HERK"
     private let hotKeySignature: OSType = OSType(UInt32(bigEndian: 0x4845524B))
@@ -218,13 +220,12 @@ final class KeyboardMonitor {
         execute(cmd: "T")
     }
 
-    /// Common flow once we have a non-empty selected text.
-    private func proceedWithSelectedText(_ text: String, cmd: String) {
+    private func handleInProgressAlert(cmd: String) {
         if cmd == "E" {
-        showAlert(
-            title: "Enhancing Prompt",
-            message: "Enhancing your selected text..."
-        )
+            showAlert(
+                title: "Enhancing Prompt",
+                message: "Enhancing your selected text..."
+            )
         } else if cmd == "G" {
             showAlert(
                 title: "Fixing Grammar",
@@ -236,7 +237,11 @@ final class KeyboardMonitor {
                 message: "Processing your selected text..."
             )
         }
+    }
 
+    /// Common flow once we have a non-empty selected text.
+    private func proceedWithSelectedText(_ text: String, cmd: String) {
+        startInProgressAlerts(for: cmd)
         sendToAPI(text: text, cmd: cmd)
     }
 
@@ -338,10 +343,13 @@ final class KeyboardMonitor {
             DispatchQueue.main.async {
                 guard let self else { return }
 
+                self.stopInProgressAlerts()
+
                 switch result {
                 case .success(let enhancedText):
                     self.showAlert(title: "Success", message: "Text enhanced!")
-                    self.replaceSelectedText(with: enhancedText)
+                    let finalText = self.extractImprovedText(from: enhancedText)
+                    self.replaceSelectedText(with: finalText)
 
                 case .failure(let error):
                     self.showAlert(title: "Error", message: "Failed: \(error.localizedDescription)")
@@ -387,6 +395,48 @@ final class KeyboardMonitor {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             self.simulateKeyCombination(carbonKeyCode: CGKeyCode(9), flags: .maskCommand) // "V" is 9
         }
+    }
+
+    // MARK: - Streaming helpers
+
+    /// Starts periodic in-progress alerts while the enhancement
+    /// request is running, and shows the first alert immediately.
+    private func startInProgressAlerts(for cmd: String) {
+        stopInProgressAlerts()
+
+        // Show the initial in‑progress alert right away.
+        handleInProgressAlert(cmd: cmd)
+
+        let timer = Timer.scheduledTimer(withTimeInterval: inProgressAlertInterval, repeats: true) {
+            [weak self] _ in
+            self?.handleInProgressAlert(cmd: cmd)
+        }
+
+        inProgressAlertTimer = timer
+    }
+
+    /// Stops any ongoing in-progress alerts.
+    private func stopInProgressAlerts() {
+        inProgressAlertTimer?.invalidate()
+        inProgressAlertTimer = nil
+    }
+
+    /// Extracts the improved text from the model response by
+    /// removing optional <improved_text> wrapper tags, falling
+    /// back to the raw response if no tags are present.
+    private func extractImprovedText(from response: String) -> String {
+        let trimmed = response.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard let startRange = trimmed.range(of: "<improved_text>") else {
+            return trimmed
+        }
+
+        guard let endRange = trimmed.range(of: "</improved_text>", range: startRange.upperBound..<trimmed.endIndex) else {
+            return trimmed
+        }
+
+        let inner = trimmed[startRange.upperBound..<endRange.lowerBound]
+        return inner.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     // MARK: - UI

@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
+import fs from 'fs';
 import { createSubscriptionRouter } from './subscriptionRoutes';
 import { createFeatureRouter } from './featureRoutes';
 import { initDatabase } from './db';
@@ -32,6 +33,56 @@ app.get('/macos/download', (req, res) => {
       }
     }
   });
+});
+
+// Sparkle appcast feed for macOS updates.
+// This feed uses the existing /macos/download endpoint as the
+// enclosure URL so both manual downloads and Sparkle updates
+// share the same DMG file.
+app.get('/macos/appcast', (req, res) => {
+  const dmgPath = path.join(process.cwd(), 'macOS', 'OmniKeyAI.dmg');
+
+  let length = 0;
+  try {
+    const stats = fs.statSync(dmgPath);
+    length = stats.size;
+  } catch (error) {
+    logger.error('Failed to stat OmniKeyAI.dmg for appcast.', { error });
+  }
+
+  const baseUrl = `${req.protocol}://${req.get('host')}`;
+  const downloadUrl = `${baseUrl}/macos/download`;
+  const appcastUrl = `${baseUrl}/macos/appcast`;
+
+  // These should match the values embedded into the macOS app
+  // Info.plist in macOS/build_release_dmg.sh.
+  const bundleVersion = '1';
+  const shortVersion = '1.0.0';
+
+  const xml = `<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0"
+     xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"
+     xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>OmniKeyAI Updates</title>
+    <link>${appcastUrl}</link>
+    <description>OmniKeyAI macOS updates</description>
+    <language>en</language>
+    <item>
+      <title>Version ${shortVersion}</title>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <enclosure
+        url="${downloadUrl}"
+        sparkle:version="${bundleVersion}"
+        sparkle:shortVersionString="${shortVersion}"
+        length="${length}"
+        type="application/octet-stream" />
+    </item>
+  </channel>
+</rss>`;
+
+  res.set('Content-Type', 'application/xml; charset=utf-8');
+  res.send(xml);
 });
 
 app.get('/health', (_req, res) => {

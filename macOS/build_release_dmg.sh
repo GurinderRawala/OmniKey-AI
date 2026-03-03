@@ -139,6 +139,16 @@ cat > "${INFO_PLIST}" <<EOF
     <key>OMNIKEY_BACKEND_URL</key>
     <string>${BACKEND_BASE_URL}</string>
 
+    <!-- Sparkle update feed URL. The backend should expose an appcast
+      at /macos/appcast which in turn points its enclosure URL to
+      the existing /macos/download DMG endpoint. -->
+    <key>SUFeedURL</key>
+    <string>${BACKEND_BASE_URL}/macos/appcast</string>
+
+    <!-- Enable automatic periodic update checks -->
+    <key>SUEnableAutomaticChecks</key>
+    <true/>
+
     <!-- Run as a UIElement (menu bar style, no Dock icon). Remove if you want Dock icon. -->
     <key>LSUIElement</key>
     <true/>

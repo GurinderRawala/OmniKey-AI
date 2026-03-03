@@ -51,6 +51,8 @@ class APIClient {
         if let token = SubscriptionManager.shared.jwtToken {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
+        // Request streaming behavior from the backend when available.
+        request.setValue("true", forHTTPHeaderField: "x-omnikey-stream")
         
         let payload: [String: String] = ["text": text]
         
@@ -114,18 +116,12 @@ class APIClient {
                 return
             }
 
-            do {
-                if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let enhancedText = json["result"] as? String {
-                    completion(.success(enhancedText))
-                } else if let enhancedText = String(data: data, encoding: .utf8) {
-                    completion(.success(enhancedText))
-                } else {
-                    completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Could not parse response"])))
-                }
-            } catch {
-                completion(.failure(error))
+            if let enhancedText = String(data: data, encoding: .utf8) {
+                completion(.success(enhancedText))
+                return
             }
+
+            completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Could not parse response"])))
         }
 
         task.resume()
