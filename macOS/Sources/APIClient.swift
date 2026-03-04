@@ -7,13 +7,15 @@ class APIClient {
     /// 3. Fallback to local development server at http://localhost:7071
     static let baseURL: URL = {
         if let env = ProcessInfo.processInfo.environment["OMNIKEY_BACKEND_URL"], !env.isEmpty,
-           let url = URL(string: env) {
+           let url = URL(string: env)
+        {
             return url
         }
 
         if let plistValue = Bundle.main.object(forInfoDictionaryKey: "OMNIKEY_BACKEND_URL") as? String,
            !plistValue.isEmpty,
-           let url = URL(string: plistValue) {
+           let url = URL(string: plistValue)
+        {
             return url
         }
 
@@ -39,7 +41,7 @@ class APIClient {
             return nil
         }
     }
-    
+
     func enhance(_ text: String, cmd: String, completion: @escaping (Result<String, Error>) -> Void) {
         guard let url = getURL(for: cmd) else {
             completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unknown command"])))
@@ -53,16 +55,16 @@ class APIClient {
         }
         // Request streaming behavior from the backend when available.
         request.setValue("true", forHTTPHeaderField: "x-omnikey-stream")
-        
+
         let payload: [String: String] = ["text": text]
-        
+
         do {
             request.httpBody = try JSONSerialization.data(withJSONObject: payload)
         } catch {
             completion(.failure(error))
             return
         }
-        
+
         sendEnhanceRequest(with: request, allowReauth: true, completion: completion)
     }
 
@@ -101,7 +103,7 @@ class APIClient {
                 return
             }
 
-            guard (200...299).contains(httpResponse.statusCode) else {
+            guard (200 ... 299).contains(httpResponse.statusCode) else {
                 let error = NSError(
                     domain: "APIClient",
                     code: httpResponse.statusCode,
@@ -167,12 +169,12 @@ class APIClient {
                 return
             }
 
-            guard (200...299).contains(httpResponse.statusCode) else {
+            guard (200 ... 299).contains(httpResponse.statusCode) else {
                 // If the instructions endpoint is missing or not yet set up, treat it as empty instructions
                 if httpResponse.statusCode == 404 {
                     completion(.success(""))
                 } else {
-                    completion(.failure(NSError(domain: "APIClient", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Server returned status code \(httpResponse.statusCode)"])) )
+                    completion(.failure(NSError(domain: "APIClient", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Server returned status code \(httpResponse.statusCode)"])))
                 }
                 return
             }
@@ -316,8 +318,8 @@ class APIClient {
                 return
             }
 
-            guard (200...299).contains(httpResponse.statusCode) else {
-                completion(.failure(NSError(domain: "APIClient", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Server returned status code \(httpResponse.statusCode)"])) )
+            guard (200 ... 299).contains(httpResponse.statusCode) else {
+                completion(.failure(NSError(domain: "APIClient", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Server returned status code \(httpResponse.statusCode)"])))
                 return
             }
 

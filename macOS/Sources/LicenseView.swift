@@ -81,7 +81,7 @@ struct LicenseView: View {
                     self.statusMessage = "Activation successful. OmniKey is unlocked."
                     AppDelegate.shared?.handleSuccessfulAuthorization()
 
-                case .failure(let error):
+                case let .failure(error):
                     self.statusMessage = "Activation failed: \(error.localizedDescription)"
                 }
             }

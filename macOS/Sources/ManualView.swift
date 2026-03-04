@@ -22,51 +22,51 @@ struct ManualView: View {
                         sectionTitle("Keyboard shortcuts")
 
                         Text("""
-• ⌘E – Enhance prompts
-  Improves clarity, structure, and tone of your selected text so it works better as an AI prompt.
+                        • ⌘E – Enhance prompts
+                          Improves clarity, structure, and tone of your selected text so it works better as an AI prompt.
 
-• ⌘G – Fix grammar and clarity
-  Focuses on grammar, spelling, and readability without changing the core meaning.
+                        • ⌘G – Fix grammar and clarity
+                          Focuses on grammar, spelling, and readability without changing the core meaning.
 
-• ⌘T – Run your custom task
-  Applies your saved task instructions to the selected text. Configure these in “Task Instructions” from the menu bar.
-""")
+                        • ⌘T – Run your custom task
+                          Applies your saved task instructions to the selected text. Configure these in “Task Instructions” from the menu bar.
+                        """)
                         .font(.system(size: 13))
                         .foregroundColor(NordTheme.primaryText(colorScheme))
 
                         sectionTitle("How OmniKey works")
 
                         Text("""
-1. Select text in any app (editor, browser, email, etc.).
-2. Press one of the OmniKey shortcuts (⌘E, ⌘G, or ⌘T).
-3. OmniKey sends the text securely to the OmniKey AI service.
-4. The result is pasted back in place of your original selection.
-""")
+                        1. Select text in any app (editor, browser, email, etc.).
+                        2. Press one of the OmniKey shortcuts (⌘E, ⌘G, or ⌘T).
+                        3. OmniKey sends the text securely to the OmniKey AI service.
+                        4. The result is pasted back in place of your original selection.
+                        """)
                         .font(.system(size: 13))
                         .foregroundColor(NordTheme.primaryText(colorScheme))
 
                         sectionTitle("Custom tasks with Task Instructions")
 
                         Text("""
-- Open the “Task Instructions” window from the OmniKey menu bar icon.
-- Describe the role, style, and rules you want OmniKey to follow when you press ⌘T.
-- OmniKey will apply those instructions every time you trigger the custom task shortcut.
-""")
+                        - Open the “Task Instructions” window from the OmniKey menu bar icon.
+                        - Describe the role, style, and rules you want OmniKey to follow when you press ⌘T.
+                        - OmniKey will apply those instructions every time you trigger the custom task shortcut.
+                        """)
                         .font(.system(size: 13))
                         .foregroundColor(NordTheme.primaryText(colorScheme))
 
                         sectionTitle("Asking questions with @omnikeyai")
 
                         Text("""
-You can also ask OmniKey questions related to your current task.
+                        You can also ask OmniKey questions related to your current task.
 
-- In your document or editor, write a question starting with “@omnikeyai”.
-  Example: “@omnikeyai Can you explain step 3 in simpler terms?”
-- Select that question (or the whole block of text around it).
-- Press one of the OmniKey shortcuts.
+                        - In your document or editor, write a question starting with “@omnikeyai”.
+                          Example: “@omnikeyai Can you explain step 3 in simpler terms?”
+                        - Select that question (or the whole block of text around it).
+                        - Press one of the OmniKey shortcuts.
 
-OmniKey will treat anything after “@omnikeyai” as a direct question and answer in the context of your current text or task.
-""")
+                        OmniKey will treat anything after “@omnikeyai” as a direct question and answer in the context of your current text or task.
+                        """)
                         .font(.system(size: 13))
                         .foregroundColor(NordTheme.primaryText(colorScheme))
                     }

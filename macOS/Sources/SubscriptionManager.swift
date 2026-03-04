@@ -20,7 +20,9 @@ final class SubscriptionManager {
     /// memory only and refreshed by re-activating the stored key.
     private(set) var jwtToken: String?
 
-    var hasStoredKey: Bool { userKey != nil }
+    var hasStoredKey: Bool {
+        userKey != nil
+    }
 
     private init() {
         userKey = defaults.string(forKey: userKeyDefaultsKey)
@@ -45,13 +47,13 @@ final class SubscriptionManager {
             guard let self else { return }
 
             switch result {
-            case .success(let token):
+            case let .success(token):
                 self.userKey = trimmed
                 self.jwtToken = token
                 self.defaults.set(trimmed, forKey: self.userKeyDefaultsKey)
                 completion(.success(()))
 
-            case .failure(let error as NSError):
+            case let .failure(error as NSError):
                 if error.domain == "SubscriptionManager", error.code == 403 {
                     // Subscription has expired for this key – notify the app
                     // so it can present the subscription window / purchase link.
@@ -74,11 +76,11 @@ final class SubscriptionManager {
             guard let self else { return }
 
             switch result {
-            case .success(let token):
+            case let .success(token):
                 self.jwtToken = token
                 completion(true)
 
-            case .failure(let error as NSError):
+            case let .failure(error as NSError):
                 self.jwtToken = nil
                 if error.domain == "SubscriptionManager", error.code == 403 {
                     // Stored key is now expired; surface the subscription
@@ -112,11 +114,11 @@ final class SubscriptionManager {
             guard let self else { return }
 
             switch result {
-            case .success(let token):
+            case let .success(token):
                 self.jwtToken = token
                 completion(.success)
 
-            case .failure(let error as NSError):
+            case let .failure(error as NSError):
                 if error.domain == "SubscriptionManager", error.code == 403 {
                     completion(.expired)
                 } else {
@@ -194,8 +196,9 @@ final class SubscriptionManager {
             do {
                 let decoded = try JSONDecoder().decode(ActivateResponse.self, from: data)
 
-                guard (200...299).contains(httpResponse.statusCode),
-                      let token = decoded.token else {
+                guard (200 ... 299).contains(httpResponse.statusCode),
+                      let token = decoded.token
+                else {
                     let message = decoded.error
                         ?? HTTPURLResponse.localizedString(forStatusCode: httpResponse.statusCode)
                     let error = NSError(

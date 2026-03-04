@@ -1,10 +1,10 @@
-import Foundation
 import AppKit
+import Foundation
 
 final class PasteboardManager {
     static let shared = PasteboardManager()
 
-    // Primary helpers used by KeyboardMonitor
+    /// Primary helpers used by KeyboardMonitor
     func getSelectedTextFromPasteboard() -> String? {
         let pasteboard = NSPasteboard.general
         return pasteboard.string(forType: .string)
@@ -16,7 +16,7 @@ final class PasteboardManager {
         pasteboard.setString(text, forType: .string)
     }
 
-    // Backwards-compatible helpers (if you still use old names anywhere)
+    /// Backwards-compatible helpers (if you still use old names anywhere)
     func getSelectedText() -> String? {
         getSelectedTextFromPasteboard()
     }

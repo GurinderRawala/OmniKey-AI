@@ -1,9 +1,10 @@
 import AppKit
+import ApplicationServices
 import Carbon
 import Foundation
-import ApplicationServices
 
 // MARK: - Keyboard Monitor
+
 final class KeyboardMonitor {
     static let shared = KeyboardMonitor()
 
@@ -12,20 +13,30 @@ final class KeyboardMonitor {
     private let apiClient = APIClient()
     private var inProgressAlertTimer: Timer?
     private let inProgressAlertInterval: TimeInterval = 10.0
+    private let logPrefix = "[omnikeyai]"
+
+    // Remember the original app and selection so we can paste
+    // the result back into the correct place even if the user
+    // switches windows while the request is in flight.
+    private var originalApp: NSRunningApplication?
+    private var originalAXElement: AXUIElement?
+    private var originalSelectedTextRange: CFTypeRef?
 
     // "HERK"
-    private let hotKeySignature: OSType = OSType(UInt32(bigEndian: 0x4845524B))
+    private let hotKeySignature: OSType = .init(UInt32(bigEndian: 0x4845_524B))
     private let hotKeyID: UInt32 = 1
 
-    private let grammarFixHotKeySignature: OSType = OSType(UInt32(bigEndian: 0x47525846)) // "GRXF"
+    private let grammarFixHotKeySignature: OSType = .init(UInt32(bigEndian: 0x4752_5846)) // "GRXF"
     private let grammarFixHotKeyID: UInt32 = 2
 
-    private let customTaskHotKeySignature: OSType = OSType(UInt32(bigEndian: 0x4354534B)) // "CTSK"
+    private let customTaskHotKeySignature: OSType = .init(UInt32(bigEndian: 0x4354_534B)) // "CTSK"
     private let customTaskHotKeyID: UInt32 = 3
+
+    private var originalSelectedText = ""
 
     private init() {}
 
-    // Call this once at app startup (e.g. AppDelegate applicationDidFinishLaunching)
+    /// Call this once at app startup (e.g. AppDelegate applicationDidFinishLaunching)
     func startMonitoring() {
         requestAccessibilityPermissions()
 
@@ -51,12 +62,12 @@ final class KeyboardMonitor {
     private func installHotKeyHandler() {
         // Listen for kEventHotKeyPressed
         var eventSpec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
-                                     eventKind: UInt32(kEventHotKeyPressed))
+                                      eventKind: UInt32(kEventHotKeyPressed))
 
         // Install handler on the application event target
         let status = InstallEventHandler(
             GetApplicationEventTarget(),
-            { (_, eventRef, _) -> OSStatus in
+            { _, eventRef, _ -> OSStatus in
                 guard let eventRef else { return OSStatus(eventNotHandledErr) }
 
                 var hotKeyID = EventHotKeyID()
@@ -73,27 +84,27 @@ final class KeyboardMonitor {
                 guard err == noErr else { return err }
 
                 // Route only our hotkey
-                if hotKeyID.signature == KeyboardMonitor.shared.hotKeySignature &&
-                    hotKeyID.id == KeyboardMonitor.shared.hotKeyID {
-
+                if hotKeyID.signature == KeyboardMonitor.shared.hotKeySignature,
+                   hotKeyID.id == KeyboardMonitor.shared.hotKeyID
+                {
                     DispatchQueue.main.async {
                         KeyboardMonitor.shared.handleCommandE()
                     }
                     return noErr
                 }
 
-                if hotKeyID.signature == KeyboardMonitor.shared.grammarFixHotKeySignature &&
-                    hotKeyID.id == KeyboardMonitor.shared.grammarFixHotKeyID {
-
+                if hotKeyID.signature == KeyboardMonitor.shared.grammarFixHotKeySignature,
+                   hotKeyID.id == KeyboardMonitor.shared.grammarFixHotKeyID
+                {
                     DispatchQueue.main.async {
                         KeyboardMonitor.shared.handleCommandG()
                     }
                     return noErr
                 }
 
-                if hotKeyID.signature == KeyboardMonitor.shared.customTaskHotKeySignature &&
-                    hotKeyID.id == KeyboardMonitor.shared.customTaskHotKeyID {
-
+                if hotKeyID.signature == KeyboardMonitor.shared.customTaskHotKeySignature,
+                   hotKeyID.id == KeyboardMonitor.shared.customTaskHotKeyID
+                {
                     DispatchQueue.main.async {
                         KeyboardMonitor.shared.handleCommandT()
                     }
@@ -117,7 +128,7 @@ final class KeyboardMonitor {
 
     private func registerHotKeys() {
         // Cmd modifier
-        let modifiers: UInt32 = UInt32(cmdKey)
+        let modifiers = UInt32(cmdKey)
 
         // Carbon virtual keycode for "E" is 14 on US keyboard layouts
         let enhancerKeyCode: UInt32 = 14
@@ -141,7 +152,7 @@ final class KeyboardMonitor {
             print("❌ Failed to register Cmd+E hotkey: \(enhancePromptKeyStatus)")
         }
 
-         // Carbon virtual keycode for "G" is 5 on US keyboard layouts
+        // Carbon virtual keycode for "G" is 5 on US keyboard layouts
         // will be used to fix grammar only.
         let grammarFixKeyCode: UInt32 = 5
 
@@ -188,18 +199,23 @@ final class KeyboardMonitor {
     }
 
     @MainActor private func execute(cmd: String) {
+        // Capture the current frontmost app and its focused
+        // text selection before we start any work, so we can
+        // restore focus and paste the result back there later.
+        captureOriginalContext()
+
         // First try Accessibility API to read globally selected text
         if let rawText = getGloballySelectedText() {
             let trimmed = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmed.isEmpty {
-                print("[PromptEnhancer] AX captured text (length: \(trimmed.count)):\n\(trimmed)")
+                print("\(logPrefix) AX captured text (length: \(trimmed.count)):\n\(trimmed)")
                 proceedWithSelectedText(trimmed, cmd: cmd)
                 return
             } else {
-                print("[PromptEnhancer] AX selected text is empty; falling back to clipboard.")
+                print("\(logPrefix) AX selected text is empty; falling back to clipboard.")
             }
         } else {
-            print("[PromptEnhancer] AX selected text is nil; falling back to clipboard.")
+            print("\(logPrefix) AX selected text is nil; falling back to clipboard.")
         }
 
         // Fallback: use Cmd+C + pasteboard change detection
@@ -241,6 +257,7 @@ final class KeyboardMonitor {
 
     /// Common flow once we have a non-empty selected text.
     private func proceedWithSelectedText(_ text: String, cmd: String) {
+        originalSelectedText = text
         startInProgressAlerts(for: cmd)
         sendToAPI(text: text, cmd: cmd)
     }
@@ -260,7 +277,7 @@ final class KeyboardMonitor {
 
             let currentPasteboard = NSPasteboard.general
             let newChangeCount = currentPasteboard.changeCount
-            print("[PromptEnhancer] Pasteboard changeCount: initial=\(initialChangeCount), current=\(newChangeCount)")
+            print("\(logPrefix) Pasteboard changeCount: initial=\(initialChangeCount), current=\(newChangeCount)")
 
             // If the pasteboard did not change, no new copy happened
             if newChangeCount == initialChangeCount {
@@ -268,7 +285,7 @@ final class KeyboardMonitor {
                     title: "No Text Selected",
                     message: "There is no text selected. Please select some text and try again."
                 )
-                print("[PromptEnhancer] Cmd+\(cmd) pressed but pasteboard did not change (no copy).")
+                print("\(logPrefix) Cmd+\(cmd) pressed but pasteboard did not change (no copy).")
                 return
             }
 
@@ -279,11 +296,11 @@ final class KeyboardMonitor {
                     title: "No Text Selected",
                     message: "There is no text selected. Please select some text and try again."
                 )
-                print("[PromptEnhancer] Cmd+\(cmd) pressed but copied text is empty.")
+                print("\(logPrefix) Cmd+\(cmd) pressed but copied text is empty.")
                 return
             }
 
-            print("[PromptEnhancer] Clipboard captured text (length: \(trimmed.count)):\n\(trimmed)")
+            print("\(logPrefix) Clipboard captured text (length: \(trimmed.count)):\n\(trimmed)")
             self.proceedWithSelectedText(trimmed, cmd: cmd)
         }
     }
@@ -299,11 +316,12 @@ final class KeyboardMonitor {
             if range.length > 0 {
                 let full = textView.string as NSString
                 let selectedText = full.substring(with: range)
-                print("[PromptEnhancer] Local NSTextView selected text (length: \(selectedText.count))")
+                print("\(logPrefix) Local NSTextView selected text (length: \(selectedText.count))")
                 return selectedText
             }
         }
 
+        // Finally, fall back to the system-wide focused element.
         let systemWideElement = AXUIElementCreateSystemWide()
 
         var focusedValue: CFTypeRef?
@@ -314,7 +332,7 @@ final class KeyboardMonitor {
         )
 
         guard focusedError == .success, let focusedValue else {
-            print("[PromptEnhancer] Failed to get focused AX element: \(focusedError.rawValue)")
+            print("\(logPrefix) Failed to get focused AX element: \(focusedError.rawValue)")
             return nil
         }
 
@@ -328,7 +346,7 @@ final class KeyboardMonitor {
         )
 
         guard selectedError == .success, let selectedText = selectedValue as? String else {
-            print("[PromptEnhancer] Failed to get selected text: \(selectedError.rawValue)")
+            print("\(logPrefix) Failed to get selected text: \(selectedError.rawValue)")
             return nil
         }
 
@@ -337,7 +355,7 @@ final class KeyboardMonitor {
 
     private func sendToAPI(text: String, cmd: String) {
         let original = normalizeOriginalText(text)
-        print("[PromptEnhancer] Normalized text to send (length: \(original.count)).")
+        print("\(logPrefix) Normalized text to send (length: \(original.count)).")
 
         apiClient.enhance(original, cmd: cmd) { [weak self] result in
             DispatchQueue.main.async {
@@ -346,12 +364,12 @@ final class KeyboardMonitor {
                 self.stopInProgressAlerts()
 
                 switch result {
-                case .success(let enhancedText):
+                case let .success(enhancedText):
                     self.showAlert(title: "Success", message: "Text enhanced!")
                     let finalText = self.extractImprovedText(from: enhancedText)
                     self.replaceSelectedText(with: finalText)
 
-                case .failure(let error):
+                case let .failure(error):
                     self.showAlert(title: "Error", message: "Failed: \(error.localizedDescription)")
                 }
             }
@@ -388,13 +406,12 @@ final class KeyboardMonitor {
             return
         }
 
-        // Otherwise fall back to pasteboard + simulated Cmd+V for
-        // external apps.
-        PasteboardManager.shared.setPasteboardText(text)
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            self.simulateKeyCombination(carbonKeyCode: CGKeyCode(9), flags: .maskCommand) // "V" is 9
-        }
+        // Otherwise, we are operating on another app. Try to
+        // reactivate the original app and restore its selection
+        // before pasting there. If that fails, fall back to just
+        // copying the text to the clipboard and asking the user
+        // to paste manually.
+        pasteResultBackToOriginalContext(text)
     }
 
     // MARK: - Streaming helpers
@@ -431,11 +448,11 @@ final class KeyboardMonitor {
             return trimmed
         }
 
-        guard let endRange = trimmed.range(of: "</improved_text>", range: startRange.upperBound..<trimmed.endIndex) else {
+        guard let endRange = trimmed.range(of: "</improved_text>", range: startRange.upperBound ..< trimmed.endIndex) else {
             return trimmed
         }
 
-        let inner = trimmed[startRange.upperBound..<endRange.lowerBound]
+        let inner = trimmed[startRange.upperBound ..< endRange.lowerBound]
         return inner.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
@@ -500,17 +517,17 @@ final class KeyboardMonitor {
         window.orderFrontRegardless()
 
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.15
+            ctx.duration = 0.20
             window.animator().alphaValue = 1
         }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.7) {
-            NSAnimationContext.runAnimationGroup({ ctx in
+            NSAnimationContext.runAnimationGroup { ctx in
                 ctx.duration = 0.25
                 window.animator().alphaValue = 0
-            }, completionHandler: {
+            } completionHandler: {
                 window.orderOut(nil)
-            })
+            }
         }
     }
 
@@ -521,13 +538,14 @@ final class KeyboardMonitor {
         print("ℹ️ AXIsProcessTrusted() = \(trusted)")
 
         guard let source = CGEventSource(stateID: .hidSystemState) else {
-            print("[PromptEnhancer] Failed to create CGEventSource.")
+            print("\(logPrefix) Failed to create CGEventSource.")
             return
         }
 
         guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: carbonKeyCode, keyDown: true),
-              let keyUp = CGEvent(keyboardEventSource: source, virtualKey: carbonKeyCode, keyDown: false) else {
-            print("[PromptEnhancer] Failed to create CGEvent for key down/up.")
+              let keyUp = CGEvent(keyboardEventSource: source, virtualKey: carbonKeyCode, keyDown: false)
+        else {
+            print("\(logPrefix) Failed to create CGEvent for key down/up.")
             return
         }
 
@@ -551,6 +569,141 @@ final class KeyboardMonitor {
             print("✅ Accessibility permissions granted")
         } else {
             print("⚠️ Accessibility permissions NOT granted yet. Enable it in System Settings → Privacy & Security → Accessibility.")
+        }
+    }
+
+    // MARK: - Original context capture & paste-back
+
+    /// Capture the frontmost application's focused element and its
+    /// selected text range so we can later restore focus and paste
+    /// the enhanced text back into the same place.
+    private func captureOriginalContext() {
+        // Clear any previous context first.
+        originalApp = nil
+        originalAXElement = nil
+        originalSelectedTextRange = nil
+
+        // If OmniKey itself is active (e.g. user is in our Task
+        // Instructions window), we handle replacement directly in
+        // the NSTextView and do not need AX-based paste-back.
+        if NSApp.isActive {
+            return
+        }
+
+        guard let frontmost = NSWorkspace.shared.frontmostApplication else {
+            print("\(logPrefix) Unable to resolve frontmost app for selection context.")
+            return
+        }
+
+        let appElement = AXUIElementCreateApplication(frontmost.processIdentifier)
+
+        var focusedValue: CFTypeRef?
+        let focusedError = AXUIElementCopyAttributeValue(
+            appElement,
+            kAXFocusedUIElementAttribute as CFString,
+            &focusedValue
+        )
+
+        guard focusedError == .success, let focusedValue else {
+            print("\(logPrefix) Could not capture AX focused element for app \(frontmost.localizedName ?? "?"): \(focusedError.rawValue)")
+            // We at least remember the app so we can reactivate it.
+            originalApp = frontmost
+            return
+        }
+
+        let focusedElement = focusedValue as! AXUIElement
+
+        var rangeValue: CFTypeRef?
+        let rangeError = AXUIElementCopyAttributeValue(
+            focusedElement,
+            kAXSelectedTextRangeAttribute as CFString,
+            &rangeValue
+        )
+
+        originalApp = frontmost
+        originalAXElement = focusedElement
+
+        if rangeError == .success, let rangeValue {
+            originalSelectedTextRange = rangeValue
+        } else {
+            originalSelectedTextRange = nil
+            print("\(logPrefix) Could not capture AX selected range: \(rangeError.rawValue)")
+        }
+    }
+
+    /// Try to paste the enhanced text back into the original app
+    /// and selection captured when the hotkey was pressed. If this
+    /// is not possible (e.g. the window closed or AX is not fully
+    /// available), we fall back to copying the text and showing a
+    /// notification so the user can paste manually.
+    private func pasteResultBackToOriginalContext(_ text: String) {
+        // Always ensure the result is on the clipboard.
+        PasteboardManager.shared.setPasteboardText(text)
+
+        guard let originalApp else {
+            // We don't know where the request originated from;
+            // keep the text on the clipboard and instruct the
+            // user to paste wherever they need it.
+            showAlert(
+                title: "Result Ready",
+                message: "Results copied. Press ⌘V where you want to paste it."
+            )
+            return
+        }
+
+        // Try to bring the original app back to the front so
+        // Cmd+V targets the same window/field as when the user
+        // first invoked OmniKey, but only if it's not already
+        // the frontmost application.
+        let didActivate: Bool
+        if NSWorkspace.shared.frontmostApplication?.processIdentifier != originalApp.processIdentifier {
+            originalApp.activate(options: [.activateIgnoringOtherApps])
+            didActivate = true
+        } else {
+            didActivate = false
+        }
+
+        let performPasteBack: () -> Void = { [weak self, originalApp] in
+            guard let self else { return }
+
+            // Best-effort: if we captured a selection range,
+            // try to restore it. Even if this fails, we still
+            // go ahead and paste, because the original selection
+            // is still active.
+            if let range = self.originalSelectedTextRange {
+                let element = self.originalAXElement ?? AXUIElementCreateApplication(originalApp.processIdentifier)
+                let setResult = AXUIElementSetAttributeValue(
+                    element,
+                    kAXSelectedTextRangeAttribute as CFString,
+                    range
+                )
+
+                if setResult != .success {
+                    print("\(self.logPrefix) Failed to restore AX selected range: \(setResult.rawValue)")
+                }
+            }
+
+            // With focus on the same element, simulated Cmd+V
+            // should replace the existing selection or insert at
+            // the current caret position.
+            self.simulateKeyCombination(carbonKeyCode: CGKeyCode(9), flags: .maskCommand) // "V" is 9
+
+            // Clear context after we've attempted paste-back.
+            self.originalApp = nil
+            self.originalAXElement = nil
+            self.originalSelectedTextRange = nil
+            self.originalSelectedText = ""
+        }
+
+        if didActivate {
+            // Give macOS a brief moment to bring the original
+            // app and its window back to the front before we
+            // attempt to restore the selection and paste.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: performPasteBack)
+        } else {
+            // App is already frontmost; we can paste back
+            // immediately without any delay.
+            performPasteBack()
         }
     }
 }

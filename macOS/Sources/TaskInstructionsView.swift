@@ -22,7 +22,7 @@ struct TaskInstructionsView: View {
             content: ""
         ),
         EditorPolishTemplate.template,
-        SQLTemplate.template
+        SQLTemplate.template,
     ]
 
     var body: some View {
@@ -127,13 +127,13 @@ struct TaskInstructionsView: View {
         apiClient.fetchTaskInstructions { result in
             DispatchQueue.main.async {
                 switch result {
-                case .success(let text):
+                case let .success(text):
                     self.originalInstructions = text
                     self.instructions = text
                     self.hasPendingChanges = false
                     self.statusMessage = text.isEmpty ? "No instructions set yet." : "Instructions loaded."
 
-                case .failure(let error):
+                case let .failure(error):
                     self.statusMessage = "Failed to load: \(error.localizedDescription)"
                 }
 
@@ -155,7 +155,7 @@ struct TaskInstructionsView: View {
                     self.hasPendingChanges = false
                     self.statusMessage = "Instructions saved."
 
-                case .failure(let error):
+                case let .failure(error):
                     self.statusMessage = "Failed to save: \(error.localizedDescription)"
                 }
 
@@ -166,7 +166,6 @@ struct TaskInstructionsView: View {
 
     // MARK: - Subviews
 
-    @ViewBuilder
     private func instructionTextEditor() -> some View {
         ZStack(alignment: .topLeading) {
             if instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {

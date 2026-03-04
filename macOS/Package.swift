@@ -4,10 +4,10 @@ import PackageDescription
 let package = Package(
     name: "OmniKeyAI",
     platforms: [
-        .macOS(.v13)
+        .macOS(.v13),
     ],
     products: [
-        .executable(name: "OmniKeyAI", targets: ["OmniKeyAI"])
+        .executable(name: "OmniKeyAI", targets: ["OmniKeyAI"]),
     ],
     dependencies: [
         // Sparkle framework for macOS app auto-updates
@@ -17,12 +17,12 @@ let package = Package(
         .executableTarget(
             name: "OmniKeyAI",
             dependencies: [
-                .product(name: "Sparkle", package: "Sparkle")
+                .product(name: "Sparkle", package: "Sparkle"),
             ],
             path: "Sources",
             linkerSettings: [
-                .linkedFramework("Carbon")
+                .linkedFramework("Carbon"),
             ]
-        )
+        ),
     ]
 )

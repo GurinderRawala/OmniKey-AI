@@ -1,18 +1,18 @@
 import SwiftUI
 
-struct NordTheme {
+enum NordTheme {
     // Base Nord colors
-    static let nord0 = Color(red: 46/255, green: 52/255, blue: 64/255)
-    static let nord1 = Color(red: 59/255, green: 66/255, blue: 82/255)
-    static let nord2 = Color(red: 67/255, green: 76/255, blue: 94/255)
-    static let nord3 = Color(red: 76/255, green: 86/255, blue: 106/255)
-    static let nord4 = Color(red: 216/255, green: 222/255, blue: 233/255)
-    static let nord5 = Color(red: 229/255, green: 233/255, blue: 240/255)
-    static let nord6 = Color(red: 236/255, green: 239/255, blue: 244/255)
-    static let nord7 = Color(red: 143/255, green: 188/255, blue: 187/255)
-    static let nord8 = Color(red: 136/255, green: 192/255, blue: 208/255)
-    static let nord9 = Color(red: 129/255, green: 161/255, blue: 193/255)
-    static let nord10 = Color(red: 94/255, green: 129/255, blue: 172/255)
+    static let nord0 = Color(red: 46 / 255, green: 52 / 255, blue: 64 / 255)
+    static let nord1 = Color(red: 59 / 255, green: 66 / 255, blue: 82 / 255)
+    static let nord2 = Color(red: 67 / 255, green: 76 / 255, blue: 94 / 255)
+    static let nord3 = Color(red: 76 / 255, green: 86 / 255, blue: 106 / 255)
+    static let nord4 = Color(red: 216 / 255, green: 222 / 255, blue: 233 / 255)
+    static let nord5 = Color(red: 229 / 255, green: 233 / 255, blue: 240 / 255)
+    static let nord6 = Color(red: 236 / 255, green: 239 / 255, blue: 244 / 255)
+    static let nord7 = Color(red: 143 / 255, green: 188 / 255, blue: 187 / 255)
+    static let nord8 = Color(red: 136 / 255, green: 192 / 255, blue: 208 / 255)
+    static let nord9 = Color(red: 129 / 255, green: 161 / 255, blue: 193 / 255)
+    static let nord10 = Color(red: 94 / 255, green: 129 / 255, blue: 172 / 255)
 
     static func windowBackground(_ scheme: ColorScheme) -> LinearGradient {
         switch scheme {

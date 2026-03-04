@@ -17,9 +17,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
 
     private let manualShownUserDefaultsKey = "OmniKeyManualShown"
 
-    static weak var shared: AppDelegate?
-    
-    func applicationDidFinishLaunching(_ notification: Notification) {
+    weak static var shared: AppDelegate?
+
+    func applicationDidFinishLaunching(_: Notification) {
         NSApp.setActivationPolicy(.accessory)
         setupMenuBar()
 
@@ -73,12 +73,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
             showLicenseWindow()
         }
     }
-    
+
     private func setupMenuBar() {
         // Create a status bar item
         let statusBar = NSStatusBar.system
         statusItem = statusBar.statusItem(withLength: NSStatusItem.squareLength)
-        
+
         if let button = statusItem?.button {
             if let statusImage = NSImage(named: "StatusBarIcon") {
                 statusImage.isTemplate = false
@@ -90,7 +90,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
                 button.font = NSFont.systemFont(ofSize: 12)
             }
         }
-        
+
         // Create menu
         let menu = NSMenu()
 
@@ -103,11 +103,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         instructionsItem.target = self
         instructionsItem.isEnabled = false
         menu.addItem(instructionsItem)
-        self.taskInstructionsMenuItem = instructionsItem
+        taskInstructionsMenuItem = instructionsItem
         let manualItem = NSMenuItem(title: "Manual", action: #selector(showManualWindowFromMenu), keyEquivalent: "")
         manualItem.target = self
         menu.addItem(manualItem)
-        self.manualMenuItem = manualItem
+        manualMenuItem = manualItem
         let licenseItem = NSMenuItem(title: "Subscription", action: #selector(showLicenseWindowFromMenu), keyEquivalent: "")
         licenseItem.target = self
         menu.addItem(licenseItem)
@@ -115,10 +115,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         updateItem.target = self
         menu.addItem(updateItem)
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q"))
-        
+
         // Attach the menu to the status bar item so clicking the
         // menu bar icon shows this menu.
-        self.statusItem?.menu = menu
+        statusItem?.menu = menu
     }
 
     @objc private func checkForUpdatesFromMenu() {
@@ -239,15 +239,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
             self.showLicenseWindow()
         }
     }
-    
+
     @objc func quit() {
         NSApplication.shared.terminate(nil)
     }
-    
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+
+    func applicationShouldTerminateAfterLastWindowClosed(_: NSApplication) -> Bool {
         return false // Keep app running in menu bar
     }
 }
+
 // Top-level entry point for the executable target
 let app = NSApplication.shared
 let delegate = AppDelegate()

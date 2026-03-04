@@ -3,7 +3,6 @@ import SwiftUI
 
 /// NSWindowController hosting the ManualView that explains how to use OmniKey.
 final class ManualWindowController: NSWindowController {
-
     convenience init() {
         let rootView = ManualView()
         let hostingController = NSHostingController(rootView: rootView)
@@ -25,7 +24,7 @@ final class ManualWindowController: NSWindowController {
     override func showWindow(_ sender: Any?) {
         super.showWindow(sender)
 
-        guard let window = self.window else { return }
+        guard let window = window else { return }
         NSApp.activate(ignoringOtherApps: true)
         window.level = .normal
         window.makeKeyAndOrderFront(nil)

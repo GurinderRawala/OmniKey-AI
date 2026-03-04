@@ -5,7 +5,6 @@ import SwiftUI
 /// first responder so that SwiftUI text fields can handle paste/copy
 /// even without a full menubar.
 final class LicenseWindow: NSWindow {
-
     private func firstTextResponder(in view: NSView) -> NSResponder? {
         if view is NSTextField || view is NSTextView { return view }
         for sub in view.subviews {
@@ -18,7 +17,6 @@ final class LicenseWindow: NSWindow {
         if event.type == .keyDown {
             let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
             if flags.contains(.command), let chars = event.charactersIgnoringModifiers {
-
                 let target: NSResponder?
                 if let first = firstResponder, first is NSTextField || first is NSTextView {
                     target = first
@@ -80,7 +78,6 @@ final class LicenseWindow: NSWindow {
 /// NSWindowController hosting the LicenseView used to enter and
 /// activate the subscription key.
 final class LicenseWindowController: NSWindowController {
-
     convenience init() {
         let rootView = LicenseView()
         let hostingController = NSHostingController(rootView: rootView)
@@ -102,7 +99,7 @@ final class LicenseWindowController: NSWindowController {
     override func showWindow(_ sender: Any?) {
         super.showWindow(sender)
 
-        guard let window = self.window else { return }
+        guard let window = window else { return }
         NSApp.activate(ignoringOtherApps: true)
         window.level = .normal
         window.makeKeyAndOrderFront(nil)
