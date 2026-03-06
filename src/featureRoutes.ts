@@ -82,7 +82,7 @@ export function createFeatureRouter(): express.Router {
       );
     }
 
-    return decompressString(subscription.taskInstructions) ?? '';
+    return '';
   }
 
   function getModelForCommand(cmd: EnhanceCommand): string {
