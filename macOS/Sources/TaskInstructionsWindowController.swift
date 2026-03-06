@@ -69,7 +69,7 @@ final class TaskInstructionsWindowController: NSWindowController {
         let hostingController = NSHostingController(rootView: rootView)
 
         let window = TaskInstructionsWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 860, height: 720),
+            contentRect: NSRect(x: 0, y: 0, width: 1200, height: 820),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false

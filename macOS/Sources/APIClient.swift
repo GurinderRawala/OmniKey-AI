@@ -26,8 +26,7 @@ class APIClient {
     private let enhancePromptURL = APIClient.baseURL.appendingPathComponent("api/feature/enhance")
     private let enhanceGrammarURL = APIClient.baseURL.appendingPathComponent("api/feature/grammar")
     private let customTaskURL = APIClient.baseURL.appendingPathComponent("api/feature/custom-task")
-    private let getTaskInstructionsURL = APIClient.baseURL.appendingPathComponent("api/instructions/get-task-instructions")
-    private let createTaskInstructionsURL = APIClient.baseURL.appendingPathComponent("api/instructions/create-task-instructions")
+    private let taskTemplatesBaseURL = APIClient.baseURL.appendingPathComponent("api/instructions/templates")
 
     func getURL(for cmd: String) -> URL? {
         switch cmd {
@@ -129,84 +128,6 @@ class APIClient {
         task.resume()
     }
 
-    /// Fetches existing custom task instructions from the backend.
-    /// If no instructions exist, the backend is expected to return an empty string
-    /// or an empty JSON field, which this method normalizes to an empty string.
-    func fetchTaskInstructions(completion: @escaping (Result<String, Error>) -> Void) {
-        fetchTaskInstructions(allowReauth: true, completion: completion)
-    }
-
-    private func fetchTaskInstructions(
-        allowReauth: Bool,
-        completion: @escaping (Result<String, Error>) -> Void
-    ) {
-        var request = URLRequest(url: getTaskInstructionsURL)
-        request.httpMethod = "GET"
-
-        if let token = SubscriptionManager.shared.jwtToken {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
-
-        let task = URLSession.shared.dataTask(with: request) { data, response, error in
-            if let error = error {
-                completion(.failure(error))
-                return
-            }
-
-            guard let httpResponse = response as? HTTPURLResponse else {
-                completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response"])))
-                return
-            }
-
-            if self.handleAuthFailure(
-                statusCode: httpResponse.statusCode,
-                allowReauth: allowReauth,
-                onRetry: {
-                    self.fetchTaskInstructions(allowReauth: false, completion: completion)
-                },
-                completion: completion
-            ) {
-                return
-            }
-
-            guard (200 ... 299).contains(httpResponse.statusCode) else {
-                // If the instructions endpoint is missing or not yet set up, treat it as empty instructions
-                if httpResponse.statusCode == 404 {
-                    completion(.success(""))
-                } else {
-                    completion(.failure(NSError(domain: "APIClient", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Server returned status code \(httpResponse.statusCode)"])))
-                }
-                return
-            }
-
-            guard let data = data, !data.isEmpty else {
-                completion(.success(""))
-                return
-            }
-
-            do {
-                // Try to parse JSON first; fall back to plain text.
-                if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                    if let instructions = json["instructions"] as? String {
-                        completion(.success(instructions))
-                        return
-                    }
-                }
-
-                if let text = String(data: data, encoding: .utf8) {
-                    completion(.success(text))
-                    return
-                }
-
-                completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Could not parse instructions response"])))
-            } catch {
-                completion(.failure(error))
-            }
-        }
-
-        task.resume()
-    }
-
     @discardableResult
     private func handleAuthFailure<T>(
         statusCode: Int,
@@ -269,34 +190,31 @@ class APIClient {
         completion(.failure(error))
     }
 
-    /// Persists custom task instructions to the backend.
-    func saveTaskInstructions(_ instructions: String, completion: @escaping (Result<Void, Error>) -> Void) {
-        saveTaskInstructions(instructions, allowReauth: true, completion: completion)
+    // MARK: - Task templates
+
+    struct TaskTemplateDTO: Codable, Identifiable {
+        let id: String
+        let heading: String
+        let instructions: String
+        let isDefault: Bool
     }
 
-    private func saveTaskInstructions(
-        _ instructions: String,
+    func fetchTaskTemplates(completion: @escaping (Result<[TaskTemplateDTO], Error>) -> Void) {
+        fetchTaskTemplates(allowReauth: true, completion: completion)
+    }
+
+    private func fetchTaskTemplates(
         allowReauth: Bool,
-        completion: @escaping (Result<Void, Error>) -> Void
+        completion: @escaping (Result<[TaskTemplateDTO], Error>) -> Void
     ) {
-        var request = URLRequest(url: createTaskInstructionsURL)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        var request = URLRequest(url: taskTemplatesBaseURL)
+        request.httpMethod = "GET"
 
         if let token = SubscriptionManager.shared.jwtToken {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
 
-        let payload: [String: String] = ["instructions": instructions]
-
-        do {
-            request.httpBody = try JSONSerialization.data(withJSONObject: payload)
-        } catch {
-            completion(.failure(error))
-            return
-        }
-
-        let task = URLSession.shared.dataTask(with: request) { _, response, error in
+        let task = URLSession.shared.dataTask(with: request) { data, response, error in
             if let error = error {
                 completion(.failure(error))
                 return
@@ -311,7 +229,7 @@ class APIClient {
                 statusCode: httpResponse.statusCode,
                 allowReauth: allowReauth,
                 onRetry: {
-                    self.saveTaskInstructions(instructions, allowReauth: false, completion: completion)
+                    self.fetchTaskTemplates(allowReauth: false, completion: completion)
                 },
                 completion: completion
             ) {
@@ -323,7 +241,209 @@ class APIClient {
                 return
             }
 
+            guard let data = data, !data.isEmpty else {
+                completion(.success([]))
+                return
+            }
+
+            do {
+                struct ResponseEnvelope: Codable {
+                    let templates: [TaskTemplateDTO]
+                }
+
+                let decoded = try JSONDecoder().decode(ResponseEnvelope.self, from: data)
+                completion(.success(decoded.templates))
+            } catch {
+                completion(.failure(error))
+            }
+        }
+
+        task.resume()
+    }
+
+    func createTaskTemplate(
+        heading: String,
+        instructions: String,
+        completion: @escaping (Result<TaskTemplateDTO, Error>) -> Void
+    ) {
+        var request = URLRequest(url: taskTemplatesBaseURL)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        if let token = SubscriptionManager.shared.jwtToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+
+        let payload: [String: String] = [
+            "heading": heading,
+            "instructions": instructions,
+        ]
+
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        } catch {
+            completion(.failure(error))
+            return
+        }
+
+        let task = URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error = error {
+                completion(.failure(error))
+                return
+            }
+
+            guard let httpResponse = response as? HTTPURLResponse else {
+                completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response"])))
+                return
+            }
+
+            if !(200 ... 299).contains(httpResponse.statusCode) {
+                completion(.failure(NSError(domain: "APIClient", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Server returned status code \(httpResponse.statusCode)"])))
+                return
+            }
+
+            guard let data = data, !data.isEmpty else {
+                completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No data received"])))
+                return
+            }
+
+            do {
+                let decoded = try JSONDecoder().decode(TaskTemplateDTO.self, from: data)
+                completion(.success(decoded))
+            } catch {
+                completion(.failure(error))
+            }
+        }
+
+        task.resume()
+    }
+
+    func updateTaskTemplate(
+        id: String,
+        heading: String,
+        instructions: String,
+        completion: @escaping (Result<TaskTemplateDTO, Error>) -> Void
+    ) {
+        let url = taskTemplatesBaseURL.appendingPathComponent(id)
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        if let token = SubscriptionManager.shared.jwtToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+
+        let payload: [String: String] = [
+            "heading": heading,
+            "instructions": instructions,
+        ]
+
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        } catch {
+            completion(.failure(error))
+            return
+        }
+
+        let task = URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error = error {
+                completion(.failure(error))
+                return
+            }
+
+            guard let httpResponse = response as? HTTPURLResponse else {
+                completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response"])))
+                return
+            }
+
+            if !(200 ... 299).contains(httpResponse.statusCode) {
+                completion(.failure(NSError(domain: "APIClient", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Server returned status code \(httpResponse.statusCode)"])))
+                return
+            }
+
+            guard let data = data, !data.isEmpty else {
+                completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No data received"])))
+                return
+            }
+
+            do {
+                let decoded = try JSONDecoder().decode(TaskTemplateDTO.self, from: data)
+                completion(.success(decoded))
+            } catch {
+                completion(.failure(error))
+            }
+        }
+
+        task.resume()
+    }
+
+    func deleteTaskTemplate(id: String, completion: @escaping (Result<Void, Error>) -> Void) {
+        let url = taskTemplatesBaseURL.appendingPathComponent(id)
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+
+        if let token = SubscriptionManager.shared.jwtToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+
+        let task = URLSession.shared.dataTask(with: request) { _, response, error in
+            if let error = error {
+                completion(.failure(error))
+                return
+            }
+
+            guard let httpResponse = response as? HTTPURLResponse else {
+                completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response"])))
+                return
+            }
+
+            if !(200 ... 299).contains(httpResponse.statusCode) && httpResponse.statusCode != 204 {
+                completion(.failure(NSError(domain: "APIClient", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Server returned status code \(httpResponse.statusCode)"])))
+                return
+            }
+
             completion(.success(()))
+        }
+
+        task.resume()
+    }
+
+    func setDefaultTaskTemplate(id: String, completion: @escaping (Result<TaskTemplateDTO, Error>) -> Void) {
+        let url = taskTemplatesBaseURL.appendingPathComponent("\(id)/set-default")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+
+        if let token = SubscriptionManager.shared.jwtToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+
+        let task = URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error = error {
+                completion(.failure(error))
+                return
+            }
+
+            guard let httpResponse = response as? HTTPURLResponse else {
+                completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response"])))
+                return
+            }
+
+            if !(200 ... 299).contains(httpResponse.statusCode) {
+                completion(.failure(NSError(domain: "APIClient", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Server returned status code \(httpResponse.statusCode)"])))
+                return
+            }
+
+            guard let data = data, !data.isEmpty else {
+                completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No data received"])))
+                return
+            }
+
+            do {
+                let decoded = try JSONDecoder().decode(TaskTemplateDTO.self, from: data)
+                completion(.success(decoded))
+            } catch {
+                completion(.failure(error))
+            }
         }
 
         task.resume()
