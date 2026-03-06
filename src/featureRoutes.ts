@@ -13,6 +13,7 @@ import { AuthLocals, authMiddleware } from './authMiddleware';
 import { Subscription } from './models/subscription';
 import { SubscriptionUsage } from './models/subscriptionUsage';
 import { decompressString } from './compression';
+import { SubscriptionTaskTemplate } from './models/subscriptionTaskTemplate';
 
 interface EnhanceRequestBody {
   text?: string;
@@ -46,18 +47,42 @@ export function createFeatureRouter(): express.Router {
     total_tokens?: number;
   };
 
-  function getSystemPromptForCommand(
+  async function getSystemPromptForCommand(
+    logger: Logger,
     cmd: EnhanceCommand,
     subscription: Subscription,
-  ): string | null {
-    const prompts: Record<EnhanceCommand, string> = {
-      enhance: enhancePromptSystemInstruction,
-      grammar: grammarPromptSystemInstruction,
-      task: decompressString(subscription.taskInstructions) ?? '',
-    };
+  ): Promise<string | null> {
+    if (cmd === 'enhance') {
+      return enhancePromptSystemInstruction;
+    }
 
-    const systemPrompt = prompts[cmd];
-    return systemPrompt || null;
+    if (cmd === 'grammar') {
+      return grammarPromptSystemInstruction;
+    }
+
+    try {
+      const template = await SubscriptionTaskTemplate.findOne({
+        where: { subscriptionId: subscription.id, isDefault: true },
+        order: [['createdAt', 'ASC']],
+      });
+
+      if (template) {
+        const decompressed = decompressString(template.instructions);
+        if (decompressed) {
+          return decompressed;
+        }
+      }
+    } catch (err) {
+      logger.error(
+        'Error loading subscription task template; falling back to legacy instructions.',
+        {
+          error: err,
+          subscriptionId: subscription.id,
+        },
+      );
+    }
+
+    return decompressString(subscription.taskInstructions) ?? '';
   }
 
   function getModelForCommand(cmd: EnhanceCommand): string {
@@ -78,7 +103,7 @@ export function createFeatureRouter(): express.Router {
       return null;
     }
 
-    const systemPrompt = getSystemPromptForCommand(cmd, subscription);
+    const systemPrompt = await getSystemPromptForCommand(logger, cmd, subscription);
 
     if (!systemPrompt) {
       logger.error(`No system prompt found for command: ${cmd}`);
