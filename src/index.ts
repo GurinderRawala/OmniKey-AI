@@ -8,6 +8,7 @@ import { initDatabase } from './db';
 import { logger } from './logger';
 import { taskInstructionRouter } from './taskInstructionRoutes';
 import { config } from './config';
+import { startAgentGrpcServer } from './agentServer';
 
 const app = express();
 const PORT = Number(config.port);
@@ -56,8 +57,8 @@ app.get('/macos/appcast', (req, res) => {
 
   // These should match the values embedded into the macOS app
   // Info.plist in macOS/build_release_dmg.sh.
-  const bundleVersion = '6';
-  const shortVersion = '1.0.5';
+  const bundleVersion = '7';
+  const shortVersion = '1.0.6';
 
   const xml = `<?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0"
@@ -97,6 +98,12 @@ async function start() {
     server = app.listen(PORT, () => {
       logger.info(`Enhancer API listening on http://localhost:${PORT}`);
     });
+
+    // Start the gRPC agent server in the same process. This
+    // listens on a separate TCP port and handles the bi-
+    // directional AgentStream used by the macOS app when
+    // running @omniAgent sessions.
+    startAgentGrpcServer();
   } catch (err) {
     logger.error('Failed to start server due to DB error.', { error: err });
     process.exit(1);

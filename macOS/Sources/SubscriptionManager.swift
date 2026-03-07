@@ -7,7 +7,7 @@ extension Notification.Name {
 
 /// Manages the persisted user subscription key and the in‑memory
 /// JWT used to authenticate requests to the OmniKey backend.
-final class SubscriptionManager {
+final class SubscriptionManager: @unchecked Sendable {
     static let shared = SubscriptionManager()
 
     private let defaults = UserDefaults.standard

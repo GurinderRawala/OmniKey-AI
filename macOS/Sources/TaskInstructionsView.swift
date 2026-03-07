@@ -313,10 +313,16 @@ struct TaskInstructionsView: View {
                     .padding(.leading, 5)
             }
 
-            TextEditor(text: $templateInstructionsInput)
-                .font(.system(size: 12, design: .monospaced))
-                .scrollContentBackground(.hidden)
-                .background(NordTheme.editorBackground(colorScheme))
+            if #available(macOS 13.0, *) {
+                    TextEditor(text: $templateInstructionsInput)
+                        .font(.system(size: 12, design: .monospaced))
+                        .scrollContentBackground(.hidden)
+                        .background(NordTheme.editorBackground(colorScheme))
+                } else {
+                    TextEditor(text: $templateInstructionsInput)
+                        .font(.system(size: 12, design: .monospaced))
+                        .background(NordTheme.editorBackground(colorScheme))
+                }
         }
             .frame(minHeight: 260)
         .overlay(

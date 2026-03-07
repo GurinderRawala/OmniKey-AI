@@ -1,6 +1,6 @@
 import Foundation
 
-class APIClient {
+final class APIClient: @unchecked Sendable {
     /// Base URL resolution order:
     /// 1. Environment variable `OMNIKEY_BACKEND_URL` at runtime
     /// 2. Info.plist key `OMNIKEY_BACKEND_URL` (set by build_release_dmg.sh)
@@ -41,7 +41,7 @@ class APIClient {
         }
     }
 
-    func enhance(_ text: String, cmd: String, completion: @escaping (Result<String, Error>) -> Void) {
+    func enhance(_ text: String, cmd: String, completion: @escaping @Sendable (Result<String, Error>) -> Void) {
         guard let url = getURL(for: cmd) else {
             completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unknown command"])))
             return
@@ -73,58 +73,63 @@ class APIClient {
     private func sendEnhanceRequest(
         with request: URLRequest,
         allowReauth: Bool,
-        completion: @escaping (Result<String, Error>) -> Void
+        completion: @escaping @Sendable (Result<String, Error>) -> Void
     ) {
-        let task = URLSession.shared.dataTask(with: request) { data, response, error in
-            if let error = error {
-                completion(.failure(error))
-                return
-            }
+        let handler: @Sendable (Data?, URLResponse?, Error?) -> Void = { [weak self, request, allowReauth] data, response, error in
+            Task { @MainActor [weak self, data, response, error] in
+                guard let self else { return }
 
-            guard let httpResponse = response as? HTTPURLResponse else {
-                completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response"])))
-                return
-            }
+                if let error = error {
+                    completion(.failure(error))
+                    return
+                }
 
-            // Handle auth failures (401/403) with optional re-activation
-            if self.handleAuthFailure(
-                statusCode: httpResponse.statusCode,
-                allowReauth: allowReauth,
-                onRetry: {
-                    var retriedRequest = request
-                    if let token = SubscriptionManager.shared.jwtToken {
-                        retriedRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-                    }
-                    self.sendEnhanceRequest(with: retriedRequest, allowReauth: false, completion: completion)
-                },
-                completion: completion
-            ) {
-                return
-            }
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response"])))
+                    return
+                }
 
-            guard (200 ... 299).contains(httpResponse.statusCode) else {
-                let error = NSError(
-                    domain: "APIClient",
-                    code: httpResponse.statusCode,
-                    userInfo: [NSLocalizedDescriptionKey: "Server returned status code \(httpResponse.statusCode)"]
-                )
-                completion(.failure(error))
-                return
-            }
+                // Handle auth failures (401/403) with optional re-activation
+                if self.handleAuthFailure(
+                    statusCode: httpResponse.statusCode,
+                    allowReauth: allowReauth,
+                    onRetry: {
+                        var retriedRequest = request
+                        if let token = SubscriptionManager.shared.jwtToken {
+                            retriedRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+                        }
+                        self.sendEnhanceRequest(with: retriedRequest, allowReauth: false, completion: completion)
+                    },
+                    completion: completion
+                ) {
+                    return
+                }
 
-            guard let data = data, !data.isEmpty else {
-                completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No data received"])))
-                return
-            }
+                guard (200 ... 299).contains(httpResponse.statusCode) else {
+                    let error = NSError(
+                        domain: "APIClient",
+                        code: httpResponse.statusCode,
+                        userInfo: [NSLocalizedDescriptionKey: "Server returned status code \(httpResponse.statusCode)"]
+                    )
+                    completion(.failure(error))
+                    return
+                }
 
-            if let enhancedText = String(data: data, encoding: .utf8) {
-                completion(.success(enhancedText))
-                return
-            }
+                guard let data = data, !data.isEmpty else {
+                    completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No data received"])))
+                    return
+                }
 
-            completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Could not parse response"])))
+                if let enhancedText = String(data: data, encoding: .utf8) {
+                    completion(.success(enhancedText))
+                    return
+                }
+
+                completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Could not parse response"])))
+            }
         }
 
+        let task = URLSession.shared.dataTask(with: request, completionHandler: handler)
         task.resume()
     }
 
@@ -132,8 +137,8 @@ class APIClient {
     private func handleAuthFailure<T>(
         statusCode: Int,
         allowReauth: Bool,
-        onRetry: @escaping () -> Void,
-        completion: @escaping (Result<T, Error>) -> Void
+        onRetry: @escaping @Sendable () -> Void,
+        completion: @escaping @Sendable (Result<T, Error>) -> Void
     ) -> Bool {
         // Only handle auth-related failures here.
         guard statusCode == 401 || statusCode == 403 else {
@@ -177,7 +182,7 @@ class APIClient {
 
     private func handleUnauthorized<T>(
         statusCode: Int,
-        completion: @escaping (Result<T, Error>) -> Void
+        completion: @escaping @Sendable (Result<T, Error>) -> Void
     ) {
         SubscriptionManager.shared.invalidateToken()
         NotificationCenter.default.post(name: .subscriptionUnauthorized, object: nil)
@@ -199,13 +204,13 @@ class APIClient {
         let isDefault: Bool
     }
 
-    func fetchTaskTemplates(completion: @escaping (Result<[TaskTemplateDTO], Error>) -> Void) {
+    func fetchTaskTemplates(completion: @escaping @Sendable (Result<[TaskTemplateDTO], Error>) -> Void) {
         fetchTaskTemplates(allowReauth: true, completion: completion)
     }
 
     private func fetchTaskTemplates(
         allowReauth: Bool,
-        completion: @escaping (Result<[TaskTemplateDTO], Error>) -> Void
+        completion: @escaping @Sendable (Result<[TaskTemplateDTO], Error>) -> Void
     ) {
         var request = URLRequest(url: taskTemplatesBaseURL)
         request.httpMethod = "GET"
@@ -214,57 +219,62 @@ class APIClient {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
 
-        let task = URLSession.shared.dataTask(with: request) { data, response, error in
-            if let error = error {
-                completion(.failure(error))
-                return
-            }
+        let handler: @Sendable (Data?, URLResponse?, Error?) -> Void = { [weak self, allowReauth] data, response, error in
+            Task { @MainActor [weak self, data, response, error] in
+                guard let self else { return }
 
-            guard let httpResponse = response as? HTTPURLResponse else {
-                completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response"])))
-                return
-            }
-
-            if self.handleAuthFailure(
-                statusCode: httpResponse.statusCode,
-                allowReauth: allowReauth,
-                onRetry: {
-                    self.fetchTaskTemplates(allowReauth: false, completion: completion)
-                },
-                completion: completion
-            ) {
-                return
-            }
-
-            guard (200 ... 299).contains(httpResponse.statusCode) else {
-                completion(.failure(NSError(domain: "APIClient", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Server returned status code \(httpResponse.statusCode)"])))
-                return
-            }
-
-            guard let data = data, !data.isEmpty else {
-                completion(.success([]))
-                return
-            }
-
-            do {
-                struct ResponseEnvelope: Codable {
-                    let templates: [TaskTemplateDTO]
+                if let error = error {
+                    completion(.failure(error))
+                    return
                 }
 
-                let decoded = try JSONDecoder().decode(ResponseEnvelope.self, from: data)
-                completion(.success(decoded.templates))
-            } catch {
-                completion(.failure(error))
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response"])))
+                    return
+                }
+
+                if self.handleAuthFailure(
+                    statusCode: httpResponse.statusCode,
+                    allowReauth: allowReauth,
+                    onRetry: {
+                        self.fetchTaskTemplates(allowReauth: false, completion: completion)
+                    },
+                    completion: completion
+                ) {
+                    return
+                }
+
+                guard (200 ... 299).contains(httpResponse.statusCode) else {
+                    completion(.failure(NSError(domain: "APIClient", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Server returned status code \(httpResponse.statusCode)"])))
+                    return
+                }
+
+                guard let data = data, !data.isEmpty else {
+                    completion(.success([]))
+                    return
+                }
+
+                do {
+                    struct ResponseEnvelope: Codable {
+                        let templates: [TaskTemplateDTO]
+                    }
+
+                    let decoded = try JSONDecoder().decode(ResponseEnvelope.self, from: data)
+                    completion(.success(decoded.templates))
+                } catch {
+                    completion(.failure(error))
+                }
             }
         }
 
+        let task = URLSession.shared.dataTask(with: request, completionHandler: handler)
         task.resume()
     }
 
     func createTaskTemplate(
         heading: String,
         instructions: String,
-        completion: @escaping (Result<TaskTemplateDTO, Error>) -> Void
+        completion: @escaping @Sendable (Result<TaskTemplateDTO, Error>) -> Void
     ) {
         var request = URLRequest(url: taskTemplatesBaseURL)
         request.httpMethod = "POST"
@@ -322,7 +332,7 @@ class APIClient {
         id: String,
         heading: String,
         instructions: String,
-        completion: @escaping (Result<TaskTemplateDTO, Error>) -> Void
+        completion: @escaping @Sendable (Result<TaskTemplateDTO, Error>) -> Void
     ) {
         let url = taskTemplatesBaseURL.appendingPathComponent(id)
         var request = URLRequest(url: url)
@@ -377,7 +387,7 @@ class APIClient {
         task.resume()
     }
 
-    func deleteTaskTemplate(id: String, completion: @escaping (Result<Void, Error>) -> Void) {
+    func deleteTaskTemplate(id: String, completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
         let url = taskTemplatesBaseURL.appendingPathComponent(id)
         var request = URLRequest(url: url)
         request.httpMethod = "DELETE"
@@ -408,7 +418,7 @@ class APIClient {
         task.resume()
     }
 
-    func setDefaultTaskTemplate(id: String, completion: @escaping (Result<TaskTemplateDTO, Error>) -> Void) {
+    func setDefaultTaskTemplate(id: String, completion: @escaping @Sendable (Result<TaskTemplateDTO, Error>) -> Void) {
         let url = taskTemplatesBaseURL.appendingPathComponent("\(id)/set-default")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"

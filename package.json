@@ -11,6 +11,8 @@
     "dev:windows": "concurrently \"yarn dev\" \"cd windows && dotnet run\""
   },
   "dependencies": {
+    "@grpc/grpc-js": "^1.14.3",
+    "@grpc/proto-loader": "^0.8.0",
     "axios": "^1.13.5",
     "cors": "^2.8.5",
     "cuid": "^3.0.0",

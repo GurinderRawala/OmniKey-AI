@@ -38,252 +38,249 @@ const enhanceRequestSchema = zod.object({
   text: zod.string().max(10000, 'Text must be at most 10000 characters long.'),
 });
 
-export function createFeatureRouter(): express.Router {
-  const router = express.Router();
-
-  type CompletionUsage = {
-    prompt_tokens?: number;
-    completion_tokens?: number;
-    total_tokens?: number;
-  };
-
-  async function getSystemPromptForCommand(
-    logger: Logger,
-    cmd: EnhanceCommand,
-    subscription: Subscription,
-  ): Promise<string | null> {
-    if (cmd === 'enhance') {
-      return enhancePromptSystemInstruction;
-    }
-
-    if (cmd === 'grammar') {
-      return grammarPromptSystemInstruction;
-    }
-
-    try {
-      const template = await SubscriptionTaskTemplate.findOne({
-        where: { subscriptionId: subscription.id, isDefault: true },
-        order: [['createdAt', 'ASC']],
-      });
-
-      if (template) {
-        const decompressed = decompressString(template.instructions);
-        if (decompressed) {
-          return decompressed;
-        }
-      }
-    } catch (err) {
-      logger.error(
-        'Error loading subscription task template; falling back to legacy instructions.',
-        {
-          error: err,
-          subscriptionId: subscription.id,
-        },
-      );
-    }
-
-    return '';
+export async function getSystemPromptForCommand(
+  logger: Logger,
+  cmd: EnhanceCommand,
+  subscription: Subscription,
+): Promise<string | null> {
+  if (cmd === 'enhance') {
+    return enhancePromptSystemInstruction;
   }
 
-  function getModelForCommand(cmd: EnhanceCommand): string {
-    return cmd === 'task' ? 'gpt-5.1' : 'gpt-4o-mini';
+  if (cmd === 'grammar') {
+    return grammarPromptSystemInstruction;
   }
 
-  async function runEnhancementModel(
-    logger: Logger,
-    text: string,
-    cmd: EnhanceCommand,
-    subscription: Subscription,
-    onDelta?: (delta: string) => void,
-  ): Promise<{ rawResponse: string; usage?: CompletionUsage; model: string } | null> {
-    const trimmed = text.trim();
-
-    if (!config.openaiApiKey) {
-      logger.warn('OPENAI_API_KEY is not set; returning null from runEnhancementModel.');
-      return null;
-    }
-
-    const systemPrompt = await getSystemPromptForCommand(logger, cmd, subscription);
-
-    if (!systemPrompt) {
-      logger.error(`No system prompt found for command: ${cmd}`);
-      return null;
-    }
-
-    const finalSystemPrompt = `${systemPrompt}\n${OUTPUT_FORMAT_INSTRUCTION}`;
-    const model = getModelForCommand(cmd);
-
-    const stream = await openai.chat.completions.create({
-      model,
-      messages: [
-        { role: 'system', content: finalSystemPrompt },
-        { role: 'user', content: trimmed },
-      ],
-      temperature: 0.3,
-      stream: true,
-      stream_options: { include_usage: true },
+  try {
+    const template = await SubscriptionTaskTemplate.findOne({
+      where: { subscriptionId: subscription.id, isDefault: true },
+      order: [['createdAt', 'ASC']],
     });
 
-    let rawResponse = '';
-    let usage: CompletionUsage | undefined;
-
-    for await (const part of stream as any) {
-      const delta = part.choices?.[0]?.delta?.content ?? '';
-      if (delta) {
-        rawResponse += delta;
-        if (onDelta) {
-          onDelta(delta);
-        }
-      }
-      if (part.usage) {
-        usage = part.usage;
+    if (template) {
+      const decompressed = decompressString(template.instructions);
+      if (decompressed) {
+        return decompressed;
       }
     }
-
-    return { rawResponse, usage, model };
+  } catch (err) {
+    logger.error('Error loading subscription task template; falling back to legacy instructions.', {
+      error: err,
+      subscriptionId: subscription.id,
+    });
   }
 
-  async function enhanceText(
-    logger: Logger,
-    text: string,
-    cmd: EnhanceCommand,
-    subscription: Subscription,
-  ): Promise<string> {
-    const trimmed = text.trim();
+  return '';
+}
 
-    try {
-      const result = await runEnhancementModel(logger, trimmed, cmd, subscription);
+type CompletionUsage = {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+};
 
-      if (!result) {
-        return trimmed;
+function getModelForCommand(cmd: EnhanceCommand): string {
+  return cmd === 'task' ? 'gpt-5.1' : 'gpt-4o-mini';
+}
+
+export async function runEnhancementModel(
+  logger: Logger,
+  text: string,
+  cmd: EnhanceCommand,
+  subscription: Subscription,
+  onDelta?: (delta: string) => void,
+): Promise<{ rawResponse: string; usage?: CompletionUsage; model: string } | null> {
+  const trimmed = text.trim();
+
+  if (!config.openaiApiKey) {
+    logger.warn('OPENAI_API_KEY is not set; returning null from runEnhancementModel.');
+    return null;
+  }
+
+  const systemPrompt = await getSystemPromptForCommand(logger, cmd, subscription);
+
+  if (!systemPrompt) {
+    logger.error(`No system prompt found for command: ${cmd}`);
+    return null;
+  }
+
+  const finalSystemPrompt = `${systemPrompt}\n${OUTPUT_FORMAT_INSTRUCTION}`;
+  const model = getModelForCommand(cmd);
+
+  const stream = await openai.chat.completions.create({
+    model,
+    messages: [
+      { role: 'system', content: finalSystemPrompt },
+      { role: 'user', content: trimmed },
+    ],
+    temperature: 0.3,
+    stream: true,
+    stream_options: { include_usage: true },
+  });
+
+  let rawResponse = '';
+  let usage: CompletionUsage | undefined;
+
+  for await (const part of stream as any) {
+    const delta = part.choices?.[0]?.delta?.content ?? '';
+    if (delta) {
+      rawResponse += delta;
+      if (onDelta) {
+        onDelta(delta);
       }
+    }
+    if (part.usage) {
+      usage = part.usage;
+    }
+  }
 
-      const { rawResponse, usage, model } = result;
+  return { rawResponse, usage, model };
+}
 
-      // Record token usage for this subscription and model, if usage
-      // data is available and we know which subscription made the call.
-      if (usage && subscription.id) {
-        try {
-          await SubscriptionUsage.create({
-            subscriptionId: subscription.id,
-            model,
-            promptTokens: usage.prompt_tokens ?? 0,
-            completionTokens: usage.completion_tokens ?? 0,
-            totalTokens: usage.total_tokens ?? 0,
-          });
+async function enhanceText(
+  logger: Logger,
+  text: string,
+  cmd: EnhanceCommand,
+  subscription: Subscription,
+): Promise<string> {
+  const trimmed = text.trim();
 
-          await Subscription.increment('totalTokensUsed', {
-            by: usage.total_tokens ?? 0,
-            where: { id: subscription.id },
-          });
-        } catch (err) {
-          logger.error('Failed to record subscription usage metrics.', {
-            error: err,
-            subscriptionId: subscription.id,
-          });
-        }
-      }
-      const enhanced = rawResponse.trim();
+  try {
+    const result = await runEnhancementModel(logger, trimmed, cmd, subscription);
 
-      if (!enhanced) {
-        logger.warn('LLM returned empty content; falling back to original text.');
-        return trimmed;
-      }
-
-      logger.info(`LLM response received for command "${cmd}", length: ${enhanced.length}`);
-
-      return parseImprovedTextResponse(logger, enhanced);
-    } catch (err) {
-      logger.error(`Error calling OpenAI: ${err instanceof Error ? err.message : String(err)}`);
+    if (!result) {
       return trimmed;
     }
+
+    const { rawResponse, usage, model } = result;
+
+    // Record token usage for this subscription and model, if usage
+    // data is available and we know which subscription made the call.
+    if (usage && subscription.id) {
+      try {
+        await SubscriptionUsage.create({
+          subscriptionId: subscription.id,
+          model,
+          promptTokens: usage.prompt_tokens ?? 0,
+          completionTokens: usage.completion_tokens ?? 0,
+          totalTokens: usage.total_tokens ?? 0,
+        });
+
+        await Subscription.increment('totalTokensUsed', {
+          by: usage.total_tokens ?? 0,
+          where: { id: subscription.id },
+        });
+      } catch (err) {
+        logger.error('Failed to record subscription usage metrics.', {
+          error: err,
+          subscriptionId: subscription.id,
+        });
+      }
+    }
+    const enhanced = rawResponse.trim();
+
+    if (!enhanced) {
+      logger.warn('LLM returned empty content; falling back to original text.');
+      return trimmed;
+    }
+
+    logger.info(`LLM response received for command "${cmd}", length: ${enhanced.length}`);
+
+    return parseImprovedTextResponse(logger, enhanced);
+  } catch (err) {
+    logger.error(`Error calling OpenAI: ${err instanceof Error ? err.message : String(err)}`);
+    return trimmed;
   }
+}
 
-  async function streamEnhanceResponse(
-    res: Response<any, AuthLocals>,
-    text: string,
-    cmd: EnhanceCommand,
-  ): Promise<void> {
-    const { logger, subscription } = res.locals;
-    const trimmed = text.trim();
+async function streamEnhanceResponse(
+  res: Response<any, AuthLocals>,
+  text: string,
+  cmd: EnhanceCommand,
+): Promise<void> {
+  const { logger, subscription } = res.locals;
+  const trimmed = text.trim();
 
-    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-    res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache');
 
-    (res as any).flushHeaders?.();
+  (res as any).flushHeaders?.();
+
+  try {
+    const result = await runEnhancementModel(logger, trimmed, cmd, subscription, (delta) => {
+      res.write(delta);
+    });
+
+    if (!result) {
+      // Fall back to returning the original text once.
+      res.write(trimmed);
+      res.end();
+      return;
+    }
+
+    const { usage, model } = result;
+
+    if (usage && subscription.id) {
+      try {
+        await SubscriptionUsage.create({
+          subscriptionId: subscription.id,
+          model,
+          promptTokens: usage.prompt_tokens ?? 0,
+          completionTokens: usage.completion_tokens ?? 0,
+          totalTokens: usage.total_tokens ?? 0,
+        });
+
+        await Subscription.increment('totalTokensUsed', {
+          by: usage.total_tokens ?? 0,
+          where: { id: subscription.id },
+        });
+      } catch (err) {
+        logger.error('Failed to record subscription usage metrics during stream.', {
+          error: err,
+          subscriptionId: subscription.id,
+        });
+      }
+    }
+
+    res.end();
+  } catch (err) {
+    logger.error('Error streaming enhance response.', {
+      error: err,
+      command: cmd,
+    });
 
     try {
-      const result = await runEnhancementModel(logger, trimmed, cmd, subscription, (delta) => {
-        res.write(delta);
-      });
+      res.end();
+    } catch {
+      // ignore secondary errors when ending stream
+    }
+  }
+}
 
-      if (!result) {
-        // Fall back to returning the original text once.
-        res.write(trimmed);
-        res.end();
+function makeEnhanceHandler(cmd: EnhanceCommand) {
+  return async (req: Request, res: Response<any, AuthLocals>) => {
+    const { logger, subscription } = res.locals;
+    try {
+      const body = enhanceRequestSchema.parse(req.body);
+      const wantsStream = req.header('x-omnikey-stream') === 'true';
+
+      if (wantsStream) {
+        await streamEnhanceResponse(res, body.text, cmd);
         return;
       }
 
-      const { usage, model } = result;
+      const result = await enhanceText(logger, body.text, cmd, subscription);
 
-      if (usage && subscription.id) {
-        try {
-          await SubscriptionUsage.create({
-            subscriptionId: subscription.id,
-            model,
-            promptTokens: usage.prompt_tokens ?? 0,
-            completionTokens: usage.completion_tokens ?? 0,
-            totalTokens: usage.total_tokens ?? 0,
-          });
-
-          await Subscription.increment('totalTokensUsed', {
-            by: usage.total_tokens ?? 0,
-            where: { id: subscription.id },
-          });
-        } catch (err) {
-          logger.error('Failed to record subscription usage metrics during stream.', {
-            error: err,
-            subscriptionId: subscription.id,
-          });
-        }
-      }
-
-      res.end();
+      return res.json({ result });
     } catch (err) {
-      logger.error('Error streaming enhance response.', {
-        error: err,
-        command: cmd,
-      });
-
-      try {
-        res.end();
-      } catch {
-        // ignore secondary errors when ending stream
-      }
+      logger.error('Error processing enhance request.', { error: err });
+      return res.status(500).json({ error: 'Internal server error.' });
     }
-  }
+  };
+}
 
-  function makeEnhanceHandler(cmd: EnhanceCommand) {
-    return async (req: Request, res: Response<any, AuthLocals>) => {
-      const { logger, subscription } = res.locals;
-      try {
-        const body = enhanceRequestSchema.parse(req.body);
-        const wantsStream = req.header('x-omnikey-stream') === 'true';
-
-        if (wantsStream) {
-          await streamEnhanceResponse(res, body.text, cmd);
-          return;
-        }
-
-        const result = await enhanceText(logger, body.text, cmd, subscription);
-
-        return res.json({ result });
-      } catch (err) {
-        logger.error('Error processing enhance request.', { error: err });
-        return res.status(500).json({ error: 'Internal server error.' });
-      }
-    };
-  }
+export function createFeatureRouter(): express.Router {
+  const router = express.Router();
 
   // Main endpoints used by the macOS app
   router.post('/enhance', authMiddleware, makeEnhanceHandler('enhance'));

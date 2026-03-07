@@ -1,10 +1,11 @@
 import AppKit
-import ApplicationServices
+@preconcurrency import ApplicationServices
 import Carbon
 import Foundation
 
 // MARK: - Keyboard Monitor
 
+@MainActor
 final class KeyboardMonitor {
     static let shared = KeyboardMonitor()
 
@@ -259,7 +260,15 @@ final class KeyboardMonitor {
     private func proceedWithSelectedText(_ text: String, cmd: String) {
         originalSelectedText = text
         startInProgressAlerts(for: cmd)
-        sendToAPI(text: text, cmd: cmd)
+
+        // For Cmd+T, if the text contains an @agent directive
+        // we route the request through the gRPC agent instead of
+        // the traditional custom-task HTTP endpoint.
+        if cmd == "T", AgentRunner.shared.containsAgentDirective(text) {
+            sendToAgent(text: text)
+        } else {
+            sendToAPI(text: text, cmd: cmd)
+        }
     }
 
     /// Fallback approach: simulate Cmd+C in the frontmost app and read
@@ -376,6 +385,29 @@ final class KeyboardMonitor {
         }
     }
 
+    /// Route an @agent request through the gRPC AgentService.
+    private func sendToAgent(text: String) {
+        let original = normalizeOriginalText(text)
+        print("\(logPrefix) Normalized @agent text to send (length: \(original.count)).")
+
+        AgentRunner.shared.runAgentSession(originalText: original) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self else { return }
+
+                self.stopInProgressAlerts()
+
+                switch result {
+                case let .success(finalText):
+                    self.showAlert(title: "Agent Complete", message: "Command finished.")
+                    self.replaceSelectedText(with: finalText)
+
+                case let .failure(error):
+                    self.showAlert(title: "Agent Error", message: error.localizedDescription)
+                }
+            }
+        }
+    }
+
     /// send the underlying original text to the backend.
     private func normalizeOriginalText(_ text: String) -> String {
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -458,7 +490,7 @@ final class KeyboardMonitor {
 
     // MARK: - UI
 
-    private func showAlert(title: String, message: String) {
+    func showAlert(title: String, message: String) {
         // Choose the screen under the current mouse cursor so the
         // HUD appears on the display the user is working on.
         let mouseLocation = NSEvent.mouseLocation
@@ -558,6 +590,7 @@ final class KeyboardMonitor {
 
     // MARK: - Accessibility Permissions
 
+    @MainActor
     private func requestAccessibilityPermissions() {
         let exePath = CommandLine.arguments.first ?? "<unknown>"
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
@@ -707,3 +740,19 @@ final class KeyboardMonitor {
         }
     }
 }
+
+// MARK: - Agent-specific UI helpers
+
+extension KeyboardMonitor {
+    /// Show a more detailed alert when an agent-triggered
+    /// shell command fails.
+    func showAgentCommandFailureAlert(command: String, output: String) {
+        showAlert(
+            title: "Command Failed",
+            message: "The agent command failed. Check the output in your context and try again."
+        )
+
+        print("\(logPrefix) Agent command failed. Command:\n\(command)\nOutput:\n\(output)")
+    }
+}
+
