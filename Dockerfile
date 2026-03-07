@@ -14,7 +14,6 @@ RUN corepack enable \
 # Copy source, proto definitions, and TypeScript config
 COPY tsconfig.json ./
 COPY src ./src
-COPY proto ./proto
 COPY macOS/OmniKeyAI.dmg ./macOS/OmniKeyAI.dmg
 
 # Build TypeScript to JavaScript
@@ -35,7 +34,6 @@ RUN corepack enable \
 
 # Copy compiled JS and runtime assets from build stage
 COPY --from=build /usr/src/app/dist ./dist
-COPY proto ./proto
 COPY macOS/OmniKeyAI.dmg ./macOS/OmniKeyAI.dmg
 
 # Cloud Run expects the container to listen on this port

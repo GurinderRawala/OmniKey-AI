@@ -1,7 +1,4 @@
 import Foundation
-import NIO
-import NIOHPACK
-import GRPC
 
 /// Simple shell execution helper that captures both the
 /// output and the exit status of the command.
@@ -29,11 +26,7 @@ func runShellCommandWithStatus(_ command: String) -> (output: String, status: In
 @MainActor
 final class AgentRunner {
     static let shared = AgentRunner()
-    private let eventLoopGroup: EventLoopGroup
-
-    private init() {
-        self.eventLoopGroup = MultiThreadedEventLoopGroup(numberOfThreads: 1)
-    }
+    private init() {}
 
     /// Returns true if the provided text contains an @omniAgent
     /// directive and should be handled by the gRPC agent.
@@ -48,10 +41,45 @@ final class AgentRunner {
         originalText: String,
         completion: @escaping (Result<String, Error>) -> Void
     ) {
+        func startSession(with jwt: String, allowReauth: Bool) {
+            self.connectAndRun(originalText: originalText, jwt: jwt) { result in
+                switch result {
+                case .success:
+                    completion(result)
+
+                case let .failure(error):
+                    guard allowReauth else {
+                        completion(.failure(error))
+                        return
+                    }
+
+                    SubscriptionManager.shared.reactivateStoredKeyIfNeeded { outcome in
+                        switch outcome {
+                        case .success:
+                            let newJwt = SubscriptionManager.shared.jwtToken ?? ""
+                            DispatchQueue.main.async {
+                                startSession(with: newJwt, allowReauth: false)
+                            }
+
+                        case .noStoredKey, .expired:
+                            DispatchQueue.main.async {
+                                completion(.failure(error))
+                            }
+
+                        case let .failure(activationError):
+                            DispatchQueue.main.async {
+                                completion(.failure(activationError))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Ensure we have (or can obtain) a JWT before
         // attempting to connect to the agent.
         if let token = SubscriptionManager.shared.jwtToken, !token.isEmpty {
-            connectAndRun(originalText: originalText, jwt: token, completion: completion)
+            startSession(with: token, allowReauth: true)
             return
         }
 
@@ -59,7 +87,9 @@ final class AgentRunner {
             switch outcome {
             case .success:
                 let jwt = SubscriptionManager.shared.jwtToken ?? ""
-                self.connectAndRun(originalText: originalText, jwt: jwt, completion: completion)
+                DispatchQueue.main.async {
+                    startSession(with: jwt, allowReauth: false)
+                }
 
             case .noStoredKey, .expired:
                 let error = NSError(
@@ -79,10 +109,8 @@ final class AgentRunner {
         }
     }
 
-    /// Lightweight connectivity check to verify that the gRPC
-    /// AgentService is reachable and the current JWT is valid.
-    /// This opens a short-lived AgentStream and immediately
-    /// closes it, reporting any transport or auth failures.
+    /// Lightweight connectivity check to verify that the WebSocket
+    /// agent endpoint is reachable and the current JWT is valid.
     func checkAgentConnectivity(
         completion: @escaping @Sendable (Result<Void, Error>) -> Void
     ) {
@@ -120,30 +148,23 @@ final class AgentRunner {
         jwt: String,
         completion: @escaping (Result<String, Error>) -> Void
     ) {
-        // Derive the gRPC host and port from the HTTP
-        // API base URL and the AGENT_GRPC_PORT env var,
-        // falling back to localhost:50051 for local dev.
-        let host = APIClient.baseURL.host ?? "localhost"
-        let port: Int
-        if let env = ProcessInfo.processInfo.environment["AGENT_GRPC_PORT"],
-           let envPort = Int(env)
-        {
-            port = envPort
-        } else {
-            port = 50051
+        guard let url = makeAgentWebSocketURL() else {
+            let error = NSError(
+                domain: "AgentRunner",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "Failed to construct agent WebSocket URL."]
+            )
+            DispatchQueue.main.async {
+                completion(.failure(error))
+            }
+            return
         }
 
+        print("[AgentRunner] Connecting WebSocket to: \(url.absoluteString)")
+
         let sessionID = UUID().uuidString
-
-        // Establish a gRPC connection using the Swift gRPC v1
-        // ClientConnection API. Any transport issues will be
-        // surfaced via the call status handler.
-        let connection = ClientConnection
-            .insecure(group: eventLoopGroup)
-            .connect(host: host, port: port)
-
-        startAgentStream(
-            connection: connection,
+        startAgentWebSocketSession(
+            url: url,
             sessionID: sessionID,
             jwt: jwt,
             originalText: originalText,
@@ -155,138 +176,11 @@ final class AgentRunner {
         jwt: String,
         completion: @escaping @Sendable (Result<Void, Error>) -> Void
     ) {
-        let host = APIClient.baseURL.host ?? "localhost"
-        let port: Int
-        if let env = ProcessInfo.processInfo.environment["AGENT_GRPC_PORT"],
-           let envPort = Int(env)
-        {
-            port = envPort
-        } else {
-            port = 50051
-        }
-
-        let connection = ClientConnection
-            .insecure(group: eventLoopGroup)
-            .connect(host: host, port: port)
-
-        var headers = HPACKHeaders()
-        headers.add(name: "authorization", value: "Bearer \(jwt)")
-
-        let callOptions = CallOptions(
-            customMetadata: headers,
-            timeLimit: .timeout(.seconds(5))
-        )
-
-        let client = Omnikey_AgentServiceNIOClient(
-            channel: connection,
-            defaultCallOptions: callOptions
-        )
-
-        let call = client.agentStream(callOptions: callOptions) { _ in
-            // We ignore any responses for this lightweight check.
-        }
-
-        let endPromise = call.eventLoop.makePromise(of: Void.self)
-        call.sendEnd(promise: endPromise)
-
-        call.status.whenComplete { result in
-            switch result {
-            case let .success(status) where status.code == .ok:
-                DispatchQueue.main.async {
-                    completion(.success(()))
-                }
-
-            case let .success(status):
-                let error = NSError(
-                    domain: "AgentRunner",
-                    code: Int(status.code.rawValue),
-                    userInfo: [NSLocalizedDescriptionKey: status.message ?? "Agent gRPC connectivity check failed with status \(status.code)."]
-                )
-                DispatchQueue.main.async {
-                    completion(.failure(error))
-                }
-
-            case let .failure(error):
-                DispatchQueue.main.async {
-                    completion(.failure(error))
-                }
-            }
-
-            let closePromise = self.eventLoopGroup.next().makePromise(of: Void.self)
-            connection.close(promise: closePromise)
-        }
-    }
-
-    /// Open the bi-directional AgentStream, send the initial
-    /// user message, execute any <shell_script> blocks returned
-    /// by the agent, and finally surface the <final_answer>.
-    private func startAgentStream(
-        connection: ClientConnection,
-        sessionID: String,
-        jwt: String,
-        originalText: String,
-        completion: @escaping (Result<String, Error>) -> Void
-    ) {
-        var headers = HPACKHeaders()
-        headers.add(name: "authorization", value: "Bearer \(jwt)")
-
-        let callOptions = CallOptions(customMetadata: headers)
-        let client = Omnikey_AgentServiceNIOClient(channel: connection, defaultCallOptions: callOptions)
-
-        var finalAnswerDelivered = false
-
-        var streamingCall: BidirectionalStreamingCall<Omnikey_AgentMessage, Omnikey_AgentMessage>?
-
-        streamingCall = client.agentStream(callOptions: callOptions) { response in
-            let content = response.content
-
-            // If the agent wants us to run a shell script,
-            // execute it and stream the output back as a
-            // terminal_output message.
-            if let script = AgentRunner.extractShellScript(from: content) {
-                DispatchQueue.global(qos: .userInitiated).async {
-                    let (output, status) = runShellCommandWithStatus(script)
-
-                    var reply = Omnikey_AgentMessage()
-                    reply.sessionID = response.sessionID
-                    reply.sender = "client"
-                    reply.content = output
-                    reply.isTerminalOutput = true
-                    reply.isError = (status != 0)
-
-                    if let activeCall = streamingCall {
-                        let promise = activeCall.eventLoop.makePromise(of: Void.self)
-                        activeCall.sendMessage(reply, promise: promise)
-                    }
-                }
-                return
-            }
-
-            // If we received a final answer, surface it to the
-            // caller and close the stream.
-            if let final = AgentRunner.extractFinalAnswer(from: content) {
-                finalAnswerDelivered = true
-                DispatchQueue.main.async {
-                    completion(.success(final))
-                }
-                if let activeCall = streamingCall {
-                    let endPromise = activeCall.eventLoop.makePromise(of: Void.self)
-                    activeCall.sendEnd(promise: endPromise)
-                }
-                return
-            }
-
-            // Any other agent messages (e.g. intermediate
-            // reasoning) are currently ignored by the app but
-            // are still part of the agent's conversation state
-            // on the backend.
-        }
-
-        guard let call = streamingCall else {
+        guard let url = makeAgentWebSocketURL() else {
             let error = NSError(
                 domain: "AgentRunner",
                 code: -1,
-                userInfo: [NSLocalizedDescriptionKey: "Failed to create AgentStream call."]
+                userInfo: [NSLocalizedDescriptionKey: "Failed to construct agent WebSocket URL."]
             )
             DispatchQueue.main.async {
                 completion(.failure(error))
@@ -294,47 +188,175 @@ final class AgentRunner {
             return
         }
 
-        // Send the initial user message that kicks off the
-        // agent session.
-        var initial = Omnikey_AgentMessage()
-        initial.sessionID = sessionID
-        initial.sender = "client"
-        initial.content = originalText
-        initial.isTerminalOutput = false
-        initial.isError = false
+        var request = URLRequest(url: url)
+        request.addValue("Bearer \(jwt)", forHTTPHeaderField: "Authorization")
 
-        let sendPromise = call.eventLoop.makePromise(of: Void.self)
-        call.sendMessage(initial, promise: sendPromise)
+        let session = URLSession(configuration: .default)
+        let task = session.webSocketTask(with: request)
 
-        // Observe the call status so we can surface any
-        // transport-level errors if no final answer was
-        // delivered.
-        call.status.whenComplete { result in
-            switch result {
-            case let .success(status):
-                if !finalAnswerDelivered {
-                    let error = NSError(
-                        domain: "AgentRunner",
-                        code: Int(status.code.rawValue),
-                        userInfo: [NSLocalizedDescriptionKey: status.message ?? "Agent stream ended without a final answer."]
-                    )
-                    DispatchQueue.main.async {
-                        completion(.failure(error))
-                    }
-                }
+        task.resume()
 
-            case let .failure(error):
-                if !finalAnswerDelivered {
-                    DispatchQueue.main.async {
-                        completion(.failure(error))
-                    }
+        task.sendPing { error in
+            DispatchQueue.main.async {
+                if let error {
+                    completion(.failure(error))
+                } else {
+                    completion(.success(()))
                 }
             }
+            task.cancel(with: .goingAway, reason: nil)
+        }
+    }
 
-            // Close the underlying connection once the
-            // call has completed.
-            let closePromise = self.eventLoopGroup.next().makePromise(of: Void.self)
-            connection.close(promise: closePromise)
+    /// Open the bi-directional WebSocket stream, send the initial
+    /// user message, execute any <shell_script> blocks returned
+    /// by the agent, and finally surface the <final_answer>.
+    private func startAgentWebSocketSession(
+        url: URL,
+        sessionID: String,
+        jwt: String,
+        originalText: String,
+        completion: @escaping (Result<String, Error>) -> Void
+    ) {
+        var request = URLRequest(url: url)
+        request.addValue("Bearer \(jwt)", forHTTPHeaderField: "Authorization")
+
+        let session = URLSession(configuration: .default)
+        let task = session.webSocketTask(with: request)
+
+        struct AgentMessage: Codable {
+            let sessionID: String
+            let sender: String
+            let content: String
+            let isTerminalOutput: Bool?
+            let isError: Bool?
+
+            enum CodingKeys: String, CodingKey {
+                case sessionID = "session_id"
+                case sender
+                case content
+                case isTerminalOutput = "is_terminal_output"
+                case isError = "is_error"
+            }
+        }
+
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+
+        var finalAnswerDelivered = false
+
+        func receiveNext() {
+            task.receive { result in
+                switch result {
+                case let .failure(error):
+                    if !finalAnswerDelivered {
+                        DispatchQueue.main.async {
+                            completion(.failure(error))
+                        }
+                    }
+                    task.cancel(with: .goingAway, reason: nil)
+
+                case let .success(message):
+                    guard case let .string(text) = message else {
+                        // Ignore non-text messages
+                        receiveNext()
+                        return
+                    }
+
+                    guard let data = text.data(using: .utf8),
+                          let response = try? decoder.decode(AgentMessage.self, from: data)
+                    else {
+                        receiveNext()
+                        return
+                    }
+
+                    let content = response.content
+
+                    // If the agent wants us to run a shell script,
+                    // execute it and stream the output back as a
+                    // terminal_output message.
+                    if let script = AgentRunner.extractShellScript(from: content) {
+                        DispatchQueue.global(qos: .userInitiated).async {
+                            let (output, status) = runShellCommandWithStatus(script)
+
+                            let reply = AgentMessage(
+                                sessionID: response.sessionID,
+                                sender: "client",
+                                content: output,
+                                isTerminalOutput: true,
+                                isError: (status != 0)
+                            )
+
+                            if let jsonData = try? encoder.encode(reply),
+                               let jsonString = String(data: jsonData, encoding: .utf8)
+                            {
+                                task.send(.string(jsonString)) { _ in }
+                            }
+                        }
+                        receiveNext()
+                        return
+                    }
+
+                    // If we received a final answer, surface it to the
+                    // caller and close the stream.
+                    if let final = AgentRunner.extractFinalAnswer(from: content) {
+                        finalAnswerDelivered = true
+                        DispatchQueue.main.async {
+                            completion(.success(final))
+                        }
+                        task.cancel(with: .goingAway, reason: nil)
+                        return
+                    }
+
+                    // Any other agent messages (e.g. intermediate
+                    // reasoning) are currently ignored by the app but
+                    // are still part of the agent's conversation state
+                    // on the backend.
+                    receiveNext()
+                }
+            }
+        }
+
+        task.resume()
+
+        // Send the initial user message that kicks off the agent session.
+        let initial = AgentMessage(
+            sessionID: sessionID,
+            sender: "client",
+            content: originalText,
+            isTerminalOutput: false,
+            isError: false
+        )
+
+        if let data = try? encoder.encode(initial),
+           let json = String(data: data, encoding: .utf8)
+        {
+            print("[AgentRunner] Sending initial WebSocket message (length: \(json.count))")
+            task.send(.string(json)) { error in
+                if let error, !finalAnswerDelivered {
+                    print("[AgentRunner] Failed to send initial WebSocket message: \(error.localizedDescription)")
+                    DispatchQueue.main.async {
+                        completion(.failure(error))
+                    }
+                    task.cancel(with: .goingAway, reason: nil)
+                    return
+                }
+
+                print("[AgentRunner] Initial WebSocket message sent successfully, starting receive loop…")
+                // Start receiving responses once the initial
+                // message has been sent.
+                receiveNext()
+            }
+        } else {
+            let error = NSError(
+                domain: "AgentRunner",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "Failed to encode initial agent message."]
+            )
+            DispatchQueue.main.async {
+                completion(.failure(error))
+            }
+            task.cancel(with: .goingAway, reason: nil)
         }
     }
 
@@ -354,5 +376,28 @@ final class AgentRunner {
 
         let inner = text[startRange.upperBound ..< endRange.lowerBound]
         return String(inner).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    // MARK: - URL helpers
+
+    /// Construct the WebSocket URL for the agent endpoint based on the
+    /// configured HTTP API base URL. This mirrors the backend's
+    /// /ws/omni-agent path.
+    private func makeAgentWebSocketURL() -> URL? {
+        guard var components = URLComponents(url: APIClient.baseURL, resolvingAgainstBaseURL: false) else {
+            return nil
+        }
+
+        let scheme = components.scheme?.lowercased()
+        components.scheme = (scheme == "https") ? "wss" : "ws"
+
+        var path = components.path
+        if !path.hasSuffix("/") {
+            path += "/"
+        }
+        path += "ws/omni-agent"
+        components.path = path
+
+        return components.url
     }
 }

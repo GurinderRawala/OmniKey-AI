@@ -1,6 +1,5 @@
-import path from 'path';
-import * as grpc from '@grpc/grpc-js';
-import * as protoLoader from '@grpc/proto-loader';
+import type http from 'http';
+import WebSocket, { WebSocketServer } from 'ws';
 import jwt from 'jsonwebtoken';
 import OpenAI from 'openai';
 import cuid from 'cuid';
@@ -10,10 +9,6 @@ import { Subscription } from './models/subscription';
 import { SubscriptionUsage } from './models/subscriptionUsage';
 import { AGENT_SYSTEM_PROMPT } from './agentPrompts';
 import { getSystemPromptForCommand } from './featureRoutes';
-
-const PROTO_PATH = path.join(process.cwd(), 'proto', 'agent.proto');
-
-type ProtoGrpcType = any; // kept loose to avoid over-typing dynamic loader
 
 interface AgentMessage {
   session_id: string;
@@ -46,6 +41,8 @@ type SessionState = {
 };
 
 const sessionMessages = new Map<string, SessionState>();
+
+type AgentSendFn = (msg: AgentMessage) => void;
 
 async function getOrCreateSession(
   sessionId: string,
@@ -87,21 +84,18 @@ async function getOrCreateSession(
   return entry;
 }
 
-async function authenticateCall(
-  call: grpc.ServerDuplexStream<AgentMessage, AgentMessage>,
+async function authenticateFromAuthHeader(
+  authHeader: string | undefined,
   log: typeof logger,
 ): Promise<Subscription | null> {
-  const metadata = call.metadata;
-  const authHeader = metadata.get('authorization')[0] as string | undefined;
-
   if (!authHeader) {
-    log.warn('Agent gRPC call missing authorization metadata');
+    log.warn('Agent WebSocket connection missing authorization header');
     return null;
   }
 
   const [scheme, token] = authHeader.split(' ');
   if (scheme !== 'Bearer' || !token) {
-    log.warn('Agent gRPC call has malformed authorization metadata');
+    log.warn('Agent WebSocket connection has malformed authorization header');
     return null;
   }
 
@@ -110,14 +104,14 @@ async function authenticateCall(
     const subscription = await Subscription.findByPk(decoded.sid);
 
     if (!subscription) {
-      log.warn('Agent gRPC auth failed: subscription not found', {
+      log.warn('Agent WebSocket auth failed: subscription not found', {
         sid: decoded.sid,
       });
       return null;
     }
 
     if (subscription.subscriptionStatus === 'expired') {
-      log.warn('Agent gRPC auth failed: subscription expired', {
+      log.warn('Agent WebSocket auth failed: subscription expired', {
         sid: decoded.sid,
       });
       return null;
@@ -128,20 +122,20 @@ async function authenticateCall(
       subscription.subscriptionStatus = 'expired';
       await subscription.save();
 
-      log.info('Agent gRPC auth: subscription key expired during call', {
+      log.info('Agent WebSocket auth: subscription key expired during connection', {
         subscriptionId: subscription.id,
       });
 
       return null;
     }
 
-    log.debug('Agent gRPC auth succeeded', {
+    log.debug('Agent WebSocket auth succeeded', {
       subscriptionId: subscription.id,
       status: subscription.subscriptionStatus,
     });
     return subscription;
   } catch (err) {
-    log.warn('Agent gRPC auth failed: invalid or expired JWT', { error: err });
+    log.warn('Agent WebSocket auth failed: invalid or expired JWT', { error: err });
     return null;
   }
 }
@@ -150,7 +144,7 @@ async function runAgentTurn(
   sessionId: string,
   subscription: Subscription,
   clientMessage: AgentMessage,
-  send: (msg: AgentMessage) => void,
+  send: AgentSendFn,
   log: typeof logger,
 ) {
   const session = await getOrCreateSession(sessionId, subscription, log);
@@ -190,7 +184,22 @@ async function runAgentTurn(
   });
 
   if (!config.openaiApiKey) {
-    log.warn('OPENAI_API_KEY is not set; skipping agent turn.');
+    log.warn('OPENAI_API_KEY is not set; returning error to client.');
+
+    const errorMessage =
+      'The server is missing its OpenAI API key. Please configure OPENAI_API_KEY on the backend and try again.';
+
+    send({
+      session_id: sessionId,
+      sender: 'agent',
+      content: `<final_answer>\n${errorMessage}\n</final_answer>`,
+      is_terminal_output: false,
+      is_error: true,
+    });
+
+    // Clear any cached session state so a subsequent attempt can
+    // start fresh once the environment is correctly configured.
+    sessionMessages.delete(sessionId);
     return;
   }
 
@@ -238,7 +247,15 @@ async function runAgentTurn(
     const content = (choice.message.content ?? '').toString().trim();
 
     if (!content) {
-      log.warn('Agent LLM returned empty content.');
+      log.warn('Agent LLM returned empty content; sending generic error to client.');
+
+      const errorMessage = 'The agent returned an empty response. Please try again.';
+
+      sendFinalAnswer(send, sessionId, errorMessage, true);
+
+      // Clear any cached session state so a subsequent attempt can
+      // start fresh without a polluted history.
+      sessionMessages.delete(sessionId);
       return;
     }
 
@@ -291,13 +308,7 @@ async function runAgentTurn(
   } catch (err) {
     log.error('Agent LLM call failed', { error: err });
     const errorMessage = 'Agent failed to call language model. Please try again later.';
-    send({
-      session_id: sessionId,
-      sender: 'agent',
-      content: `<final_answer>\n${errorMessage}\n</final_answer>`,
-      is_terminal_output: false,
-      is_error: true,
-    });
+    sendFinalAnswer(send, sessionId, errorMessage, true);
 
     // Clear any cached session state so a subsequent attempt can
     // start fresh without being polluted by a failed turn.
@@ -305,112 +316,146 @@ async function runAgentTurn(
   }
 }
 
-function agentStreamHandler(call: grpc.ServerDuplexStream<AgentMessage, AgentMessage>) {
+function sendFinalAnswer(
+  send: AgentSendFn,
+  sessionId: string,
+  message: string,
+  isError: boolean,
+): void {
+  send({
+    session_id: sessionId,
+    sender: 'agent',
+    content: `<final_answer>\n${message}\n</final_answer>`,
+    is_terminal_output: false,
+    is_error: isError,
+  });
+}
+
+type AuthContext = {
+  ensureAuthenticated: () => Promise<boolean>;
+  getSubscription: () => Subscription | null;
+};
+
+function createLazyAuthContext(authHeader: string | undefined, log: typeof logger): AuthContext {
   let authenticatedSubscription: Subscription | null = null;
-  const traceId = cuid();
+  let authFailed = false;
+  let authPromise: Promise<void> | null = null;
 
-  const log = logger.child({ traceId });
-
-  log.info('AgentStream connection opened');
-
-  const send = (msg: AgentMessage) => {
-    try {
-      call.write(msg);
-    } catch (err) {
-      log.error('Failed to write AgentMessage to stream', { error: err });
+  const ensureAuthenticated = async (): Promise<boolean> => {
+    if (authenticatedSubscription) {
+      return true;
     }
+    if (authFailed) {
+      return false;
+    }
+
+    if (!authPromise) {
+      authPromise = (async () => {
+        try {
+          const sub = await authenticateFromAuthHeader(authHeader, log);
+          if (!sub) {
+            authFailed = true;
+            return;
+          }
+          authenticatedSubscription = sub;
+          log.info('Agent WebSocket authenticated', {
+            subscriptionId: authenticatedSubscription.id,
+          });
+        } catch (err) {
+          authFailed = true;
+          log.error('Unexpected error during agent WebSocket auth', { error: err });
+        }
+      })();
+    }
+
+    await authPromise;
+    return Boolean(authenticatedSubscription);
   };
 
-  authenticateCall(call, log)
-    .then((sub) => {
-      authenticatedSubscription = sub;
-      if (!sub) {
-        log.warn('Closing AgentStream due to failed authentication');
-        send({
-          session_id: '',
-          sender: 'agent',
-          content: 'Unauthorized: missing or invalid subscription. Please re-activate your key.',
-          is_terminal_output: false,
-          is_error: true,
-        });
-        call.end();
-        return;
+  const getSubscription = () => authenticatedSubscription;
+
+  return { ensureAuthenticated, getSubscription };
+}
+
+export function attachAgentWebSocketServer(server: http.Server): WebSocketServer {
+  const wss = new WebSocketServer({ server, path: '/ws/omni-agent' });
+
+  wss.on('connection', (ws: WebSocket, req) => {
+    const traceId = cuid();
+    const log = logger.child({ traceId });
+
+    log.info('Agent WebSocket connection opened');
+
+    const authHeaderValue = req.headers['authorization'];
+    const authHeader = Array.isArray(authHeaderValue) ? authHeaderValue[0] : authHeaderValue;
+
+    const { ensureAuthenticated, getSubscription } = createLazyAuthContext(authHeader, log);
+
+    const send: AgentSendFn = (msg) => {
+      try {
+        ws.send(JSON.stringify(msg));
+      } catch (err) {
+        log.error('Failed to write AgentMessage to WebSocket', { error: err });
       }
+    };
 
-      log.info('AgentStream authenticated', {
-        subscriptionId: authenticatedSubscription?.id,
-      });
+    ws.on('message', (data) => {
+      void (async () => {
+        const ok = await ensureAuthenticated();
+        const subscription = getSubscription();
 
-      call.on('data', (message: AgentMessage) => {
-        if (!authenticatedSubscription) {
+        if (!ok || !subscription) {
+          if (ws.readyState === WebSocket.OPEN) {
+            log.warn('Closing Agent WebSocket due to failed authentication');
+            send({
+              session_id: '',
+              sender: 'agent',
+              content:
+                'Unauthorized: missing or invalid subscription. Please re-activate your key.',
+              is_terminal_output: false,
+              is_error: true,
+            });
+            ws.close();
+          }
+          return;
+        }
+
+        let message: AgentMessage;
+        try {
+          const text = typeof data === 'string' ? data : data.toString('utf8');
+          log.info('Agent WebSocket received message from client', {
+            approximateLength: text.length,
+          });
+          message = JSON.parse(text) as AgentMessage;
+        } catch (err) {
+          log.warn('Received invalid AgentMessage payload over WebSocket', { error: err });
           return;
         }
 
         const sessionId = message.session_id || 'default';
-        log.debug('Received AgentMessage from client', {
+        log.debug('Received AgentMessage from client (WebSocket)', {
           sessionId,
           sender: message.sender,
           isTerminalOutput: message.is_terminal_output,
           isError: message.is_error,
         });
-        void runAgentTurn(sessionId, authenticatedSubscription!, message, send, log);
-      });
 
-      call.on('error', (err: grpc.StatusObject) => {
-        log.warn('AgentStream call error', { error: err });
-      });
-
-      call.on('end', () => {
-        log.info('AgentStream ended by client', {
-          hadAuthenticatedSubscription: Boolean(authenticatedSubscription),
-        });
-        call.end();
-      });
-    })
-    .catch((err) => {
-      log.error('Unexpected error during agent stream auth', { error: err });
-      call.end();
+        void runAgentTurn(sessionId, subscription, message, send, log);
+      })();
     });
-}
 
-export function startAgentGrpcServer(): grpc.Server | null {
-  const agentPort = process.env.AGENT_GRPC_PORT || '50051';
+    ws.on('error', (err) => {
+      log.warn('Agent WebSocket error', { error: err });
+    });
 
-  const packageDefinition = protoLoader.loadSync(PROTO_PATH, {
-    keepCase: true,
-    longs: String,
-    enums: String,
-    defaults: true,
-    oneofs: true,
+    ws.on('close', () => {
+      log.info('Agent WebSocket connection closed', {
+        hadAuthenticatedSubscription: Boolean(getSubscription()),
+      });
+    });
   });
 
-  const proto = grpc.loadPackageDefinition(packageDefinition) as unknown as ProtoGrpcType;
+  logger.info('Agent WebSocket server attached at path /ws/omni-agent');
 
-  if (!proto.omnikey || !proto.omnikey.AgentService) {
-    logger.error('Failed to load AgentService from agent.proto');
-    return null;
-  }
-
-  const server = new grpc.Server();
-
-  server.addService(proto.omnikey.AgentService.service, {
-    AgentStream: agentStreamHandler,
-  });
-
-  const bindAddress = `0.0.0.0:${agentPort}`;
-
-  server.bindAsync(
-    bindAddress,
-    grpc.ServerCredentials.createInsecure(),
-    (err: Error | null, port: number) => {
-      if (err) {
-        logger.error('Failed to start Agent gRPC server', { error: err });
-        return;
-      }
-      logger.info(`Agent gRPC server listening on ${bindAddress} (bound port ${port})`);
-      server.start();
-    },
-  );
-
-  return server;
+  return wss;
 }

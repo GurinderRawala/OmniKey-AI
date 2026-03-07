@@ -36,9 +36,6 @@ export const config = {
   logLevel: getEnv('LOG_LEVEL') || 'info',
   isLocal: getBooleanEnv('LOCAL', false),
 
-  // Agent / gRPC
-  agentGrpcPort: getNumberEnv('AGENT_GRPC_PORT', 50051),
-
   // OpenAI
   openaiApiKey: getEnv('OPENAI_API_KEY'),
 
