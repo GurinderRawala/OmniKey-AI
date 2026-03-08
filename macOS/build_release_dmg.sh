@@ -127,9 +127,9 @@ cat > "${INFO_PLIST}" <<EOF
     <key>CFBundleIdentifier</key>
     <string>${BUNDLE_ID}</string>
     <key>CFBundleVersion</key>
-    <string>8</string>
+    <string>9</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0.7</string>
+    <string>1.0.8</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>LSMinimumSystemVersion</key>
@@ -205,11 +205,25 @@ xcrun notarytool submit "${APP_ZIP}" \
 info "Stapling notarization ticket to app bundle..."
 xcrun stapler staple "${APP_BUNDLE}"
 
-# 10. Create the DMG
-info "Creating DMG at ${DMG_PATH}..."
+# 10. Create DMG with drag-to-Applications layout
+info "Preparing DMG staging folder..."
+STAGE_DIR="${SCRIPT_DIR}/dmg-root"
+rm -rf "${STAGE_DIR}"
+mkdir -p "${STAGE_DIR}"
+cp -R "${APP_BUNDLE}" "${STAGE_DIR}/OmniKeyAI.app"
+ln -s /Applications "${STAGE_DIR}/Applications"
+
+info "Creating styled DMG..."
 rm -f "${DMG_PATH}"
-hdiutil create -volname "${APP_NAME}" \
-  -srcfolder "${APP_BUNDLE}" \
-  -ov -format UDZO "${DMG_PATH}"
+
+create-dmg \
+  --volname "${APP_NAME}" \
+  --volicon "${APP_BUNDLE}/Contents/Resources/AppIcon.icns" \
+  --window-size 600 400 \
+  --icon-size 128 \
+  --icon "OmniKeyAI.app" 150 200 \
+  --icon "Applications" 450 200 \
+  "${DMG_PATH}" \
+  "${STAGE_DIR}"
 
 info "Done. DMG created at: ${DMG_PATH}"

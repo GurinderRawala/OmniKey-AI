@@ -407,7 +407,7 @@ final class APIClient: @unchecked Sendable {
                 return
             }
 
-            if !(200 ... 299).contains(httpResponse.statusCode) && httpResponse.statusCode != 204 {
+            if !(200 ... 299).contains(httpResponse.statusCode), httpResponse.statusCode != 204 {
                 completion(.failure(NSError(domain: "APIClient", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Server returned status code \(httpResponse.statusCode)"])))
                 return
             }

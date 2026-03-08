@@ -46,7 +46,7 @@ struct TaskInstructionsView: View {
                                 }
                                 if savedTemplates.count < 5 {
                                     Text(savedTemplates.isEmpty ? "No templates yet" : "New template")
-                                        .tag(Optional<String>.none)
+                                        .tag(String?.none)
                                 }
                             }
                             .labelsHidden()
@@ -255,7 +255,8 @@ struct TaskInstructionsView: View {
     private func loadSelectedTemplateIntoEditor() {
         // When a template is selected from the dropdown, load it into the editor.
         if let id = selectedTemplateId,
-           let template = savedTemplates.first(where: { $0.id == id }) {
+           let template = savedTemplates.first(where: { $0.id == id })
+        {
             templateHeadingInput = template.heading
             templateInstructionsInput = template.instructions
             // Reset example picker when switching to an existing template.
@@ -314,17 +315,17 @@ struct TaskInstructionsView: View {
             }
 
             if #available(macOS 13.0, *) {
-                    TextEditor(text: $templateInstructionsInput)
-                        .font(.system(size: 12, design: .monospaced))
-                        .scrollContentBackground(.hidden)
-                        .background(NordTheme.editorBackground(colorScheme))
-                } else {
-                    TextEditor(text: $templateInstructionsInput)
-                        .font(.system(size: 12, design: .monospaced))
-                        .background(NordTheme.editorBackground(colorScheme))
-                }
+                TextEditor(text: $templateInstructionsInput)
+                    .font(.system(size: 12, design: .monospaced))
+                    .scrollContentBackground(.hidden)
+                    .background(NordTheme.editorBackground(colorScheme))
+            } else {
+                TextEditor(text: $templateInstructionsInput)
+                    .font(.system(size: 12, design: .monospaced))
+                    .background(NordTheme.editorBackground(colorScheme))
+            }
         }
-            .frame(minHeight: 260)
+        .frame(minHeight: 260)
         .overlay(
             RoundedRectangle(cornerRadius: 6)
                 .stroke(NordTheme.border(colorScheme))

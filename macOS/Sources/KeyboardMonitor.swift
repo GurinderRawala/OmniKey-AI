@@ -755,4 +755,3 @@ extension KeyboardMonitor {
         print("\(logPrefix) Agent command failed. Command:\n\(command)\nOutput:\n\(output)")
     }
 }
-

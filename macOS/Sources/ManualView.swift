@@ -18,7 +18,7 @@ struct ManualView: View {
                     .foregroundColor(NordTheme.secondaryText(colorScheme))
 
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
+                    VStack(alignment: .leading, spacing: 24) {
                         sectionTitle("Keyboard shortcuts")
 
                         Text("""
@@ -34,6 +34,10 @@ struct ManualView: View {
                         .font(.system(size: 13))
                         .foregroundColor(NordTheme.primaryText(colorScheme))
 
+                        Divider()
+                            .background(NordTheme.border(colorScheme))
+                            .padding(.vertical, 4)
+
                         sectionTitle("How OmniKey works")
 
                         Text("""
@@ -45,6 +49,10 @@ struct ManualView: View {
                         .font(.system(size: 13))
                         .foregroundColor(NordTheme.primaryText(colorScheme))
 
+                        Divider()
+                            .background(NordTheme.border(colorScheme))
+                            .padding(.vertical, 4)
+
                         sectionTitle("Custom tasks with Task Instructions")
 
                         Text("""
@@ -54,6 +62,10 @@ struct ManualView: View {
                         """)
                         .font(.system(size: 13))
                         .foregroundColor(NordTheme.primaryText(colorScheme))
+
+                        Divider()
+                            .background(NordTheme.border(colorScheme))
+                            .padding(.vertical, 4)
 
                         sectionTitle("Asking questions with @omnikeyai")
 
@@ -66,6 +78,27 @@ struct ManualView: View {
                         - Press one of the OmniKey shortcuts.
 
                         OmniKey will treat anything after “@omnikeyai” as a direct question and answer in the context of your current text or task.
+                        """)
+                        .font(.system(size: 13))
+                        .foregroundColor(NordTheme.primaryText(colorScheme))
+
+                        Divider()
+                            .background(NordTheme.border(colorScheme))
+                            .padding(.vertical, 4)
+
+                        sectionTitle("Running tasks with @omniAgent")
+
+                        Text("""
+                        You can ask the Omni agent to perform tasks for you using the @omniAgent command.
+
+                        - Type "@omniAgent" followed by clear instructions for what you want done.
+                            Example: "@omniAgent Set up a new README section describing the API routes."
+                        - Select the text containing your @omniAgent instructions.
+                        - Press ⌘T to run your custom task.
+
+                        If you have Task Instructions configured, the agent will combine those with the instructions you provided using "@omniAgent" and then execute the task.
+
+                        The agent can access your terminal and perform actions through it, but it runs with restricted permissions. It cannot run commands with "sudo" or install additional software needed to complete tasks.
                         """)
                         .font(.system(size: 13))
                         .foregroundColor(NordTheme.primaryText(colorScheme))
@@ -90,7 +123,7 @@ struct ManualView: View {
             )
             .padding(24)
         }
-        .frame(minWidth: 760, minHeight: 520)
+        .frame(minWidth: 880, minHeight: 580)
     }
 
     private func sectionTitle(_ text: String) -> some View {

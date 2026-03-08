@@ -42,7 +42,7 @@ final class AgentRunner {
         completion: @escaping (Result<String, Error>) -> Void
     ) {
         func startSession(with jwt: String, allowReauth: Bool) {
-            self.connectAndRun(originalText: originalText, jwt: jwt) { result in
+            connectAndRun(originalText: originalText, jwt: jwt) { result in
                 switch result {
                 case .success:
                     completion(result)
@@ -284,7 +284,7 @@ final class AgentRunner {
                                 sender: "client",
                                 content: output,
                                 isTerminalOutput: true,
-                                isError: (status != 0)
+                                isError: status != 0
                             )
 
                             if let jsonData = try? encoder.encode(reply),
