@@ -44,6 +44,8 @@ const sessionMessages = new Map<string, SessionState>();
 
 type AgentSendFn = (msg: AgentMessage) => void;
 
+const MAX_TURNS = 10;
+
 async function getOrCreateSession(
   sessionId: string,
   subscription: Subscription,
@@ -158,9 +160,9 @@ async function runAgentTurn(
     turn: session.turns,
   });
 
-  // On the 5th iteration, instruct the LLM to provide a final,
+  // On the MAX_TURNS iteration, instruct the LLM to provide a final,
   // consolidated answer based on the full conversation context.
-  if (session.turns === 5) {
+  if (session.turns === MAX_TURNS) {
     session.history.push({
       role: 'system',
       content:
@@ -262,14 +264,14 @@ async function runAgentTurn(
     // Ensure that a proper <final_answer> block is produced for the
     // desktop clients once we reach the final turn. If the model did
     // not emit either a <shell_script> or <final_answer> tag on the
-    // 5th turn, we treat this as the final natural-language answer
+    // MAX_TURNS turn, we treat this as the final natural-language answer
     // and wrap it in <final_answer> tags so the client can stop
     // waiting and paste the result.
     const hasShellScriptTag = content.includes('<shell_script>');
     const hasFinalAnswerTag = content.includes('<final_answer>');
 
     const normalizedContent =
-      !hasShellScriptTag && !hasFinalAnswerTag && session.turns >= 5
+      !hasShellScriptTag && !hasFinalAnswerTag && session.turns >= MAX_TURNS
         ? `<final_answer>\n${content}\n</final_answer>`
         : content;
 
@@ -287,9 +289,9 @@ async function runAgentTurn(
       is_error: false,
     });
 
-    // After the 5th iteration or if a final answer tag is present, treat this as the final answer
+    // After the MAX_TURNS iteration or if a final answer tag is present, treat this as the final answer
     // and clear the session from memory while marking it completed.
-    if (session.turns >= 5 || hasFinalAnswerTag) {
+    if (session.turns >= MAX_TURNS || hasFinalAnswerTag) {
       log.info('Finalizing agent session after max turns or final answer tag', {
         sessionId,
         subscriptionId: subscription.id,
