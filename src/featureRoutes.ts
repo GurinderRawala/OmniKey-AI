@@ -35,7 +35,7 @@ const openai = new OpenAI({
 });
 
 const enhanceRequestSchema = zod.object({
-  text: zod.string().max(10000, 'Text must be at most 10000 characters long.'),
+  text: zod.string(),
 });
 
 export async function getSystemPromptForCommand(
