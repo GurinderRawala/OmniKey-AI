@@ -28,6 +28,50 @@ final class APIClient: @unchecked Sendable {
     private let customTaskURL = APIClient.baseURL.appendingPathComponent("api/feature/custom-task")
     private let taskTemplatesBaseURL = APIClient.baseURL.appendingPathComponent("api/instructions/templates")
 
+    // MARK: - Shared error helpers
+
+    /// Build a user-facing NSError from a non-success HTTP response,
+    /// attempting to surface any backend-provided error message.
+    static func makeBackendError(
+        statusCode: Int,
+        data: Data?
+    ) -> NSError {
+        var message: String?
+
+        if let data, !data.isEmpty {
+            // First try to decode as UTF-8 text; many backends return
+            // plain-text error descriptions for non-2xx responses.
+            if let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !text.isEmpty
+            {
+                message = text
+            }
+
+            // If the body looks like JSON, try to pull a common
+            // "message" / "error" field out of it.
+            if message == nil,
+               let json = try? JSONSerialization.jsonObject(with: data, options: []) as? [String: Any]
+            {
+                let candidateKeys = ["message", "error", "detail", "title", "description"]
+                for key in candidateKeys {
+                    if let value = json[key] as? String, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        message = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                        break
+                    }
+                }
+            }
+        }
+
+        let fallback = "Server returned status code \(statusCode)"
+        let description = (message?.isEmpty == false ? message! : fallback)
+
+        return NSError(
+            domain: "APIClient",
+            code: statusCode,
+            userInfo: [NSLocalizedDescriptionKey: description]
+        )
+    }
+
     func getURL(for cmd: String) -> URL? {
         switch cmd {
         case "E":
@@ -106,11 +150,7 @@ final class APIClient: @unchecked Sendable {
                 }
 
                 guard (200 ... 299).contains(httpResponse.statusCode) else {
-                    let error = NSError(
-                        domain: "APIClient",
-                        code: httpResponse.statusCode,
-                        userInfo: [NSLocalizedDescriptionKey: "Server returned status code \(httpResponse.statusCode)"]
-                    )
+                    let error = APIClient.makeBackendError(statusCode: httpResponse.statusCode, data: data)
                     completion(.failure(error))
                     return
                 }
@@ -245,7 +285,8 @@ final class APIClient: @unchecked Sendable {
                 }
 
                 guard (200 ... 299).contains(httpResponse.statusCode) else {
-                    completion(.failure(NSError(domain: "APIClient", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Server returned status code \(httpResponse.statusCode)"])))
+                    let error = APIClient.makeBackendError(statusCode: httpResponse.statusCode, data: data)
+                    completion(.failure(error))
                     return
                 }
 
@@ -308,7 +349,8 @@ final class APIClient: @unchecked Sendable {
             }
 
             if !(200 ... 299).contains(httpResponse.statusCode) {
-                completion(.failure(NSError(domain: "APIClient", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Server returned status code \(httpResponse.statusCode)"])))
+                let error = APIClient.makeBackendError(statusCode: httpResponse.statusCode, data: data)
+                completion(.failure(error))
                 return
             }
 
@@ -367,7 +409,8 @@ final class APIClient: @unchecked Sendable {
             }
 
             if !(200 ... 299).contains(httpResponse.statusCode) {
-                completion(.failure(NSError(domain: "APIClient", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Server returned status code \(httpResponse.statusCode)"])))
+                let error = APIClient.makeBackendError(statusCode: httpResponse.statusCode, data: data)
+                completion(.failure(error))
                 return
             }
 
@@ -408,7 +451,8 @@ final class APIClient: @unchecked Sendable {
             }
 
             if !(200 ... 299).contains(httpResponse.statusCode), httpResponse.statusCode != 204 {
-                completion(.failure(NSError(domain: "APIClient", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Server returned status code \(httpResponse.statusCode)"])))
+                let error = APIClient.makeBackendError(statusCode: httpResponse.statusCode, data: nil)
+                completion(.failure(error))
                 return
             }
 
@@ -439,7 +483,8 @@ final class APIClient: @unchecked Sendable {
             }
 
             if !(200 ... 299).contains(httpResponse.statusCode) {
-                completion(.failure(NSError(domain: "APIClient", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Server returned status code \(httpResponse.statusCode)"])))
+                let error = APIClient.makeBackendError(statusCode: httpResponse.statusCode, data: data)
+                completion(.failure(error))
                 return
             }
 

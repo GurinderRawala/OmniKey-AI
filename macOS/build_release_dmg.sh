@@ -127,9 +127,9 @@ cat > "${INFO_PLIST}" <<EOF
     <key>CFBundleIdentifier</key>
     <string>${BUNDLE_ID}</string>
     <key>CFBundleVersion</key>
-    <string>9</string>
+    <string>10</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0.8</string>
+    <string>1.0.9</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>LSMinimumSystemVersion</key>
@@ -216,7 +216,7 @@ ln -s /Applications "${STAGE_DIR}/Applications"
 info "Creating styled DMG..."
 rm -f "${DMG_PATH}"
 
-create-dmg \
+sudo create-dmg \
   --volname "${APP_NAME}" \
   --volicon "${APP_BUNDLE}/Contents/Resources/AppIcon.icns" \
   --window-size 600 400 \

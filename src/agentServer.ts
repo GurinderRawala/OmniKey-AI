@@ -8,7 +8,7 @@ import { logger } from './logger';
 import { Subscription } from './models/subscription';
 import { SubscriptionUsage } from './models/subscriptionUsage';
 import { AGENT_SYSTEM_PROMPT } from './agentPrompts';
-import { getSystemPromptForCommand } from './featureRoutes';
+import { getPromptForCommand } from './featureRoutes';
 
 interface AgentMessage {
   session_id: string;
@@ -61,7 +61,8 @@ async function getOrCreateSession(
     return existing;
   }
 
-  const systemPrompt = await getSystemPromptForCommand(log, 'task', subscription).catch((err) => {
+  // use these instructions as user instructions
+  const prompt = await getPromptForCommand(log, 'task', subscription).catch((err) => {
     log.error('Failed to get system prompt for new agent session', { error: err });
     return '';
   });
@@ -71,8 +72,19 @@ async function getOrCreateSession(
     history: [
       {
         role: 'system',
-        content: [systemPrompt, AGENT_SYSTEM_PROMPT].filter(Boolean).join('\n'),
+        content: AGENT_SYSTEM_PROMPT,
       },
+      ...(prompt
+        ? [
+            {
+              role: 'assistant' as const,
+              content: `<user_configured_instructions>
+# User-Configured Task Instructions
+${prompt}
+</user_configured_instructions>`,
+            },
+          ]
+        : []),
     ],
     turns: 0,
   };
@@ -81,7 +93,7 @@ async function getOrCreateSession(
   log.info('Created new agent session', {
     sessionId,
     subscriptionId: subscription.id,
-    hasCustomSystemPrompt: Boolean(systemPrompt),
+    hasCustomPrompt: Boolean(prompt),
   });
   return entry;
 }

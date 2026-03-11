@@ -259,16 +259,17 @@ final class KeyboardMonitor {
     /// Common flow once we have a non-empty selected text.
     private func proceedWithSelectedText(_ text: String, cmd: String) {
         originalSelectedText = text
-        startInProgressAlerts(for: cmd)
 
-        // For Cmd+T, if the text contains an @agent directive
-        // we route the request through the gRPC agent instead of
-        // the traditional custom-task HTTP endpoint.
+        // For Cmd+T with an @omniAgent directive, route through the
+        // agent without showing the "Performing Custom Task" alerts.
         if cmd == "T", AgentRunner.shared.containsAgentDirective(text) {
             sendToAgent(text: text)
-        } else {
-            sendToAPI(text: text, cmd: cmd)
+            return
         }
+
+        // For all other flows, show periodic in-progress alerts.
+        startInProgressAlerts(for: cmd)
+        sendToAPI(text: text, cmd: cmd)
     }
 
     /// Fallback approach: simulate Cmd+C in the frontmost app and read
@@ -379,7 +380,21 @@ final class KeyboardMonitor {
                     self.replaceSelectedText(with: finalText)
 
                 case let .failure(error):
-                    self.showAlert(title: "Error", message: "Failed: \(error.localizedDescription)")
+                    let nsError = error as NSError
+
+                    if cmd == "T",
+                       nsError.domain == "APIClient",
+                       nsError.code == 404
+                    {
+                        self.showAlert(
+                            title: "No Task Template",
+                            message: "No default task template is configured. Opening Task Instructions…"
+                        )
+
+                        AppDelegate.shared?.showTaskInstructionsWindow()
+                    } else {
+                        self.showAlert(title: "Error", message: "Failed: \(error.localizedDescription)")
+                    }
                 }
             }
         }
@@ -390,22 +405,39 @@ final class KeyboardMonitor {
         let original = normalizeOriginalText(text)
         print("\(logPrefix) Normalized @agent text to send (length: \(original.count)).")
 
-        AgentRunner.shared.runAgentSession(originalText: original) { [weak self] result in
-            DispatchQueue.main.async {
-                guard let self else { return }
+        // Reset and start the shared thinking model so the
+        // dedicated window can stream updates from the agent.
+        AgentThinkingModel.shared.reset(with: "Request:\n\(original)")
+        AgentThinkingModel.shared.isRunning = true
+        AppDelegate.shared?.agentSessionDidStart()
 
-                self.stopInProgressAlerts()
+        AgentRunner.shared.runAgentSession(
+            originalText: original,
+            completion: { [weak self] result in
+                DispatchQueue.main.async {
+                    guard let self else { return }
 
-                switch result {
-                case let .success(finalText):
-                    self.showAlert(title: "Agent Complete", message: "Command finished.")
-                    self.replaceSelectedText(with: finalText)
+                    AgentThinkingModel.shared.isRunning = false
+                    AppDelegate.shared?.agentSessionDidEnd()
+                    self.stopInProgressAlerts()
 
-                case let .failure(error):
-                    self.showAlert(title: "Agent Error", message: error.localizedDescription)
+                    switch result {
+                    case let .success(finalText):
+                        self.showAlert(title: "Agent Complete", message: "Command finished.")
+                        self.replaceSelectedText(with: finalText)
+
+                    case let .failure(error):
+                        let nsError = error as NSError
+                        if nsError.domain == "AgentRunner", nsError.code == -9999 {
+                            // User cancelled the agent run; do not show an error.
+                            return
+                        }
+
+                        self.showAlert(title: "Agent Error", message: error.localizedDescription)
+                    }
                 }
             }
-        }
+        )
     }
 
     /// send the underlying original text to the backend.

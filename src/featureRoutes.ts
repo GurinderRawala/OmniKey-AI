@@ -2,11 +2,12 @@ import express, { Request, Response } from 'express';
 import OpenAI from 'openai';
 import { Logger } from 'winston';
 import zod from 'zod';
-import { EnhanceCommand } from './types';
+import { EnhanceCommand, OmniKeyError } from './types';
 import {
   enhancePromptSystemInstruction,
   grammarPromptSystemInstruction,
   OUTPUT_FORMAT_INSTRUCTION,
+  taskPromptSystemInstruction,
 } from './prompts';
 import { config } from './config';
 import { AuthLocals, authMiddleware } from './authMiddleware';
@@ -14,6 +15,7 @@ import { Subscription } from './models/subscription';
 import { SubscriptionUsage } from './models/subscriptionUsage';
 import { decompressString } from './compression';
 import { SubscriptionTaskTemplate } from './models/subscriptionTaskTemplate';
+import { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
 
 interface EnhanceRequestBody {
   text?: string;
@@ -38,7 +40,7 @@ const enhanceRequestSchema = zod.object({
   text: zod.string(),
 });
 
-export async function getSystemPromptForCommand(
+export async function getPromptForCommand(
   logger: Logger,
   cmd: EnhanceCommand,
   subscription: Subscription,
@@ -83,36 +85,69 @@ function getModelForCommand(cmd: EnhanceCommand): string {
   return cmd === 'task' ? 'gpt-5.1' : 'gpt-4o-mini';
 }
 
+function createMessagesParams(
+  cmd: EnhanceCommand,
+  input: string,
+  prompt: string,
+): ChatCompletionMessageParam[] {
+  if (cmd === 'task') {
+    return [
+      {
+        role: 'system',
+        content: [taskPromptSystemInstruction, OUTPUT_FORMAT_INSTRUCTION].join('\n'),
+      },
+      {
+        role: 'user',
+        content: `<user_configured_instructions>
+# User-Configured Task Instructions
+${prompt}
+</user_configured_instructions>
+<current_input>
+# Current user input for this execution
+${input}
+</current_input>`,
+      },
+    ];
+  }
+
+  return [
+    {
+      role: 'system',
+      content: [prompt, OUTPUT_FORMAT_INSTRUCTION].join('\n'),
+    },
+    {
+      role: 'user',
+      content: input,
+    },
+  ];
+}
+
 export async function runEnhancementModel(
   logger: Logger,
   text: string,
   cmd: EnhanceCommand,
   subscription: Subscription,
   onDelta?: (delta: string) => void,
-): Promise<{ rawResponse: string; usage?: CompletionUsage; model: string } | null> {
+): Promise<{ rawResponse: string; usage?: CompletionUsage; model: string } | OmniKeyError | null> {
   const trimmed = text.trim();
 
   if (!config.openaiApiKey) {
     logger.warn('OPENAI_API_KEY is not set; returning null from runEnhancementModel.');
-    return null;
+    return new OmniKeyError('OpenAI API key is not configured.', 500);
   }
 
-  const systemPrompt = await getSystemPromptForCommand(logger, cmd, subscription);
+  const prompt = await getPromptForCommand(logger, cmd, subscription);
 
-  if (!systemPrompt) {
+  if (!prompt) {
     logger.error(`No system prompt found for command: ${cmd}`);
-    return null;
+    return new OmniKeyError(`No system prompt found for command: ${cmd}`, 404);
   }
 
-  const finalSystemPrompt = `${systemPrompt}\n${OUTPUT_FORMAT_INSTRUCTION}`;
   const model = getModelForCommand(cmd);
 
   const stream = await openai.chat.completions.create({
     model,
-    messages: [
-      { role: 'system', content: finalSystemPrompt },
-      { role: 'user', content: trimmed },
-    ],
+    messages: createMessagesParams(cmd, trimmed, prompt),
     temperature: 0.3,
     stream: true,
     stream_options: { include_usage: true },
@@ -142,14 +177,14 @@ async function enhanceText(
   text: string,
   cmd: EnhanceCommand,
   subscription: Subscription,
-): Promise<string> {
+): Promise<string | OmniKeyError> {
   const trimmed = text.trim();
 
   try {
     const result = await runEnhancementModel(logger, trimmed, cmd, subscription);
 
-    if (!result) {
-      return trimmed;
+    if (!result || result instanceof OmniKeyError) {
+      return result instanceof OmniKeyError ? result : new OmniKeyError('Unknown error', 500);
     }
 
     const { rawResponse, usage, model } = result;
@@ -201,18 +236,46 @@ async function streamEnhanceResponse(
   const { logger, subscription } = res.locals;
   const trimmed = text.trim();
 
-  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-  res.setHeader('Cache-Control', 'no-cache');
+  let headersSent = false;
 
-  (res as any).flushHeaders?.();
+  const ensureHeadersSent = () => {
+    if (!headersSent) {
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-cache');
+
+      (res as any).flushHeaders?.();
+      headersSent = true;
+    }
+  };
 
   try {
     const result = await runEnhancementModel(logger, trimmed, cmd, subscription, (delta) => {
+      if (!delta) return;
+      ensureHeadersSent();
       res.write(delta);
     });
 
+    if (result instanceof OmniKeyError) {
+      logger.error('Error during streaming enhancement model execution.', {
+        error: result,
+        command: cmd,
+      });
+
+      if (!headersSent) {
+        res.status(result.statusCode ?? 500).json({ error: result.message });
+      } else {
+        try {
+          res.end();
+        } catch {
+          // ignore secondary errors when ending stream
+        }
+      }
+      return;
+    }
+
     if (!result) {
       // Fall back to returning the original text once.
+      ensureHeadersSent();
       res.write(trimmed);
       res.end();
       return;
@@ -242,6 +305,10 @@ async function streamEnhanceResponse(
       }
     }
 
+    if (!headersSent) {
+      ensureHeadersSent();
+    }
+
     res.end();
   } catch (err) {
     logger.error('Error streaming enhance response.', {
@@ -250,7 +317,11 @@ async function streamEnhanceResponse(
     });
 
     try {
-      res.end();
+      if (!headersSent) {
+        res.status(500).json({ error: 'Internal server error.' });
+      } else {
+        res.end();
+      }
     } catch {
       // ignore secondary errors when ending stream
     }
@@ -270,6 +341,14 @@ function makeEnhanceHandler(cmd: EnhanceCommand) {
       }
 
       const result = await enhanceText(logger, body.text, cmd, subscription);
+
+      if (result instanceof OmniKeyError) {
+        logger.error('Error during enhanceText execution.', {
+          error: result,
+          command: cmd,
+        });
+        return res.status(result.statusCode ?? 500).json({ error: result.message });
+      }
 
       return res.json({ result });
     } catch (err) {

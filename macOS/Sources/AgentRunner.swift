@@ -272,6 +272,17 @@ final class AgentRunner {
 
                     let content = response.content
 
+                    // Surface a cleaned, human-readable version of
+                    // the agent's message (without XML-like tags)
+                    // directly to the shared thinking model so the
+                    // UI can display a streaming transcript.
+                    let displayText = AgentRunner.cleanedDisplayText(from: content)
+                    if !displayText.isEmpty {
+                        DispatchQueue.main.async {
+                            AgentThinkingModel.shared.append(displayText)
+                        }
+                    }
+
                     // If the agent wants us to run a shell script,
                     // execute it and stream the output back as a
                     // terminal_output message.
@@ -368,6 +379,18 @@ final class AgentRunner {
 
         let inner = text[startRange.upperBound ..< endRange.lowerBound]
         return String(inner).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Remove internal XML-like tags used by the agent protocol
+    /// so that we can show a clean, human-readable stream of
+    /// content in the UI.
+    static func cleanedDisplayText(from text: String) -> String {
+        var result = text
+        let tags = ["<shell_script>", "</shell_script>", "<final_answer>", "</final_answer>"]
+        for tag in tags {
+            result = result.replacingOccurrences(of: tag, with: "")
+        }
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     static func extractFinalAnswer(from text: String) -> String? {

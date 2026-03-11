@@ -6,8 +6,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     var statusItem: NSStatusItem?
     private var statusMenuItem: NSMenuItem?
     private var taskInstructionsMenuItem: NSMenuItem?
+    private var agentSessionMenuItem: NSMenuItem?
     private var manualMenuItem: NSMenuItem?
     private var taskInstructionsWindowController: TaskInstructionsWindowController?
+    private var agentThinkingWindowController: AgentThinkingWindowController?
     private var licenseWindowController: LicenseWindowController?
     private var manualWindowController: ManualWindowController?
     private var monitoringStarted = false
@@ -104,6 +106,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         instructionsItem.isEnabled = false
         menu.addItem(instructionsItem)
         taskInstructionsMenuItem = instructionsItem
+        let agentItem = NSMenuItem(title: "OmniAgent Session", action: #selector(showAgentThinkingWindowFromMenu), keyEquivalent: "")
+        agentItem.target = self
+        agentItem.isEnabled = false
+        agentItem.isHidden = true
+        menu.addItem(agentItem)
+        agentSessionMenuItem = agentItem
         let manualItem = NSMenuItem(title: "Manual", action: #selector(showManualWindowFromMenu), keyEquivalent: "")
         manualItem.target = self
         menu.addItem(manualItem)
@@ -129,7 +137,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         showTaskInstructionsWindow()
     }
 
-    private func showTaskInstructionsWindow() {
+    func showTaskInstructionsWindow() {
         guard isAuthorized else {
             showLicenseWindow()
             return
@@ -141,6 +149,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
 
         NSApp.activate(ignoringOtherApps: true)
         taskInstructionsWindowController?.showWindow(nil)
+    }
+
+    @objc private func showAgentThinkingWindowFromMenu() {
+        showAgentThinkingWindow()
+    }
+
+    func showAgentThinkingWindow() {
+        if agentThinkingWindowController == nil {
+            agentThinkingWindowController = AgentThinkingWindowController()
+        }
+
+        NSApp.activate(ignoringOtherApps: true)
+        agentThinkingWindowController?.showWindow(nil)
     }
 
     @objc private func showManualWindowFromMenu() {
@@ -206,6 +227,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
 
         statusMenuItem?.title = title
         taskInstructionsMenuItem?.isEnabled = isAuthorized
+    }
+
+    /// Called when an @omniAgent session starts so we can show
+    /// the thinking window and enable the status menu entry.
+    func agentSessionDidStart() {
+        agentSessionMenuItem?.isHidden = false
+        agentSessionMenuItem?.isEnabled = true
+        showAgentThinkingWindow()
+    }
+
+    /// Called when an @omniAgent session ends so we can hide the
+    /// thinking window and disable the status menu entry.
+    func agentSessionDidEnd() {
+        agentSessionMenuItem?.isEnabled = false
+        agentSessionMenuItem?.isHidden = true
+        agentThinkingWindowController?.close()
     }
 
     @objc private func handleSubscriptionUnauthorizedNotification() {
