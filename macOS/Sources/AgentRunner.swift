@@ -1,5 +1,54 @@
 import Foundation
 
+// Concurrency-safe container for the currently running shell
+// process, WebSocket task, and cancellation flag so that a
+// user-initiated Cancel action can stop them cleanly.
+actor AgentSessionState {
+    static let shared = AgentSessionState()
+
+    private var shellProcess: Process?
+    private var webSocketTask: URLSessionWebSocketTask?
+    private var wasCancelledByUser: Bool = false
+
+    func registerShellProcess(_ process: Process?) {
+        shellProcess = process
+    }
+
+    func registerWebSocketTask(_ task: URLSessionWebSocketTask?) {
+        webSocketTask = task
+    }
+
+    func markCancelledByUser() {
+        wasCancelledByUser = true
+    }
+
+    /// Returns and clears the cancellation flag so each
+    /// session observes it at most once.
+    func takeWasCancelledByUser() -> Bool {
+        let flag = wasCancelledByUser
+        wasCancelledByUser = false
+        return flag
+    }
+
+    /// Cancel any running shell command and close the active
+    /// WebSocket connection.
+    func cancelCurrentSession() {
+        wasCancelledByUser = true
+
+        if let process = shellProcess, process.isRunning {
+            print("[AgentRunner] Cancelling running shell process…")
+            process.terminate()
+        }
+        shellProcess = nil
+
+        if let task = webSocketTask {
+            print("[AgentRunner] Cancelling current WebSocket task…")
+            task.cancel(with: .goingAway, reason: nil)
+        }
+        webSocketTask = nil
+    }
+}
+
 /// Simple shell execution helper that captures both the
 /// output and the exit status of the command.
 func runShellCommandWithStatus(_ command: String) -> (output: String, status: Int32) {
@@ -17,12 +66,23 @@ func runShellCommandWithStatus(_ command: String) -> (output: String, status: In
     process.launchPath = "/bin/zsh"
     process.arguments = ["-l", "-c", command]
 
+    // Remember this process so it can be cancelled if the user
+    // presses the Cancel button in the thinking window.
+    Task {
+        await AgentSessionState.shared.registerShellProcess(process)
+    }
+
     let pipe = Pipe()
     process.standardOutput = pipe
     process.standardError = pipe
 
     process.launch()
     process.waitUntilExit()
+
+    // Clear the tracked process once it has finished.
+    Task {
+        await AgentSessionState.shared.registerShellProcess(nil)
+    }
 
     let data = pipe.fileHandleForReading.readDataToEndOfFile()
     let output = String(data: data, encoding: .utf8) ?? ""
@@ -49,6 +109,17 @@ final class AgentRunner {
     static let shared = AgentRunner()
     private init() {}
 
+    /// Cancel the current agent session, if any. This will
+    /// terminate a running shell command and close the active
+    /// WebSocket connection via the shared AgentSessionState
+    /// actor. KeyboardMonitor treats this as a user-cancelled
+    /// run and will not show an error.
+    func cancelCurrentSession() {
+        Task {
+            await AgentSessionState.shared.cancelCurrentSession()
+        }
+    }
+
     /// Returns true if the provided text contains an @omniAgent
     func containsAgentDirective(_ text: String) -> Bool {
         return text.range(of: "@omniAgent", options: .caseInsensitive) != nil
@@ -63,6 +134,21 @@ final class AgentRunner {
     ) {
         func startSession(with jwt: String, allowReauth: Bool) {
             connectAndRun(originalText: originalText, jwt: jwt) { result in
+                // If the user pressed Cancel, surface a dedicated
+                // cancellation error and skip any re-auth logic.
+                Task { @MainActor in
+                    let wasCancelled = await AgentSessionState.shared.takeWasCancelledByUser()
+                    if wasCancelled {
+                        let cancelError = NSError(
+                            domain: "AgentRunner",
+                            code: -9999,
+                            userInfo: [NSLocalizedDescriptionKey: "Agent run cancelled by user."]
+                        )
+
+                        completion(.failure(cancelError))
+                        return
+                    }
+
                 switch result {
                 case .success:
                     completion(result)
@@ -92,6 +178,7 @@ final class AgentRunner {
                             }
                         }
                     }
+                }
                 }
             }
         }
@@ -214,6 +301,12 @@ final class AgentRunner {
         let session = URLSession(configuration: .default)
         let task = session.webSocketTask(with: request)
 
+        // Track the active WebSocket so it can be closed when the
+        // user cancels an in-progress agent session.
+        Task {
+            await AgentSessionState.shared.registerWebSocketTask(task)
+        }
+
         task.resume()
 
         task.sendPing { error in
@@ -276,6 +369,9 @@ final class AgentRunner {
                         }
                     }
                     task.cancel(with: .goingAway, reason: nil)
+                    Task {
+                        await AgentSessionState.shared.registerWebSocketTask(nil)
+                    }
 
                 case let .success(message):
                     guard case let .string(text) = message else {
@@ -360,6 +456,9 @@ final class AgentRunner {
                             completion(.success(final))
                         }
                         task.cancel(with: .goingAway, reason: nil)
+                        Task {
+                            await AgentSessionState.shared.registerWebSocketTask(nil)
+                        }
                         return
                     }
 
@@ -375,6 +474,9 @@ final class AgentRunner {
                         completion(.success(answerText))
                     }
                     task.cancel(with: .goingAway, reason: nil)
+                    Task {
+                        await AgentSessionState.shared.registerWebSocketTask(nil)
+                    }
                     return
                 }
             }

@@ -119,6 +119,17 @@ struct AgentThinkingView: View {
                 )
 
                 HStack {
+                    if model.isRunning {
+                        Button("Cancel") {
+                            // First cancel any in-flight shell command and
+                            // close the active WebSocket session, then mark
+                            // the local model as no longer running.
+                            AgentRunner.shared.cancelCurrentSession()
+                            model.isRunning = false
+                        }
+                        .font(.system(size: 10))
+                    }
+
                     Spacer()
 
                     Text(model.isRunning ? "Running…" : "Finished")
