@@ -7,14 +7,21 @@ final class AgentThinkingModel: ObservableObject {
 
     @Published var log: String = ""
     @Published var isRunning: Bool = false
+    @Published var initialRequest: String = ""
+    @Published var agentMessages: [String] = []
+    @Published var terminalOutputs: [String] = []
 
     private init() {}
 
     func reset(with initialText: String? = nil) {
+        log = ""
+        initialRequest = ""
+        agentMessages = []
+        terminalOutputs = []
+
         if let initial = initialText, !initial.isEmpty {
             log = initial
-        } else {
-            log = ""
+            initialRequest = initial
         }
         isRunning = false
     }
@@ -27,6 +34,12 @@ final class AgentThinkingModel: ObservableObject {
             log = trimmed
         } else {
             log += "\n\n" + trimmed
+        }
+
+        if trimmed.hasPrefix("[terminal ") {
+            terminalOutputs.append(trimmed)
+        } else {
+            agentMessages.append(trimmed)
         }
     }
 }

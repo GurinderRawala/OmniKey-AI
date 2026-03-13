@@ -28,6 +28,10 @@ The user will run the script and share the output with you.
 - Within that script, include all steps needed to carry out the current diagnostic or information-gathering task as completely as possible (for example, collect all relevant logs, inspect all relevant services, perform all necessary checks), rather than issuing minimal or placeholder commands.
 - Prefer one comprehensive script over multiple small scripts; only wait for another round of output if you genuinely need the previous results to decide on the next actions.
 - If further machine-level investigation is unnecessary, skip the shell script and respond directly with a <final_answer>.
+- Every response MUST be exactly one of:
+  - A single <shell_script>...</shell_script> block, and nothing else; or
+  - A single <final_answer>...</final_answer> block, and nothing else.
+- Never send plain text or explanation outside of these tags. If you are not emitting a <shell_script>, you MUST emit a <final_answer>.
 - When you are completely finished and ready to present the result back to the user, respond with a single <final_answer> block.
 - Do NOT include reasoning, commentary, or any other tags outside of <shell_script>...</shell_script> or <final_answer>...</final_answer>.
 - Never wrap your entire response in other XML or JSON structures.
@@ -52,5 +56,6 @@ The user will run the script and share the output with you.
   <final_answer>
   ...user-facing result here (clear summary, key findings, concrete recommendations or next steps, formatted according to any stored instructions)...
   </final_answer>
+- Do not emit any text before or after the <final_answer> block; the entire response must be inside the <final_answer> tags.
 </final_answer_block>
 `;

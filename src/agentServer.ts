@@ -185,12 +185,23 @@ async function runAgentTurn(
   // Append the client message as user content, marking terminal
   // output and errors in the text so the agent can reason about them.
   let userContent = clientMessage.content || '';
-  if (clientMessage.is_terminal_output) {
+  const isTerminalOutput = Boolean(clientMessage.is_terminal_output);
+  const isErrorFlag = Boolean(clientMessage.is_error);
+
+  if (isTerminalOutput) {
     userContent = `TERMINAL OUTPUT:\n${userContent}`;
   }
-  if (clientMessage.is_error) {
+  if (isErrorFlag) {
     userContent = `COMMAND ERROR:\n${userContent}`;
   }
+
+  log.info('Agent turn received client message', {
+    sessionId,
+    isTerminalOutput,
+    isError: isErrorFlag,
+    rawContentLength: (clientMessage.content || '').length,
+    userContentLength: userContent.length,
+  });
 
   session.history.push({
     role: 'user',
@@ -282,10 +293,24 @@ async function runAgentTurn(
     const hasShellScriptTag = content.includes('<shell_script>');
     const hasFinalAnswerTag = content.includes('<final_answer>');
 
+    log.info('Agent LLM raw response summary', {
+      sessionId,
+      turn: session.turns,
+      rawContentLength: content.length,
+      hasShellScriptTag,
+      hasFinalAnswerTag,
+    });
+
     const normalizedContent =
       !hasShellScriptTag && !hasFinalAnswerTag && session.turns >= MAX_TURNS
         ? `<final_answer>\n${content}\n</final_answer>`
         : content;
+
+    log.info('Agent LLM normalized response summary', {
+      sessionId,
+      turn: session.turns,
+      normalizedContentLength: normalizedContent.length,
+    });
 
     // Record assistant message back into history for future turns.
     session.history.push({

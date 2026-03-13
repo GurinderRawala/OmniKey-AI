@@ -3,6 +3,16 @@ import Foundation
 /// Simple shell execution helper that captures both the
 /// output and the exit status of the command.
 func runShellCommandWithStatus(_ command: String) -> (output: String, status: Int32) {
+    let trimmedCommandForLog: String
+    if command.count > 2000 {
+        let prefix = command.prefix(2000)
+        trimmedCommandForLog = String(prefix) + "... [truncated]"
+    } else {
+        trimmedCommandForLog = command
+    }
+
+    print("[AgentRunner] About to run shell command (length: \(command.count)):\n\(trimmedCommandForLog)")
+
     let process = Process()
     process.launchPath = "/bin/zsh"
     process.arguments = ["-l", "-c", command]
@@ -16,6 +26,17 @@ func runShellCommandWithStatus(_ command: String) -> (output: String, status: In
 
     let data = pipe.fileHandleForReading.readDataToEndOfFile()
     let output = String(data: data, encoding: .utf8) ?? ""
+
+    let outputForLog: String
+    if output.count > 2000 {
+        let prefix = output.prefix(2000)
+        outputForLog = String(prefix) + "... [truncated]"
+    } else {
+        outputForLog = output
+    }
+
+    print("[AgentRunner] Shell command finished with status \(process.terminationStatus). Output length: \(output.count). Sample:\n\(outputForLog)")
+
     return (output, process.terminationStatus)
 }
 
@@ -248,6 +269,7 @@ final class AgentRunner {
             task.receive { result in
                 switch result {
                 case let .failure(error):
+                    print("[AgentRunner] WebSocket receive failed: \(error.localizedDescription)")
                     if !finalAnswerDelivered {
                         DispatchQueue.main.async {
                             completion(.failure(error))
@@ -258,13 +280,17 @@ final class AgentRunner {
                 case let .success(message):
                     guard case let .string(text) = message else {
                         // Ignore non-text messages
+                        print("[AgentRunner] Received non-text WebSocket message; ignoring.")
                         receiveNext()
                         return
                     }
 
+                    print("[AgentRunner] Received WebSocket text message (length: \(text.count))")
+
                     guard let data = text.data(using: .utf8),
                           let response = try? decoder.decode(AgentMessage.self, from: data)
                     else {
+                        print("[AgentRunner] Failed to decode AgentMessage from text payload.")
                         receiveNext()
                         return
                     }
@@ -286,6 +312,7 @@ final class AgentRunner {
                     // execute it and stream the output back as a
                     // terminal_output message.
                     if let script = AgentRunner.extractShellScript(from: content) {
+                        print("[AgentRunner] Detected <shell_script> block in agent response. Script length: \(script.count)")
                         DispatchQueue.global(qos: .userInitiated).async {
                             let (output, status) = runShellCommandWithStatus(script)
 
@@ -305,6 +332,15 @@ final class AgentRunner {
                                 isError: status != 0
                             )
 
+                            let encodedLength: Int
+                            if let jsonData = try? encoder.encode(reply) {
+                                encodedLength = jsonData.count
+                            } else {
+                                encodedLength = -1
+                            }
+
+                            print("[AgentRunner] Sending terminal output back to agent. Exit status: \(status). Output length: \(output.count). Encoded JSON length: \(encodedLength)")
+
                             if let jsonData = try? encoder.encode(reply),
                                let jsonString = String(data: jsonData, encoding: .utf8)
                             {
@@ -318,6 +354,7 @@ final class AgentRunner {
                     // If we received a final answer, surface it to the
                     // caller and close the stream.
                     if let final = AgentRunner.extractFinalAnswer(from: content) {
+                        print("[AgentRunner] Detected <final_answer> block in agent response. Length: \(final.count)")
                         finalAnswerDelivered = true
                         DispatchQueue.main.async {
                             completion(.success(final))
@@ -332,6 +369,7 @@ final class AgentRunner {
                     // connection. This allows simpler agents that
                     // just stream plain text without special tags.
                     let answerText = !displayText.isEmpty ? displayText : content
+                    print("[AgentRunner] Treating agent message as implicit final answer. Length: \(answerText.count)")
                     finalAnswerDelivered = true
                     DispatchQueue.main.async {
                         completion(.success(answerText))
