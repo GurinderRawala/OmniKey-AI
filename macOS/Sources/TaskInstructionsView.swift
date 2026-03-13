@@ -235,13 +235,20 @@ struct TaskInstructionsView: View {
             DispatchQueue.main.async {
                 switch result {
                 case let .success(updatedDefault):
+                    // Update local templates so that only the returned
+                    // template is marked as default, and use the
+                    // server-provided fields for that template.
                     self.savedTemplates = self.savedTemplates.map { tpl in
-                        APIClient.TaskTemplateDTO(
-                            id: tpl.id,
-                            heading: tpl.heading,
-                            instructions: tpl.instructions,
-                            isDefault: tpl.id == updatedDefault.id
-                        )
+                        if tpl.id == updatedDefault.id {
+                            return updatedDefault
+                        } else {
+                            return APIClient.TaskTemplateDTO(
+                                id: tpl.id,
+                                heading: tpl.heading,
+                                instructions: tpl.instructions,
+                                isDefault: false
+                            )
+                        }
                     }
                     self.statusMessage = "Default template set for ⌘T."
 

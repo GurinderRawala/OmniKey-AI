@@ -29,7 +29,6 @@ final class AgentRunner {
     private init() {}
 
     /// Returns true if the provided text contains an @omniAgent
-    /// directive and should be handled by the gRPC agent.
     func containsAgentDirective(_ text: String) -> Bool {
         return text.range(of: "@omniAgent", options: .caseInsensitive) != nil
     }
@@ -290,6 +289,14 @@ final class AgentRunner {
                         DispatchQueue.global(qos: .userInitiated).async {
                             let (output, status) = runShellCommandWithStatus(script)
 
+                            // Surface the terminal output in the thinking window so
+                            // the user can see exactly what the command produced.
+                            DispatchQueue.main.async {
+                                let statusLabel = (status == 0) ? "success" : "error (exit code: \(status))"
+                                let display = "[terminal \(statusLabel)]\n\(output)"
+                                AgentThinkingModel.shared.append(display)
+                            }
+
                             let reply = AgentMessage(
                                 sessionID: response.sessionID,
                                 sender: "client",
@@ -319,11 +326,18 @@ final class AgentRunner {
                         return
                     }
 
-                    // Any other agent messages (e.g. intermediate
-                    // reasoning) are currently ignored by the app but
-                    // are still part of the agent's conversation state
-                    // on the backend.
-                    receiveNext()
+                    // If there is no shell script to run and no
+                    // <final_answer> tag present, treat this message
+                    // as the final answer as well and close the
+                    // connection. This allows simpler agents that
+                    // just stream plain text without special tags.
+                    let answerText = !displayText.isEmpty ? displayText : content
+                    finalAnswerDelivered = true
+                    DispatchQueue.main.async {
+                        completion(.success(answerText))
+                    }
+                    task.cancel(with: .goingAway, reason: nil)
+                    return
                 }
             }
         }

@@ -24,11 +24,11 @@ struct AgentThinkingView: View {
                     VStack(alignment: .leading, spacing: 12) {
                         if model.log.isEmpty {
                             Text("Waiting for the agent to respond…")
-                                .font(.system(size: 12))
+                                .font(.system(size: 10))
                                 .foregroundColor(NordTheme.secondaryText(colorScheme))
                         } else {
                             Text(model.log)
-                                .font(.system(size: 12, design: .monospaced))
+                                .font(.system(size: 10, design: .monospaced))
                                 .foregroundColor(NordTheme.primaryText(colorScheme))
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
@@ -44,7 +44,7 @@ struct AgentThinkingView: View {
                     Spacer()
 
                     Text(model.isRunning ? "Running…" : "Finished")
-                        .font(.system(size: 11))
+                        .font(.system(size: 10))
                         .foregroundColor(NordTheme.secondaryText(colorScheme))
                 }
             }

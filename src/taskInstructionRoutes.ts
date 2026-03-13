@@ -143,6 +143,18 @@ export function taskInstructionRouter(): express.Router {
         return res.status(404).json({ error: 'Template not found.' });
       }
 
+      if (template.isDefault) {
+        // If the template is already the default, just return it in the
+        // same shape as other successful responses so clients can
+        // consistently decode a template DTO.
+        return res.json({
+          id: template.id,
+          heading: template.heading,
+          instructions: decompressString(template.instructions) ?? '',
+          isDefault: template.isDefault,
+        });
+      }
+
       // Clear previous default(s)
       await SubscriptionTaskTemplate.update(
         { isDefault: false },
