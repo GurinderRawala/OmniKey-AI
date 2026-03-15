@@ -11,41 +11,61 @@ The app sends the selected text to the backend, gets the rewritten result, and r
 
 ---
 
-## Components
+# Omnikey SaaS
 
-- **macOS app** (status bar app)
-  - Lives in the menu bar with an "OK" icon.
-  - Listens globally for `Cmd + E`, `Cmd + G`, and `Cmd + T`.
-  - Captures the currently selected text and replaces it with the processed result.
+Omnikey is an open-source app for managing your OpenAI API key and onboarding users. Now supports self-hosted mode with SQLite and Yarn-based workflows.
 
-- **windows app** (tray app)
-  - Runs in the Windows system tray with an icon.
-  - Listens globally for `Ctrl + E`, `Ctrl + G`, and `Ctrl + T`.
-  - Captures the currently selected text and replaces it with the processed result.
+## Features
 
-- **Backend API** (TypeScript + Express)
-  - Runs on `http://localhost:7172`.
-  - Endpoints:
-    - `POST /api/enhance` – enhance prompt (`Cmd + E`).
-    - `POST /api/grammar` – grammar fix (`Cmd + G`).
-    - `POST /api/custom-task` – custom task (`Cmd + T`).
+- Onboard users with their OpenAI API key
+- Backend API built with Node.js, Express, and Sequelize
+- CLI for onboarding and configuration
+- Self-hosted mode with SQLite (no external database required)
 
----
+## Getting Started
 
-## Prerequisites
+1. Clone the repository
+2. Install dependencies with Yarn
+3. Build and start the backend
+4. Use the CLI to onboard
 
-- macOS 13 or later.
-- Xcode installed (for the macOS app).
-- Windows 10 or later.
-- .NET 8.0 SDK installed (for the Windows tray app).
-- Node.js and Yarn installed (for the backend).
-- An OpenAI API key in `.env`.
+```sh
+git clone <repo-url>
+cd omnikey-saas
+yarn install
+yarn build
+yarn start
+```
 
----
+## Self-Hosted Setup
 
-## Backend Setup
+When onboarding with the CLI, you can choose self-hosted mode. This will:
 
-All backend files live in the repository root (for example `package.json`, `src/index.ts`).
+- Generate a `.env` file with your OpenAI API key and SQLite database path
+- Configure the backend to use SQLite (no need for Postgres)
+- Start the backend locally with Yarn
+
+To onboard:
+
+```sh
+cd cli
+yarn global add .
+omnikey onboard
+```
+
+Follow the prompts to set up your OpenAI API key and choose self-hosted mode. The CLI will generate the necessary `.env` file for you.
+
+## CLI Usage
+
+See [cli/README.md](cli/README.md) for details.
+
+## Configuration
+
+Environment variables are loaded from `.env` or your environment. For self-hosted mode, the CLI will generate `.env` with `OPENAI_API_KEY`, `IS_SELF_HOSTED`, and `SQLITE_PATH`.
+
+## License
+
+MIT
 
 1. **Install dependencies**
 

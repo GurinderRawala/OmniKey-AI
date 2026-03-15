@@ -2,22 +2,22 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-function getEnv(name: string, required = false): string | undefined {
+function getEnv<T = true>(name: string, required: T): T extends true ? string : string | undefined {
   const value = process.env[name];
   if (required && (value === undefined || value === '')) {
     throw new Error(`Missing required environment variable: ${name}`);
   }
-  return value;
+  return value as T extends true ? string : string | undefined;
 }
 
 function getBooleanEnv(name: string, defaultValue = false): boolean {
-  const value = getEnv(name);
+  const value = getEnv(name, false);
   if (value === undefined) return defaultValue;
   return value.toLowerCase() === 'true' || value === '1';
 }
 
 function getNumberEnv(name: string, defaultValue?: number): number {
-  const value = getEnv(name);
+  const value = getEnv(name, false);
   if (value === undefined || value === '') {
     if (defaultValue === undefined) {
       throw new Error(`Missing required numeric environment variable: ${name}`);
@@ -33,23 +33,25 @@ function getNumberEnv(name: string, defaultValue?: number): number {
 
 export const config = {
   // Server
-  logLevel: getEnv('LOG_LEVEL') || 'info',
+  logLevel: getEnv('LOG_LEVEL', false) || 'info',
   isLocal: getBooleanEnv('LOCAL', false),
 
   // OpenAI
-  openaiApiKey: getEnv('OPENAI_API_KEY'),
+  openaiApiKey: getEnv('OPENAI_API_KEY', true),
 
   // Database
-  databaseUrl: getEnv('DATABASE_URL', true)!,
+  databaseUrl: getEnv('DATABASE_URL', getBooleanEnv('IS_SELF_HOSTED', false) ? false : true),
   dbLogging: getBooleanEnv('DB_LOGGING', false),
+  sqlitePath: getEnv('SQLITE_PATH', false) || 'omnikey-selfhosted.sqlite',
 
   // Crypto
-  appEncryptionKey: getEnv('APP_ENCRYPTION_KEY'),
+  appEncryptionKey: getEnv('APP_ENCRYPTION_KEY', false),
 
   // JWT / auth
-  jwtSecret: getEnv('JWT_SECRET', true)!,
+  jwtSecret: getEnv('JWT_SECRET', false) || 'default_jwt_secret_change_me',
   // Expiry in seconds
   jwtExpiresInSeconds: getNumberEnv('JWT_EXPIRES_IN_SECONDS', 2 * 60 * 60), // default 2 hours
-  internalApiKey: getEnv('INTERNAL_API_KEY', true)!,
-  port: getNumberEnv('PORT', 8080),
+  internalApiKey: getEnv('INTERNAL_API_KEY', false),
+  port: getNumberEnv('OMNIKEY_PORT', 8080),
+  isSelfHosted: getBooleanEnv('IS_SELF_HOSTED', false),
 };

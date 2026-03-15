@@ -8,6 +8,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     private var taskInstructionsMenuItem: NSMenuItem?
     private var agentSessionMenuItem: NSMenuItem?
     private var manualMenuItem: NSMenuItem?
+    private var licenseMenuItem: NSMenuItem?
     private var taskInstructionsWindowController: TaskInstructionsWindowController?
     private var agentThinkingWindowController: AgentThinkingWindowController?
     private var licenseWindowController: LicenseWindowController?
@@ -49,30 +50,38 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
             object: nil
         )
 
-        // If we already have a stored subscription key, try to
-        // activate it and start monitoring only when authorized.
-        if SubscriptionManager.shared.hasStoredKey {
-            SubscriptionManager.shared.activateStoredKey { [weak self] success in
-                DispatchQueue.main.async {
-                    guard let self else { return }
+        // Bypass authentication and activation window if self-hosted
+        if APIClient.isSelfHosted {
+            isAuthorized = true
+            updateAuthStatusUI()
+            startMonitoringIfNeeded()
+            showManualIfFirstTime()
+        } else {
+            // If we already have a stored subscription key, try to
+            // activate it and start monitoring only when authorized.
+            if SubscriptionManager.shared.hasStoredKey {
+                SubscriptionManager.shared.activateStoredKey { [weak self] success in
+                    DispatchQueue.main.async {
+                        guard let self else { return }
 
-                    if success {
-                        self.isAuthorized = true
-                        self.updateAuthStatusUI()
-                        self.startMonitoringIfNeeded()
-                        self.showManualIfFirstTime()
-                    } else {
-                        self.isAuthorized = false
-                        self.updateAuthStatusUI()
-                        self.showLicenseWindow()
+                        if success {
+                            self.isAuthorized = true
+                            self.updateAuthStatusUI()
+                            self.startMonitoringIfNeeded()
+                            self.showManualIfFirstTime()
+                        } else {
+                            self.isAuthorized = false
+                            self.updateAuthStatusUI()
+                            self.showLicenseWindow()
+                        }
                     }
                 }
+            } else {
+                // No key stored yet: prompt the user immediately.
+                isAuthorized = false
+                updateAuthStatusUI()
+                showLicenseWindow()
             }
-        } else {
-            // No key stored yet: prompt the user immediately.
-            isAuthorized = false
-            updateAuthStatusUI()
-            showLicenseWindow()
         }
     }
 
@@ -118,7 +127,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         manualMenuItem = manualItem
         let licenseItem = NSMenuItem(title: "Subscription", action: #selector(showLicenseWindowFromMenu), keyEquivalent: "")
         licenseItem.target = self
+        // Hide the subscription menu item if self-hosted
+        if APIClient.isSelfHosted {
+            licenseItem.isHidden = true
+        }
         menu.addItem(licenseItem)
+        licenseMenuItem = licenseItem
         let updateItem = NSMenuItem(title: "Check Updates", action: #selector(checkForUpdatesFromMenu), keyEquivalent: "")
         updateItem.target = self
         menu.addItem(updateItem)

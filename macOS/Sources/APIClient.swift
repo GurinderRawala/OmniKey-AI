@@ -1,24 +1,61 @@
 import Foundation
 
 final class APIClient: @unchecked Sendable {
+        /// Indicates if the self-hosted OmniKey config is detected
+    /// Reads the self-hosted config and returns the port if present, else nil
+    private static func selfHostedPort() -> String? {
+        // Use FileManager and NSHomeDirectory to resolve the config path reliably
+        let homeDir = NSHomeDirectory()
+        let configPath = (homeDir as NSString).appendingPathComponent(".omnikey/config.json")
+        let fileManager = FileManager.default
+        print("[OmniKey] Checking for self-hosted config at path: \(configPath)")
+        if fileManager.fileExists(atPath: configPath) {
+            print("[OmniKey] Config file exists at path: \(configPath)")
+            do {
+                let data = try Data(contentsOf: URL(fileURLWithPath: configPath))
+                if let json = try JSONSerialization.jsonObject(with: data, options: []) as? [String: Any] {
+                    print("[OmniKey] Config JSON: \(json)")
+                    if let port = json["OMNIKEY_PORT"] as? String {
+                        print("[OmniKey] Found OMNIKEY_PORT as String: \(port)")
+                        return port
+                    } else if let portNum = json["OMNIKEY_PORT"] as? Int {
+                        let portStr = String(portNum)
+                        print("[OmniKey] Found OMNIKEY_PORT as Int: \(portNum), returning as String: \(portStr)")
+                        return portStr
+                    } else {
+                        print("[OmniKey] OMNIKEY_PORT key not found or not a string/int")
+                    }
+                }
+            } catch {
+                print("[OmniKey] Error reading or parsing config: \(error)")
+            }
+        }
+        return nil
+    }
+
+    static let isSelfHosted: Bool = {
+        return selfHostedPort() != nil
+    }()
     /// Base URL resolution order:
-    /// 1. Environment variable `OMNIKEY_BACKEND_URL` at runtime
-    /// 2. Info.plist key `OMNIKEY_BACKEND_URL` (set by build_release_dmg.sh)
-    /// 3. Fallback to local development server at http://localhost:7071
+    /// 1. Check for the self-hosted OmniKey setup in `~/.omnikey/config.json`
+    /// 2. Environment variable `OMNIKEY_BACKEND_URL` at runtime
+    /// 3. Info.plist key `OMNIKEY_BACKEND_URL` (set by build_release_dmg.sh)
+    /// 4. Fallback to local development server at http://localhost:7071
     static let baseURL: URL = {
+        if let port = selfHostedPort() {
+            return URL(string: "http://localhost:\(port)")!
+        }
         if let env = ProcessInfo.processInfo.environment["OMNIKEY_BACKEND_URL"], !env.isEmpty,
            let url = URL(string: env)
         {
             return url
         }
-
         if let plistValue = Bundle.main.object(forInfoDictionaryKey: "OMNIKEY_BACKEND_URL") as? String,
            !plistValue.isEmpty,
            let url = URL(string: plistValue)
         {
             return url
         }
-
         // Default local backend for development
         return URL(string: "http://localhost:7071")!
     }()

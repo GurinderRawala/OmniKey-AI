@@ -12,6 +12,25 @@ export interface AuthLocals {
   subscription: Subscription;
 }
 
+export async function selfHostedSubscription(): Promise<Subscription> {
+  try {
+    let subscription = await Subscription.findOne({ where: { isSelfHosted: true } });
+    if (!subscription) {
+      subscription = await Subscription.create({
+        email: 'local-user@omnikey.ai',
+        licenseKey: 'self-hosted',
+        subscriptionStatus: 'active',
+        isSelfHosted: true,
+      });
+      logger.info('Created self-hosted subscription record in database.');
+    }
+    return subscription;
+  } catch (err) {
+    logger.error('Error ensuring self-hosted subscription record exists.', { error: err });
+    throw err;
+  }
+}
+
 export async function authMiddleware(
   req: Request,
   res: Response<any, AuthLocals>,
@@ -19,6 +38,15 @@ export async function authMiddleware(
 ) {
   const authHeader = req.headers.authorization;
   logger.defaultMeta = { traceId: randomUUID() };
+
+  if (config.isSelfHosted || !config.jwtSecret) {
+    logger.info('Self-hosted mode: skipping auth middleware.');
+    if (config.isSelfHosted) {
+      res.locals.subscription = await selfHostedSubscription();
+      res.locals.logger = logger;
+    }
+    return next();
+  }
 
   if (!authHeader) {
     logger.warn('Missing Authorization header on feature route.');

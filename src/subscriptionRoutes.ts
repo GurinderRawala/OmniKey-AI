@@ -5,6 +5,7 @@ import { randomBytes, randomUUID } from 'crypto';
 import { Logger } from 'winston';
 import { Subscription } from './models/subscription';
 import { config } from './config';
+import { selfHostedSubscription } from './authMiddleware';
 
 interface GenerateKeyBody {
   email: string;
@@ -24,6 +25,10 @@ export interface SubscriptionJwtPayload {
 
 function signSubscriptionJwt(logger: Logger, subscriptionId: string, status: string): string {
   const secret = config.jwtSecret;
+  if (!secret) {
+    logger.error('JWT secret is not configured. Cannot sign subscription JWT.');
+    throw new Error('JWT secret not configured.');
+  }
   const expiresIn = config.jwtExpiresInSeconds; // numeric seconds
 
   return jwt.sign(
@@ -37,13 +42,16 @@ function signSubscriptionJwt(logger: Logger, subscriptionId: string, status: str
 }
 
 function superAdminAuthMiddleware(req: Request, res: Response, next: express.NextFunction) {
+  if (!config.internalApiKey || config.isSelfHosted) {
+    return res.status(403).json({ error: 'Internal API key not configured on server.' });
+  }
   const authHeader = req.headers['authorization'];
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Missing or invalid Authorization header.' });
   }
 
   const token = authHeader.substring(7); // Remove "Bearer " prefix
-  if (token !== config.internalApiKey) {
+  if (config.internalApiKey && token !== config.internalApiKey) {
     return res.status(403).json({ error: 'Forbidden: Invalid API key.' });
   }
 
@@ -99,7 +107,9 @@ export function createSubscriptionRouter(logger: Logger): express.Router {
 
     try {
       const body = zod.custom<ActivateBody>().parse(req.body);
-      const subscription = await Subscription.findOne({ where: { licenseKey: body.key } });
+      const subscription = config.isSelfHosted
+        ? await selfHostedSubscription()
+        : await Subscription.findOne({ where: { licenseKey: body.key } });
 
       if (!subscription) {
         logger.warn('No subscription found for provided key.');

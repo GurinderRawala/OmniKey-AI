@@ -14,13 +14,14 @@ interface SubscriptionAttributes {
   licenseKeyExpiresAt?: Date | null;
   // Cumulative count of OpenAI tokens used by this subscription.
   totalTokensUsed?: number;
+  isSelfHosted: boolean;
   createdAt?: Date;
   updatedAt?: Date;
 }
 
 interface SubscriptionCreationAttributes extends Optional<
   SubscriptionAttributes,
-  'id' | 'subscriptionStatus' | 'email' | 'createdAt' | 'updatedAt'
+  'id' | 'subscriptionStatus' | 'email' | 'createdAt' | 'updatedAt' | 'isSelfHosted'
 > {}
 
 export class Subscription
@@ -35,6 +36,7 @@ export class Subscription
   public totalTokensUsed?: number;
   public readonly createdAt!: Date;
   public readonly updatedAt!: Date;
+  public isSelfHosted!: boolean;
 }
 
 Subscription.init(
@@ -70,6 +72,12 @@ Subscription.init(
       allowNull: false,
       defaultValue: 0,
       field: 'total_tokens_used',
+    },
+    isSelfHosted: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+      field: 'is_self_hosted',
     },
   },
   {

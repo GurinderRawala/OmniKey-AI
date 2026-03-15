@@ -9,6 +9,7 @@ import { Subscription } from './models/subscription';
 import { SubscriptionUsage } from './models/subscriptionUsage';
 import { AGENT_SYSTEM_PROMPT } from './agentPrompts';
 import { getPromptForCommand } from './featureRoutes';
+import { selfHostedSubscription } from './authMiddleware';
 
 interface AgentMessage {
   session_id: string;
@@ -102,6 +103,26 @@ async function authenticateFromAuthHeader(
   authHeader: string | undefined,
   log: typeof logger,
 ): Promise<Subscription | null> {
+  if (config.isSelfHosted) {
+    log.info('Self-hosted mode: skipping JWT authentication for agent WebSocket connection.');
+    try {
+      const subscription = await selfHostedSubscription();
+      log.info('Retrieved self-hosted subscription for agent WebSocket connection', {
+        subscriptionId: subscription.id,
+      });
+      return subscription;
+    } catch (err) {
+      log.error('Failed to retrieve self-hosted subscription for agent WebSocket connection', {
+        error: err,
+      });
+      return null;
+    }
+  }
+  
+  if (!config.jwtSecret) {
+    log.error('JWT secret is not configured. Cannot authenticate subscription from auth header.');
+    return null;
+  }
   if (!authHeader) {
     log.warn('Agent WebSocket connection missing authorization header');
     return null;

@@ -1,0 +1,34 @@
+{
+  "name": "omnikey-cli",
+  "version": "1.0.0",
+  "description": "CLI for onboarding users to Omnikey and configuring OPENAI_API_KEY. Use Yarn for install/build.",
+  "engines": {
+    "node": ">=14.0.0",
+    "yarn": ">=1.22.0"
+  },
+  "bin": {
+    "omnikey": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "postinstall": "yarn build && yarn copy-backend",
+    "copy-backend": "rm -rf backend-dist && mkdir -p backend-dist && cp -R ../dist/* backend-dist/"
+  },
+  "keywords": [
+    "cli",
+    "omnikey",
+    "onboarding",
+    "openai"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "commander": "^11.0.0",
+    "inquirer": "^9.0.0"
+  },
+  "devDependencies": {
+    "@types/inquirer": "^9.0.9",
+    "typescript": "^5.0.0"
+  }
+}

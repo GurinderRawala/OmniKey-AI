@@ -2,10 +2,24 @@ import { Sequelize } from 'sequelize';
 import { config } from './config';
 import { Logger } from 'winston';
 
-export const sequelize = new Sequelize(config.databaseUrl, {
-  dialect: 'postgres',
-  logging: config.dbLogging ? console.log : false,
-});
+let sequelize: Sequelize;
+if (config.isSelfHosted) {
+  // Use SQLite for self-hosted users
+  const dbPath = config.sqlitePath || 'omnikey-selfhosted.sqlite';
+  sequelize = new Sequelize({
+    dialect: 'sqlite',
+    storage: dbPath,
+    logging: config.dbLogging ? console.log : false,
+  });
+} else if (config.databaseUrl) {
+  // Use Postgres for cloud/hosted
+  sequelize = new Sequelize(config.databaseUrl, {
+    dialect: 'postgres',
+    logging: config.dbLogging ? console.log : false,
+  });
+}
+
+export { sequelize };
 
 export async function initDatabase(logger: Logger): Promise<void> {
   try {
