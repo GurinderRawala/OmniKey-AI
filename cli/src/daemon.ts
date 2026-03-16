@@ -39,5 +39,5 @@ export function startDaemon(port: number = 7071) {
     stdio: 'ignore',
   });
   child.unref();
-  console.log(`Omnikey API backend started as a daemon on port ${port}`);
+  console.log(`Omnikey API backend started as a daemon on port ${port}. PID: ${child.pid}`);
 }

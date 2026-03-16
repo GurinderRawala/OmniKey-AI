@@ -5,27 +5,37 @@ on:
     branches:
       - main
     paths:
-      - "cli/**"
+      - 'cli/**'
 
 jobs:
   publish:
     runs-on: ubuntu-latest
-
     permissions:
       contents: read
-      id-token: write   # REQUIRED for npm trusted publishing
+      id-token: write
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 22
-          registry-url: https://registry.npmjs.org
-      
-      - run: npm install -g npm@latest
+          node-version: '22.14.0'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Upgrade npm to required version
+        run: npm install -g npm@latest
+
+      - name: Show versions
+        run: |
+          node -v
+          npm -v
+
+      - name: Show npm config locations
+        run: |
+          npm config get userconfig
+          npm config get registry
 
       - name: Install CLI dependencies
         run: npm ci
@@ -46,11 +56,6 @@ jobs:
           rm -rf ./cli/backend-dist
           mkdir -p ./cli/backend-dist
           cp -R ./dist/* ./cli/backend-dist/
-
-      - name: Verify CLI dist and backend-dist exist
-        run: |
-          if [ ! -d "./cli/dist" ]; then echo "dist directory missing!"; exit 1; fi
-          if [ ! -d "./cli/backend-dist" ]; then echo "backend-dist directory missing!"; exit 1; fi
 
       - name: Publish to npm
         run: npm publish --access public
