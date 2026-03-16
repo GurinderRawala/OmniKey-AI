@@ -1,11 +1,11 @@
 import { execSync } from 'child_process';
 
 /**
- * Kill the Omnikey API backend daemon running on a given port (default 8080).
+ * Kill the Omnikey API backend daemon running on a given port (default 7071).
  * Looks for node processes running backend-dist/index.js on the specified port and kills them.
- * @param port The port to look for (default 8080)
+ * @param port The port to look for (default 7071)
  */
-export function killDaemon(port: number = 8080) {
+export function killDaemon(port: number = 7071) {
   try {
     // Find the PID(s) of node processes running backend-dist/index.js on the given port
     // macOS: lsof -i :PORT -t

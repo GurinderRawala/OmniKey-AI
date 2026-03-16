@@ -23,18 +23,18 @@ program
 program
   .command('daemon')
   .description('Start the Omnikey API backend as a daemon on a specified port')
-  .option('--port <port>', 'Port to run the backend on', '8080')
+  .option('--port <port>', 'Port to run the backend on', '7071')
   .action((options) => {
-    const port = Number(options.port) || 8080;
+    const port = Number(options.port) || 7071;
     startDaemon(port);
   });
 
 program
   .command('kill-daemon')
   .description('Kill the Omnikey API backend daemon running on a specified port')
-  .option('--port <port>', 'Port to look for the daemon on', '8080')
+  .option('--port <port>', 'Port to look for the daemon on', '7071')
   .action((options) => {
-    const port = Number(options.port) || 8080;
+    const port = Number(options.port) || 7071;
     killDaemon(port);
   });
 

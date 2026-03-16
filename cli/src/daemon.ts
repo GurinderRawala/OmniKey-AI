@@ -6,7 +6,7 @@ import fs from 'fs';
  * Start the Omnikey API backend as a daemon on the specified port.
  * @param port The port to run the backend on
  */
-export function startDaemon(port: number = 8080) {
+export function startDaemon(port: number = 7071) {
   // Only use ~/.omnikey/config.json for environment variables
 
   // Path to the backend entry point (now from backend-dist)
