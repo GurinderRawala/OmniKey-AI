@@ -9,8 +9,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "format": "prettier --write \"src/**/*.ts\"",
-    "dev:windows": "concurrently \"yarn dev\" \"cd windows && dotnet run\"",
-    "postinstall": "yarn build"
+    "dev:windows": "concurrently \"yarn dev\" \"cd windows && dotnet run\""
   },
   "engines": {
     "node": ">=14.0.0",

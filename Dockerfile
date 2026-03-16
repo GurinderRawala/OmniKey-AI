@@ -8,7 +8,7 @@ WORKDIR /usr/src/app
 
 # Install dependencies (including devDependencies for TypeScript build)
 COPY package.json yarn.lock ./
-RUN corepack enable \
+RUN corepack prepare yarn@stable --activate \
   && yarn install --frozen-lockfile
 
 # Copy source, proto definitions, and TypeScript config
@@ -29,7 +29,7 @@ ENV NODE_ENV=production
 
 # Only install production dependencies
 COPY package.json yarn.lock ./
-RUN corepack enable \
+RUN corepack prepare yarn@stable --activate \
   && yarn install --production --frozen-lockfile
 
 # Copy compiled JS and runtime assets from build stage
