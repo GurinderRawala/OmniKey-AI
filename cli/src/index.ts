@@ -4,6 +4,7 @@ import { onboard } from './onboard';
 
 import { startDaemon } from './daemon';
 import { killDaemon } from './killDaemon';
+import { removeConfigAndDb } from './removeConfig';
 
 const program = new Command();
 
@@ -36,6 +37,15 @@ program
   .action((options) => {
     const port = Number(options.port) || 7071;
     killDaemon(port);
+  });
+
+program
+  .command('remove-config')
+  .description(
+    'Remove the .omnikey config directory and the SQLite database from your home directory',
+  )
+  .action(() => {
+    removeConfigAndDb();
   });
 
 program.parseAsync(process.argv);
