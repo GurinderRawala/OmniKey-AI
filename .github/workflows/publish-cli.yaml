@@ -5,29 +5,32 @@ on:
     branches:
       - main
     paths:
-      - 'cli/**'
+      - "cli/**"
 
 jobs:
   publish:
     runs-on: ubuntu-latest
 
+    permissions:
+      contents: read
+      id-token: write   # REQUIRED for npm trusted publishing
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Node.js
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          registry-url: 'https://registry.npmjs.org/'
+          node-version: 20
+          registry-url: https://registry.npmjs.org
 
-      - name: Install dependencies
+      - name: Install CLI dependencies
         run: npm ci
         working-directory: ./cli
 
       - name: Build CLI
-        run: |
-          npm run build
+        run: npm run build
         working-directory: ./cli
 
       - name: Install main app dependencies
@@ -46,17 +49,7 @@ jobs:
         run: |
           if [ ! -d "./cli/dist" ]; then echo "dist directory missing!"; exit 1; fi
           if [ ! -d "./cli/backend-dist" ]; then echo "backend-dist directory missing!"; exit 1; fi
-      
-      - name: Verify npm login
-        run: npm whoami
 
       - name: Publish to npm
         run: npm publish --access public
         working-directory: ./cli
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Test install from npm
-        run: |
-          npm install -g omnikey-cli
-          omnikey --version || echo "CLI installed and version command ran"
