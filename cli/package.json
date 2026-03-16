@@ -12,7 +12,6 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "postinstall": "yarn build && yarn copy-backend",
     "copy-backend": "rm -rf backend-dist && mkdir -p backend-dist && cp -R ../dist/* backend-dist/"
   },
   "keywords": [
@@ -21,7 +20,7 @@
     "onboarding",
     "openai"
   ],
-  "author": "",
+  "author": "Gurinder Rawala",
   "license": "MIT",
   "dependencies": {
     "commander": "^11.0.0",
