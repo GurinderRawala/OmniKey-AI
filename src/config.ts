@@ -1,4 +1,6 @@
 import dotenv from 'dotenv';
+import path from 'path';
+import os from 'os';
 
 dotenv.config();
 
@@ -31,6 +33,14 @@ function getNumberEnv(name: string, defaultValue?: number): number {
   return parsed;
 }
 
+function getSqlitePath() {
+  const envPath = getEnv('SQLITE_PATH', false);
+  const homeDir = process.env.HOME || process.env.USERPROFILE || os.homedir();
+  const defaultPath = path.join(homeDir, '.omnikey', 'omnikey-selfhosted.sqlite');
+  if (!envPath) return defaultPath;
+  return path.isAbsolute(envPath) ? envPath : path.join(homeDir, '.omnikey', envPath);
+}
+
 export const config = {
   // Server
   logLevel: getEnv('LOG_LEVEL', false) || 'info',
@@ -42,7 +52,7 @@ export const config = {
   // Database
   databaseUrl: getEnv('DATABASE_URL', getBooleanEnv('IS_SELF_HOSTED', false) ? false : true),
   dbLogging: getBooleanEnv('DB_LOGGING', false),
-  sqlitePath: getEnv('SQLITE_PATH', false) || 'omnikey-selfhosted.sqlite',
+  sqlitePath: getSqlitePath(),
 
   // Crypto
   appEncryptionKey: getEnv('APP_ENCRYPTION_KEY', false),

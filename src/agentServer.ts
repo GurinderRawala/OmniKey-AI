@@ -118,7 +118,7 @@ async function authenticateFromAuthHeader(
       return null;
     }
   }
-  
+
   if (!config.jwtSecret) {
     log.error('JWT secret is not configured. Cannot authenticate subscription from auth header.');
     return null;

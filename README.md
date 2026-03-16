@@ -19,7 +19,7 @@ Follow these steps to set up OmniKey:
    ```
 
 3. **Start the OmniKey daemon:**
-   This command will run the OmniKey backend on your local machine.
+   This command will set up a launchd agent and keep the OmniKey backend running across system restarts on your Mac.
 
    ```sh
    omnikey daemon
@@ -31,8 +31,6 @@ Follow these steps to set up OmniKey:
    [Download macOS App](https://omnikeyai-saas-fmytqc3dra-uc.a.run.app/macos/download)
 
 ## Features
-
-### Features
 
 - **Prompt Enhancement (`⌘E`)**: Improves clarity, structure, and tone of your selected text to make it a better AI prompt.
 - **Grammar & Clarity Fix (`⌘G`)**: Focuses on grammar, spelling, and readability without changing the core meaning of your text.

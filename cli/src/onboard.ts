@@ -8,7 +8,9 @@ import path from 'path';
  */
 export async function onboard(openAiKey?: string) {
   let apiKey = openAiKey;
-  let sqlitePath = 'omnikey-selfhosted.sqlite';
+  const homeDir = process.env.HOME || process.env.USERPROFILE || '.';
+  const configDir = path.join(homeDir, '.omnikey');
+  const sqlitePath = path.join(configDir, 'omnikey-selfhosted.sqlite');
 
   if (!apiKey) {
     const answers = await inquirer.prompt([
@@ -18,19 +20,11 @@ export async function onboard(openAiKey?: string) {
         message: 'Enter your OPENAI_API_KEY:',
         validate: (input: string) => input.trim() !== '' || 'API key cannot be empty',
       },
-      {
-        type: 'input',
-        name: 'sqlitePath',
-        message: 'SQLite DB file path:',
-        default: 'omnikey-selfhosted.sqlite',
-      },
     ]);
     apiKey = answers.apiKey;
-    sqlitePath = answers.sqlitePath;
   }
 
   // Save all environment variables to ~/.omnikey/config.json
-  const configDir = path.join(process.env.HOME || process.env.USERPROFILE || '.', '.omnikey');
   const configPath = path.join(configDir, 'config.json');
   fs.mkdirSync(configDir, { recursive: true });
   const configVars = {

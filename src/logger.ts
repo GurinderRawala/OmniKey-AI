@@ -1,6 +1,6 @@
-import winston from "winston";
+import winston from 'winston';
 import util from 'util';
-import { config } from "./config";
+import { config } from './config';
 
 export const logger = winston.createLogger({
   level: config.logLevel,

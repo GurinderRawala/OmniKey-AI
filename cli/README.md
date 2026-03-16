@@ -27,11 +27,14 @@ omnikey onboard
 # Or onboard non-interactively
 omnikey onboard --open-ai-key YOUR_KEY
 
-# Running the daemon will start the backend
+# Running the daemon will set up a launchd agent and keep the backend server running across system restarts
 omnikey daemon --port 7071
 
 # Kill the daemon
 omnikey kill-daemon --port 7071
+
+# Remove the config directory and SQLite database (and launchd agent)
+omnikey remove-config
 ```
 
 ## Development
