@@ -46,11 +46,9 @@ jobs:
         run: |
           if [ ! -d "./cli/dist" ]; then echo "dist directory missing!"; exit 1; fi
           if [ ! -d "./cli/backend-dist" ]; then echo "backend-dist directory missing!"; exit 1; fi
-
-      - name: Authenticate with npm registry
-        run: echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+      
+      - name: Verify npm login
+        run: npm whoami
 
       - name: Publish to npm
         run: npm publish --access public

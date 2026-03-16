@@ -29,5 +29,9 @@
   "devDependencies": {
     "@types/inquirer": "^9.0.9",
     "typescript": "^5.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/GurinderRawala/OmniKey-AI"
   }
 }
