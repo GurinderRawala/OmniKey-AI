@@ -2,13 +2,9 @@
    <img src="macOS/Assets.xcassets/AppIcon.appiconset/Icon-iOS-Default-1024x1024@1x.png" alt="OmniKey AI Icon" width="128" height="128" />
 </p>
 
----
-
 # OmniKey AI
 
 OmniKey AI is a productivity tool that enhances your workflow with AI-powered prompt enhancements, grammar correction, and custom tasks. Simply select a text and execute the command using a specific key combination from your keyboard.
-
----
 
 ## Getting Started
 
@@ -35,12 +31,8 @@ Follow these steps to set up OmniKey:
 
    For more information about CLI commands, see the [CLI documentation](./cli/README.md).
 
----
-
 4. **Download the macOS app:**
    [Download macOS App](https://omnikeyai-saas-fmytqc3dra-uc.a.run.app/macos/download)
-
----
 
 ## Features
 
@@ -58,7 +50,5 @@ Follow these steps to set up OmniKey:
 4. The result is pasted back in place of your original selection.
 
 You can add or edit your custom task instructions in the **Task Instructions** tab in the menu bar app.
-
----
 
 To learn more about how to use OmniKey, see the **Manual View** in the macOS app.
