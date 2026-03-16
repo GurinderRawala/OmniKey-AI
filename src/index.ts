@@ -96,7 +96,9 @@ async function start() {
   try {
     await initDatabase(logger);
     server = app.listen(PORT, () => {
-      logger.info(`Enhancer API listening on http://localhost:${PORT}`);
+      logger.info(`Enhancer API listening on http://localhost:${PORT}`, {
+        isSelfHosted: config.isSelfHosted,
+      });
     });
 
     // Attach the WebSocket-based agent server to the existing HTTP

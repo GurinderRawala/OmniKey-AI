@@ -38,14 +38,19 @@ jobs:
 
       - name: Copy backend dist to CLI
         run: |
-            rm -rf ./cli/backend-dist
-            mkdir -p ./cli/backend-dist
-            cp -R ./dist/* ./cli/backend-dist/
+          rm -rf ./cli/backend-dist
+          mkdir -p ./cli/backend-dist
+          cp -R ./dist/* ./cli/backend-dist/
 
       - name: Verify CLI dist and backend-dist exist
         run: |
           if [ ! -d "./cli/dist" ]; then echo "dist directory missing!"; exit 1; fi
           if [ ! -d "./cli/backend-dist" ]; then echo "backend-dist directory missing!"; exit 1; fi
+
+      - name: Authenticate with npm registry
+        run: echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish to npm
         run: npm publish --access public
