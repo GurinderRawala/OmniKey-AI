@@ -9,7 +9,7 @@ Follow these steps to set up OmniKey:
 1. **Install OmniKey CLI via npm:**
 
    ```sh
-   npm install -g omnikey
+   npm install -g omnikey-cli
    ```
 
 2. **Onboard and add your OpenAI API key:**

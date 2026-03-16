@@ -19,7 +19,7 @@ OmnikeyAI is a productivity tool for macOS that helps you quickly rewrite select
 
 ```sh
 # Install CLI globally (from this directory)
-npm install -g .
+npm install -g omnikey-cli
 
 # Onboard interactively (will prompt for OpenAI key and self-hosting)
 omnikey onboard
