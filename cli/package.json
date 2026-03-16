@@ -4,7 +4,7 @@
     "access": "public",
     "registry": "https://registry.npmjs.org/"
   },
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "CLI for onboarding users to Omnikey AI and configuring OPENAI_API_KEY. Use Yarn for install/build.",
   "engines": {
     "node": ">=14.0.0",
@@ -37,5 +37,11 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/GurinderRawala/OmniKey-AI.git"
-  }
+  },
+  "files": [
+    "dist",
+    "backend-dist",
+    "src",
+    "README.md"
+  ]
 }
