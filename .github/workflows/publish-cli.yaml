@@ -24,6 +24,8 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
+      
+      - run: npm install -g npm@latest
 
       - name: Install CLI dependencies
         run: npm ci

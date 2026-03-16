@@ -39,5 +39,7 @@ export async function onboard(openAiKey?: string) {
     SQLITE_PATH: sqlitePath,
   };
   fs.writeFileSync(configPath, JSON.stringify(configVars, null, 2));
-  console.log(`Environment variables saved to ${configPath}`);
+  console.log(
+    `Environment variables saved to ${configPath}. You can edit this file to update your configuration.`,
+  );
 }
