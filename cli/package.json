@@ -1,7 +1,7 @@
 {
   "name": "omnikey-cli",
   "version": "1.0.1",
-  "description": "CLI for onboarding users to Omnikey and configuring OPENAI_API_KEY. Use Yarn for install/build.",
+  "description": "CLI for onboarding users to Omnikey AI and configuring OPENAI_API_KEY. Use Yarn for install/build.",
   "engines": {
     "node": ">=14.0.0",
     "yarn": ">=1.22.0"
