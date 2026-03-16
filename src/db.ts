@@ -24,11 +24,14 @@ export { sequelize };
 export async function initDatabase(logger: Logger): Promise<void> {
   try {
     await sequelize.authenticate();
-    // Use `alter: true` so schema changes to models (like new
-    // subscription fields) are reflected in the database automatically
-    // without requiring manual migrations for this small service.
-    await sequelize.sync({ alter: true });
-    logger.info('Database connection established and models synchronized.');
+    // Use `alter: true` only for Postgres, not for SQLite
+    if (sequelize.getDialect() === 'sqlite') {
+      await sequelize.sync();
+      logger.info('Database connection established and models synchronized (SQLite, no alter).');
+    } else {
+      await sequelize.sync({ alter: true });
+      logger.info('Database connection established and models synchronized (alter: true).');
+    }
   } catch (err) {
     logger.error('Unable to connect to the database:', err);
     throw err;
