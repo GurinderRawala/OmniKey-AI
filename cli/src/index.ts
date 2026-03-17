@@ -61,9 +61,11 @@ program
   .command('logs')
   .description('Show logs of the running Omnikey daemon')
   .option('--lines <lines>', 'Number of log lines to show', '50')
+  .option('--errors', 'Show only error logs')
   .action((options) => {
     const lines = Number(options.lines) || 50;
-    showLogs(lines);
+    const errorsOnly = !!options.errors;
+    showLogs(lines, errorsOnly);
   });
 
 program.parseAsync(process.argv);
