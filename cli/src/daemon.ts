@@ -87,10 +87,21 @@ export function startDaemon(port: number = 7071) {
   }
 
   // Also start the backend immediately for current session
+  const logPath = path.join(configDir, 'daemon.log');
+  const errorLogPath = path.join(configDir, 'daemon-error.log');
+  // Clean (truncate) log files before starting new session
+  try {
+    fs.writeFileSync(logPath, '');
+    fs.writeFileSync(errorLogPath, '');
+  } catch (e) {
+    // Ignore errors if files don't exist yet
+  }
+  const out = fs.openSync(logPath, 'a');
+  const err = fs.openSync(errorLogPath, 'a');
   const child = spawn('node', [backendPath], {
-    env: { ...process.env, ...configVars, OMNIKEY_PORT: String(port) },
+    env: { ...configVars, OMNIKEY_PORT: String(port) },
     detached: true,
-    stdio: 'ignore',
+    stdio: ['ignore', out, err],
   });
   child.unref();
   console.log(`Omnikey API backend started as a daemon on port ${port}. PID: ${child.pid}`);

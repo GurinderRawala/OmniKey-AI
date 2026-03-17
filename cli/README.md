@@ -4,7 +4,7 @@ A command-line tool for onboarding users to the Omnikey open-source app and conf
 
 ## About OmnikeyAI (macOS)
 
-OmnikeyAI is a productivity tool for macOS that helps you quickly rewrite selected text using OpenAI. It consists of a macOS menu bar app and a TypeScript backend daemon. The CLI allows you to configure and run the backend daemon, onboard users, and manage your OpenAI API key with ease. Once set up, you can select any text on your Mac and trigger rewrite commands directly from your desktop.
+OmnikeyAI is a productivity tool for macOS that helps you quickly rewrite selected text using OpenAI. The CLI allows you to configure and run the backend daemon on your local macOS and manage your OpenAI API key with ease. Once set up, you can select any text on your Mac in any app and trigger rewrite commands directly from your desktop.
 
 - For more details about the app and its features, see the [main README](https://github.com/GurinderRawala/OmniKey-AI).
 - Download the latest macOS app here: [Download OmniKeyAI for macOS](https://omnikeyai-saas-fmytqc3dra-uc.a.run.app/macos/download)
@@ -35,6 +35,12 @@ omnikey kill-daemon --port 7071
 
 # Remove the config directory and SQLite database (and launchd agent)
 omnikey remove-config
+
+# check daemon status if it is running
+omnikey status
+
+# check daemon logs 
+omnikey logs --lines 100
 ```
 
 ## Development

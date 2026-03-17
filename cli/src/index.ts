@@ -5,6 +5,8 @@ import { onboard } from './onboard';
 import { startDaemon } from './daemon';
 import { killDaemon } from './killDaemon';
 import { removeConfigAndDb } from './removeConfig';
+import { statusCmd } from './status';
+import { showLogs } from './showLogs';
 
 const program = new Command();
 
@@ -48,4 +50,20 @@ program
     removeConfigAndDb();
   });
 
+// Add status command
+program
+  .command('status')
+  .description('Show status of Omnikey daemon (lsof on configured port)')
+  .action(statusCmd);
+
 program.parseAsync(process.argv);
+
+// Add logs command
+program
+  .command('logs')
+  .description('Show logs of the running Omnikey daemon')
+  .option('--lines <lines>', 'Number of log lines to show', '50')
+  .action((options) => {
+    const lines = Number(options.lines) || 50;
+    showLogs(lines);
+  });

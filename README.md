@@ -40,7 +40,7 @@ Follow these steps to set up OmniKey:
 - **Grammar & Clarity Fix (`⌘G`)**: Focuses on grammar, spelling, and readability without changing the core meaning of your text.
 - **Custom Tasks (`⌘T`)**: Applies your saved task instructions to the selected text. Configure these in the “Task Instructions” window from the menu bar.
 - **@omnikeyai Questions**: Select a question starting with “@omnikeyai” and use a shortcut to get answers in the context of your current text or task.
-- **@omniAgent Tasks**: Select instructions starting with “@omniAgent” and press `⌘T` to have the agent perform tasks for you, combining your Task Instructions if configured.
+- **@omniAgent Tasks**: Select instructions starting with “@omniAgent” and press `⌘T` to have the agent perform tasks for you, combining your task instructions if configured. OmniKey will use your terminal to gather context by running commands.
 
 #### How OmniKey Works
 
