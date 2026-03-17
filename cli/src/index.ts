@@ -56,8 +56,6 @@ program
   .description('Show status of Omnikey daemon (lsof on configured port)')
   .action(statusCmd);
 
-program.parseAsync(process.argv);
-
 // Add logs command
 program
   .command('logs')
@@ -67,3 +65,5 @@ program
     const lines = Number(options.lines) || 50;
     showLogs(lines);
   });
+
+program.parseAsync(process.argv);
