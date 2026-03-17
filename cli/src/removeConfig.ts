@@ -3,6 +3,23 @@ import path from 'path';
 import os from 'os';
 import { execSync } from 'child_process';
 
+export function killLaunchdAgent() {
+  const homeDir = process.env.HOME || process.env.USERPROFILE || os.homedir();
+  const plistName = 'com.omnikey.daemon.plist';
+  const plistPath = path.join(homeDir, 'Library', 'LaunchAgents', plistName);
+  if (fs.existsSync(plistPath)) {
+    try {
+      execSync(`launchctl unload "${plistPath}"`);
+      fs.rmSync(plistPath);
+      console.log(`Removed launchd agent: ${plistPath}`);
+    } catch (e) {
+      console.error(`Failed to remove launchd agent: ${e}`);
+    }
+  } else {
+    console.log(`Launchd agent does not exist: ${plistPath}`);
+  }
+}
+
 /**
  * Removes the ~/.omnikey config directory and the SQLite database file specified in config.json.
  */
@@ -27,19 +44,7 @@ export function removeConfigAndDb() {
   }
 
   // Remove launchd agent if exists (macOS)
-  const plistName = 'com.omnikey.daemon.plist';
-  const plistPath = path.join(homeDir, 'Library', 'LaunchAgents', plistName);
-  if (fs.existsSync(plistPath)) {
-    try {
-      execSync(`launchctl unload "${plistPath}"`);
-      fs.rmSync(plistPath);
-      console.log(`Removed launchd agent: ${plistPath}`);
-    } catch (e) {
-      console.error(`Failed to remove launchd agent: ${e}`);
-    }
-  } else {
-    console.log(`Launchd agent does not exist: ${plistPath}`);
-  }
+  killLaunchdAgent();
 
   // Remove SQLite database
   if (fs.existsSync(sqlitePath)) {
