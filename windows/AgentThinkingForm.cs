@@ -88,6 +88,10 @@ namespace OmniKey.Windows
             _cancelButton.FlatAppearance.BorderColor = NordColors.ErrorRed;
             _cancelButton.Click += (_, _) =>
             {
+                // Explicitly abort the active WebSocket (mirrors macOS
+                // AgentRunner.shared.cancelCurrentSession()), then cancel
+                // the token so any running shell command is also killed.
+                AgentRunner.CancelCurrentSession();
                 CancellationSource.Cancel();
                 SetRunning(false);
             };

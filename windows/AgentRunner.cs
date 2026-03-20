@@ -10,6 +10,22 @@ namespace OmniKey.Windows
 {
     internal static class AgentRunner
     {
+        // Tracks the active WebSocket so CancelCurrentSession() can abort it
+        // immediately, mirroring macOS AgentSessionState.cancelCurrentSession().
+        private static volatile ClientWebSocket? _activeWebSocket;
+
+        /// Abort the currently running agent session (WebSocket + shell process).
+        /// Called from the Cancel button in AgentThinkingForm.
+        public static void CancelCurrentSession()
+        {
+            var ws = _activeWebSocket;
+            if (ws != null)
+            {
+                try { ws.Abort(); }
+                catch { }
+            }
+        }
+
         public static bool ContainsAgentDirective(string text) =>
             text.IndexOf("@omniAgent", StringComparison.OrdinalIgnoreCase) >= 0;
 
@@ -21,15 +37,19 @@ namespace OmniKey.Windows
             AgentThinkingForm thinkingForm,
             CancellationToken ct)
         {
-            // Ensure we have a JWT
-            if (string.IsNullOrEmpty(SubscriptionManager.Instance.JwtToken))
+            // Mirror macOS: if a JWT already exists use it with allowReauth:true so
+            // an expired token is transparently refreshed on 401/403.  If we had to
+            // activate upfront there is no point retrying with the brand-new token,
+            // so pass allowReauth:false to avoid an infinite re-auth loop.
+            bool hadToken = !string.IsNullOrEmpty(SubscriptionManager.Instance.JwtToken);
+            if (!hadToken)
             {
                 bool ok = await SubscriptionManager.Instance.ReactivateStoredKeyIfNeededAsync();
                 if (!ok)
                     throw new InvalidOperationException("Subscription is not active.");
             }
 
-            return await ConnectAndRunAsync(originalText, thinkingForm, ct, allowReauth: true);
+            return await ConnectAndRunAsync(originalText, thinkingForm, ct, allowReauth: hadToken);
         }
 
         private static async Task<string> ConnectAndRunAsync(
@@ -44,6 +64,9 @@ namespace OmniKey.Windows
             using var ws = new ClientWebSocket();
             ws.Options.SetRequestHeader("Authorization", $"Bearer {jwt}");
 
+            // Register this WebSocket as the active one so CancelCurrentSession()
+            // can abort it immediately (mirrors macOS AgentSessionState).
+            _activeWebSocket = ws;
             try
             {
                 await ws.ConnectAsync(new Uri(wsUrl), ct);
@@ -51,6 +74,7 @@ namespace OmniKey.Windows
             catch (WebSocketException ex) when (
                 (ex.Message.Contains("401") || ex.Message.Contains("403")) && allowReauth)
             {
+                _activeWebSocket = null;
                 bool ok = await SubscriptionManager.Instance.ReactivateStoredKeyIfNeededAsync();
                 if (!ok) throw new InvalidOperationException("Subscription is not active.");
                 return await ConnectAndRunAsync(originalText, thinkingForm, ct, allowReauth: false);
@@ -126,16 +150,19 @@ namespace OmniKey.Windows
                 string? finalAnswer = ExtractFinalAnswer(content);
                 if (finalAnswer != null)
                 {
+                    _activeWebSocket = null;
                     await CloseWebSocketAsync(ws);
                     return finalAnswer;
                 }
 
                 // Implicit final answer (no tags)
                 string answer = !string.IsNullOrWhiteSpace(displayText) ? displayText : content;
+                _activeWebSocket = null;
                 await CloseWebSocketAsync(ws);
                 return answer;
             }
 
+            _activeWebSocket = null;
             throw new OperationCanceledException("Agent session ended without a final answer.");
         }
 
