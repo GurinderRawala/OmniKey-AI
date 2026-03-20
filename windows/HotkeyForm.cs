@@ -109,14 +109,13 @@ namespace OmniKey.Windows
             menu.Items.Add(_statusMenuItem);
             menu.Items.Add(new ToolStripSeparator());
 
-            menu.Items.Add(new ToolStripMenuItem("Fix Prompt (Ctrl+E)")    { Enabled = false });
-            menu.Items.Add(new ToolStripMenuItem("Fix Grammar (Ctrl+G)")   { Enabled = false });
-            menu.Items.Add(new ToolStripMenuItem("Custom Task (Ctrl+T)")   { Enabled = false });
-            menu.Items.Add(new ToolStripSeparator());
-
             var taskInstructionsItem = new ToolStripMenuItem("Task Instructions\u2026");
             taskInstructionsItem.Click += (_, _) => ShowTaskInstructions();
             menu.Items.Add(taskInstructionsItem);
+
+            var manualItem = new ToolStripMenuItem("Manual\u2026");
+            manualItem.Click += (_, _) => ShowManual();
+            menu.Items.Add(manualItem);
 
             var licenseItem = new ToolStripMenuItem("Subscription / Activate\u2026");
             licenseItem.Click += (_, _) => ShowLicenseForm();
@@ -135,6 +134,12 @@ namespace OmniKey.Windows
         private void ShowTaskInstructions()
         {
             var form = new TaskInstructionsForm();
+            form.Show(this);
+        }
+
+        private void ShowManual()
+        {
+            var form = new ManualForm();
             form.Show(this);
         }
 
