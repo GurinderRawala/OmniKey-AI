@@ -90,7 +90,7 @@ app.get('/macos/appcast', (req, res) => {
 // These should match the values in windows/OmniKey.Windows.csproj
 // <Version> and windows/build_release_zip.ps1 $APP_VERSION.
 const WIN_VERSION = '1.0';
-const WIN_ZIP_FILENAME = 'OmniKeyAI-windows-x64.zip';
+const WIN_ZIP_FILENAME = 'OmniKeyAI-windows-win-x64.zip';
 const WIN_ZIP_PATH = path.join(process.cwd(), 'windows', WIN_ZIP_FILENAME);
 
 // Serves the pre-built ZIP produced by windows/build_release_zip.ps1.

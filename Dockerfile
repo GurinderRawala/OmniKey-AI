@@ -15,7 +15,7 @@ RUN corepack prepare yarn@stable --activate \
 COPY tsconfig.json ./
 COPY src ./src
 COPY macOS/OmniKeyAI.dmg ./macOS/OmniKeyAI.dmg
-COPY windows/OmniKeyAI-windows-x64.zip ./windows/OmniKeyAI-windows-x64.zip
+COPY windows/OmniKeyAI-windows-win-x64.zip ./windows/OmniKeyAI-windows-win-x64.zip
 
 # Build TypeScript to JavaScript
 RUN npm run build
@@ -36,7 +36,7 @@ RUN corepack prepare yarn@stable --activate \
 # Copy compiled JS and runtime assets from build stage
 COPY --from=build /usr/src/app/dist ./dist
 COPY macOS/OmniKeyAI.dmg ./macOS/OmniKeyAI.dmg
-COPY --from=build /usr/src/app/windows/OmniKeyAI-windows-x64.zip ./windows/OmniKeyAI-windows-x64.zip
+COPY --from=build /usr/src/app/windows/OmniKeyAI-windows-win-x64.zip ./windows/OmniKeyAI-windows-win-x64.zip
 
 # Cloud Run expects the container to listen on this port
 ENV PORT=8080
