@@ -27,8 +27,9 @@ namespace OmniKey.Windows
 
         public async Task<bool> ActivateStoredKeyAsync()
         {
-            if (string.IsNullOrWhiteSpace(UserKey)) return false;
-            var (ok, token, _) = await ActivateCoreAsync(UserKey);
+            // Self-hosted backend returns a JWT without requiring a key.
+            if (!ApiClient.IsSelfHosted && string.IsNullOrWhiteSpace(UserKey)) return false;
+            var (ok, token, _) = await ActivateCoreAsync(ApiClient.IsSelfHosted ? "" : UserKey!);
             JwtToken = ok ? token : null;
             return ok;
         }
@@ -50,8 +51,9 @@ namespace OmniKey.Windows
 
         public async Task<bool> ReactivateStoredKeyIfNeededAsync()
         {
-            if (string.IsNullOrWhiteSpace(UserKey)) return false;
-            var (ok, token, _) = await ActivateCoreAsync(UserKey);
+            // Self-hosted backend returns a JWT without requiring a key.
+            if (!ApiClient.IsSelfHosted && string.IsNullOrWhiteSpace(UserKey)) return false;
+            var (ok, token, _) = await ActivateCoreAsync(ApiClient.IsSelfHosted ? "" : UserKey!);
             JwtToken = ok ? token : null;
             return ok;
         }

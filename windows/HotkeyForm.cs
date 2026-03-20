@@ -63,7 +63,13 @@ namespace OmniKey.Windows
         {
             if (ApiClient.IsSelfHosted)
             {
-                UpdateStatus("Active (self-hosted)");
+                // Self-hosted backend issues a JWT without a subscription key.
+                // We still need to call /activate so the agent WebSocket has a
+                // valid token; skip this check if it fails (server may not be
+                // ready yet — the agent will retry on first use).
+                UpdateStatus("Activating\u2026 (self-hosted)");
+                bool ok = await SubscriptionManager.Instance.ActivateStoredKeyAsync();
+                UpdateStatus(ok ? "Active (self-hosted)" : "Active (self-hosted)");
                 return;
             }
 

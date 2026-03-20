@@ -50,12 +50,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
             object: nil
         )
 
-        // Bypass authentication and activation window if self-hosted
+        // Self-hosted: call /activate with an empty key to obtain a JWT
+        // (the backend issues one without requiring a subscription key).
+        // We still need the token for the agent WebSocket, so we cannot skip this.
         if APIClient.isSelfHosted {
-            isAuthorized = true
-            updateAuthStatusUI()
-            startMonitoringIfNeeded()
-            showManualIfFirstTime()
+            SubscriptionManager.shared.activateStoredKey { [weak self] _ in
+                // Proceed regardless of outcome — the agent will retry on first use.
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.isAuthorized = true
+                    self.updateAuthStatusUI()
+                    self.startMonitoringIfNeeded()
+                    self.showManualIfFirstTime()
+                }
+            }
         } else {
             // If we already have a stored subscription key, try to
             // activate it and start monitoring only when authorized.

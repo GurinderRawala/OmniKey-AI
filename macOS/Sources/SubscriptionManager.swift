@@ -65,11 +65,19 @@ final class SubscriptionManager: @unchecked Sendable {
     }
 
     /// Attempt to authenticate using a previously stored key.
+    /// When self-hosted the backend issues a JWT without a key, so
+    /// we call /activate with an empty string instead of returning early.
     /// Calls completion(true) and stores a JWT on success.
     func activateStoredKey(completion: @escaping (Bool) -> Void) {
-        guard let key = userKey else {
-            completion(false)
-            return
+        let key: String
+        if APIClient.isSelfHosted {
+            key = ""
+        } else {
+            guard let storedKey = userKey else {
+                completion(false)
+                return
+            }
+            key = storedKey
         }
 
         activate(key: key) { [weak self] result in
@@ -101,13 +109,20 @@ final class SubscriptionManager: @unchecked Sendable {
 
     /// Re-activate using the stored key (if any). This is used when
     /// an API request returns 401/403 so we can transparently refresh
-    /// the short-lived JWT. If there is no stored key, or the server
-    /// reports the subscription as expired (403), the caller is
-    /// informed so it can show appropriate UI.
+    /// the short-lived JWT. When self-hosted the backend issues a JWT
+    /// without a key. If there is no stored key on a non-self-hosted
+    /// setup, or the server reports the subscription as expired (403),
+    /// the caller is informed so it can show appropriate UI.
     func reactivateStoredKeyIfNeeded(completion: @escaping (ReactivationOutcome) -> Void) {
-        guard let key = userKey else {
-            completion(.noStoredKey)
-            return
+        let key: String
+        if APIClient.isSelfHosted {
+            key = ""
+        } else {
+            guard let storedKey = userKey else {
+                completion(.noStoredKey)
+                return
+            }
+            key = storedKey
         }
 
         activate(key: key) { [weak self] result in
