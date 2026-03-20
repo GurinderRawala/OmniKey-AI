@@ -8,6 +8,7 @@ OmnikeyAI is a productivity tool that helps you quickly rewrite selected text us
 
 - For more details about the app and its features, see the [main README](https://github.com/GurinderRawala/OmniKey-AI).
 - Download the latest macOS app here: [Download OmniKeyAI for macOS](https://omnikeyai-saas-fmytqc3dra-uc.a.run.app/macos/download)
+- Download the latest Windows app here: [Download OmniKeyAI for Windows](https://omnikeyai-saas-fmytqc3dra-uc.a.run.app/windows/download)
 
 ## Features
 

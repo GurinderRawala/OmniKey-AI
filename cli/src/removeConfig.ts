@@ -75,11 +75,26 @@ export function removeConfigAndDb() {
 
   // Remove SQLite database
   if (fs.existsSync(sqlitePath)) {
-    try {
-      fs.rmSync(sqlitePath);
-      console.log(`Removed SQLite database: ${sqlitePath}`);
-    } catch (e) {
-      console.error(`Failed to remove SQLite database: ${e}`);
+    const maxAttempts = isWindows ? 5 : 1;
+    let removed = false;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        fs.rmSync(sqlitePath);
+        console.log(`Removed SQLite database: ${sqlitePath}`);
+        removed = true;
+        break;
+      } catch (e: any) {
+        if (isWindows && attempt < maxAttempts && (e.code === 'EBUSY' || e.code === 'EPERM' || e.code === 'EACCES')) {
+          // File may still be locked by the daemon — wait ~1s and retry
+          execSync(`ping -n 2 127.0.0.1 > nul`, { stdio: 'pipe' });
+        } else {
+          console.error(`Failed to remove SQLite database: ${e}`);
+          break;
+        }
+      }
+    }
+    if (!removed && isWindows) {
+      console.error(`Failed to remove SQLite database after ${maxAttempts} attempts: ${sqlitePath}`);
     }
   } else {
     console.log(`SQLite database does not exist: ${sqlitePath}`);
