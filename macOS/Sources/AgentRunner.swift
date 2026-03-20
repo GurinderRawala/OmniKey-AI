@@ -343,6 +343,7 @@ final class AgentRunner {
             let content: String
             let isTerminalOutput: Bool?
             let isError: Bool?
+            let platform: String?
 
             enum CodingKeys: String, CodingKey {
                 case sessionID = "session_id"
@@ -350,6 +351,7 @@ final class AgentRunner {
                 case content
                 case isTerminalOutput = "is_terminal_output"
                 case isError = "is_error"
+                case platform
             }
         }
 
@@ -425,7 +427,8 @@ final class AgentRunner {
                                 sender: "client",
                                 content: output,
                                 isTerminalOutput: true,
-                                isError: status != 0
+                                isError: status != 0,
+                                platform: "macos"
                             )
 
                             let encodedLength: Int
@@ -490,7 +493,8 @@ final class AgentRunner {
             sender: "client",
             content: originalText,
             isTerminalOutput: false,
-            isError: false
+            isError: false,
+            platform: "macos"
         )
 
         if let data = try? encoder.encode(initial),

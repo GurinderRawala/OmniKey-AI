@@ -214,10 +214,14 @@ namespace OmniKey.Windows
         private static async Task<(string output, int exitCode)> RunShellCommandAsync(
             string script, CancellationToken ct)
         {
+            // Encode the script as Base64 UTF-16LE so that powershell.exe -EncodedCommand
+            // receives it verbatim — no quoting, escaping, or curly-brace conflicts.
+            string encodedScript = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
+
             var psi = new ProcessStartInfo
             {
                 FileName = "powershell.exe",
-                Arguments = $"-NoProfile -NonInteractive -Command {EscapeForPowerShell(script)}",
+                Arguments = $"-NoProfile -NonInteractive -EncodedCommand {encodedScript}",
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
@@ -245,12 +249,6 @@ namespace OmniKey.Windows
             await process.WaitForExitAsync(ct).ConfigureAwait(false);
 
             return (outputSb.ToString(), process.ExitCode);
-        }
-
-        private static string EscapeForPowerShell(string script)
-        {
-            // Wrap the script in a scriptblock passed via -Command
-            return $"& {{ {script.Replace("\"", "\\\"")} }}";
         }
 
         private static string MakeWebSocketUrl()
@@ -308,6 +306,7 @@ namespace OmniKey.Windows
             public string? content { get; set; }
             public bool is_terminal_output { get; set; }
             public bool is_error { get; set; }
+            public string platform { get; set; } = "windows";
         }
     }
 }

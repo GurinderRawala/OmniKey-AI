@@ -7,7 +7,7 @@ import { config } from './config';
 import { logger } from './logger';
 import { Subscription } from './models/subscription';
 import { SubscriptionUsage } from './models/subscriptionUsage';
-import { AGENT_SYSTEM_PROMPT } from './agentPrompts';
+import { AGENT_SYSTEM_PROMPT_MACOS, AGENT_SYSTEM_PROMPT_WINDOWS } from './agentPrompts';
 import { getPromptForCommand } from './featureRoutes';
 import { selfHostedSubscription } from './authMiddleware';
 
@@ -17,6 +17,7 @@ interface AgentMessage {
   content: string;
   is_terminal_output?: boolean;
   is_error?: boolean;
+  platform?: string;
 }
 
 interface DecodedJwtPayload {
@@ -50,6 +51,7 @@ const MAX_TURNS = 10;
 async function getOrCreateSession(
   sessionId: string,
   subscription: Subscription,
+  platform: string | undefined,
   log: typeof logger,
 ): Promise<SessionState> {
   const existing = sessionMessages.get(sessionId);
@@ -62,6 +64,9 @@ async function getOrCreateSession(
     return existing;
   }
 
+  const systemPrompt =
+    platform === 'windows' ? AGENT_SYSTEM_PROMPT_WINDOWS : AGENT_SYSTEM_PROMPT_MACOS;
+
   // use these instructions as user instructions
   const prompt = await getPromptForCommand(log, 'task', subscription).catch((err) => {
     log.error('Failed to get system prompt for new agent session', { error: err });
@@ -73,7 +78,7 @@ async function getOrCreateSession(
     history: [
       {
         role: 'system',
-        content: AGENT_SYSTEM_PROMPT,
+        content: systemPrompt,
       },
       ...(prompt
         ? [
@@ -182,7 +187,7 @@ async function runAgentTurn(
   send: AgentSendFn,
   log: typeof logger,
 ) {
-  const session = await getOrCreateSession(sessionId, subscription, log);
+  const session = await getOrCreateSession(sessionId, subscription, clientMessage.platform, log);
 
   // Count this call as one agent iteration.
   session.turns += 1;
