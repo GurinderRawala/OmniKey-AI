@@ -16,23 +16,38 @@ namespace OmniKey.Windows
         {
             try
             {
-                // Small settle delay so modifier keys from the triggering hotkey
-                // (e.g. Ctrl held during Ctrl+E) are physically released before we
-                // inject a new Ctrl+C, preventing key-state interference.
-                await Task.Delay(80);
-
+                // Capture sequence number and text BEFORE copying so we can detect change.
+                // NOTE: Do NOT await anything before SendKeys — any delay here allows
+                // queued Windows messages (e.g. from the balloon tip) to be processed
+                // and potentially shift keyboard focus away from the user's window,
+                // causing Ctrl+C to be sent to the wrong target.
                 uint seqBefore = GetClipboardSequenceNumber();
+                string? textBefore = Clipboard.ContainsText() ? Clipboard.GetText() : null;
 
                 // Send Ctrl+C to copy current selection
                 SendKeys.SendWait("^c");
 
                 await Task.Delay(250);
 
-                // Compare sequence numbers rather than clipboard text — avoids the
-                // false-negative where the selected text is identical to what was
-                // already on the clipboard (string equality check was the old bug).
-                if (GetClipboardSequenceNumber() == seqBefore)
-                    return null;
+                uint seqAfter = GetClipboardSequenceNumber();
+
+                // Primary check: sequence number changed — avoids the false-negative
+                // where the selected text is identical to what was already on the clipboard.
+                // Fallback to text comparison if GetClipboardSequenceNumber is unavailable
+                // (returns 0, e.g. restricted window-station access).
+                if (seqBefore != 0 && seqAfter != 0)
+                {
+                    if (seqAfter == seqBefore)
+                        return null;
+                }
+                else
+                {
+                    if (!Clipboard.ContainsText())
+                        return null;
+                    string textAfter = Clipboard.GetText();
+                    if (string.IsNullOrWhiteSpace(textAfter) || string.Equals(textBefore, textAfter, StringComparison.Ordinal))
+                        return null;
+                }
 
                 if (!Clipboard.ContainsText())
                     return null;

@@ -166,6 +166,9 @@ namespace OmniKey.Windows
 
             _isProcessing = true;
 
+            // Capture the focused window before any UI changes (balloons, forms) can shift focus.
+            IntPtr originalWindow = GetForegroundWindow();
+
             try
             {
                 var command = id switch
@@ -198,7 +201,7 @@ namespace OmniKey.Windows
                 // Agent workflow for Ctrl+T when @omniAgent directive is present
                 if (command == EnhanceCommand.Task && AgentRunner.ContainsAgentDirective(normalized))
                 {
-                    await RunAgentWorkflowAsync(normalized);
+                    await RunAgentWorkflowAsync(normalized, originalWindow);
                     return;
                 }
 
@@ -219,7 +222,7 @@ namespace OmniKey.Windows
                     return;
                 }
 
-                await ClipboardHelper.ReplaceSelectionAsync(result);
+                await RestoreFocusAndPasteAsync(originalWindow, result);
                 ShowBalloon("OmniKey AI", "Text updated.");
             }
             finally
@@ -228,7 +231,7 @@ namespace OmniKey.Windows
             }
         }
 
-        private async Task RunAgentWorkflowAsync(string originalText)
+        private async Task RunAgentWorkflowAsync(string originalText, IntPtr originalWindow)
         {
             // Close any existing agent window
             _agentThinkingForm?.Close();
@@ -268,8 +271,20 @@ namespace OmniKey.Windows
                 return;
             }
 
-            await ClipboardHelper.ReplaceSelectionAsync(result);
+            await RestoreFocusAndPasteAsync(originalWindow, result);
             ShowBalloon("OmniKey AI", "Agent finished. Text updated.");
+        }
+
+        // Brings the original window back to the foreground (mirroring macOS behavior),
+        // waits for it to activate, then pastes the result via Ctrl+V.
+        private async Task RestoreFocusAndPasteAsync(IntPtr windowHandle, string text)
+        {
+            if (windowHandle != IntPtr.Zero)
+            {
+                SetForegroundWindow(windowHandle);
+                await Task.Delay(250);
+            }
+            await ClipboardHelper.ReplaceSelectionAsync(text);
         }
 
         // ─── Win32 hotkey registration ────────────────────────────────
@@ -300,5 +315,11 @@ namespace OmniKey.Windows
 
         [DllImport("user32.dll")]
         private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetForegroundWindow();
+
+        [DllImport("user32.dll")]
+        private static extern bool SetForegroundWindow(IntPtr hWnd);
     }
 }
