@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -25,8 +26,14 @@ namespace OmniKey.Windows
 
         // Read config once; both BaseUrl and IsSelfHosted are derived from this single call
         // so they are always consistent with each other.
-        private static readonly string? _selfHostedPort = SubscriptionManager.SelfHostedPort();
+        private static readonly string? _selfHostedPort = ReadSelfHostedPort();
 
+        /// <summary>
+        /// Base URL resolution order (mirrors macOS APIClient.swift):
+        /// 1. ~/.omnikey/config.json OMNIKEY_PORT  →  http://localhost:{port}
+        /// 2. OMNIKEY_BACKEND_URL environment variable
+        /// 3. Fallback: http://localhost:7172
+        /// </summary>
         public static readonly string BaseUrl = _selfHostedPort is { Length: > 0 } port
             ? $"http://localhost:{port}"
             : Environment.GetEnvironmentVariable("OMNIKEY_BACKEND_URL") is { Length: > 0 } env
@@ -34,6 +41,33 @@ namespace OmniKey.Windows
                 : "http://localhost:7172";
 
         public static readonly bool IsSelfHosted = _selfHostedPort != null;
+
+        /// Reads OMNIKEY_PORT from ~/.omnikey/config.json.
+        /// Returns the port string when found, null otherwise.
+        /// Mirrors macOS APIClient.selfHostedPort().
+        private static string? ReadSelfHostedPort()
+        {
+            try
+            {
+                string path = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                    ".omnikey", "config.json");
+
+                if (!File.Exists(path)) return null;
+
+                using var doc = JsonDocument.Parse(File.ReadAllText(path));
+                var root = doc.RootElement;
+
+                if (root.TryGetProperty("OMNIKEY_PORT", out var portEl))
+                {
+                    if (portEl.ValueKind == JsonValueKind.String) return portEl.GetString();
+                    if (portEl.ValueKind == JsonValueKind.Number) return portEl.GetInt32().ToString();
+                }
+            }
+            catch { }
+
+            return null;
+        }
 
         private HttpRequestMessage BuildRequest(HttpMethod method, string path)
         {
@@ -71,11 +105,11 @@ namespace OmniKey.Windows
                     using var doc = JsonDocument.Parse(body);
                     if (doc.RootElement.TryGetProperty("result", out var r) &&
                         r.ValueKind == JsonValueKind.String)
-                        return r.GetString() ?? text;
+                        return ExtractImprovedText(r.GetString() ?? text);
                 }
                 catch { }
 
-                return body.Length > 0 ? body : text;
+                return body.Length > 0 ? ExtractImprovedText(body) : text;
             });
         }
 
@@ -146,6 +180,17 @@ namespace OmniKey.Windows
             Instructions = el.TryGetProperty("instructions", out var ins) ? ins.GetString() ?? "" : "",
             IsDefault    = el.TryGetProperty("isDefault", out var def) && def.GetBoolean()
         };
+
+        private static string ExtractImprovedText(string response)
+        {
+            string trimmed = response.Trim();
+            int start = trimmed.IndexOf("<improved_text>", StringComparison.Ordinal);
+            if (start < 0) return trimmed;
+            start += "<improved_text>".Length;
+            int end = trimmed.IndexOf("</improved_text>", start, StringComparison.Ordinal);
+            if (end < 0) return trimmed;
+            return trimmed[start..end].Trim();
+        }
 
         private static async Task EnsureSuccessAsync(HttpResponseMessage resp)
         {

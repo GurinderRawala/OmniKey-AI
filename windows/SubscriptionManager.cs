@@ -1,5 +1,4 @@
 using System;
-using System.IO;
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -24,31 +23,6 @@ namespace OmniKey.Windows
         private SubscriptionManager()
         {
             UserKey = ReadFromRegistry();
-        }
-
-        /// Returns the OMNIKEY_PORT from ~/.omnikey/config.json, or null if not found.
-        public static string? SelfHostedPort()
-        {
-            try
-            {
-                string path = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                    ".omnikey", "config.json");
-
-                if (!File.Exists(path)) return null;
-
-                using var doc = JsonDocument.Parse(File.ReadAllText(path));
-                var root = doc.RootElement;
-
-                if (root.TryGetProperty("OMNIKEY_PORT", out var portEl))
-                {
-                    if (portEl.ValueKind == JsonValueKind.String) return portEl.GetString();
-                    if (portEl.ValueKind == JsonValueKind.Number) return portEl.GetInt32().ToString();
-                }
-            }
-            catch { }
-
-            return null;
         }
 
         public async Task<bool> ActivateStoredKeyAsync()

@@ -83,8 +83,9 @@ namespace OmniKey.Windows
                 }
                 catch
                 {
-                    // Not parseable – treat as final answer
-                    return CleanDisplayText(raw);
+                    // Not parseable – skip this frame and keep listening,
+                    // matching macOS behaviour (receiveNext() on decode failure).
+                    continue;
                 }
 
                 if (msg == null) continue;
