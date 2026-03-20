@@ -16,12 +16,16 @@ namespace OmniKey.Windows
         private readonly ComboBox _templatePicker;
         private readonly ComboBox _examplePicker;
         private readonly Label _exampleLabel;
+        private readonly Label _instructionsLabel;
         private readonly TextBox _headingBox;
         private readonly RichTextBox _instructionsBox;
         private readonly Label _statusLabel;
         private readonly Button _saveButton;
         private readonly Button _defaultButton;
         private readonly Button _deleteButton;
+
+        // Top of the instructions area — shifts up when example section is hidden
+        private int _instructionsTop = 212;
 
         private static readonly (string Name, string Content)[] Examples =
         {
@@ -49,6 +53,7 @@ namespace OmniKey.Windows
                 Text = "Task templates for Ctrl+T",
                 Font = new Font("Segoe UI", 14, FontStyle.Bold),
                 ForeColor = NordColors.PrimaryText,
+                BackColor = NordColors.WindowBackground,
                 AutoSize = true,
                 Location = new Point(16, 14)
             });
@@ -58,6 +63,7 @@ namespace OmniKey.Windows
                 Text = "Save up to 5 task instruction templates. One can be set as default for Ctrl+T.",
                 Font = new Font("Segoe UI", 9),
                 ForeColor = NordColors.SecondaryText,
+                BackColor = NordColors.WindowBackground,
                 AutoSize = true,
                 Location = new Point(16, 46)
             });
@@ -68,11 +74,11 @@ namespace OmniKey.Windows
                 Text = "Heading:",
                 Font = new Font("Segoe UI", 9),
                 ForeColor = NordColors.PrimaryText,
+                BackColor = NordColors.WindowBackground,
                 AutoSize = true,
                 Location = new Point(16, 80)
             });
 
-            // Single-line input → PanelBackground (nord1), matching macOS TextField appearance
             _headingBox = new TextBox
             {
                 Font = new Font("Segoe UI", 10),
@@ -83,6 +89,7 @@ namespace OmniKey.Windows
                 BorderStyle = BorderStyle.FixedSingle,
                 PlaceholderText = "Template heading"
             };
+            _headingBox.TextChanged += (_, _) => UpdateButtons();
             Controls.Add(_headingBox);
 
             Controls.Add(new Label
@@ -90,6 +97,7 @@ namespace OmniKey.Windows
                 Text = "Template:",
                 Font = new Font("Segoe UI", 9),
                 ForeColor = NordColors.PrimaryText,
+                BackColor = NordColors.WindowBackground,
                 AutoSize = true,
                 Location = new Point(406, 80)
             });
@@ -97,12 +105,14 @@ namespace OmniKey.Windows
             _templatePicker = new ComboBox
             {
                 DropDownStyle = ComboBoxStyle.DropDownList,
+                DrawMode = DrawMode.OwnerDrawFixed,
                 Font = new Font("Segoe UI", 9),
                 Location = new Point(406, 100),
                 Size = new Size(250, 24),
                 BackColor = NordColors.PanelBackground,
                 ForeColor = NordColors.PrimaryText
             };
+            _templatePicker.DrawItem += DrawDarkComboItem;
             _templatePicker.SelectedIndexChanged += OnTemplatePickerChanged;
             Controls.Add(_templatePicker);
 
@@ -112,6 +122,7 @@ namespace OmniKey.Windows
                 Text = "Load example:",
                 Font = new Font("Segoe UI", 9),
                 ForeColor = NordColors.PrimaryText,
+                BackColor = NordColors.WindowBackground,
                 AutoSize = true,
                 Location = new Point(16, 136)
             };
@@ -120,12 +131,14 @@ namespace OmniKey.Windows
             _examplePicker = new ComboBox
             {
                 DropDownStyle = ComboBoxStyle.DropDownList,
+                DrawMode = DrawMode.OwnerDrawFixed,
                 Font = new Font("Segoe UI", 9),
                 Location = new Point(16, 156),
                 Size = new Size(240, 24),
                 BackColor = NordColors.PanelBackground,
                 ForeColor = NordColors.PrimaryText
             };
+            _examplePicker.DrawItem += DrawDarkComboItem;
             _examplePicker.Items.Add("None");
             foreach (var (name, _) in Examples) _examplePicker.Items.Add(name);
             _examplePicker.SelectedIndex = 0;
@@ -133,16 +146,17 @@ namespace OmniKey.Windows
             Controls.Add(_examplePicker);
 
             // ── Instructions label ────────────────────────────────────────
-            Controls.Add(new Label
+            _instructionsLabel = new Label
             {
                 Text = "Instructions:",
                 Font = new Font("Segoe UI", 9),
                 ForeColor = NordColors.PrimaryText,
+                BackColor = NordColors.WindowBackground,
                 AutoSize = true,
                 Location = new Point(16, 192)
-            });
+            };
+            Controls.Add(_instructionsLabel);
 
-            // Multi-line text editor → EditorBackground (nord2), matching macOS TextEditor
             _instructionsBox = new RichTextBox
             {
                 Font = new Font("Consolas", 10),
@@ -172,6 +186,7 @@ namespace OmniKey.Windows
                 Text = "",
                 Font = new Font("Segoe UI", 8),
                 ForeColor = NordColors.SecondaryText,
+                BackColor = NordColors.WindowBackground,
                 AutoSize = true,
                 Location = new Point(148, 16)
             };
@@ -184,7 +199,6 @@ namespace OmniKey.Windows
             _defaultButton.Anchor = AnchorStyles.Right | AnchorStyles.Top;
             _defaultButton.Click += async (_, _) => await SetDefaultAsync();
 
-            // Primary action button uses Accent (nord10), matching macOS .tint(accent)
             _saveButton = MakeButton("Save Template", NordColors.Accent);
             _saveButton.ForeColor = Color.White;
             _saveButton.Anchor = AnchorStyles.Right | AnchorStyles.Top;
@@ -218,6 +232,22 @@ namespace OmniKey.Windows
             return b;
         }
 
+        private static void DrawDarkComboItem(object? sender, DrawItemEventArgs e)
+        {
+            if (e.Index < 0 || sender is not ComboBox combo) return;
+
+            bool selected = (e.State & DrawItemState.Selected) != 0;
+            Color backColor = selected ? NordColors.Accent : NordColors.PanelBackground;
+            Color foreColor = NordColors.PrimaryText;
+
+            e.Graphics.FillRectangle(new SolidBrush(backColor), e.Bounds);
+            string? text = combo.Items[e.Index]?.ToString();
+            if (text != null)
+                TextRenderer.DrawText(e.Graphics, text, e.Font ?? combo.Font,
+                    e.Bounds, foreColor,
+                    TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis);
+        }
+
         private void LayoutBottomButtons(Panel panel, Button close)
         {
             int right = panel.ClientSize.Width - 8;
@@ -226,13 +256,24 @@ namespace OmniKey.Windows
             close.Location          = new Point(_defaultButton.Left - close.Width - 4, 9);
         }
 
+        private void SetExampleSectionVisible(bool visible)
+        {
+            _exampleLabel.Visible  = visible;
+            _examplePicker.Visible = visible;
+
+            _instructionsTop = visible ? 212 : 156;
+            _instructionsLabel.Location = new Point(16, _instructionsTop - 20);
+            _instructionsBox.Location   = new Point(16, _instructionsTop);
+            ResizeInstructions();
+        }
+
         private void ResizeInstructions()
         {
             var bottomH = Controls.OfType<Panel>()
                 .FirstOrDefault(p => p.Dock == DockStyle.Bottom)?.Height ?? 46;
             _instructionsBox.Size = new Size(
                 ClientSize.Width - 32,
-                Math.Max(ClientSize.Height - 212 - bottomH - 8, 80));
+                Math.Max(ClientSize.Height - _instructionsTop - bottomH - 8, 80));
         }
 
         // ── Picker event handlers ─────────────────────────────────────────
@@ -249,12 +290,10 @@ namespace OmniKey.Windows
                 _headingBox.Text = "";
                 _instructionsBox.Text = "";
                 _examplePicker.SelectedIndex = 0;
-                _exampleLabel.Enabled = true;
-                _examplePicker.Enabled = true;
+                SetExampleSectionVisible(true);
             }
             else
             {
-                // Strip the ★ prefix before looking up the template
                 string heading = (item ?? "").TrimStart('\u2605', ' ');
                 var tpl = _templates.FirstOrDefault(t => t.Heading == heading);
                 if (tpl != null)
@@ -263,8 +302,7 @@ namespace OmniKey.Windows
                     _headingBox.Text = tpl.Heading;
                     _instructionsBox.Text = tpl.Instructions;
                     _examplePicker.SelectedIndex = 0;
-                    _exampleLabel.Enabled = false;
-                    _examplePicker.Enabled = false;
+                    SetExampleSectionVisible(false);
                 }
             }
 
@@ -299,8 +337,7 @@ namespace OmniKey.Windows
                 if (_templates.Count == 0)
                 {
                     SetStatus("No saved templates yet.");
-                    _exampleLabel.Enabled = true;
-                    _examplePicker.Enabled = true;
+                    SetExampleSectionVisible(true);
                 }
                 else
                 {
@@ -334,8 +371,7 @@ namespace OmniKey.Windows
             _selectedId = tpl.Id;
             _headingBox.Text = tpl.Heading;
             _instructionsBox.Text = tpl.Instructions;
-            _exampleLabel.Enabled = false;
-            _examplePicker.Enabled = false;
+            SetExampleSectionVisible(false);
 
             string display = (tpl.IsDefault ? "\u2605 " : "") + tpl.Heading;
             int idx = _templatePicker.Items.IndexOf(display);
@@ -354,7 +390,9 @@ namespace OmniKey.Windows
             bool has = _selectedId != null;
             _deleteButton.Enabled  = has;
             _defaultButton.Enabled = has;
-            _saveButton.Enabled    = !string.IsNullOrWhiteSpace(_headingBox.Text);
+            bool headingFilled = !string.IsNullOrWhiteSpace(_headingBox.Text);
+            bool atLimit       = _selectedId == null && _templates.Count >= 5;
+            _saveButton.Enabled = headingFilled && !atLimit;
         }
 
         private async Task SaveAsync()
@@ -393,7 +431,7 @@ namespace OmniKey.Windows
             }
             finally
             {
-                _saveButton.Enabled = !string.IsNullOrWhiteSpace(_headingBox.Text);
+                UpdateButtons();
             }
         }
 
@@ -419,8 +457,8 @@ namespace OmniKey.Windows
                 {
                     _headingBox.Text = "";
                     _instructionsBox.Text = "";
-                    _exampleLabel.Enabled = true;
-                    _examplePicker.Enabled = true;
+                    _examplePicker.SelectedIndex = 0;
+                    SetExampleSectionVisible(true);
                     if (_templatePicker.Items.Count > 0)
                     {
                         _templatePicker.SelectedIndexChanged -= OnTemplatePickerChanged;
