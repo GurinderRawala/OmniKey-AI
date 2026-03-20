@@ -35,10 +35,8 @@ program
 program
   .command('kill-daemon')
   .description('Kill the Omnikey API backend daemon running on a specified port')
-  .option('--port <port>', 'Port to look for the daemon on', '7071')
-  .action((options) => {
-    const port = Number(options.port) || 7071;
-    killDaemon(port);
+  .action(() => {
+    killDaemon();
   });
 
 program

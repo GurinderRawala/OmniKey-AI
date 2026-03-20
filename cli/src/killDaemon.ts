@@ -1,14 +1,15 @@
 import { execSync } from 'child_process';
 import { killPersistenceAgent } from './removeConfig';
-
-const isWindows = process.platform === 'win32';
+import { isWindows, getPort } from './utils';
 
 /**
- * Kill the Omnikey API backend daemon running on a given port (default 7071).
+ * Kill the Omnikey API backend daemon.
+ * Reads the port from ~/.omnikey/config.json (falls back to 7071).
  * Removes the persistence agent, then kills any remaining process on the port.
- * @param port The port to look for (default 7071)
  */
-export function killDaemon(port: number = 7071) {
+export function killDaemon() {
+  const port = getPort();
+
   // 1. Remove/stop the persistence agent
   try {
     killPersistenceAgent();

@@ -1,10 +1,8 @@
 import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
-import os from 'os';
 import { execSync } from 'child_process';
-
-const isWindows = process.platform === 'win32';
+import { isWindows, getHomeDir, getConfigDir, getConfigPath, readConfig, initLogFiles } from './utils';
 
 /**
  * Start the Omnikey API backend as a daemon on the specified port.
@@ -15,17 +13,9 @@ const isWindows = process.platform === 'win32';
 export function startDaemon(port: number = 7071) {
   const backendPath = path.resolve(__dirname, '../backend-dist/index.js');
 
-  const homeDir = process.env.HOME || process.env.USERPROFILE || os.homedir();
-  const configDir = path.join(homeDir, '.omnikey');
-  const configPath = path.join(configDir, 'config.json');
-  let configVars: Record<string, any> = {};
-  if (fs.existsSync(configPath)) {
-    try {
-      configVars = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-    } catch (e) {
-      console.error('Failed to parse config.json:', e);
-    }
-  }
+  const configDir = getConfigDir();
+  const configPath = getConfigPath();
+  const configVars = readConfig();
   configVars.OMNIKEY_PORT = port;
   try {
     fs.mkdirSync(configDir, { recursive: true });
@@ -98,14 +88,7 @@ function startDaemonWindows(opts: DaemonOptions) {
   }
 
   // Also start the backend immediately for the current session
-  try {
-    fs.writeFileSync(logPath, '');
-    fs.writeFileSync(errorLogPath, '');
-  } catch {
-    // Ignore if files don't exist yet
-  }
-  const out = fs.openSync(logPath, 'a');
-  const err = fs.openSync(errorLogPath, 'a');
+  const { out, err } = initLogFiles(logPath, errorLogPath);
   const child = spawn(nodePath, [backendPath], {
     env: { ...process.env, ...configVars, OMNIKEY_PORT: String(port) },
     detached: true,
@@ -117,7 +100,7 @@ function startDaemonWindows(opts: DaemonOptions) {
 
 function startDaemonMacOS(opts: DaemonOptions) {
   const { port, configDir, configVars, nodePath, backendPath, logPath, errorLogPath } = opts;
-  const homeDir = process.env.HOME || os.homedir();
+  const homeDir = getHomeDir();
 
   const plistName = 'com.omnikey.daemon.plist';
   const plistPath = path.join(homeDir, 'Library', 'LaunchAgents', plistName);
@@ -164,14 +147,7 @@ function startDaemonMacOS(opts: DaemonOptions) {
     console.error('Failed to create or load launch agent:', e);
   }
 
-  try {
-    fs.writeFileSync(logPath, '');
-    fs.writeFileSync(errorLogPath, '');
-  } catch {
-    // Ignore
-  }
-  const out = fs.openSync(logPath, 'a');
-  const err = fs.openSync(errorLogPath, 'a');
+  const { out, err } = initLogFiles(logPath, errorLogPath);
   const child = spawn('node', [backendPath], {
     env: { ...configVars, OMNIKEY_PORT: String(port) },
     detached: true,

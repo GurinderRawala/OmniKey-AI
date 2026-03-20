@@ -21,6 +21,7 @@ namespace OmniKey.Windows
         private bool _isProcessing;
         private ToolStripMenuItem? _statusMenuItem;
         private AgentThinkingForm? _agentThinkingForm;
+        private ToolStripMenuItem? _checkUpdatesMenuItem;
 
         public HotkeyForm()
         {
@@ -47,6 +48,7 @@ namespace OmniKey.Windows
             base.OnLoad(e);
             RegisterHotkeys();
             _ = InitializeAuthAsync();
+            _ = CheckForUpdatesBackgroundAsync();
         }
 
         protected override void OnFormClosing(FormClosingEventArgs e)
@@ -101,8 +103,20 @@ namespace OmniKey.Windows
 
         private void UpdateStatus(string status)
         {
-            if (_statusMenuItem != null)
-                _statusMenuItem.Text = "Status: " + status;
+            if (_statusMenuItem == null) return;
+            _statusMenuItem.Text  = "Status: " + status;
+            _statusMenuItem.Image = CreateDotIcon(status.StartsWith("Active"));
+        }
+
+        private static Bitmap CreateDotIcon(bool active)
+        {
+            var bmp = new Bitmap(16, 16);
+            using var g = Graphics.FromImage(bmp);
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            g.Clear(Color.Transparent);
+            using var brush = new SolidBrush(active ? Color.FromArgb(34, 197, 94) : Color.FromArgb(239, 68, 68));
+            g.FillEllipse(brush, 2, 2, 12, 12);
+            return bmp;
         }
 
         // ─── Context menu ─────────────────────────────────────────────
@@ -115,18 +129,22 @@ namespace OmniKey.Windows
             menu.Items.Add(_statusMenuItem);
             menu.Items.Add(new ToolStripSeparator());
 
-            var taskInstructionsItem = new ToolStripMenuItem("Task Instructions\u2026");
+            var taskInstructionsItem = new ToolStripMenuItem("Task Instructions");
             taskInstructionsItem.Click += (_, _) => ShowTaskInstructions();
             menu.Items.Add(taskInstructionsItem);
 
-            var manualItem = new ToolStripMenuItem("Manual\u2026");
+            var manualItem = new ToolStripMenuItem("Manual");
             manualItem.Click += (_, _) => ShowManual();
             menu.Items.Add(manualItem);
 
-            var licenseItem = new ToolStripMenuItem("Subscription / Activate\u2026");
+            var licenseItem = new ToolStripMenuItem("Subscription / Activate");
             licenseItem.Click += (_, _) => ShowLicenseForm();
             if (ApiClient.IsSelfHosted) licenseItem.Visible = false;
             menu.Items.Add(licenseItem);
+
+            _checkUpdatesMenuItem = new ToolStripMenuItem("Check for Updates");
+            _checkUpdatesMenuItem.Click += async (_, _) => await CheckForUpdatesFromMenuAsync();
+            menu.Items.Add(_checkUpdatesMenuItem);
 
             menu.Items.Add(new ToolStripSeparator());
 
@@ -147,6 +165,54 @@ namespace OmniKey.Windows
         {
             var form = new ManualForm();
             form.Show(this);
+        }
+
+        // ─── Update checking ──────────────────────────────────────────
+
+        /// <summary>
+        /// Runs silently at startup. Shows a balloon tip when an update is found.
+        /// </summary>
+        private async Task CheckForUpdatesBackgroundAsync()
+        {
+            var info = await UpdateChecker.CheckAsync();
+            if (info == null) return;
+
+            ShowBalloon("OmniKey AI", $"Update {info.Version} is available! Click \u2018Check for Updates\u2019 to install.");
+        }
+
+        /// <summary>
+        /// Triggered by the "Check for Updates" tray menu item.
+        /// Shows the update window when available, or a "you're up to date" balloon.
+        /// </summary>
+        private async Task CheckForUpdatesFromMenuAsync()
+        {
+            if (_checkUpdatesMenuItem != null)
+            {
+                _checkUpdatesMenuItem.Enabled = false;
+                _checkUpdatesMenuItem.Text    = "Checking\u2026";
+            }
+
+            try
+            {
+                var info = await UpdateChecker.CheckAsync();
+
+                if (info == null)
+                {
+                    ShowBalloon("OmniKey AI", "You\u2019re up to date! No new version available.");
+                    return;
+                }
+
+                var form = new UpdateForm(info);
+                form.Show(this);
+            }
+            finally
+            {
+                if (_checkUpdatesMenuItem != null)
+                {
+                    _checkUpdatesMenuItem.Enabled = true;
+                    _checkUpdatesMenuItem.Text    = "Check for Updates";
+                }
+            }
         }
 
         // ─── Hotkey handling ──────────────────────────────────────────

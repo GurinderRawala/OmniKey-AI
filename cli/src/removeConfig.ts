@@ -1,14 +1,11 @@
 import fs from 'fs';
 import path from 'path';
-import os from 'os';
 import { execSync } from 'child_process';
-
-const isWindows = process.platform === 'win32';
+import { isWindows, getHomeDir, getConfigDir, readConfig } from './utils';
 
 export function killLaunchdAgent() {
-  const homeDir = process.env.HOME || process.env.USERPROFILE || os.homedir();
   const plistName = 'com.omnikey.daemon.plist';
-  const plistPath = path.join(homeDir, 'Library', 'LaunchAgents', plistName);
+  const plistPath = path.join(getHomeDir(), 'Library', 'LaunchAgents', plistName);
   if (fs.existsSync(plistPath)) {
     try {
       execSync(`launchctl unload "${plistPath}"`);
@@ -37,8 +34,7 @@ export function killWindowsTask() {
   }
 
   // Also remove the wrapper script
-  const homeDir = process.env.USERPROFILE || os.homedir();
-  const wrapperPath = path.join(homeDir, '.omnikey', 'start-daemon.cmd');
+  const wrapperPath = path.join(getConfigDir(), 'start-daemon.cmd');
   if (fs.existsSync(wrapperPath)) {
     try {
       fs.rmSync(wrapperPath);
@@ -63,23 +59,15 @@ export function killPersistenceAgent() {
  * Removes the ~/.omnikey config directory and the SQLite database file specified in config.json.
  */
 export function removeConfigAndDb() {
-  const homeDir = process.env.HOME || process.env.USERPROFILE || os.homedir();
-  const configDir = path.join(homeDir, '.omnikey');
-  const configPath = path.join(configDir, 'config.json');
-  let sqlitePath = path.join(homeDir, 'omnikey-selfhosted.sqlite');
+  const homeDir = getHomeDir();
+  const configDir = getConfigDir();
+  const configData = readConfig();
 
-  // Try to read SQLITE_PATH from config.json
-  if (fs.existsSync(configPath)) {
-    try {
-      const configData = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-      if (configData.SQLITE_PATH) {
-        sqlitePath = path.isAbsolute(configData.SQLITE_PATH)
-          ? configData.SQLITE_PATH
-          : path.join(homeDir, configData.SQLITE_PATH);
-      }
-    } catch (e) {
-      console.error(`Failed to read config.json: ${e}`);
-    }
+  let sqlitePath = path.join(homeDir, 'omnikey-selfhosted.sqlite');
+  if (configData.SQLITE_PATH) {
+    sqlitePath = path.isAbsolute(configData.SQLITE_PATH)
+      ? configData.SQLITE_PATH
+      : path.join(homeDir, configData.SQLITE_PATH);
   }
 
   // Remove platform-appropriate persistence agent

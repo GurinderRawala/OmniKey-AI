@@ -1,6 +1,7 @@
 import inquirer from 'inquirer';
 import fs from 'fs';
 import path from 'path';
+import { getConfigDir, getConfigPath } from './utils';
 
 /**
  * Onboard the user by configuring their OPENAI_API_KEY and generating a .env for self-hosted use.
@@ -8,8 +9,7 @@ import path from 'path';
  */
 export async function onboard(openAiKey?: string) {
   let apiKey = openAiKey;
-  const homeDir = process.env.HOME || process.env.USERPROFILE || '.';
-  const configDir = path.join(homeDir, '.omnikey');
+  const configDir = getConfigDir();
   const sqlitePath = path.join(configDir, 'omnikey-selfhosted.sqlite');
 
   if (!apiKey) {
@@ -25,7 +25,7 @@ export async function onboard(openAiKey?: string) {
   }
 
   // Save all environment variables to ~/.omnikey/config.json
-  const configPath = path.join(configDir, 'config.json');
+  const configPath = getConfigPath();
   fs.mkdirSync(configDir, { recursive: true });
   const configVars = {
     OPENAI_API_KEY: apiKey,

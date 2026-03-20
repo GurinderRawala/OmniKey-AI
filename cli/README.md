@@ -31,7 +31,7 @@ omnikey onboard --open-ai-key YOUR_KEY
 omnikey daemon --port 7071
 
 # Kill the daemon
-omnikey kill-daemon --port 7071
+omnikey kill-daemon
 
 # Remove the config directory and SQLite database (and persistence agent)
 omnikey remove-config

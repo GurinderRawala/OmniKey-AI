@@ -57,8 +57,8 @@ app.get('/macos/appcast', (req, res) => {
 
   // These should match the values embedded into the macOS app
   // Info.plist in macOS/build_release_dmg.sh.
-  const bundleVersion = '12';
-  const shortVersion = '1.0.11';
+  const bundleVersion = '13';
+  const shortVersion = '1.0.12';
 
   const xml = `<?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0"
@@ -84,6 +84,46 @@ app.get('/macos/appcast', (req, res) => {
 
   res.set('Content-Type', 'application/xml; charset=utf-8');
   res.send(xml);
+});
+
+// ── Windows distribution endpoints ───────────────────────────────────────────
+// These should match the values in windows/OmniKey.Windows.csproj
+// <Version> and windows/build_release_zip.ps1 $APP_VERSION.
+const WIN_VERSION = '1.0';
+const WIN_ZIP_FILENAME = 'OmniKeyAI-windows-x64.zip';
+const WIN_ZIP_PATH = path.join(process.cwd(), 'windows', WIN_ZIP_FILENAME);
+
+// Serves the pre-built ZIP produced by windows/build_release_zip.ps1.
+app.get('/windows/download', (_req, res) => {
+  res.download(WIN_ZIP_PATH, WIN_ZIP_FILENAME, (err) => {
+    if (err) {
+      logger.error('Failed to send Windows ZIP for download.', { error: err });
+      if (!res.headersSent) {
+        res.status(500).send('Unable to download file.');
+      }
+    }
+  });
+});
+
+// JSON update-check endpoint consumed by UpdateChecker.cs on the Windows client.
+// Returns the latest version + download URL so the client can decide whether
+// to prompt the user for an update.
+app.get('/windows/update', (req, res) => {
+  const baseUrl = `${req.protocol}://${req.get('host')}`;
+
+  let fileSize = 0;
+  try {
+    fileSize = fs.statSync(WIN_ZIP_PATH).size;
+  } catch (error) {
+    logger.error('Failed to stat Windows ZIP for update endpoint.', { error });
+  }
+
+  res.json({
+    version:      WIN_VERSION,
+    downloadUrl:  `${baseUrl}/windows/download`,
+    fileSize,
+    releaseNotes: '',
+  });
 });
 
 app.get('/health', (_req, res) => {
