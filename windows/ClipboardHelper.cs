@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
@@ -6,35 +7,37 @@ namespace OmniKey.Windows
 {
     internal static class ClipboardHelper
     {
+        [DllImport("user32.dll")]
+        private static extern uint GetClipboardSequenceNumber();
+
         // Capture currently selected text by sending Ctrl+C to the active window.
         // NOTE: This must run on the UI (STA) thread; do not wrap in Task.Run.
         public static async Task<string?> CaptureSelectionAsync()
         {
             try
             {
-                string? before = null;
-                if (Clipboard.ContainsText())
-                {
-                    before = Clipboard.GetText();
-                }
+                // Small settle delay so modifier keys from the triggering hotkey
+                // (e.g. Ctrl held during Ctrl+E) are physically released before we
+                // inject a new Ctrl+C, preventing key-state interference.
+                await Task.Delay(80);
+
+                uint seqBefore = GetClipboardSequenceNumber();
 
                 // Send Ctrl+C to copy current selection
                 SendKeys.SendWait("^c");
 
-                await Task.Delay(200);
+                await Task.Delay(250);
 
-                string? after = null;
-                if (Clipboard.ContainsText())
-                {
-                    after = Clipboard.GetText();
-                }
-
-                if (string.IsNullOrWhiteSpace(after) || string.Equals(before, after, StringComparison.Ordinal))
-                {
+                // Compare sequence numbers rather than clipboard text — avoids the
+                // false-negative where the selected text is identical to what was
+                // already on the clipboard (string equality check was the old bug).
+                if (GetClipboardSequenceNumber() == seqBefore)
                     return null;
-                }
 
-                return after;
+                if (!Clipboard.ContainsText())
+                    return null;
+
+                return Clipboard.GetText();
             }
             catch
             {
