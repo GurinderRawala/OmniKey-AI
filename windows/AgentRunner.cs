@@ -178,7 +178,7 @@ namespace OmniKey.Windows
             try
             {
                 if (ws.State == WebSocketState.Open)
-                    await ws.CloseAsync(WebSocketCloseStatus.GoingAway, "", CancellationToken.None);
+                    await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "", CancellationToken.None);
             }
             catch { }
         }
