@@ -1,38 +1,57 @@
 import { execSync } from 'child_process';
-import { killLaunchdAgent } from './removeConfig';
+import { killPersistenceAgent } from './removeConfig';
+
+const isWindows = process.platform === 'win32';
 
 /**
  * Kill the Omnikey API backend daemon running on a given port (default 7071).
- * Looks for node processes running backend-dist/index.js on the specified port and kills them.
+ * Removes the persistence agent, then kills any remaining process on the port.
  * @param port The port to look for (default 7071)
  */
 export function killDaemon(port: number = 7071) {
-  // 1. Unload/kill the launchd agent first
+  // 1. Remove/stop the persistence agent
   try {
-    killLaunchdAgent();
-    console.log('Launchd agent unloaded (if it existed).');
+    killPersistenceAgent();
+    console.log('Persistence agent stopped (if it existed).');
   } catch (e) {
-    console.warn('Failed to unload launchd agent or agent did not exist:', e);
+    console.warn('Failed to stop persistence agent:', e);
   }
 
-  // 2. Check if the port is still in use
+  // 2. Find any remaining processes still using the port
   let pids: string[] = [];
   try {
-    pids = execSync(`lsof -i :${port} -t`).toString().split('\n').filter(Boolean);
-  } catch (e) {
-    // lsof returns non-zero exit code if nothing is using the port
+    if (isWindows) {
+      // netstat -ano lists PID in the last column; filter by :<port> with LISTENING or ESTABLISHED
+      const output = execSync(`netstat -ano | findstr :${port}`).toString();
+      const seen = new Set<string>();
+      for (const line of output.trim().split('\n')) {
+        const parts = line.trim().split(/\s+/);
+        const pid = parts[parts.length - 1];
+        if (pid && /^\d+$/.test(pid) && pid !== '0' && !seen.has(pid)) {
+          seen.add(pid);
+          pids.push(pid);
+        }
+      }
+    } else {
+      pids = execSync(`lsof -i :${port} -t`).toString().split('\n').filter(Boolean);
+    }
+  } catch {
     pids = [];
   }
 
   if (pids.length === 0) {
-    console.log(`No process found using port ${port} after unloading launchd agent.`);
+    console.log(`No process found using port ${port}.`);
     return;
   }
 
-  // 3. If the port is still occupied, kill the process using the port
+  // 3. Kill each process
   for (const pid of pids) {
     try {
-      process.kill(Number(pid), 'SIGTERM');
+      if (isWindows) {
+        execSync(`taskkill /PID ${pid} /F`, { stdio: 'pipe' });
+      } else {
+        process.kill(Number(pid), 'SIGTERM');
+      }
       console.log(`Killed process with PID ${pid} using port ${port}.`);
     } catch (e) {
       console.error(`Failed to kill process ${pid}:`, e);

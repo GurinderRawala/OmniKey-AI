@@ -3,6 +3,8 @@ import path from 'path';
 import os from 'os';
 import { execSync } from 'child_process';
 
+const isWindows = process.platform === 'win32';
+
 export function killLaunchdAgent() {
   const homeDir = process.env.HOME || process.env.USERPROFILE || os.homedir();
   const plistName = 'com.omnikey.daemon.plist';
@@ -17,6 +19,43 @@ export function killLaunchdAgent() {
     }
   } else {
     console.log(`Launchd agent does not exist: ${plistPath}`);
+  }
+}
+
+export function killWindowsTask() {
+  const taskName = 'OmnikeyDaemon';
+  try {
+    execSync(`schtasks /end /tn "${taskName}"`, { stdio: 'pipe' });
+  } catch {
+    // Task may not be running — that's fine
+  }
+  try {
+    execSync(`schtasks /delete /tn "${taskName}" /f`, { stdio: 'pipe' });
+    console.log(`Removed Windows Task Scheduler task: ${taskName}`);
+  } catch {
+    console.log(`Windows Task Scheduler task does not exist: ${taskName}`);
+  }
+
+  // Also remove the wrapper script
+  const homeDir = process.env.USERPROFILE || os.homedir();
+  const wrapperPath = path.join(homeDir, '.omnikey', 'start-daemon.cmd');
+  if (fs.existsSync(wrapperPath)) {
+    try {
+      fs.rmSync(wrapperPath);
+    } catch {
+      // Ignore
+    }
+  }
+}
+
+/**
+ * Kill the platform-appropriate persistence agent (launchd on macOS, Task Scheduler on Windows).
+ */
+export function killPersistenceAgent() {
+  if (isWindows) {
+    killWindowsTask();
+  } else {
+    killLaunchdAgent();
   }
 }
 
@@ -43,8 +82,8 @@ export function removeConfigAndDb() {
     }
   }
 
-  // Remove launchd agent if exists (macOS)
-  killLaunchdAgent();
+  // Remove platform-appropriate persistence agent
+  killPersistenceAgent();
 
   // Remove SQLite database
   if (fs.existsSync(sqlitePath)) {

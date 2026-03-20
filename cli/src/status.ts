@@ -2,6 +2,8 @@ import path from 'path';
 import fs from 'fs';
 import { execSync } from 'child_process';
 
+const isWindows = process.platform === 'win32';
+
 export function statusCmd() {
   // Read port from ~/.omnikey/config.json
   const homeDir = process.env.HOME || process.env.USERPROFILE || '.';
@@ -18,14 +20,20 @@ export function statusCmd() {
       console.error('Failed to read config.json:', e);
     }
   }
+
   try {
-    const output = execSync(`lsof -i :${port}`).toString();
+    let output: string;
+    if (isWindows) {
+      output = execSync(`netstat -ano | findstr :${port}`).toString();
+    } else {
+      output = execSync(`lsof -i :${port}`).toString();
+    }
     if (output.trim()) {
       console.log(`Processes using port ${port}:\n${output}`);
     } else {
       console.log(`No process is using port ${port}.`);
     }
-  } catch (e) {
+  } catch {
     console.log(`No process is using port ${port}.`);
   }
 }
