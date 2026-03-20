@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { getConfigDir } from './utils';
 
 /**
  * Show the logs of the running Omnikey daemon by printing the contents of the daemon log file.
@@ -7,9 +8,7 @@ import path from 'path';
  * If errorsOnly is true, shows daemon-error.log instead.
  */
 export function showLogs(lines: number = 50, errorsOnly: boolean = false) {
-  const homeDir = process.env.HOME || process.env.USERPROFILE || '.';
-  const configDir = path.join(homeDir, '.omnikey');
-  const logPath = path.join(configDir, errorsOnly ? 'daemon-error.log' : 'daemon.log');
+  const logPath = path.join(getConfigDir(), errorsOnly ? 'daemon-error.log' : 'daemon.log');
 
   if (!fs.existsSync(logPath)) {
     console.log(errorsOnly ? 'No error logs found.' : 'No daemon logs found.');

@@ -1,12 +1,11 @@
 import fs from 'fs';
 import path from 'path';
-import os from 'os';
 import { execSync } from 'child_process';
+import { isWindows, getHomeDir, getConfigDir, readConfig } from './utils';
 
 export function killLaunchdAgent() {
-  const homeDir = process.env.HOME || process.env.USERPROFILE || os.homedir();
   const plistName = 'com.omnikey.daemon.plist';
-  const plistPath = path.join(homeDir, 'Library', 'LaunchAgents', plistName);
+  const plistPath = path.join(getHomeDir(), 'Library', 'LaunchAgents', plistName);
   if (fs.existsSync(plistPath)) {
     try {
       execSync(`launchctl unload "${plistPath}"`);
@@ -20,31 +19,59 @@ export function killLaunchdAgent() {
   }
 }
 
+export function killWindowsTask() {
+  const taskName = 'OmnikeyDaemon';
+  try {
+    execSync(`schtasks /end /tn "${taskName}"`, { stdio: 'pipe' });
+  } catch {
+    // Task may not be running — that's fine
+  }
+  try {
+    execSync(`schtasks /delete /tn "${taskName}" /f`, { stdio: 'pipe' });
+    console.log(`Removed Windows Task Scheduler task: ${taskName}`);
+  } catch {
+    console.log(`Windows Task Scheduler task does not exist: ${taskName}`);
+  }
+
+  // Also remove the wrapper script
+  const wrapperPath = path.join(getConfigDir(), 'start-daemon.cmd');
+  if (fs.existsSync(wrapperPath)) {
+    try {
+      fs.rmSync(wrapperPath);
+    } catch {
+      // Ignore
+    }
+  }
+}
+
+/**
+ * Kill the platform-appropriate persistence agent (launchd on macOS, Task Scheduler on Windows).
+ */
+export function killPersistenceAgent() {
+  if (isWindows) {
+    killWindowsTask();
+  } else {
+    killLaunchdAgent();
+  }
+}
+
 /**
  * Removes the ~/.omnikey config directory and the SQLite database file specified in config.json.
  */
 export function removeConfigAndDb() {
-  const homeDir = process.env.HOME || process.env.USERPROFILE || os.homedir();
-  const configDir = path.join(homeDir, '.omnikey');
-  const configPath = path.join(configDir, 'config.json');
-  let sqlitePath = path.join(homeDir, 'omnikey-selfhosted.sqlite');
+  const homeDir = getHomeDir();
+  const configDir = getConfigDir();
+  const configData = readConfig();
 
-  // Try to read SQLITE_PATH from config.json
-  if (fs.existsSync(configPath)) {
-    try {
-      const configData = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-      if (configData.SQLITE_PATH) {
-        sqlitePath = path.isAbsolute(configData.SQLITE_PATH)
-          ? configData.SQLITE_PATH
-          : path.join(homeDir, configData.SQLITE_PATH);
-      }
-    } catch (e) {
-      console.error(`Failed to read config.json: ${e}`);
-    }
+  let sqlitePath = path.join(homeDir, 'omnikey-selfhosted.sqlite');
+  if (configData.SQLITE_PATH) {
+    sqlitePath = path.isAbsolute(configData.SQLITE_PATH)
+      ? configData.SQLITE_PATH
+      : path.join(homeDir, configData.SQLITE_PATH);
   }
 
-  // Remove launchd agent if exists (macOS)
-  killLaunchdAgent();
+  // Remove platform-appropriate persistence agent
+  killPersistenceAgent();
 
   // Remove SQLite database
   if (fs.existsSync(sqlitePath)) {

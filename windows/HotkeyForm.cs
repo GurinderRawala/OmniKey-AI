@@ -1,6 +1,7 @@
 using System;
 using System.Drawing;
 using System.Runtime.InteropServices;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
@@ -13,24 +14,31 @@ namespace OmniKey.Windows
 
         private const int HOTKEY_ID_ENHANCE = 1;
         private const int HOTKEY_ID_GRAMMAR = 2;
-        private const int HOTKEY_ID_TASK = 3;
+        private const int HOTKEY_ID_TASK    = 3;
 
         private readonly NotifyIcon _notifyIcon;
-        private readonly ApiClient _apiClient = new ApiClient();
+        private readonly ApiClient _apiClient = new();
         private bool _isProcessing;
+        private ToolStripMenuItem? _statusMenuItem;
+        private AgentThinkingForm? _agentThinkingForm;
+        private ToolStripMenuItem? _checkUpdatesMenuItem;
 
         public HotkeyForm()
         {
-            ShowInTaskbar = false;
-            WindowState = FormWindowState.Minimized;
+            ShowInTaskbar  = false;
+            WindowState    = FormWindowState.Minimized;
             FormBorderStyle = FormBorderStyle.FixedToolWindow;
-            Opacity = 0;
+            Opacity        = 0;
+
+            var assembly = System.Reflection.Assembly.GetExecutingAssembly();
+            using var iconStream = assembly.GetManifestResourceStream("OmniKey.Windows.app.ico");
+            var appIcon = iconStream != null ? new Icon(iconStream) : SystemIcons.Information;
 
             _notifyIcon = new NotifyIcon
             {
-                Text = "OmniKey AI",
-                Icon = SystemIcons.Information,
-                Visible = true,
+                Text             = "OmniKey AI",
+                Icon             = appIcon,
+                Visible          = true,
                 ContextMenuStrip = BuildContextMenu(),
             };
         }
@@ -39,6 +47,8 @@ namespace OmniKey.Windows
         {
             base.OnLoad(e);
             RegisterHotkeys();
+            _ = InitializeAuthAsync();
+            _ = CheckForUpdatesBackgroundAsync();
         }
 
         protected override void OnFormClosing(FormClosingEventArgs e)
@@ -49,12 +59,93 @@ namespace OmniKey.Windows
             base.OnFormClosing(e);
         }
 
+        // ─── Auth initialisation ──────────────────────────────────────
+
+        private async Task InitializeAuthAsync()
+        {
+            if (ApiClient.IsSelfHosted)
+            {
+                // Self-hosted backend issues a JWT without a subscription key.
+                // We still need to call /activate so the agent WebSocket has a
+                // valid token; skip this check if it fails (server may not be
+                // ready yet — the agent will retry on first use).
+                UpdateStatus("Activating\u2026 (self-hosted)");
+                bool ok = await SubscriptionManager.Instance.ActivateStoredKeyAsync();
+                UpdateStatus(ok ? "Active (self-hosted)" : "Active (self-hosted)");
+                return;
+            }
+
+            if (SubscriptionManager.Instance.HasStoredKey)
+            {
+                UpdateStatus("Activating\u2026");
+                bool ok = await SubscriptionManager.Instance.ActivateStoredKeyAsync();
+                if (ok)
+                {
+                    UpdateStatus("Active");
+                    return;
+                }
+            }
+
+            // No key, or activation failed – show the license form
+            ShowLicenseForm();
+        }
+
+        private void ShowLicenseForm()
+        {
+            using var form = new LicenseForm();
+            var result = form.ShowDialog(this);
+
+            if (result == DialogResult.OK)
+                UpdateStatus("Active");
+            else
+                Application.Exit();
+        }
+
+        private void UpdateStatus(string status)
+        {
+            if (_statusMenuItem == null) return;
+            _statusMenuItem.Text  = "Status: " + status;
+            _statusMenuItem.Image = CreateDotIcon(status.StartsWith("Active"));
+        }
+
+        private static Bitmap CreateDotIcon(bool active)
+        {
+            var bmp = new Bitmap(16, 16);
+            using var g = Graphics.FromImage(bmp);
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            g.Clear(Color.Transparent);
+            using var brush = new SolidBrush(active ? Color.FromArgb(34, 197, 94) : Color.FromArgb(239, 68, 68));
+            g.FillEllipse(brush, 2, 2, 12, 12);
+            return bmp;
+        }
+
+        // ─── Context menu ─────────────────────────────────────────────
+
         private ContextMenuStrip BuildContextMenu()
         {
             var menu = new ContextMenuStrip();
-            menu.Items.Add("Fix Prompt (Ctrl+E)...");
-            menu.Items.Add("Fix Grammar (Ctrl+G)...");
-            menu.Items.Add("Custom Task (Ctrl+T)...");
+
+            _statusMenuItem = new ToolStripMenuItem("Status: Checking\u2026") { Enabled = false };
+            menu.Items.Add(_statusMenuItem);
+            menu.Items.Add(new ToolStripSeparator());
+
+            var taskInstructionsItem = new ToolStripMenuItem("Task Instructions");
+            taskInstructionsItem.Click += (_, _) => ShowTaskInstructions();
+            menu.Items.Add(taskInstructionsItem);
+
+            var manualItem = new ToolStripMenuItem("Manual");
+            manualItem.Click += (_, _) => ShowManual();
+            menu.Items.Add(manualItem);
+
+            var licenseItem = new ToolStripMenuItem("Subscription / Activate");
+            licenseItem.Click += (_, _) => ShowLicenseForm();
+            if (ApiClient.IsSelfHosted) licenseItem.Visible = false;
+            menu.Items.Add(licenseItem);
+
+            _checkUpdatesMenuItem = new ToolStripMenuItem("Check for Updates");
+            _checkUpdatesMenuItem.Click += async (_, _) => await CheckForUpdatesFromMenuAsync();
+            menu.Items.Add(_checkUpdatesMenuItem);
+
             menu.Items.Add(new ToolStripSeparator());
 
             var exitItem = new ToolStripMenuItem("Exit");
@@ -63,6 +154,68 @@ namespace OmniKey.Windows
 
             return menu;
         }
+
+        private void ShowTaskInstructions()
+        {
+            var form = new TaskInstructionsForm();
+            form.Show(this);
+        }
+
+        private void ShowManual()
+        {
+            var form = new ManualForm();
+            form.Show(this);
+        }
+
+        // ─── Update checking ──────────────────────────────────────────
+
+        /// <summary>
+        /// Runs silently at startup. Shows a balloon tip when an update is found.
+        /// </summary>
+        private async Task CheckForUpdatesBackgroundAsync()
+        {
+            var info = await UpdateChecker.CheckAsync();
+            if (info == null) return;
+
+            ShowBalloon("OmniKey AI", $"Update {info.Version} is available! Click \u2018Check for Updates\u2019 to install.");
+        }
+
+        /// <summary>
+        /// Triggered by the "Check for Updates" tray menu item.
+        /// Shows the update window when available, or a "you're up to date" balloon.
+        /// </summary>
+        private async Task CheckForUpdatesFromMenuAsync()
+        {
+            if (_checkUpdatesMenuItem != null)
+            {
+                _checkUpdatesMenuItem.Enabled = false;
+                _checkUpdatesMenuItem.Text    = "Checking\u2026";
+            }
+
+            try
+            {
+                var info = await UpdateChecker.CheckAsync();
+
+                if (info == null)
+                {
+                    ShowBalloon("OmniKey AI", "You\u2019re up to date! No new version available.");
+                    return;
+                }
+
+                var form = new UpdateForm(info);
+                form.Show(this);
+            }
+            finally
+            {
+                if (_checkUpdatesMenuItem != null)
+                {
+                    _checkUpdatesMenuItem.Enabled = true;
+                    _checkUpdatesMenuItem.Text    = "Check for Updates";
+                }
+            }
+        }
+
+        // ─── Hotkey handling ──────────────────────────────────────────
 
         protected override void WndProc(ref Message m)
         {
@@ -79,11 +232,14 @@ namespace OmniKey.Windows
         {
             if (_isProcessing)
             {
-                ShowBalloon("OmniKey AI", "Already processing a selection. Please wait...");
+                ShowBalloon("OmniKey AI", "Already processing a selection. Please wait\u2026");
                 return;
             }
 
             _isProcessing = true;
+
+            // Capture the focused window before any UI changes (balloons, forms) can shift focus.
+            IntPtr originalWindow = GetForegroundWindow();
 
             try
             {
@@ -91,21 +247,20 @@ namespace OmniKey.Windows
                 {
                     HOTKEY_ID_ENHANCE => EnhanceCommand.Enhance,
                     HOTKEY_ID_GRAMMAR => EnhanceCommand.Grammar,
-                    HOTKEY_ID_TASK => EnhanceCommand.Task,
-                    _ => EnhanceCommand.Enhance,
+                    HOTKEY_ID_TASK    => EnhanceCommand.Task,
+                    _                 => EnhanceCommand.Enhance,
                 };
 
                 string actionName = command switch
                 {
                     EnhanceCommand.Enhance => "Enhancing Prompt",
                     EnhanceCommand.Grammar => "Fixing Grammar",
-                    EnhanceCommand.Task => "Performing Custom Task",
-                    _ => "Processing",
+                    EnhanceCommand.Task    => "Performing Custom Task",
+                    _                      => "Processing",
                 };
 
-                ShowBalloon("OmniKey AI", actionName + "...");
+                ShowBalloon("OmniKey AI", actionName + "\u2026");
 
-                // Copy current selection via Ctrl+C and read clipboard
                 string? selected = await ClipboardHelper.CaptureSelectionAsync();
                 if (string.IsNullOrWhiteSpace(selected))
                 {
@@ -114,6 +269,13 @@ namespace OmniKey.Windows
                 }
 
                 string normalized = ClipboardHelper.NormalizeOriginalText(selected);
+
+                // Agent workflow for Ctrl+T when @omniAgent directive is present
+                if (command == EnhanceCommand.Task && AgentRunner.ContainsAgentDirective(normalized))
+                {
+                    await RunAgentWorkflowAsync(normalized, originalWindow);
+                    return;
+                }
 
                 string result;
                 try
@@ -132,7 +294,7 @@ namespace OmniKey.Windows
                     return;
                 }
 
-                await ClipboardHelper.ReplaceSelectionAsync(result);
+                await RestoreFocusAndPasteAsync(originalWindow, result);
                 ShowBalloon("OmniKey AI", "Text updated.");
             }
             finally
@@ -141,14 +303,69 @@ namespace OmniKey.Windows
             }
         }
 
+        private async Task RunAgentWorkflowAsync(string originalText, IntPtr originalWindow)
+        {
+            // Close any existing agent window
+            _agentThinkingForm?.Close();
+            _agentThinkingForm = new AgentThinkingForm();
+
+            _agentThinkingForm.SetInitialRequest(originalText);
+            _agentThinkingForm.SetRunning(true);
+            _agentThinkingForm.Show(this);
+
+            var ct = _agentThinkingForm.CancellationSource.Token;
+
+            ShowBalloon("OmniKey AI", "OmniAgent session started\u2026");
+
+            string result;
+            try
+            {
+                result = await AgentRunner.RunAgentSessionAsync(originalText, _agentThinkingForm, ct);
+            }
+            catch (OperationCanceledException)
+            {
+                _agentThinkingForm?.SetRunning(false);
+                ShowBalloon("OmniKey AI", "Agent session cancelled.");
+                return;
+            }
+            catch (Exception ex)
+            {
+                _agentThinkingForm?.SetRunning(false);
+                ShowBalloon("OmniKey AI", "Agent error: " + ex.Message);
+                return;
+            }
+
+            _agentThinkingForm?.SetRunning(false);
+
+            if (string.IsNullOrWhiteSpace(result))
+            {
+                ShowBalloon("OmniKey AI", "Agent returned empty response.");
+                return;
+            }
+
+            await RestoreFocusAndPasteAsync(originalWindow, result);
+            ShowBalloon("OmniKey AI", "Agent finished. Text updated.");
+        }
+
+        // Brings the original window back to the foreground (mirroring macOS behavior),
+        // waits for it to activate, then pastes the result via Ctrl+V.
+        private async Task RestoreFocusAndPasteAsync(IntPtr windowHandle, string text)
+        {
+            if (windowHandle != IntPtr.Zero)
+            {
+                SetForegroundWindow(windowHandle);
+                await Task.Delay(250);
+            }
+            await ClipboardHelper.ReplaceSelectionAsync(text);
+        }
+
+        // ─── Win32 hotkey registration ────────────────────────────────
+
         private void RegisterHotkeys()
         {
-            // Ctrl+E
             RegisterHotKey(Handle, HOTKEY_ID_ENHANCE, MOD_CONTROL, (uint)Keys.E);
-            // Ctrl+G
             RegisterHotKey(Handle, HOTKEY_ID_GRAMMAR, MOD_CONTROL, (uint)Keys.G);
-            // Ctrl+T
-            RegisterHotKey(Handle, HOTKEY_ID_TASK, MOD_CONTROL, (uint)Keys.T);
+            RegisterHotKey(Handle, HOTKEY_ID_TASK,    MOD_CONTROL, (uint)Keys.T);
         }
 
         private void UnregisterHotkeys()
@@ -161,7 +378,7 @@ namespace OmniKey.Windows
         private void ShowBalloon(string title, string text)
         {
             _notifyIcon.BalloonTipTitle = title;
-            _notifyIcon.BalloonTipText = text;
+            _notifyIcon.BalloonTipText  = text;
             _notifyIcon.ShowBalloonTip(3000);
         }
 
@@ -170,5 +387,11 @@ namespace OmniKey.Windows
 
         [DllImport("user32.dll")]
         private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetForegroundWindow();
+
+        [DllImport("user32.dll")]
+        private static extern bool SetForegroundWindow(IntPtr hWnd);
     }
 }
