@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import fs from 'fs';
+import zlib from 'zlib';
 import { createSubscriptionRouter } from './subscriptionRoutes';
 import { createFeatureRouter } from './featureRoutes';
 import { initDatabase } from './db';
@@ -94,15 +95,30 @@ const WIN_ZIP_FILENAME = 'OmniKeyAI-windows-win-x64.zip';
 const WIN_ZIP_PATH = path.join(process.cwd(), 'windows', WIN_ZIP_FILENAME);
 
 // Serves the pre-built ZIP produced by windows/build_release_zip.ps1.
+// Streams through gzip to reduce response size on Cloud Run.
 app.get('/windows/download', (_req, res) => {
-  res.download(WIN_ZIP_PATH, WIN_ZIP_FILENAME, (err) => {
-    if (err) {
-      logger.error('Failed to send Windows ZIP for download.', { error: err });
-      if (!res.headersSent) {
-        res.status(500).send('Unable to download file.');
-      }
+  if (!fs.existsSync(WIN_ZIP_PATH)) {
+    res.status(404).send('File not found.');
+    return;
+  }
+
+  res.set({
+    'Content-Type': 'application/zip',
+    'Content-Disposition': `attachment; filename="${WIN_ZIP_FILENAME}"`,
+    'Content-Encoding': 'gzip',
+  });
+
+  const fileStream = fs.createReadStream(WIN_ZIP_PATH);
+  const gzip = zlib.createGzip();
+
+  fileStream.on('error', (err) => {
+    logger.error('Failed to send Windows ZIP for download.', { error: err });
+    if (!res.headersSent) {
+      res.status(500).send('Unable to download file.');
     }
   });
+
+  fileStream.pipe(gzip).pipe(res);
 });
 
 // JSON update-check endpoint consumed by UpdateChecker.cs on the Windows client.
