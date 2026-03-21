@@ -1,5 +1,4 @@
 import express, { Request, Response } from 'express';
-import OpenAI from 'openai';
 import { Logger } from 'winston';
 import zod from 'zod';
 import { EnhanceCommand, OmniKeyError } from './types';
@@ -15,11 +14,7 @@ import { Subscription } from './models/subscription';
 import { SubscriptionUsage } from './models/subscriptionUsage';
 import { decompressString } from './compression';
 import { SubscriptionTaskTemplate } from './models/subscriptionTaskTemplate';
-import { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
-
-interface EnhanceRequestBody {
-  text?: string;
-}
+import { aiClient, AIMessage } from './ai-client';
 
 function parseImprovedTextResponse(logger: Logger, response: string): string {
   const match = response.match(/<improved_text>([\s\S]*?)<\/improved_text>/);
@@ -31,10 +26,6 @@ function parseImprovedTextResponse(logger: Logger, response: string): string {
   );
   return response.trim();
 }
-
-const openai = new OpenAI({
-  apiKey: config.openaiApiKey,
-});
 
 const enhanceRequestSchema = zod.object({
   text: zod.string(),
@@ -82,14 +73,16 @@ type CompletionUsage = {
 };
 
 function getModelForCommand(cmd: EnhanceCommand): string {
-  return cmd === 'task' ? 'gpt-5.1' : 'gpt-4o-mini';
+  const tier = cmd === 'task' ? 'smart' : 'fast';
+  const models: Record<string, { fast: string; smart: string }> = {
+    openai: { fast: 'gpt-4o-mini', smart: 'gpt-5.1' },
+    gemini: { fast: 'gemini-2.5-flash', smart: 'gemini-2.5-pro' },
+    anthropic: { fast: 'claude-haiku-4-5-20251001', smart: 'claude-sonnet-4-6' },
+  };
+  return models[config.aiProvider]?.[tier] ?? 'gpt-4o-mini';
 }
 
-function createMessagesParams(
-  cmd: EnhanceCommand,
-  input: string,
-  prompt: string,
-): ChatCompletionMessageParam[] {
+function createMessagesParams(cmd: EnhanceCommand, input: string, prompt: string): AIMessage[] {
   if (cmd === 'task') {
     return [
       {
@@ -111,14 +104,8 @@ ${input}
   }
 
   return [
-    {
-      role: 'system',
-      content: [prompt, OUTPUT_FORMAT_INSTRUCTION].join('\n'),
-    },
-    {
-      role: 'user',
-      content: input,
-    },
+    { role: 'system', content: [prompt, OUTPUT_FORMAT_INSTRUCTION].join('\n') },
+    { role: 'user', content: input },
   ];
 }
 
@@ -131,11 +118,6 @@ export async function runEnhancementModel(
 ): Promise<{ rawResponse: string; usage?: CompletionUsage; model: string } | OmniKeyError | null> {
   const trimmed = text.trim();
 
-  if (!config.openaiApiKey) {
-    logger.warn('OPENAI_API_KEY is not set; returning null from runEnhancementModel.');
-    return new OmniKeyError('OpenAI API key is not configured.', 500);
-  }
-
   const prompt = await getPromptForCommand(logger, cmd, subscription);
 
   if (!prompt) {
@@ -144,30 +126,17 @@ export async function runEnhancementModel(
   }
 
   const model = getModelForCommand(cmd);
-
-  const stream = await openai.chat.completions.create({
-    model,
-    messages: createMessagesParams(cmd, trimmed, prompt),
-    temperature: 0.3,
-    stream: true,
-    stream_options: { include_usage: true },
-  });
+  const messages = createMessagesParams(cmd, trimmed, prompt);
 
   let rawResponse = '';
   let usage: CompletionUsage | undefined;
 
-  for await (const part of stream as any) {
-    const delta = part.choices?.[0]?.delta?.content ?? '';
-    if (delta) {
-      rawResponse += delta;
-      if (onDelta) {
-        onDelta(delta);
-      }
-    }
-    if (part.usage) {
-      usage = part.usage;
-    }
-  }
+  const result = await aiClient.streamComplete(model, messages, { temperature: 0.3 }, (delta) => {
+    rawResponse += delta;
+    if (onDelta) onDelta(delta);
+  });
+
+  usage = result.usage;
 
   return { rawResponse, usage, model };
 }

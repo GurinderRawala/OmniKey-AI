@@ -9,7 +9,7 @@ import { initDatabase } from './db';
 import { logger } from './logger';
 import { taskInstructionRouter } from './taskInstructionRoutes';
 import { config } from './config';
-import { attachAgentWebSocketServer } from './agentServer';
+import { attachAgentWebSocketServer } from './agent/agentServer';
 
 const app = express();
 const PORT = Number(config.port);
@@ -135,8 +135,8 @@ app.get('/windows/update', (req, res) => {
   }
 
   res.json({
-    version:      WIN_VERSION,
-    downloadUrl:  `${baseUrl}/windows/download`,
+    version: WIN_VERSION,
+    downloadUrl: `${baseUrl}/windows/download`,
     fileSize,
     releaseNotes: '',
   });

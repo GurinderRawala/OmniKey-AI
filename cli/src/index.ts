@@ -17,10 +17,9 @@ program
 
 program
   .command('onboard')
-  .description('Onboard and configure your OPENAI_API_KEY')
-  .option('--open-ai-key <key>', 'Your OpenAI API Key')
-  .action(async (options) => {
-    await onboard(options.openAiKey || options.openAiKey || options['open-ai-key']);
+  .description('Onboard and configure your AI provider')
+  .action(async () => {
+    await onboard();
   });
 
 program
@@ -41,11 +40,10 @@ program
 
 program
   .command('remove-config')
-  .description(
-    'Remove the .omnikey config directory and the SQLite database from your home directory',
-  )
-  .action(() => {
-    removeConfigAndDb();
+  .description('Remove the omnikey config. Pass --db to also remove the SQLite database.')
+  .option('--db', 'Also remove the SQLite database')
+  .action((options) => {
+    removeConfigAndDb(!!options.db);
   });
 
 // Add status command

@@ -16,6 +16,8 @@
     "yarn": ">=1.22.0"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.80.0",
+    "@google/genai": "^1.46.0",
     "axios": "^1.13.5",
     "cors": "^2.8.5",
     "cuid": "^3.0.0",

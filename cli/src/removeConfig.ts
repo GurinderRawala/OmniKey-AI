@@ -56,48 +56,59 @@ export function killPersistenceAgent() {
 }
 
 /**
- * Removes the ~/.omnikey config directory and the SQLite database file specified in config.json.
+ * Removes the ~/.omnikey config directory and optionally the SQLite database file.
+ * @param includeDb - When true, also removes the SQLite database file.
  */
-export function removeConfigAndDb() {
+export function removeConfigAndDb(includeDb = false) {
   const homeDir = getHomeDir();
   const configDir = getConfigDir();
   const configData = readConfig();
 
-  let sqlitePath = path.join(homeDir, 'omnikey-selfhosted.sqlite');
-  if (configData.SQLITE_PATH) {
-    sqlitePath = path.isAbsolute(configData.SQLITE_PATH)
-      ? configData.SQLITE_PATH
-      : path.join(homeDir, configData.SQLITE_PATH);
-  }
-
   // Remove platform-appropriate persistence agent
   killPersistenceAgent();
 
-  // Remove SQLite database
-  if (fs.existsSync(sqlitePath)) {
-    const maxAttempts = isWindows ? 5 : 1;
-    let removed = false;
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      try {
-        fs.rmSync(sqlitePath);
-        console.log(`Removed SQLite database: ${sqlitePath}`);
-        removed = true;
-        break;
-      } catch (e: any) {
-        if (isWindows && attempt < maxAttempts && (e.code === 'EBUSY' || e.code === 'EPERM' || e.code === 'EACCES')) {
-          // File may still be locked by the daemon — wait ~1s and retry
-          execSync(`ping -n 2 127.0.0.1 > nul`, { stdio: 'pipe' });
-        } else {
-          console.error(`Failed to remove SQLite database: ${e}`);
+  // Remove SQLite database only when --db flag is passed
+  if (includeDb) {
+    let sqlitePath = path.join(homeDir, 'omnikey-selfhosted.sqlite');
+    if (configData.SQLITE_PATH) {
+      sqlitePath = path.isAbsolute(configData.SQLITE_PATH)
+        ? configData.SQLITE_PATH
+        : path.join(homeDir, configData.SQLITE_PATH);
+    }
+
+    if (fs.existsSync(sqlitePath)) {
+      const maxAttempts = isWindows ? 5 : 1;
+      let removed = false;
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+          fs.rmSync(sqlitePath);
+          console.log(`Removed SQLite database: ${sqlitePath}`);
+          removed = true;
           break;
+        } catch (e: any) {
+          if (
+            isWindows &&
+            attempt < maxAttempts &&
+            (e.code === 'EBUSY' || e.code === 'EPERM' || e.code === 'EACCES')
+          ) {
+            // File may still be locked by the daemon — wait ~1s and retry
+            execSync(`ping -n 2 127.0.0.1 > nul`, { stdio: 'pipe' });
+          } else {
+            console.error(`Failed to remove SQLite database: ${e}`);
+            break;
+          }
         }
       }
-    }
-    if (!removed && isWindows) {
-      console.error(`Failed to remove SQLite database after ${maxAttempts} attempts: ${sqlitePath}`);
+      if (!removed && isWindows) {
+        console.error(
+          `Failed to remove SQLite database after ${maxAttempts} attempts: ${sqlitePath}`,
+        );
+      }
+    } else {
+      console.log(`SQLite database does not exist: ${sqlitePath}`);
     }
   } else {
-    console.log(`SQLite database does not exist: ${sqlitePath}`);
+    console.log('Skipping SQLite database removal (use --db to remove it).');
   }
 
   // Remove .omnikey directory

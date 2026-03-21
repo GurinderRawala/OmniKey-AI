@@ -4,7 +4,7 @@
     "access": "public",
     "registry": "https://registry.npmjs.org/"
   },
-  "version": "1.0.13",
+  "version": "1.0.14",
   "description": "CLI for onboarding users to Omnikey AI and configuring OPENAI_API_KEY. Use Yarn for install/build.",
   "engines": {
     "node": ">=14.0.0",
@@ -36,6 +36,8 @@
     "express": "^4.21.2",
     "jsonwebtoken": "^9.0.3",
     "openai": "^6.16.0",
+    "@anthropic-ai/sdk": "^0.80.0",
+    "@google/genai": "^1.46.0",
     "pg": "^8.18.0",
     "pg-hstore": "^2.3.4",
     "sequelize": "^6.37.7",

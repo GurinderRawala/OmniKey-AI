@@ -41,13 +41,37 @@ function getSqlitePath() {
   return path.isAbsolute(envPath) ? envPath : path.join(homeDir, '.omnikey', envPath);
 }
 
+export type AIProvider = 'openai' | 'gemini' | 'anthropic';
+
+function getAIProvider(): AIProvider {
+  const value = getEnv('AI_PROVIDER', false);
+  if (value === 'gemini' || value === 'anthropic' || value === 'openai') return value;
+  // Auto-detect from available keys
+  if (getEnv('ANTHROPIC_API_KEY', false)) return 'anthropic';
+  if (getEnv('GEMINI_API_KEY', false)) return 'gemini';
+  return 'openai';
+}
+
+function getActiveApiKey(provider: AIProvider): string {
+  if (provider === 'openai') return getEnv('OPENAI_API_KEY', true) as string;
+  if (provider === 'anthropic') return getEnv('ANTHROPIC_API_KEY', true) as string;
+  if (provider === 'gemini') return getEnv('GEMINI_API_KEY', true) as string;
+  throw new Error(`Unknown AI provider: ${provider}`);
+}
+
+const _provider = getAIProvider();
+
 export const config = {
   // Server
   logLevel: getEnv('LOG_LEVEL', false) || 'info',
   isLocal: getBooleanEnv('LOCAL', false),
 
-  // OpenAI
-  openaiApiKey: getEnv('OPENAI_API_KEY', true),
+  // AI provider
+  aiProvider: _provider as AIProvider,
+  aiApiKey: getActiveApiKey(_provider),
+
+  // Legacy — kept for backwards compatibility; may be undefined when using another provider
+  openaiApiKey: getEnv('OPENAI_API_KEY', false),
 
   // Database
   databaseUrl: getEnv('DATABASE_URL', getBooleanEnv('IS_SELF_HOSTED', false) ? false : true),
@@ -64,4 +88,9 @@ export const config = {
   internalApiKey: getEnv('INTERNAL_API_KEY', false),
   port: getNumberEnv('OMNIKEY_PORT', 8080),
   isSelfHosted: getBooleanEnv('IS_SELF_HOSTED', false),
+  // Web search providers (all optional — DuckDuckGo is used as free fallback)
+  serperApiKey: getEnv('SERPER_API_KEY', false),
+  braveSearchApiKey: getEnv('BRAVE_SEARCH_API_KEY', false),
+  tavilyApiKey: getEnv('TAVILY_API_KEY', false),
+  searxngUrl: getEnv('SEARXNG_URL', false),
 };

@@ -1,10 +1,10 @@
 # Omnikey CLI
 
-A command-line tool for onboarding users to the Omnikey open-source app and configuring their OPENAI_API_KEY.
+A command-line tool for onboarding users to the Omnikey open-source app, configuring your LLM provider (OpenAI, Anthropic, or Gemini), and setting up the web search tool.
 
 ## About OmnikeyAI
 
-OmnikeyAI is a productivity tool that helps you quickly rewrite selected text using OpenAI. The CLI allows you to configure and run the backend daemon on your local machine and manage your OpenAI API key with ease.
+OmnikeyAI is a productivity tool that helps you quickly rewrite selected text using your preferred LLM provider. The CLI allows you to configure and run the backend daemon on your local machine, manage your API keys, choose your LLM provider (OpenAI, Anthropic, or Gemini), and optionally configure the web search tool.
 
 - For more details about the app and its features, see the [main README](https://github.com/GurinderRawala/OmniKey-AI).
 - Download the latest macOS app here: [Download OmniKeyAI for macOS](https://omnikeyai-saas-fmytqc3dra-uc.a.run.app/macos/download)
@@ -12,8 +12,10 @@ OmnikeyAI is a productivity tool that helps you quickly rewrite selected text us
 
 ## Features
 
-- `omnikey onboard`: Interactive onboarding to set up your OPENAI_API_KEY.
-- Accepts the `--open-ai-key` parameter for non-interactive setup.
+- `omnikey onboard`: Interactive onboarding to configure your LLM provider and API key.
+- Supports **OpenAI**, **Anthropic**, and **Google Gemini** as LLM providers.
+- Optional **web search tool** integration for enhanced responses.
+- Accepts CLI flags for non-interactive setup.
 - Configure and run the backend daemon — persisted across reboots on both macOS and Windows.
 
 ## Usage
@@ -22,11 +24,8 @@ OmnikeyAI is a productivity tool that helps you quickly rewrite selected text us
 # Install CLI globally (from this directory)
 npm install -g omnikey-cli
 
-# Onboard interactively (will prompt for OpenAI key)
+# Onboard interactively (will prompt for LLM key and web search tool)
 omnikey onboard
-
-# Or onboard non-interactively
-omnikey onboard --open-ai-key YOUR_KEY
 
 # Start the daemon (auto-restarts on reboot)
 omnikey daemon --port 7071

@@ -18,11 +18,13 @@ Follow these steps to set up OmniKey:
    npm install -g omnikey-cli
    ```
 
-2. **Onboard and add your OpenAI API key:**
+2. **Onboard and configure your LLM provider:**
 
    ```sh
    omnikey onboard
    ```
+
+   OmniKey supports **OpenAI**, **Anthropic**, and **Google Gemini** as LLM providers. You will be prompted to select a provider and enter your API key. You can also optionally configure a **web search provider** (Serper, Brave Search, Tavily, or SearXNG) — if none is configured, OmniKey falls back to **DuckDuckGo** by default, so web search works out of the box with no key required.
 
 3. **Start the OmniKey daemon:**
    This command will set up a persistence agent and keep the OmniKey backend running across system restarts. On macOS it registers a launchd agent; on Windows it registers a Task Scheduler task.
@@ -39,11 +41,18 @@ Follow these steps to set up OmniKey:
 
 ## Features
 
+- **Multiple LLM Providers**: Choose between OpenAI, Anthropic, or Google Gemini as your AI backend. Configure your preferred provider during onboarding or at any time via the CLI.
+- **Web Search**: Configure a web search provider during onboarding to allow `@omniAgent` to gather real-time context from the web alongside your terminal. Supported providers:
+  - **DuckDuckGo** — default fallback, no key required
+  - **Serper** (serper.dev) — Google Search API, 2,500 free requests/mo
+  - **Brave Search** (brave.com/search/api) — 2,000 free requests/mo
+  - **Tavily** (tavily.com) — optimized for AI, 1,000 free requests/mo
+  - **SearXNG** — self-hosted, no key needed (provide your instance URL)
 - **Prompt Enhancement (`⌘E` / `Ctrl+E`)**: Improves clarity, structure, and tone of your selected text to make it a better AI prompt.
 - **Grammar & Clarity Fix (`⌘G` / `Ctrl+G`)**: Focuses on grammar, spelling, and readability without changing the core meaning of your text.
 - **Custom Tasks (`⌘T` / `Ctrl+T`)**: Applies your saved task instructions to the selected text. Configure these in the “Task Instructions” window from the menu bar.
 - **@omnikeyai Questions**: Select a question starting with “@omnikeyai” and use a shortcut to get answers in the context of your current text or task.
-- **@omniAgent Tasks**: Select instructions starting with “@omniAgent” and press `⌘T` / `Ctrl+T` to have the agent perform tasks for you, combining your task instructions if configured. OmniKey will use your terminal to gather context by running commands.
+- **@omniAgent Tasks**: Select instructions starting with “@omniAgent” and press `⌘T` / `Ctrl+T` to have the agent perform tasks for you, combining your task instructions if configured. OmniKey gathers context from both your **terminal** (by running commands) and the **web** (using your configured search provider, falling back to DuckDuckGo if none is set).
 
 #### How OmniKey Works
 

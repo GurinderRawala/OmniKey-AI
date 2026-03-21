@@ -2,7 +2,14 @@ import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import { execSync } from 'child_process';
-import { isWindows, getHomeDir, getConfigDir, getConfigPath, readConfig, initLogFiles } from './utils';
+import {
+  isWindows,
+  getHomeDir,
+  getConfigDir,
+  getConfigPath,
+  readConfig,
+  initLogFiles,
+} from './utils';
 
 /**
  * Start the Omnikey API backend as a daemon on the specified port.
@@ -29,7 +36,15 @@ export function startDaemon(port: number = 7071) {
   const errorLogPath = path.join(configDir, 'daemon-error.log');
 
   if (isWindows) {
-    startDaemonWindows({ port, configDir, configVars, nodePath, backendPath, logPath, errorLogPath });
+    startDaemonWindows({
+      port,
+      configDir,
+      configVars,
+      nodePath,
+      backendPath,
+      logPath,
+      errorLogPath,
+    });
   } else {
     startDaemonMacOS({ port, configDir, configVars, nodePath, backendPath, logPath, errorLogPath });
   }
@@ -148,8 +163,8 @@ function startDaemonMacOS(opts: DaemonOptions) {
   }
 
   const { out, err } = initLogFiles(logPath, errorLogPath);
-  const child = spawn('node', [backendPath], {
-    env: { ...configVars, OMNIKEY_PORT: String(port) },
+  const child = spawn(nodePath, [backendPath], {
+    env: { ...process.env, ...configVars, OMNIKEY_PORT: String(port) },
     detached: true,
     stdio: ['ignore', out, err],
   });

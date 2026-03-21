@@ -41,7 +41,7 @@ export function killDaemon() {
   }
 
   if (pids.length === 0) {
-    console.log(`No process found using port ${port}.`);
+    console.log(`No process is running on port ${port}.`);
     return;
   }
 

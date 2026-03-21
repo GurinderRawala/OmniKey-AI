@@ -1,15 +1,23 @@
 import type http from 'http';
 import WebSocket, { WebSocketServer } from 'ws';
 import jwt from 'jsonwebtoken';
-import OpenAI from 'openai';
+import axios from 'axios';
 import cuid from 'cuid';
-import { config } from './config';
-import { logger } from './logger';
-import { Subscription } from './models/subscription';
-import { SubscriptionUsage } from './models/subscriptionUsage';
+import { config } from '../config';
+import { logger } from '../logger';
+import { Subscription } from '../models/subscription';
+import { SubscriptionUsage } from '../models/subscriptionUsage';
 import { AGENT_SYSTEM_PROMPT_MACOS, AGENT_SYSTEM_PROMPT_WINDOWS } from './agentPrompts';
-import { getPromptForCommand } from './featureRoutes';
-import { selfHostedSubscription } from './authMiddleware';
+import { getPromptForCommand } from '../featureRoutes';
+import { selfHostedSubscription } from '../authMiddleware';
+import {
+  WEB_FETCH_TOOL,
+  WEB_SEARCH_TOOL,
+  MAX_WEB_FETCH_BYTES,
+  MAX_TOOL_CONTENT_CHARS,
+  executeWebSearch,
+} from './web-search-provider';
+import { aiClient, AIMessage, AITool, AICompletionResult, getDefaultModel } from '../ai-client';
 
 interface AgentMessage {
   session_id: string;
@@ -24,23 +32,65 @@ interface DecodedJwtPayload {
   sid: string;
 }
 
-const openai = new OpenAI({
-  apiKey: config.openaiApiKey,
-});
-
-// Simple chat message type used for the in-memory conversation state.
-type AgentChatMessage = {
-  role: 'system' | 'user' | 'assistant';
-  content: string;
-};
-
 // In-memory conversation state per session.
 type SessionState = {
   subscription: Subscription;
-  history: AgentChatMessage[];
+  history: AIMessage[];
   // Number of agent turns that have been run for this session.
   turns: number;
 };
+
+function buildAvailableTools(): AITool[] {
+  // web_search is always available — DuckDuckGo is used as free fallback
+  return [WEB_FETCH_TOOL, WEB_SEARCH_TOOL];
+}
+
+const aiModel = getDefaultModel(config.aiProvider, 'smart');
+
+async function executeTool(
+  name: string,
+  args: Record<string, string>,
+  log: typeof logger,
+): Promise<string> {
+  if (name === 'web_fetch') {
+    const url = args.url;
+    if (!url) return 'Error: url parameter is required';
+    try {
+      log.info('Executing web_fetch tool', { url });
+      const response = await axios.get<string>(url, {
+        timeout: 15_000,
+        responseType: 'text',
+        maxContentLength: MAX_WEB_FETCH_BYTES,
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; OmniKeyAgent/1.0)' },
+      });
+      const text = String(response.data)
+        .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+        .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, MAX_TOOL_CONTENT_CHARS);
+      return text || 'No content retrieved';
+    } catch (err) {
+      log.warn('web_fetch tool failed', { url, error: err });
+      return `Error fetching URL: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
+  if (name === 'web_search') {
+    const query = args.query;
+    if (!query) return 'Error: query parameter is required';
+    try {
+      log.info('Executing web_search tool', { query });
+      return await executeWebSearch(query, log);
+    } catch (err) {
+      log.warn('web_search tool failed', { query, error: err });
+      return `Error searching: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
+  return `Unknown tool: ${name}`;
+}
 
 const sessionMessages = new Map<string, SessionState>();
 
@@ -234,68 +284,125 @@ async function runAgentTurn(
     content: userContent,
   });
 
-  if (!config.openaiApiKey) {
-    log.warn('OPENAI_API_KEY is not set; returning error to client.');
+  // On the final turn we omit tools so the model is forced to emit a
+  // plain text <final_answer> rather than issuing another tool call.
+  const isFinalTurn = session.turns >= MAX_TURNS;
+  const tools = isFinalTurn ? undefined : buildAvailableTools();
 
-    const errorMessage =
-      'The server is missing its OpenAI API key. Please configure OPENAI_API_KEY on the backend and try again.';
-
-    send({
-      session_id: sessionId,
-      sender: 'agent',
-      content: `<final_answer>\n${errorMessage}\n</final_answer>`,
-      is_terminal_output: false,
-      is_error: true,
-    });
-
-    // Clear any cached session state so a subsequent attempt can
-    // start fresh once the environment is correctly configured.
-    sessionMessages.delete(sessionId);
-    return;
-  }
+  const recordUsage = async (result: AICompletionResult) => {
+    const usage = result.usage;
+    if (!usage || !subscription.id) return;
+    try {
+      await SubscriptionUsage.create({
+        subscriptionId: subscription.id,
+        model: result.model,
+        promptTokens: usage.prompt_tokens,
+        completionTokens: usage.completion_tokens,
+        totalTokens: usage.total_tokens,
+      });
+      await Subscription.increment('totalTokensUsed', {
+        by: usage.total_tokens,
+        where: { id: subscription.id },
+      });
+    } catch (err) {
+      log.error('Failed to record subscription usage metrics for agent.', {
+        error: err,
+        subscriptionId: subscription.id,
+      });
+    }
+  };
 
   try {
-    log.debug('Calling OpenAI for agent turn', {
+    log.debug('Calling AI provider for agent turn', {
       sessionId,
+      provider: config.aiProvider,
+      model: aiModel,
       turn: session.turns,
       historyLength: session.history.length,
     });
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-5.1',
-      // The OpenAI client accepts a superset of this simple
-      // message shape; we safely cast here to keep our local
-      // types minimal.
-      messages: session.history as OpenAI.Chat.Completions.ChatCompletionMessageParam[],
+
+    let result = await aiClient.complete(aiModel, session.history, {
+      tools: tools?.length ? tools : undefined,
       temperature: 0.2,
     });
 
-    // Record token usage for this subscription and model, if usage
-    // data is available and we know which subscription made the call.
-    const usage = completion.usage;
-    if (usage && subscription.id) {
-      try {
-        await SubscriptionUsage.create({
-          subscriptionId: subscription.id,
-          model: completion.model ?? 'gpt-5.1',
-          promptTokens: usage.prompt_tokens ?? 0,
-          completionTokens: usage.completion_tokens ?? 0,
-          totalTokens: usage.total_tokens ?? 0,
-        });
+    await recordUsage(result);
 
-        await Subscription.increment('totalTokensUsed', {
-          by: usage.total_tokens ?? 0,
-          where: { id: subscription.id },
-        });
-      } catch (err) {
-        log.error('Failed to record subscription usage metrics for agent.', {
-          error: err,
-          subscriptionId: subscription.id,
+    // Tool-call loop: execute any requested tools and feed results back
+    // until the model emits a non-tool-call response (or we hit the limit).
+    const MAX_TOOL_ITERATIONS = 10;
+    let toolIterations = 0;
+
+    while (result.finish_reason === 'tool_calls' && toolIterations < MAX_TOOL_ITERATIONS) {
+      toolIterations++;
+      session.history.push(result.assistantMessage);
+
+      const toolCalls = result.tool_calls ?? [];
+      log.info('Agent executing tool calls', {
+        sessionId,
+        turn: session.turns,
+        toolIteration: toolIterations,
+        tools: toolCalls.map((tc) => tc.name),
+      });
+
+      const toolResults = await Promise.all(
+        toolCalls.map(async (tc) => {
+          const args = tc.arguments as Record<string, string>;
+          const toolResult = await executeTool(tc.name, args, log);
+          log.info('Tool call completed', {
+            sessionId,
+            tool: tc.name,
+            resultLength: toolResult.length,
+          });
+          return { id: tc.id, name: tc.name, result: toolResult };
+        }),
+      );
+
+      for (const { id, name, result: toolResult } of toolResults) {
+        session.history.push({
+          role: 'tool',
+          tool_call_id: id,
+          tool_name: name,
+          content: toolResult,
         });
       }
+
+      result = await aiClient.complete(aiModel, session.history, {
+        tools: tools?.length ? tools : undefined,
+        temperature: 0.2,
+      });
+
+      await recordUsage(result);
     }
 
-    const choice = completion.choices[0];
-    const content = (choice.message.content ?? '').toString().trim();
+    // If the tool loop was exhausted while the model still wants more tool calls,
+    // the last result has empty content. Force one final no-tools call so the model
+    // must synthesize a text answer from everything gathered so far.
+    if (result.finish_reason === 'tool_calls') {
+      log.warn(
+        'Tool iteration limit reached with pending tool calls; forcing final text response',
+        {
+          sessionId,
+          turn: session.turns,
+        },
+      );
+      // Do NOT push result.assistantMessage here — it contains tool_use blocks that
+      // require corresponding tool_result blocks (Anthropic API constraint). Since we
+      // are not executing those tool calls, just inject a plain user nudge so the model
+      // synthesizes a text answer from the history already accumulated.
+      session.history.push({
+        role: 'user',
+        content:
+          'You have reached the maximum number of tool calls. Based on all information gathered so far, please provide your best answer now.',
+      });
+      result = await aiClient.complete(aiModel, session.history, {
+        tools: undefined,
+        temperature: 0.2,
+      });
+      await recordUsage(result);
+    }
+
+    const content = result.content.trim();
 
     if (!content) {
       log.warn('Agent LLM returned empty content; sending generic error to client.');
