@@ -1,7 +1,7 @@
 import axios from 'axios';
-import { config } from '../config';
-import { logger } from '../logger';
-import type { AITool } from '../ai-client';
+import { config } from './config';
+import { logger } from './logger';
+import type { AITool } from './ai-client';
 
 export const WEB_FETCH_TOOL: AITool = {
   name: 'web_fetch',
@@ -164,4 +164,49 @@ export async function executeWebSearch(query: string, log: typeof logger): Promi
   }
   log.info('web_search: using DuckDuckGo (free fallback)', { query });
   return formatSearchResults(await searchWithDuckDuckGo(query));
+}
+
+export async function executeTool(
+  name: string,
+  args: Record<string, string>,
+  log: typeof logger,
+): Promise<string> {
+  if (name === 'web_fetch') {
+    const url = args.url;
+    if (!url) return 'Error: url parameter is required';
+    try {
+      log.info('Executing web_fetch tool', { url });
+      const response = await axios.get<string>(url, {
+        timeout: 15_000,
+        responseType: 'text',
+        maxContentLength: MAX_WEB_FETCH_BYTES,
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; OmniKeyAgent/1.0)' },
+      });
+      const text = String(response.data)
+        .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+        .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, MAX_TOOL_CONTENT_CHARS);
+      return text || 'No content retrieved';
+    } catch (err) {
+      log.warn('web_fetch tool failed', { url, error: err });
+      return `Error fetching URL: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
+  if (name === 'web_search') {
+    const query = args.query;
+    if (!query) return 'Error: query parameter is required';
+    try {
+      log.info('Executing web_search tool', { query });
+      return await executeWebSearch(query, log);
+    } catch (err) {
+      log.warn('web_search tool failed', { query, error: err });
+      return `Error searching: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
+  return `Unknown tool: ${name}`;
 }

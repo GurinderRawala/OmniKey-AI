@@ -93,4 +93,6 @@ export const config = {
   braveSearchApiKey: getEnv('BRAVE_SEARCH_API_KEY', false),
   tavilyApiKey: getEnv('TAVILY_API_KEY', false),
   searxngUrl: getEnv('SEARXNG_URL', false),
+
+  terminalPlatform: getEnv('TERMINAL_PLATFORM', false)
 };

@@ -7,16 +7,10 @@ import { config } from '../config';
 import { logger } from '../logger';
 import { Subscription } from '../models/subscription';
 import { SubscriptionUsage } from '../models/subscriptionUsage';
-import { AGENT_SYSTEM_PROMPT_MACOS, AGENT_SYSTEM_PROMPT_WINDOWS } from './agentPrompts';
+import { getAgentPrompt } from './agentPrompts';
 import { getPromptForCommand } from '../featureRoutes';
 import { selfHostedSubscription } from '../authMiddleware';
-import {
-  WEB_FETCH_TOOL,
-  WEB_SEARCH_TOOL,
-  MAX_WEB_FETCH_BYTES,
-  MAX_TOOL_CONTENT_CHARS,
-  executeWebSearch,
-} from './web-search-provider';
+import { WEB_FETCH_TOOL, WEB_SEARCH_TOOL, executeTool } from '../web-search-provider';
 import { aiClient, AIMessage, AITool, AICompletionResult, getDefaultModel } from '../ai-client';
 
 interface AgentMessage {
@@ -47,51 +41,6 @@ function buildAvailableTools(): AITool[] {
 
 const aiModel = getDefaultModel(config.aiProvider, 'smart');
 
-async function executeTool(
-  name: string,
-  args: Record<string, string>,
-  log: typeof logger,
-): Promise<string> {
-  if (name === 'web_fetch') {
-    const url = args.url;
-    if (!url) return 'Error: url parameter is required';
-    try {
-      log.info('Executing web_fetch tool', { url });
-      const response = await axios.get<string>(url, {
-        timeout: 15_000,
-        responseType: 'text',
-        maxContentLength: MAX_WEB_FETCH_BYTES,
-        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; OmniKeyAgent/1.0)' },
-      });
-      const text = String(response.data)
-        .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-        .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-        .replace(/<[^>]+>/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .slice(0, MAX_TOOL_CONTENT_CHARS);
-      return text || 'No content retrieved';
-    } catch (err) {
-      log.warn('web_fetch tool failed', { url, error: err });
-      return `Error fetching URL: ${err instanceof Error ? err.message : String(err)}`;
-    }
-  }
-
-  if (name === 'web_search') {
-    const query = args.query;
-    if (!query) return 'Error: query parameter is required';
-    try {
-      log.info('Executing web_search tool', { query });
-      return await executeWebSearch(query, log);
-    } catch (err) {
-      log.warn('web_search tool failed', { query, error: err });
-      return `Error searching: ${err instanceof Error ? err.message : String(err)}`;
-    }
-  }
-
-  return `Unknown tool: ${name}`;
-}
-
 const sessionMessages = new Map<string, SessionState>();
 
 type AgentSendFn = (msg: AgentMessage) => void;
@@ -114,8 +63,7 @@ async function getOrCreateSession(
     return existing;
   }
 
-  const systemPrompt =
-    platform === 'windows' ? AGENT_SYSTEM_PROMPT_WINDOWS : AGENT_SYSTEM_PROMPT_MACOS;
+  const systemPrompt = getAgentPrompt(platform);
 
   // use these instructions as user instructions
   const prompt = await getPromptForCommand(log, 'task', subscription).catch((err) => {
@@ -133,11 +81,14 @@ async function getOrCreateSession(
       ...(prompt
         ? [
             {
-              role: 'assistant' as const,
-              content: `<user_configured_instructions>
-# User-Configured Task Instructions
+              role: 'user' as const,
+              content: `<stored_instructions>
+# Stored Instructions
+
+"""
 ${prompt}
-</user_configured_instructions>`,
+"""
+</stored_instructions>`,
             },
           ]
         : []),

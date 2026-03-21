@@ -6,6 +6,7 @@ import {
   enhancePromptSystemInstruction,
   grammarPromptSystemInstruction,
   OUTPUT_FORMAT_INSTRUCTION,
+  TASK_OUTPUT_FORMAT_INSTRUCTION,
   taskPromptSystemInstruction,
 } from './prompts';
 import { config } from './config';
@@ -87,7 +88,7 @@ function createMessagesParams(cmd: EnhanceCommand, input: string, prompt: string
     return [
       {
         role: 'system',
-        content: [taskPromptSystemInstruction, OUTPUT_FORMAT_INSTRUCTION].join('\n'),
+        content: [taskPromptSystemInstruction, TASK_OUTPUT_FORMAT_INSTRUCTION].join('\n'),
       },
       {
         role: 'user',

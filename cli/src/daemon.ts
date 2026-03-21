@@ -24,6 +24,8 @@ export function startDaemon(port: number = 7071) {
   const configPath = getConfigPath();
   const configVars = readConfig();
   configVars.OMNIKEY_PORT = port;
+  configVars.TERMINAL_PLATFORM = isWindows ? 'windows' : 'macos';
+
   try {
     fs.mkdirSync(configDir, { recursive: true });
     fs.writeFileSync(configPath, JSON.stringify(configVars, null, 2), 'utf-8');
@@ -105,7 +107,7 @@ function startDaemonWindows(opts: DaemonOptions) {
   // Also start the backend immediately for the current session
   const { out, err } = initLogFiles(logPath, errorLogPath);
   const child = spawn(nodePath, [backendPath], {
-    env: { ...process.env, ...configVars, OMNIKEY_PORT: String(port) },
+    env: { ...configVars, OMNIKEY_PORT: String(port) },
     detached: true,
     stdio: ['ignore', out, err],
   });
@@ -154,20 +156,15 @@ function startDaemonMacOS(opts: DaemonOptions) {
     const launchAgentsDir = path.join(homeDir, 'Library', 'LaunchAgents');
     fs.mkdirSync(launchAgentsDir, { recursive: true });
     fs.writeFileSync(plistPath, plistContent, 'utf-8');
+    initLogFiles(logPath, errorLogPath);
     execSync(`launchctl unload "${plistPath}" || true`);
     execSync(`launchctl load "${plistPath}"`);
     console.log(`Launch agent created and loaded: ${plistPath}`);
     console.log('Omnikey daemon will auto-restart and persist across reboots.');
+    // launchd starts the process via RunAtLoad — no manual spawn needed here.
+    // Spawning a second process would race to bind the same port, causing the
+    // loser to crash and launchd's KeepAlive to restart it in a ~10s loop.
   } catch (e) {
     console.error('Failed to create or load launch agent:', e);
   }
-
-  const { out, err } = initLogFiles(logPath, errorLogPath);
-  const child = spawn(nodePath, [backendPath], {
-    env: { ...process.env, ...configVars, OMNIKEY_PORT: String(port) },
-    detached: true,
-    stdio: ['ignore', out, err],
-  });
-  child.unref();
-  console.log(`Omnikey API backend started as a daemon on port ${port}. PID: ${child.pid}`);
 }
