@@ -7,9 +7,9 @@ document.getElementById('year').textContent = new Date().getFullYear();
   const isWin = /win/.test(ua);
 
   if (isMac) {
-    document.querySelector('.btn-mac')?.classList.add('btn-active');
+    document.querySelectorAll('.btn-mac').forEach(el => el.classList.add('btn-active'));
   } else if (isWin) {
-    document.querySelector('.btn-win')?.classList.add('btn-active');
+    document.querySelectorAll('.btn-win').forEach(el => el.classList.add('btn-active'));
   }
 
   // Copy-to-clipboard for code blocks
@@ -18,7 +18,6 @@ document.getElementById('year').textContent = new Date().getFullYear();
     btn.className = 'copy-btn';
     btn.setAttribute('aria-label', 'Copy');
     btn.innerHTML = '<i data-lucide="copy"></i>';
-    pre.style.position = 'relative';
     pre.appendChild(btn);
     lucide.createIcons({ nodes: [btn] });
 
@@ -34,4 +33,19 @@ document.getElementById('year').textContent = new Date().getFullYear();
       });
     });
   });
+
+  // Scroll-reveal via IntersectionObserver
+  const observer = new IntersectionObserver(
+    (entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('visible');
+          observer.unobserve(entry.target);
+        }
+      });
+    },
+    { threshold: 0.12 }
+  );
+
+  document.querySelectorAll('.scroll-reveal').forEach((el) => observer.observe(el));
 })();

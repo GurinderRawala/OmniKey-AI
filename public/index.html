@@ -45,148 +45,258 @@
     </script>
 
     <link rel="icon" href="/favicon.ico" />
-    <script src="https://cdn.tailwindcss.com"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="style.css" />
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
   </head>
   <body>
-    <main>
-      <!-- ── Header ── -->
-      <header>
-        <img src="/icon.png" alt="OmniKey AI" class="icon" />
-        <h1>OmniKey AI</h1>
-        <p class="tagline">AI-powered text enhancement, right from your keyboard.</p>
-        <p class="platform-badge">
-          <span>🍎 macOS menu bar app</span>
-          <span class="sep">·</span>
-          <span>🪟 Windows system tray app</span>
-        </p>
-        <a
-          href="https://github.com/GurinderRawala/OmniKey-AI"
-          target="_blank"
-          rel="noopener noreferrer"
-          class="star-btn"
-        >
-          <svg viewBox="0 0 16 16" fill="currentColor" width="16" height="16" aria-hidden="true">
-            <path d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.751.751 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z"/>
-          </svg>
-          Star on GitHub
+
+    <!-- ── Nav ── -->
+    <nav class="nav">
+      <div class="nav-inner">
+        <a href="/" class="nav-logo">
+          <img src="/icon.png" alt="OmniKey AI" class="nav-icon" />
+          <span>OmniKey AI</span>
         </a>
-      </header>
+        <div class="nav-links">
+          <a href="#how-it-works">How it works</a>
+          <a href="#features">Features</a>
+          <a href="#getting-started">Get started</a>
+        </div>
+        <div class="nav-actions">
+          <a href="https://github.com/GurinderRawala/OmniKey-AI" target="_blank" rel="noopener noreferrer" class="nav-github">
+            <svg viewBox="0 0 16 16" fill="currentColor" width="13" height="13" aria-hidden="true">
+              <path d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.751.751 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z"/>
+            </svg>
+            Star on GitHub
+          </a>
+          <a href="#download" class="nav-download">Download</a>
+        </div>
+      </div>
+    </nav>
 
-      <!-- ── Intro ── -->
-      <section class="intro">
-        <p>
-          OmniKey AI is a productivity tool that enhances your workflow with AI-powered prompt
-          enhancements, grammar correction, and custom tasks. Simply select any text and execute a
-          command using a key combination — in any app, on any screen.
+    <!-- ── Hero ── -->
+    <section class="hero">
+      <div class="hero-bg">
+        <div class="hero-glow hero-glow-1"></div>
+        <div class="hero-glow hero-glow-2"></div>
+      </div>
+      <div class="hero-content">
+        <div class="hero-badge">
+          <span class="hero-badge-dot"></span>
+          Free &amp; Open Source &nbsp;·&nbsp; macOS + Windows
+        </div>
+        <h1 class="hero-title">
+          <span class="gradient-text">AI-powered</span> text<br>enhancement, anywhere.
+        </h1>
+        <p class="hero-desc">
+          Select any text, press a shortcut — OmniKey enhances prompts, fixes grammar, and runs custom AI tasks in any app, on any screen.
         </p>
-        <ul class="features">
-          <li><span class="key">⌘E / Ctrl+E</span> Enhance prompt clarity &amp; structure</li>
-          <li><span class="key">⌘G / Ctrl+G</span> Fix grammar &amp; readability</li>
-          <li><span class="key">⌘T / Ctrl+T</span> Run your custom AI task or agent</li>
-        </ul>
-      </section>
-
-      <!-- ── Download ── -->
-      <section class="download">
-        <h2>Download</h2>
-        <div class="buttons">
-          <a href="/macos/download" class="btn btn-mac">
-            <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20">
-              <path
-                d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"
-              />
+        <div class="hero-actions">
+          <a href="/macos/download" class="btn btn-primary btn-mac">
+            <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18" aria-hidden="true">
+              <path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/>
             </svg>
             Download for macOS
           </a>
-          <a href="/windows/download" class="btn btn-win">
-            <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20">
-              <path
-                d="M3 12V6.75l6-1.32v6.57H3zm17 0V5.25L11 3.5v8.5h9zM3 13v5.25l6 1.32V13H3zm17 0v6.75L11 21.5V13h9z"
-              />
+          <a href="/windows/download" class="btn btn-secondary btn-win">
+            <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18" aria-hidden="true">
+              <path d="M3 12V6.75l6-1.32v6.57H3zm17 0V5.25L11 3.5v8.5h9zM3 13v5.25l6 1.32V13H3zm17 0v6.75L11 21.5V13h9z"/>
             </svg>
             Download for Windows
           </a>
         </div>
-        <p class="note">macOS 13+ &nbsp;|&nbsp; Windows 10/11 x64</p>
+        <p class="hero-note">macOS 13+ &nbsp;·&nbsp; Windows 10/11 x64 &nbsp;·&nbsp; Free to use</p>
+
+        <!-- Demo card -->
+        <div class="demo-card">
+          <div class="demo-header">
+            <div class="demo-dots">
+              <span class="dot dot-red"></span>
+              <span class="dot dot-yellow"></span>
+              <span class="dot dot-green"></span>
+            </div>
+            <span class="demo-window-title">Any application on your computer</span>
+          </div>
+          <div class="demo-body">
+            <div class="demo-before">
+              <div class="demo-label">Selected text</div>
+              <div class="demo-text demo-selected">fix my code it's not working</div>
+            </div>
+            <div class="demo-transform">
+              <span class="key demo-key">⌘E</span>
+              <svg class="demo-arrow-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                <path d="M5 12h14M13 6l6 6-6 6"/>
+              </svg>
+              <span class="demo-transform-label">Enhance Prompt</span>
+            </div>
+            <div class="demo-after">
+              <div class="demo-label demo-label-result">AI Enhanced &amp; pasted back</div>
+              <div class="demo-text demo-result">Please review the provided code and identify the issue causing it to malfunction. Explain what's going wrong, then provide a corrected version with brief comments explaining the key fix.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Providers bar ── -->
+    <div class="providers-bar">
+      <span class="providers-label">Works with</span>
+      <div class="providers-list">
+        <span class="provider-badge">OpenAI</span>
+        <span class="provider-sep">·</span>
+        <span class="provider-badge">Anthropic</span>
+        <span class="provider-sep">·</span>
+        <span class="provider-badge">Google Gemini</span>
+      </div>
+    </div>
+
+    <main>
+
+      <!-- ── How it works ── -->
+      <section class="how-section" id="how-it-works">
+        <div class="section-header">
+          <div class="section-label">Simple by design</div>
+          <h2>How OmniKey works</h2>
+          <p class="section-desc">Three steps, zero friction. Works in every app on your computer.</p>
+        </div>
+        <div class="how-steps">
+          <div class="how-step scroll-reveal">
+            <div class="how-step-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" width="24" height="24">
+                <path d="M4 6h16M4 12h10M4 18h7"/>
+                <rect x="14" y="13" width="7" height="5" rx="1" fill="currentColor" opacity="0.25" stroke="none"/>
+              </svg>
+            </div>
+            <div class="how-step-num">01</div>
+            <h3>Select any text</h3>
+            <p>Highlight text in any application — emails, documents, code editors, chat apps.</p>
+          </div>
+          <div class="how-connector"></div>
+          <div class="how-step scroll-reveal delay-1">
+            <div class="how-step-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" width="24" height="24">
+                <rect x="2" y="6" width="20" height="14" rx="2"/>
+                <path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M6 14h.01M10 14h.01M14 14h4"/>
+              </svg>
+            </div>
+            <div class="how-step-num">02</div>
+            <h3>Press a shortcut</h3>
+            <p>Use <span class="key">⌘E</span>, <span class="key">⌘G</span>, or <span class="key">⌘T</span> to trigger the AI enhancement.</p>
+          </div>
+          <div class="how-connector"></div>
+          <div class="how-step scroll-reveal delay-2">
+            <div class="how-step-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" width="24" height="24">
+                <path d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 17l-6.2 4.3 2.4-7.4L2 9.4h7.6L12 2z" stroke-linejoin="round"/>
+              </svg>
+            </div>
+            <div class="how-step-num">03</div>
+            <h3>AI enhances in-place</h3>
+            <p>The result is automatically pasted back, replacing your selected text. No copy-paste needed.</p>
+          </div>
+        </div>
       </section>
 
-      <!-- ── Getting Started ── -->
-      <section class="setup">
-        <h2>Getting Started</h2>
-
-        <div class="step">
-          <div class="step-number">1</div>
-          <div class="step-content">
-            <h3>Install the CLI</h3>
-            <p>Install the OmniKey CLI globally via npm:</p>
-            <pre><code>npm install -g omnikey-cli</code></pre>
+      <!-- ── Shortcuts ── -->
+      <section class="shortcuts-section" id="features">
+        <div class="section-header">
+          <div class="section-label">Keyboard shortcuts</div>
+          <h2>Three powerful commands</h2>
+          <p class="section-desc">Each shortcut maps to a specific AI capability, available in any app on your screen.</p>
+        </div>
+        <div class="shortcuts-grid">
+          <div class="shortcut-card scroll-reveal">
+            <div class="shortcut-key-badge badge-amber">⌘E</div>
+            <h3>Enhance Prompt</h3>
+            <p>Rewrite selected text with better clarity, structure, and tone — ideal before sending to any AI tool.</p>
+            <div class="shortcut-platforms">
+              <span class="key">⌘E</span> macOS &nbsp;·&nbsp; <span class="key">Ctrl+E</span> Windows
+            </div>
+          </div>
+          <div class="shortcut-card scroll-reveal delay-1">
+            <div class="shortcut-key-badge badge-green">⌘G</div>
+            <h3>Grammar &amp; Clarity</h3>
+            <p>Fix spelling, grammar, and readability without changing the core meaning of your text.</p>
+            <div class="shortcut-platforms">
+              <span class="key">⌘G</span> macOS &nbsp;·&nbsp; <span class="key">Ctrl+G</span> Windows
+            </div>
+          </div>
+          <div class="shortcut-card shortcut-card-featured scroll-reveal delay-2">
+            <div class="shortcut-key-badge badge-purple">⌘T</div>
+            <h3>Custom Task + Agent</h3>
+            <p>Apply your own saved instructions or run the AI agent with real-time web search and terminal access.</p>
+            <div class="shortcut-platforms">
+              <span class="key">⌘T</span> macOS &nbsp;·&nbsp; <span class="key">Ctrl+T</span> Windows
+            </div>
           </div>
         </div>
+      </section>
 
-        <div class="step">
-          <div class="step-number">2</div>
-          <div class="step-content">
-            <h3>Onboard &amp; configure your AI provider</h3>
-            <p>Run the interactive setup to pick your LLM provider and enter your API key:</p>
-            <pre><code>omnikey onboard</code></pre>
-            <p class="hint">
-              Supports <strong>OpenAI</strong>, <strong>Anthropic</strong>, and
-              <strong>Google Gemini</strong>. You can also optionally configure a web search
-              provider (Serper, Brave Search, Tavily, or SearXNG) — if none is set, OmniKey falls
-              back to <strong>DuckDuckGo</strong> by default so web search works out of the box with
-              no key required.
-            </p>
-          </div>
+      <!-- ── Usage ── -->
+      <section class="usage-section">
+        <div class="section-header">
+          <div class="section-label">Advanced usage</div>
+          <h2>Unlimited flexibility with @ commands</h2>
+          <p class="section-desc">Prefix your text with @ to give OmniKey specific instructions on the fly.</p>
         </div>
-
-        <div class="step">
-          <div class="step-number">3</div>
-          <div class="step-content">
-            <h3>Start the daemon</h3>
-            <p>
-              Register OmniKey as a persistent background service that survives system restarts:
-            </p>
-            <pre><code>omnikey daemon</code></pre>
-            <p class="hint">
-              On macOS this registers a launchd agent. On Windows it registers a Task Scheduler
-              task.
-            </p>
+        <div class="usage-cards">
+          <div class="usage-card">
+            <div class="usage-icon">⌘E</div>
+            <div class="usage-body">
+              <h3>Enhance a Prompt</h3>
+              <p>Select any text in any app and press <span class="key">⌘E</span> (macOS) or <span class="key">Ctrl+E</span> (Windows). OmniKey rewrites it with better clarity, structure, and tone — ideal before sending to an AI tool.</p>
+            </div>
           </div>
-        </div>
-
-        <div class="step">
-          <div class="step-number">4</div>
-          <div class="step-content">
-            <h3>Download &amp; launch the app</h3>
-            <p>
-              Download the app above for your platform, install it, and you're ready. Select any
-              text in any app and press a shortcut. You can manage task instructions and view the
-              manual from the menu bar / system tray icon.
-            </p>
+          <div class="usage-card">
+            <div class="usage-icon">⌘G</div>
+            <div class="usage-body">
+              <h3>Fix Grammar &amp; Clarity</h3>
+              <p>Select text and press <span class="key">⌘G</span> / <span class="key">Ctrl+G</span>. OmniKey corrects spelling, grammar, and readability without changing your meaning.</p>
+            </div>
+          </div>
+          <div class="usage-card">
+            <div class="usage-icon">⌘T</div>
+            <div class="usage-body">
+              <h3>Run a Custom Task</h3>
+              <p>Set up your own task instructions in the <strong>Task Instructions</strong> tab in the menu bar app. Then select any text and press <span class="key">⌘T</span> / <span class="key">Ctrl+T</span> to apply them.</p>
+            </div>
+          </div>
+          <div class="usage-card highlight">
+            <div class="usage-icon">@</div>
+            <div class="usage-body">
+              <h3>Ask OmniKey Anything</h3>
+              <p>Start your text with <code>@omnikeyai</code> followed by any instruction. Select it and press any OmniKey shortcut — OmniKey takes action based on what you write and pastes the result in place.</p>
+              <pre><code>@omnikeyai write this text into valid markdown format</code></pre>
+              <p class="hint">Powered by your configured provider — <strong>OpenAI</strong>, <strong>Anthropic</strong>, or <strong>Google Gemini</strong>.</p>
+            </div>
+          </div>
+          <div class="usage-card highlight">
+            <div class="usage-icon">🤖</div>
+            <div class="usage-body">
+              <h3>Run the AI Agent</h3>
+              <p>Start your instructions with <code>@omniAgent</code>, select them, and press <span class="key">⌘T</span> / <span class="key">Ctrl+T</span>. The agent gathers context from your <strong>terminal</strong> and the <strong>web</strong>, combines your saved task instructions if configured, then completes the task and pastes the result.</p>
+              <pre><code>@omniAgent find all TODO comments in my project and summarise them</code></pre>
+              <p class="hint">Web search uses your configured provider (Serper, Brave, Tavily, or SearXNG). Falls back to DuckDuckGo if none is set — no key required.</p>
+            </div>
           </div>
         </div>
       </section>
 
       <!-- ── Features ── -->
       <section class="features-section">
-        <h2>Features</h2>
-
+        <div class="section-header">
+          <div class="section-label">Everything included</div>
+          <h2>Packed with features</h2>
+        </div>
         <div class="feature-grid">
-          <div class="feature-item">
+          <div class="feature-item scroll-reveal">
             <h3>Multiple LLM Providers</h3>
-            <p>
-              Choose between <strong>OpenAI</strong>, <strong>Anthropic</strong>, or
-              <strong>Google Gemini</strong> as your AI backend. Configure your preferred provider
-              during onboarding or at any time via the CLI.
-            </p>
+            <p>Choose between <strong>OpenAI</strong>, <strong>Anthropic</strong>, or <strong>Google Gemini</strong> as your AI backend. Configure your preferred provider during onboarding or at any time via the CLI.</p>
           </div>
-
-          <div class="feature-item">
+          <div class="feature-item scroll-reveal delay-1">
             <h3>Web Search</h3>
             <p>Give the agent real-time web context. Supported providers:</p>
             <ul class="provider-list">
@@ -197,33 +307,19 @@
               <li><strong>SearXNG</strong> — self-hosted, no key needed</li>
             </ul>
           </div>
-
-          <div class="feature-item">
+          <div class="feature-item scroll-reveal">
             <h3>Prompt Enhancement</h3>
-            <p>
-              Press <span class="key">⌘E</span> / <span class="key">Ctrl+E</span> to improve the
-              clarity, structure, and tone of selected text — ideal before sending to any AI tool.
-            </p>
+            <p>Press <span class="key">⌘E</span> / <span class="key">Ctrl+E</span> to improve the clarity, structure, and tone of selected text — ideal before sending to any AI tool.</p>
           </div>
-
-          <div class="feature-item">
+          <div class="feature-item scroll-reveal delay-1">
             <h3>Grammar &amp; Clarity Fix</h3>
-            <p>
-              Press <span class="key">⌘G</span> / <span class="key">Ctrl+G</span> to correct
-              spelling, grammar, and readability without changing the core meaning of your text.
-            </p>
+            <p>Press <span class="key">⌘G</span> / <span class="key">Ctrl+G</span> to correct spelling, grammar, and readability without changing the core meaning of your text.</p>
           </div>
-
-          <div class="feature-item">
+          <div class="feature-item scroll-reveal">
             <h3>Custom Tasks</h3>
-            <p>
-              Press <span class="key">⌘T</span> / <span class="key">Ctrl+T</span> to apply your own
-              saved task instructions to the selected text. Configure them in the
-              <strong>Task Instructions</strong> window from the menu bar.
-            </p>
+            <p>Press <span class="key">⌘T</span> / <span class="key">Ctrl+T</span> to apply your own saved task instructions to the selected text. Configure them in the <strong>Task Instructions</strong> window from the menu bar.</p>
           </div>
-
-          <div class="feature-item">
+          <div class="feature-item scroll-reveal delay-1">
             <h3>How It Works</h3>
             <ol class="how-list">
               <li>Select text in any app.</li>
@@ -235,88 +331,82 @@
         </div>
       </section>
 
-      <!-- ── Using OmniKey ── -->
-      <section class="usage">
-        <h2>Using OmniKey</h2>
-
-        <div class="usage-card">
-          <div class="usage-icon">⌘E</div>
-          <div class="usage-body">
-            <h3>Enhance a Prompt</h3>
-            <p>
-              Select any text in any app and press <span class="key">⌘E</span> (macOS) or
-              <span class="key">Ctrl+E</span> (Windows). OmniKey rewrites it with better clarity,
-              structure, and tone — ideal before sending to an AI tool.
-            </p>
-          </div>
+      <!-- ── Getting Started ── -->
+      <section class="setup-section" id="getting-started">
+        <div class="section-header">
+          <div class="section-label">Quick setup</div>
+          <h2>Up and running in minutes</h2>
+          <p class="section-desc">Four simple steps to get OmniKey working on your machine.</p>
         </div>
-
-        <div class="usage-card">
-          <div class="usage-icon">⌘G</div>
-          <div class="usage-body">
-            <h3>Fix Grammar &amp; Clarity</h3>
-            <p>
-              Select text and press <span class="key">⌘G</span> / <span class="key">Ctrl+G</span>.
-              OmniKey corrects spelling, grammar, and readability without changing your meaning.
-            </p>
+        <div class="steps">
+          <div class="step">
+            <div class="step-number">1</div>
+            <div class="step-content">
+              <h3>Install the CLI</h3>
+              <p>Install the OmniKey CLI globally via npm:</p>
+              <pre><code>npm install -g omnikey-cli</code></pre>
+            </div>
           </div>
-        </div>
-
-        <div class="usage-card">
-          <div class="usage-icon">⌘T</div>
-          <div class="usage-body">
-            <h3>Run a Custom Task</h3>
-            <p>
-              Set up your own task instructions in the <strong>Task Instructions</strong> tab in the
-              menu bar app. Then select any text and press <span class="key">⌘T</span> /
-              <span class="key">Ctrl+T</span> to apply them.
-            </p>
+          <div class="step">
+            <div class="step-number">2</div>
+            <div class="step-content">
+              <h3>Onboard &amp; configure your AI provider</h3>
+              <p>Run the interactive setup to pick your LLM provider and enter your API key:</p>
+              <pre><code>omnikey onboard</code></pre>
+              <p class="hint">Supports <strong>OpenAI</strong>, <strong>Anthropic</strong>, and <strong>Google Gemini</strong>. You can also optionally configure a web search provider (Serper, Brave Search, Tavily, or SearXNG) — if none is set, OmniKey falls back to <strong>DuckDuckGo</strong> by default so web search works out of the box with no key required.</p>
+            </div>
           </div>
-        </div>
-
-        <div class="usage-card highlight">
-          <div class="usage-icon">@</div>
-          <div class="usage-body">
-            <h3>Ask OmniKey Anything</h3>
-            <p>
-              Start your text with <code>@omnikeyai</code> followed by any instruction. Select it
-              and press any OmniKey shortcut — OmniKey takes action based on what you write and
-              pastes the result in place.
-            </p>
-            <pre><code>@omnikeyai write this text into valid markdown format</code></pre>
-            <p class="hint">
-              Powered by your configured provider — <strong>OpenAI</strong>,
-              <strong>Anthropic</strong>, or <strong>Google Gemini</strong>.
-            </p>
+          <div class="step">
+            <div class="step-number">3</div>
+            <div class="step-content">
+              <h3>Start the daemon</h3>
+              <p>Register OmniKey as a persistent background service that survives system restarts:</p>
+              <pre><code>omnikey daemon</code></pre>
+              <p class="hint">On macOS this registers a launchd agent. On Windows it registers a Task Scheduler task.</p>
+            </div>
           </div>
-        </div>
-
-        <div class="usage-card highlight">
-          <div class="usage-icon">🤖</div>
-          <div class="usage-body">
-            <h3>Run the AI Agent</h3>
-            <p>
-              Start your instructions with <code>@omniAgent</code>, select them, and press
-              <span class="key">⌘T</span> / <span class="key">Ctrl+T</span>. The agent gathers
-              context from your <strong>terminal</strong> and the <strong>web</strong>, combines
-              your saved task instructions if configured, then completes the task and pastes the
-              result.
-            </p>
-            <pre
-              class="whitespace-pre-wrap break-words"
-            ><code>@omniAgent find all TODO comments in my project and summarise them</code></pre>
-            <p class="hint">
-              Web search uses your configured provider (Serper, Brave, Tavily, or SearXNG). Falls
-              back to DuckDuckGo if none is set — no key required.
-            </p>
+          <div class="step">
+            <div class="step-number">4</div>
+            <div class="step-content">
+              <h3>Download &amp; launch the app</h3>
+              <p>Download the app above for your platform, install it, and you're ready. Select any text in any app and press a shortcut. You can manage task instructions and view the manual from the menu bar / system tray icon.</p>
+            </div>
           </div>
         </div>
       </section>
 
-      <footer>
-        <p>OmniKey AI &copy; <span id="year"></span></p>
-      </footer>
+      <!-- ── Download CTA ── -->
+      <section class="cta-section" id="download">
+        <div class="cta-card">
+          <img src="/icon.png" alt="OmniKey AI" class="cta-icon" />
+          <h2 class="cta-title">Download OmniKey AI</h2>
+          <p class="cta-desc">Free to use. Open source. Works on macOS and Windows.</p>
+          <div class="buttons">
+            <a href="/macos/download" class="btn btn-primary btn-mac">
+              <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18" aria-hidden="true">
+                <path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/>
+              </svg>
+              Download for macOS
+            </a>
+            <a href="/windows/download" class="btn btn-secondary btn-win">
+              <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18" aria-hidden="true">
+                <path d="M3 12V6.75l6-1.32v6.57H3zm17 0V5.25L11 3.5v8.5h9zM3 13v5.25l6 1.32V13H3zm17 0v6.75L11 21.5V13h9z"/>
+              </svg>
+              Download for Windows
+            </a>
+          </div>
+          <p class="note">macOS 13+ &nbsp;|&nbsp; Windows 10/11 x64</p>
+        </div>
+      </section>
+
     </main>
+
+    <footer>
+      <p>OmniKey AI &copy; <span id="year"></span> &nbsp;·&nbsp;
+        <a href="https://github.com/GurinderRawala/OmniKey-AI" target="_blank" rel="noopener noreferrer">GitHub</a>
+      </p>
+    </footer>
+
     <script src="app.js"></script>
   </body>
 </html>
