@@ -111,13 +111,21 @@ export function removeConfigAndDb(includeDb = false) {
     console.log('Skipping SQLite database removal (use --db to remove it).');
   }
 
-  // Remove .omnikey directory
+  // Remove all files/folders inside .omnikey except the SQLite database
   if (fs.existsSync(configDir)) {
     try {
-      fs.rmSync(configDir, { recursive: true, force: true });
-      console.log(`Removed config directory: ${configDir}`);
+      const entries = fs.readdirSync(configDir);
+      for (const entry of entries) {
+        if (entry.endsWith('.sqlite')) {
+          continue;
+        }
+        const entryPath = path.join(configDir, entry);
+        fs.rmSync(entryPath, { recursive: true, force: true });
+        console.log(`Removed: ${entryPath}`);
+      }
+      console.log(`Cleared config directory (SQLite preserved): ${configDir}`);
     } catch (e) {
-      console.error(`Failed to remove config directory: ${e}`);
+      console.error(`Failed to clear config directory: ${e}`);
     }
   } else {
     console.log(`Config directory does not exist: ${configDir}`);

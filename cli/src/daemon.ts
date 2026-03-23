@@ -85,8 +85,54 @@ function startDaemonWindows(opts: DaemonOptions) {
     return;
   }
 
-  // Register with Windows Task Scheduler so the daemon persists across reboots
+  // Register with Windows Task Scheduler so the daemon persists across reboots.
+  // Use XML-based registration to avoid cmd.exe quoting issues with paths containing spaces.
   const taskName = 'OmnikeyDaemon';
+  const username = process.env.USERNAME || process.env.USER || '';
+  // Escape characters that are special in XML
+  const xmlEscape = (s: string) =>
+    s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const taskXml = `<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>Omnikey API Backend Daemon</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+      <UserId>${xmlEscape(username)}</UserId>
+    </LogonTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <UserId>${xmlEscape(username)}</UserId>
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Hidden>true</Hidden>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>cmd.exe</Command>
+      <Arguments>/c &quot;${xmlEscape(wrapperPath)}&quot;</Arguments>
+      <WorkingDirectory>${xmlEscape(configDir)}</WorkingDirectory>
+    </Exec>
+  </Actions>
+</Task>`;
+  const taskXmlPath = path.join(configDir, 'task.xml');
+  try {
+    // Task Scheduler XML must be UTF-16 LE encoded
+    fs.writeFileSync(taskXmlPath, '\ufeff' + taskXml, 'utf16le');
+  } catch (e) {
+    console.error('Failed to write task XML:', e);
+    return;
+  }
   try {
     // Delete existing task silently before creating a fresh one
     execSync(`schtasks /delete /tn "${taskName}" /f`, { stdio: 'pipe' });
@@ -94,14 +140,13 @@ function startDaemonWindows(opts: DaemonOptions) {
     // Task may not exist — that's fine
   }
   try {
-    execSync(
-      `schtasks /create /tn "${taskName}" /tr "cmd /c \\"${wrapperPath}\\"" /sc ONLOGON /f`,
-      { stdio: 'pipe' },
-    );
+    execSync(`schtasks /create /tn "${taskName}" /xml "${taskXmlPath}" /f`, { stdio: 'pipe' });
     console.log(`Windows Task Scheduler task created: ${taskName}`);
     console.log('Omnikey daemon will auto-start on next logon.');
   } catch (e) {
     console.error('Failed to create Windows Task Scheduler task:', e);
+  } finally {
+    try { fs.rmSync(taskXmlPath); } catch { /* ignore */ }
   }
 
   // Also start the backend immediately for the current session

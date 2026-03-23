@@ -7,6 +7,8 @@ import { killDaemon } from './killDaemon';
 import { removeConfigAndDb } from './removeConfig';
 import { statusCmd } from './status';
 import { showLogs } from './showLogs';
+import { showConfig } from './showConfig';
+import { setConfig } from './setConfig';
 
 const program = new Command();
 
@@ -62,6 +64,30 @@ program
     const lines = Number(options.lines) || 50;
     const errorsOnly = !!options.errors;
     showLogs(lines, errorsOnly);
+  });
+
+program
+  .command('config')
+  .description('Show the current Omnikey configuration (API keys are masked)')
+  .action(() => {
+    showConfig();
+  });
+
+program
+  .command('set <key> <value>')
+  .description('Set a single configuration key (e.g. omnikey set OMNIKEY_PORT 8080)')
+  .action((key: string, value: string) => {
+    setConfig(key, value);
+  });
+
+program
+  .command('restart-daemon')
+  .description('Restart the Omnikey API backend daemon')
+  .option('--port <port>', 'Port to run the backend on', '7071')
+  .action((options) => {
+    killDaemon();
+    const port = Number(options.port) || 7071;
+    startDaemon(port);
   });
 
 program.parseAsync(process.argv);
