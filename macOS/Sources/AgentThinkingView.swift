@@ -75,6 +75,29 @@ struct AgentThinkingView: View {
                                 }
                             }
 
+                            // Web calls
+                            if !model.webCalls.isEmpty {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Web calls")
+                                        .font(.system(size: 11, weight: .semibold))
+                                        .foregroundColor(NordTheme.secondaryText(colorScheme))
+
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        ForEach(Array(model.webCalls.enumerated()), id: \.offset) { _, entry in
+                                            Text(entry)
+                                                .font(.system(size: 10, design: .monospaced))
+                                                .foregroundColor(NordTheme.primaryText(colorScheme))
+                                                .frame(maxWidth: .infinity, alignment: .leading)
+                                                .padding(6)
+                                                .background(
+                                                    RoundedRectangle(cornerRadius: 4)
+                                                        .fill(NordTheme.editorBackground(colorScheme).opacity(0.9))
+                                                )
+                                        }
+                                    }
+                                }
+                            }
+
                             // Terminal command output
                             if !model.terminalOutputs.isEmpty {
                                 VStack(alignment: .leading, spacing: 4) {

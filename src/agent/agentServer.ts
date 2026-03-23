@@ -19,6 +19,7 @@ interface AgentMessage {
   content: string;
   is_terminal_output?: boolean;
   is_error?: boolean;
+  is_web_call?: boolean;
   platform?: string;
 }
 
@@ -286,9 +287,15 @@ async function runAgentTurn(
 
     while (result.finish_reason === 'tool_calls' && toolIterations < MAX_TOOL_ITERATIONS) {
       toolIterations++;
-      session.history.push(result.assistantMessage);
 
       const toolCalls = result.tool_calls ?? [];
+
+      // If the model claims tool_calls but sent none, treat it as a normal text
+      // response — pushing an assistant message with no following tool results
+      // would leave the history ending with an assistant turn, causing a 400.
+      if (!toolCalls.length) break;
+
+      session.history.push(result.assistantMessage);
       log.info('Agent executing tool calls', {
         sessionId,
         turn: session.turns,
@@ -299,6 +306,21 @@ async function runAgentTurn(
       const toolResults = await Promise.all(
         toolCalls.map(async (tc) => {
           const args = tc.arguments as Record<string, string>;
+
+          // Notify the frontend that a web tool call is about to execute.
+          const webCallContent =
+            tc.name === 'web_search'
+              ? `Searching the web for: "${args.query ?? ''}"`
+              : `Fetching URL: ${args.url ?? ''}`;
+          send({
+            session_id: sessionId,
+            sender: 'agent',
+            content: webCallContent,
+            is_terminal_output: false,
+            is_error: false,
+            is_web_call: true,
+          });
+
           const toolResult = await executeTool(tc.name, args, log);
           log.info('Tool call completed', {
             sessionId,
@@ -326,10 +348,16 @@ async function runAgentTurn(
       await recordUsage(result);
     }
 
+    log.info('Finished reasoning and tool calls: ', {
+      reason: result.finish_reason,
+    });
+
+    const content = result.content.trim();
+
     // If the tool loop was exhausted while the model still wants more tool calls,
     // the last result has empty content. Force one final no-tools call so the model
     // must synthesize a text answer from everything gathered so far.
-    if (result.finish_reason === 'tool_calls') {
+    if (result.finish_reason === 'tool_calls' || !content) {
       log.warn(
         'Tool iteration limit reached with pending tool calls; forcing final text response',
         {
@@ -352,8 +380,6 @@ async function runAgentTurn(
       });
       await recordUsage(result);
     }
-
-    const content = result.content.trim();
 
     if (!content) {
       log.warn('Agent LLM returned empty content; sending generic error to client.');

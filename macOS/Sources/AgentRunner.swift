@@ -343,7 +343,26 @@ final class AgentRunner {
             let content: String
             let isTerminalOutput: Bool?
             let isError: Bool?
+            let isWebCall: Bool?
             let platform: String?
+
+            init(
+                sessionID: String,
+                sender: String,
+                content: String,
+                isTerminalOutput: Bool? = nil,
+                isError: Bool? = nil,
+                isWebCall: Bool? = nil,
+                platform: String? = nil
+            ) {
+                self.sessionID = sessionID
+                self.sender = sender
+                self.content = content
+                self.isTerminalOutput = isTerminalOutput
+                self.isError = isError
+                self.isWebCall = isWebCall
+                self.platform = platform
+            }
 
             enum CodingKeys: String, CodingKey {
                 case sessionID = "session_id"
@@ -351,6 +370,7 @@ final class AgentRunner {
                 case content
                 case isTerminalOutput = "is_terminal_output"
                 case isError = "is_error"
+                case isWebCall = "is_web_call"
                 case platform
             }
         }
@@ -395,6 +415,16 @@ final class AgentRunner {
 
                     let content = response.content
 
+                    // Web call notification: show it in the thinking view and
+                    // keep listening — this is not a final answer.
+                    if response.isWebCall == true {
+                        DispatchQueue.main.async {
+                            AgentThinkingModel.shared.appendWebCall(content)
+                        }
+                        receiveNext()
+                        return
+                    }
+
                     // Surface a cleaned, human-readable version of
                     // the agent's message (without XML-like tags)
                     // directly to the shared thinking model so the
@@ -431,22 +461,46 @@ final class AgentRunner {
                                 platform: "macos"
                             )
 
-                            let encodedLength: Int
-                            if let jsonData = try? encoder.encode(reply) {
-                                encodedLength = jsonData.count
-                            } else {
-                                encodedLength = -1
+                            guard let jsonData = try? encoder.encode(reply),
+                                  let jsonString = String(data: jsonData, encoding: .utf8)
+                            else {
+                                print("[AgentRunner] Failed to encode terminal output reply; aborting session.")
+                                if !finalAnswerDelivered {
+                                    DispatchQueue.main.async {
+                                        completion(.failure(NSError(
+                                            domain: "AgentRunner",
+                                            code: -2,
+                                            userInfo: [NSLocalizedDescriptionKey: "Failed to encode terminal output."]
+                                        )))
+                                    }
+                                }
+                                task.cancel(with: .goingAway, reason: nil)
+                                Task { await AgentSessionState.shared.registerWebSocketTask(nil) }
+                                return
                             }
 
-                            print("[AgentRunner] Sending terminal output back to agent. Exit status: \(status). Output length: \(output.count). Encoded JSON length: \(encodedLength)")
+                            print("[AgentRunner] Sending terminal output back to agent. Exit status: \(status). Output length: \(output.count). Encoded JSON length: \(jsonData.count)")
 
-                            if let jsonData = try? encoder.encode(reply),
-                               let jsonString = String(data: jsonData, encoding: .utf8)
-                            {
-                                task.send(.string(jsonString)) { _ in }
+                            // Send the terminal output and resume the receive loop only
+                            // after the send succeeds. Ignoring the callback here was the
+                            // bug: a silent send failure left the pending receiveNext()
+                            // waiting forever for a server reply that never arrived.
+                            task.send(.string(jsonString)) { error in
+                                if let error = error {
+                                    print("[AgentRunner] Failed to send terminal output: \(error.localizedDescription)")
+                                    if !finalAnswerDelivered {
+                                        DispatchQueue.main.async {
+                                            completion(.failure(error))
+                                        }
+                                    }
+                                    task.cancel(with: .goingAway, reason: nil)
+                                    Task { await AgentSessionState.shared.registerWebSocketTask(nil) }
+                                } else {
+                                    // Terminal output delivered; listen for the agent's next message.
+                                    receiveNext()
+                                }
                             }
                         }
-                        receiveNext()
                         return
                     }
 

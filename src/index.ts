@@ -17,24 +17,40 @@ const PORT = Number(config.port);
 app.use(cors());
 app.use(express.json());
 
+// Landing page
+app.use(express.static(path.join(process.cwd(), 'public')));
+
 app.use('/api/subscription', createSubscriptionRouter(logger));
 
 app.use('/api/feature', createFeatureRouter());
 
 app.use('/api/instructions', taskInstructionRouter());
 
-app.get('/macos/download', (req, res) => {
+app.get('/macos/download', (_req, res) => {
   const dmgPath = path.join(process.cwd(), 'macOS', 'OmniKeyAI.dmg');
 
-  res.download(dmgPath, 'OmniKeyAI.dmg', (err) => {
-    if (err) {
-      logger.error('Failed to send OmniKeyAI.dmg for download.', { error: err });
+  if (!fs.existsSync(dmgPath)) {
+    res.status(404).send('File not found.');
+    return;
+  }
 
-      if (!res.headersSent) {
-        res.status(500).send('Unable to download file.');
-      }
+  res.set({
+    'Content-Type': 'application/octet-stream',
+    'Content-Disposition': 'attachment; filename="OmniKeyAI.dmg"',
+    'Content-Encoding': 'gzip',
+  });
+
+  const fileStream = fs.createReadStream(dmgPath);
+  const gzip = zlib.createGzip();
+
+  fileStream.on('error', (err) => {
+    logger.error('Failed to send OmniKeyAI.dmg for download.', { error: err });
+    if (!res.headersSent) {
+      res.status(500).send('Unable to download file.');
     }
   });
+
+  fileStream.pipe(gzip).pipe(res);
 });
 
 // Sparkle appcast feed for macOS updates.
@@ -58,8 +74,8 @@ app.get('/macos/appcast', (req, res) => {
 
   // These should match the values embedded into the macOS app
   // Info.plist in macOS/build_release_dmg.sh.
-  const bundleVersion = '13';
-  const shortVersion = '1.0.12';
+  const bundleVersion = '14';
+  const shortVersion = '1.0.13';
 
   const xml = `<?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0"
@@ -90,7 +106,7 @@ app.get('/macos/appcast', (req, res) => {
 // ── Windows distribution endpoints ───────────────────────────────────────────
 // These should match the values in windows/OmniKey.Windows.csproj
 // <Version> and windows/build_release_zip.ps1 $APP_VERSION.
-const WIN_VERSION = '1.1';
+const WIN_VERSION = '1.2';
 const WIN_ZIP_FILENAME = 'OmniKeyAI-windows-win-x64.zip';
 const WIN_ZIP_PATH = path.join(process.cwd(), 'windows', WIN_ZIP_FILENAME);
 
@@ -144,6 +160,10 @@ app.get('/windows/update', (req, res) => {
 
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok' });
+});
+
+app.get('*', (_req, res) => {
+  res.sendFile(path.join(process.cwd(), 'public', 'index.html'));
 });
 
 let server: import('http').Server | null = null;

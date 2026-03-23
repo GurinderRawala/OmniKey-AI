@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OmniKey AI</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="style.css" />
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+  </head>
+  <body>
+    <main>
+      <!-- ── Header ── -->
+      <header>
+        <img src="/icon.png" alt="OmniKey AI" class="icon" />
+        <h1>OmniKey AI</h1>
+        <p class="tagline">AI-powered text enhancement, right from your keyboard.</p>
+        <p class="platform-badge">
+          <span>🍎 macOS menu bar app</span>
+          <span class="sep">·</span>
+          <span>🪟 Windows system tray app</span>
+        </p>
+      </header>
+
+      <!-- ── Intro ── -->
+      <section class="intro">
+        <p>
+          OmniKey AI is a productivity tool that enhances your workflow with AI-powered prompt
+          enhancements, grammar correction, and custom tasks. Simply select any text and execute a
+          command using a key combination — in any app, on any screen.
+        </p>
+        <ul class="features">
+          <li><span class="key">⌘E / Ctrl+E</span> Enhance prompt clarity &amp; structure</li>
+          <li><span class="key">⌘G / Ctrl+G</span> Fix grammar &amp; readability</li>
+          <li><span class="key">⌘T / Ctrl+T</span> Run your custom AI task or agent</li>
+        </ul>
+      </section>
+
+      <!-- ── Download ── -->
+      <section class="download">
+        <h2>Download</h2>
+        <div class="buttons">
+          <a href="/macos/download" class="btn btn-mac">
+            <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20">
+              <path
+                d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"
+              />
+            </svg>
+            Download for macOS
+          </a>
+          <a href="/windows/download" class="btn btn-win">
+            <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20">
+              <path
+                d="M3 12V6.75l6-1.32v6.57H3zm17 0V5.25L11 3.5v8.5h9zM3 13v5.25l6 1.32V13H3zm17 0v6.75L11 21.5V13h9z"
+              />
+            </svg>
+            Download for Windows
+          </a>
+        </div>
+        <p class="note">macOS 13+ &nbsp;|&nbsp; Windows 10/11 x64</p>
+      </section>
+
+      <!-- ── Getting Started ── -->
+      <section class="setup">
+        <h2>Getting Started</h2>
+
+        <div class="step">
+          <div class="step-number">1</div>
+          <div class="step-content">
+            <h3>Install the CLI</h3>
+            <p>Install the OmniKey CLI globally via npm:</p>
+            <pre><code>npm install -g omnikey-cli</code></pre>
+          </div>
+        </div>
+
+        <div class="step">
+          <div class="step-number">2</div>
+          <div class="step-content">
+            <h3>Onboard &amp; configure your AI provider</h3>
+            <p>Run the interactive setup to pick your LLM provider and enter your API key:</p>
+            <pre><code>omnikey onboard</code></pre>
+            <p class="hint">
+              Supports <strong>OpenAI</strong>, <strong>Anthropic</strong>, and
+              <strong>Google Gemini</strong>. You can also optionally configure a web search
+              provider (Serper, Brave Search, Tavily, or SearXNG) — if none is set, OmniKey falls
+              back to <strong>DuckDuckGo</strong> by default so web search works out of the box with
+              no key required.
+            </p>
+          </div>
+        </div>
+
+        <div class="step">
+          <div class="step-number">3</div>
+          <div class="step-content">
+            <h3>Start the daemon</h3>
+            <p>
+              Register OmniKey as a persistent background service that survives system restarts:
+            </p>
+            <pre><code>omnikey daemon</code></pre>
+            <p class="hint">
+              On macOS this registers a launchd agent. On Windows it registers a Task Scheduler
+              task.
+            </p>
+          </div>
+        </div>
+
+        <div class="step">
+          <div class="step-number">4</div>
+          <div class="step-content">
+            <h3>Download &amp; launch the app</h3>
+            <p>
+              Download the app above for your platform, install it, and you're ready. Select any
+              text in any app and press a shortcut. You can manage task instructions and view the
+              manual from the menu bar / system tray icon.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── Features ── -->
+      <section class="features-section">
+        <h2>Features</h2>
+
+        <div class="feature-grid">
+          <div class="feature-item">
+            <h3>Multiple LLM Providers</h3>
+            <p>
+              Choose between <strong>OpenAI</strong>, <strong>Anthropic</strong>, or
+              <strong>Google Gemini</strong> as your AI backend. Configure your preferred provider
+              during onboarding or at any time via the CLI.
+            </p>
+          </div>
+
+          <div class="feature-item">
+            <h3>Web Search</h3>
+            <p>Give the agent real-time web context. Supported providers:</p>
+            <ul class="provider-list">
+              <li><strong>DuckDuckGo</strong> — default fallback, no key required</li>
+              <li><strong>Serper</strong> — Google Search API, 2,500 free req/mo</li>
+              <li><strong>Brave Search</strong> — 2,000 free req/mo</li>
+              <li><strong>Tavily</strong> — optimised for AI, 1,000 free req/mo</li>
+              <li><strong>SearXNG</strong> — self-hosted, no key needed</li>
+            </ul>
+          </div>
+
+          <div class="feature-item">
+            <h3>Prompt Enhancement</h3>
+            <p>
+              Press <span class="key">⌘E</span> / <span class="key">Ctrl+E</span> to improve the
+              clarity, structure, and tone of selected text — ideal before sending to any AI tool.
+            </p>
+          </div>
+
+          <div class="feature-item">
+            <h3>Grammar &amp; Clarity Fix</h3>
+            <p>
+              Press <span class="key">⌘G</span> / <span class="key">Ctrl+G</span> to correct
+              spelling, grammar, and readability without changing the core meaning of your text.
+            </p>
+          </div>
+
+          <div class="feature-item">
+            <h3>Custom Tasks</h3>
+            <p>
+              Press <span class="key">⌘T</span> / <span class="key">Ctrl+T</span> to apply your own
+              saved task instructions to the selected text. Configure them in the
+              <strong>Task Instructions</strong> window from the menu bar.
+            </p>
+          </div>
+
+          <div class="feature-item">
+            <h3>How It Works</h3>
+            <ol class="how-list">
+              <li>Select text in any app.</li>
+              <li>Press an OmniKey shortcut.</li>
+              <li>OmniKey sends it securely to the AI service.</li>
+              <li>The result is pasted back in place.</li>
+            </ol>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── Using OmniKey ── -->
+      <section class="usage">
+        <h2>Using OmniKey</h2>
+
+        <div class="usage-card">
+          <div class="usage-icon">⌘E</div>
+          <div class="usage-body">
+            <h3>Enhance a Prompt</h3>
+            <p>
+              Select any text in any app and press <span class="key">⌘E</span> (macOS) or
+              <span class="key">Ctrl+E</span> (Windows). OmniKey rewrites it with better clarity,
+              structure, and tone — ideal before sending to an AI tool.
+            </p>
+          </div>
+        </div>
+
+        <div class="usage-card">
+          <div class="usage-icon">⌘G</div>
+          <div class="usage-body">
+            <h3>Fix Grammar &amp; Clarity</h3>
+            <p>
+              Select text and press <span class="key">⌘G</span> / <span class="key">Ctrl+G</span>.
+              OmniKey corrects spelling, grammar, and readability without changing your meaning.
+            </p>
+          </div>
+        </div>
+
+        <div class="usage-card">
+          <div class="usage-icon">⌘T</div>
+          <div class="usage-body">
+            <h3>Run a Custom Task</h3>
+            <p>
+              Set up your own task instructions in the <strong>Task Instructions</strong> tab in the
+              menu bar app. Then select any text and press <span class="key">⌘T</span> /
+              <span class="key">Ctrl+T</span> to apply them.
+            </p>
+          </div>
+        </div>
+
+        <div class="usage-card highlight">
+          <div class="usage-icon">@</div>
+          <div class="usage-body">
+            <h3>Ask OmniKey Anything</h3>
+            <p>
+              Start your text with <code>@omnikeyai</code> followed by any instruction. Select it
+              and press any OmniKey shortcut — OmniKey takes action based on what you write and
+              pastes the result in place.
+            </p>
+            <pre><code>@omnikeyai write this text into valid markdown format</code></pre>
+            <p class="hint">
+              Powered by your configured provider — <strong>OpenAI</strong>,
+              <strong>Anthropic</strong>, or <strong>Google Gemini</strong>.
+            </p>
+          </div>
+        </div>
+
+        <div class="usage-card highlight">
+          <div class="usage-icon">🤖</div>
+          <div class="usage-body">
+            <h3>Run the AI Agent</h3>
+            <p>
+              Start your instructions with <code>@omniAgent</code>, select them, and press
+              <span class="key">⌘T</span> / <span class="key">Ctrl+T</span>. The agent gathers
+              context from your <strong>terminal</strong> and the <strong>web</strong>, combines
+              your saved task instructions if configured, then completes the task and pastes the
+              result.
+            </p>
+            <pre
+              class="whitespace-pre-wrap break-words"
+            ><code>@omniAgent find all TODO comments in my project and summarise them</code></pre>
+            <p class="hint">
+              Web search uses your configured provider (Serper, Brave, Tavily, or SearXNG). Falls
+              back to DuckDuckGo if none is set — no key required.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <footer>
+        <p>OmniKey AI &copy; <span id="year"></span></p>
+      </footer>
+    </main>
+    <script src="app.js"></script>
+  </body>
+</html>

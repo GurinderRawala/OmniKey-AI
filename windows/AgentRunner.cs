@@ -115,6 +115,15 @@ namespace OmniKey.Windows
                 if (msg == null) continue;
 
                 string content = msg.content ?? "";
+
+                // Web call notification: show it in the thinking window and
+                // keep listening — this is not a final answer (mirrors macOS).
+                if (msg.is_web_call == true)
+                {
+                    thinkingForm.AppendWebCall(content);
+                    continue;
+                }
+
                 string displayText = CleanDisplayText(content);
 
                 // Show the message in the thinking window (not terminal output)
@@ -306,6 +315,7 @@ namespace OmniKey.Windows
             public string? content { get; set; }
             public bool is_terminal_output { get; set; }
             public bool is_error { get; set; }
+            public bool? is_web_call { get; set; }
             public string platform { get; set; } = "windows";
         }
     }

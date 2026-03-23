@@ -151,6 +151,17 @@ namespace OmniKey.Windows
             });
         }
 
+        public void AppendWebCall(string text)
+        {
+            InvokeIfNeeded(() =>
+            {
+                // Web call header: AccentBlue (nord8), bold — mirrors macOS [web_call] prefix
+                AppendText("[web_call] ", NordColors.AccentBlue, bold: true);
+                AppendText(text.Trim() + "\n\n", NordColors.SecondaryText);
+                _logBox.ScrollToCaret();
+            });
+        }
+
         public void AppendTerminalOutput(string text)
         {
             InvokeIfNeeded(() =>

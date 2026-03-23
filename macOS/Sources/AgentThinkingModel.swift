@@ -10,6 +10,7 @@ final class AgentThinkingModel: ObservableObject {
     @Published var initialRequest: String = ""
     @Published var agentMessages: [String] = []
     @Published var terminalOutputs: [String] = []
+    @Published var webCalls: [String] = []
 
     private init() {}
 
@@ -18,6 +19,7 @@ final class AgentThinkingModel: ObservableObject {
         initialRequest = ""
         agentMessages = []
         terminalOutputs = []
+        webCalls = []
 
         if let initial = initialText, !initial.isEmpty {
             log = initial
@@ -38,8 +40,23 @@ final class AgentThinkingModel: ObservableObject {
 
         if trimmed.hasPrefix("[terminal ") {
             terminalOutputs.append(trimmed)
+        } else if trimmed.hasPrefix("[web_call") {
+            webCalls.append(trimmed)
         } else {
             agentMessages.append(trimmed)
+        }
+    }
+
+    func appendWebCall(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        webCalls.append(trimmed)
+
+        let logEntry = "[web_call] \(trimmed)"
+        if log.isEmpty {
+            log = logEntry
+        } else {
+            log += "\n\n" + logEntry
         }
     }
 }
