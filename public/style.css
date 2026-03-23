@@ -561,6 +561,30 @@ code {
 
 .usage-body p:last-child { margin-bottom: 0; }
 
+/* ── Star on GitHub button ── */
+.star-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 20px;
+  padding: 8px 18px;
+  border-radius: 8px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.12);
+  color: var(--nord4);
+  font-size: 0.88rem;
+  font-weight: 600;
+  text-decoration: none;
+  letter-spacing: 0.01em;
+  transition: background 0.18s, border-color 0.18s, color 0.18s;
+}
+.star-btn svg { opacity: 0.85; color: #f0c060; }
+.star-btn:hover {
+  background: rgba(255,255,255,0.11);
+  border-color: rgba(255,255,255,0.22);
+  color: var(--nord6);
+}
+
 /* ── Footer ── */
 footer {
   text-align: center;
