@@ -20,7 +20,7 @@ struct LicenseView: View {
                             .fill(NordTheme.accentBlue(colorScheme).opacity(0.12))
                             .frame(width: 56, height: 56)
 
-                        Image("AppIcon")
+                        Image(nsImage: NSApplication.shared.applicationIconImage)
                             .resizable()
                             .frame(width: 44, height: 44)
                             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
