@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { execSync } from 'child_process';
+import { execSync, execFileSync } from 'child_process';
 import { isWindows, getHomeDir, getConfigDir, readConfig } from './utils';
 
 export function killLaunchdAgent() {
@@ -20,27 +20,37 @@ export function killLaunchdAgent() {
 }
 
 export function killWindowsTask() {
-  const taskName = 'OmnikeyDaemon';
+  const serviceName = 'OmnikeyDaemon';
+
+  // Try NSSM first (current implementation)
+  let nssmPath: string | null = null;
   try {
-    execSync(`schtasks /end /tn "${taskName}"`, { stdio: 'pipe' });
-  } catch {
-    // Task may not be running — that's fine
-  }
-  try {
-    execSync(`schtasks /delete /tn "${taskName}" /f`, { stdio: 'pipe' });
-    console.log(`Removed Windows Task Scheduler task: ${taskName}`);
-  } catch {
-    console.log(`Windows Task Scheduler task does not exist: ${taskName}`);
+    nssmPath = execSync('where nssm', { stdio: 'pipe' }).toString().trim().split('\n')[0].trim();
+  } catch { /* NSSM not installed */ }
+
+  if (nssmPath) {
+    try { execFileSync(nssmPath, ['stop', serviceName], { stdio: 'pipe' }); } catch { /* not running */ }
+    try {
+      execFileSync(nssmPath, ['remove', serviceName, 'confirm'], { stdio: 'pipe' });
+      console.log(`Removed NSSM service: ${serviceName}`);
+    } catch {
+      console.log(`NSSM service does not exist: ${serviceName}`);
+    }
+  } else {
+    // Fallback: remove legacy Task Scheduler task from previous installs
+    try { execSync(`schtasks /end /tn "${serviceName}"`, { stdio: 'pipe' }); } catch { /* not running */ }
+    try {
+      execSync(`schtasks /delete /tn "${serviceName}" /f`, { stdio: 'pipe' });
+      console.log(`Removed Windows Task Scheduler task: ${serviceName}`);
+    } catch {
+      console.log(`Windows Task Scheduler task does not exist: ${serviceName}`);
+    }
   }
 
-  // Also remove the wrapper script
+  // Remove legacy wrapper script if present
   const wrapperPath = path.join(getConfigDir(), 'start-daemon.cmd');
   if (fs.existsSync(wrapperPath)) {
-    try {
-      fs.rmSync(wrapperPath);
-    } catch {
-      // Ignore
-    }
+    try { fs.rmSync(wrapperPath); } catch { /* ignore */ }
   }
 }
 

@@ -35,6 +35,89 @@ type SessionState = {
   turns: number;
 };
 
+async function runToolLoop(
+  initialResult: AICompletionResult,
+  session: SessionState,
+  sessionId: string,
+  send: AgentSendFn,
+  log: typeof logger,
+  tools: AITool[],
+  onUsage: (result: AICompletionResult) => Promise<void>,
+): Promise<AICompletionResult> {
+  const MAX_TOOL_ITERATIONS = 10;
+  let toolIterations = 0;
+  let result = initialResult;
+
+  while (result.finish_reason === 'tool_calls' && toolIterations < MAX_TOOL_ITERATIONS) {
+    toolIterations++;
+
+    const toolCalls = result.tool_calls ?? [];
+
+    // If the model claims tool_calls but sent none, treat it as a normal text
+    // response — pushing an assistant message with no following tool results
+    // would leave the history ending with an assistant turn, causing a 400.
+    if (!toolCalls.length) break;
+
+    session.history.push(result.assistantMessage);
+    log.info('Agent executing tool calls', {
+      sessionId,
+      turn: session.turns,
+      toolIteration: toolIterations,
+      tools: toolCalls.map((tc) => tc.name),
+    });
+
+    const toolResults = await Promise.all(
+      toolCalls.map(async (tc) => {
+        const args = tc.arguments as Record<string, string>;
+
+        // Notify the frontend that a web tool call is about to execute.
+        const webCallContent =
+          tc.name === 'web_search'
+            ? `Searching the web for: "${args.query ?? ''}"`
+            : `Fetching URL: ${args.url ?? ''}`;
+        send({
+          session_id: sessionId,
+          sender: 'agent',
+          content: webCallContent,
+          is_terminal_output: false,
+          is_error: false,
+          is_web_call: true,
+        });
+
+        const toolResult = await executeTool(tc.name, args, log);
+        log.info('Tool call completed', {
+          sessionId,
+          tool: tc.name,
+          resultLength: toolResult.length,
+        });
+        return { id: tc.id, name: tc.name, result: toolResult };
+      }),
+    );
+
+    for (const { id, name, result: toolResult } of toolResults) {
+      session.history.push({
+        role: 'tool',
+        tool_call_id: id,
+        tool_name: name,
+        content: toolResult,
+      });
+    }
+
+    // Call the AI again with the tool results in history to get the next response.
+    result = await aiClient.complete(aiModel, session.history, {
+      tools: tools.length ? tools : undefined,
+      temperature: 0.2,
+    });
+    await onUsage(result);
+  }
+
+  log.info('Finished reasoning and tool calls: ', {
+    reason: result.finish_reason,
+  });
+
+  return result;
+}
+
 function buildAvailableTools(): AITool[] {
   // web_search is always available — DuckDuckGo is used as free fallback
   return [WEB_FETCH_TOOL, WEB_SEARCH_TOOL];
@@ -53,7 +136,7 @@ async function getOrCreateSession(
   subscription: Subscription,
   platform: string | undefined,
   log: typeof logger,
-): Promise<SessionState> {
+): Promise<{ sessionState: SessionState; hasStoredPrompt: boolean }> {
   const existing = sessionMessages.get(sessionId);
   if (existing) {
     log.debug('Reusing existing agent session', {
@@ -61,16 +144,21 @@ async function getOrCreateSession(
       subscriptionId: existing.subscription.id,
       turns: existing.turns,
     });
-    return existing;
+    return {
+      sessionState: existing,
+      hasStoredPrompt: existing.history
+        .filter((h) => h.role === 'user')
+        .some((h) => h.content.includes('<stored_instructions>')),
+    };
   }
-
-  const systemPrompt = getAgentPrompt(platform);
 
   // use these instructions as user instructions
   const prompt = await getPromptForCommand(log, 'task', subscription).catch((err) => {
     log.error('Failed to get system prompt for new agent session', { error: err });
     return '';
   });
+
+  const systemPrompt = getAgentPrompt(platform, !!prompt);
 
   const entry: SessionState = {
     subscription,
@@ -103,7 +191,10 @@ ${prompt}
     subscriptionId: subscription.id,
     hasCustomPrompt: Boolean(prompt),
   });
-  return entry;
+  return {
+    sessionState: entry,
+    hasStoredPrompt: !!prompt,
+  };
 }
 
 async function authenticateFromAuthHeader(
@@ -182,6 +273,10 @@ async function authenticateFromAuthHeader(
   }
 }
 
+function createUserContent(content: string, hasStoredPrompt: boolean) {
+  return hasStoredPrompt ? content.replace(/@omniAgent/g, '').trim() : content;
+}
+
 async function runAgentTurn(
   sessionId: string,
   subscription: Subscription,
@@ -189,7 +284,12 @@ async function runAgentTurn(
   send: AgentSendFn,
   log: typeof logger,
 ) {
-  const session = await getOrCreateSession(sessionId, subscription, clientMessage.platform, log);
+  const { sessionState: session, hasStoredPrompt } = await getOrCreateSession(
+    sessionId,
+    subscription,
+    clientMessage.platform,
+    log,
+  );
 
   // Count this call as one agent iteration.
   session.turns += 1;
@@ -231,10 +331,16 @@ async function runAgentTurn(
     userContentLength: userContent.length,
   });
 
-  session.history.push({
-    role: 'user',
-    content: userContent,
-  });
+  const isAssistance = isTerminalOutput || isErrorFlag;
+
+  if (!clientMessage?.is_web_call) {
+    session.history.push({
+      role: 'user',
+      content: isAssistance
+        ? userContent
+        : `<user_input>${createUserContent(userContent, hasStoredPrompt)}</user_input>`,
+    });
+  }
 
   // On the final turn we omit tools so the model is forced to emit a
   // plain text <final_answer> rather than issuing another tool call.
@@ -280,108 +386,9 @@ async function runAgentTurn(
 
     await recordUsage(result);
 
-    // Tool-call loop: execute any requested tools and feed results back
-    // until the model emits a non-tool-call response (or we hit the limit).
-    const MAX_TOOL_ITERATIONS = 10;
-    let toolIterations = 0;
+    let content = result.content.trim();
 
-    while (result.finish_reason === 'tool_calls' && toolIterations < MAX_TOOL_ITERATIONS) {
-      toolIterations++;
-
-      const toolCalls = result.tool_calls ?? [];
-
-      // If the model claims tool_calls but sent none, treat it as a normal text
-      // response — pushing an assistant message with no following tool results
-      // would leave the history ending with an assistant turn, causing a 400.
-      if (!toolCalls.length) break;
-
-      session.history.push(result.assistantMessage);
-      log.info('Agent executing tool calls', {
-        sessionId,
-        turn: session.turns,
-        toolIteration: toolIterations,
-        tools: toolCalls.map((tc) => tc.name),
-      });
-
-      const toolResults = await Promise.all(
-        toolCalls.map(async (tc) => {
-          const args = tc.arguments as Record<string, string>;
-
-          // Notify the frontend that a web tool call is about to execute.
-          const webCallContent =
-            tc.name === 'web_search'
-              ? `Searching the web for: "${args.query ?? ''}"`
-              : `Fetching URL: ${args.url ?? ''}`;
-          send({
-            session_id: sessionId,
-            sender: 'agent',
-            content: webCallContent,
-            is_terminal_output: false,
-            is_error: false,
-            is_web_call: true,
-          });
-
-          const toolResult = await executeTool(tc.name, args, log);
-          log.info('Tool call completed', {
-            sessionId,
-            tool: tc.name,
-            resultLength: toolResult.length,
-          });
-          return { id: tc.id, name: tc.name, result: toolResult };
-        }),
-      );
-
-      for (const { id, name, result: toolResult } of toolResults) {
-        session.history.push({
-          role: 'tool',
-          tool_call_id: id,
-          tool_name: name,
-          content: toolResult,
-        });
-      }
-
-      result = await aiClient.complete(aiModel, session.history, {
-        tools: tools?.length ? tools : undefined,
-        temperature: 0.2,
-      });
-
-      await recordUsage(result);
-    }
-
-    log.info('Finished reasoning and tool calls: ', {
-      reason: result.finish_reason,
-    });
-
-    const content = result.content.trim();
-
-    // If the tool loop was exhausted while the model still wants more tool calls,
-    // the last result has empty content. Force one final no-tools call so the model
-    // must synthesize a text answer from everything gathered so far.
-    if (result.finish_reason === 'tool_calls' || !content) {
-      log.warn(
-        'Tool iteration limit reached with pending tool calls; forcing final text response',
-        {
-          sessionId,
-          turn: session.turns,
-        },
-      );
-      // Do NOT push result.assistantMessage here — it contains tool_use blocks that
-      // require corresponding tool_result blocks (Anthropic API constraint). Since we
-      // are not executing those tool calls, just inject a plain user nudge so the model
-      // synthesizes a text answer from the history already accumulated.
-      session.history.push({
-        role: 'user',
-        content:
-          'You have reached the maximum number of tool calls. Based on all information gathered so far, please provide your best answer now.',
-      });
-      result = await aiClient.complete(aiModel, session.history, {
-        tools: undefined,
-        temperature: 0.2,
-      });
-      await recordUsage(result);
-    }
-
-    if (!content) {
+    if (!content && result.finish_reason !== 'tool_calls') {
       log.warn('Agent LLM returned empty content; sending generic error to client.');
 
       const errorMessage = 'The agent returned an empty response. Please try again.';
@@ -394,6 +401,39 @@ async function runAgentTurn(
       return;
     }
 
+    // If the model requested web tool calls, execute them and get a follow-up
+    // response before deciding what to send to the client.
+    if (!isFinalTurn && result.finish_reason === 'tool_calls') {
+      log.info('Running web tool calls to gather information', {
+        sessionId,
+        subscriptionId: subscription.id,
+        turn: session.turns,
+      });
+
+      result = await runToolLoop(
+        result,
+        session,
+        sessionId,
+        send,
+        log,
+        buildAvailableTools(),
+        recordUsage,
+      );
+      content = result.content.trim();
+
+      if (!content) {
+        log.warn('Agent returned empty content after tool loop; sending generic error.');
+        sendFinalAnswer(
+          send,
+          sessionId,
+          'The agent returned an empty response. Please try again.',
+          true,
+        );
+        sessionMessages.delete(sessionId);
+        return;
+      }
+    }
+
     // Ensure that a proper <final_answer> block is produced for the
     // desktop clients once we reach the final turn. If the model did
     // not emit either a <shell_script> or <final_answer> tag on the
@@ -403,57 +443,44 @@ async function runAgentTurn(
     const hasShellScriptTag = content.includes('<shell_script>');
     const hasFinalAnswerTag = content.includes('<final_answer>');
 
-    log.info('Agent LLM raw response summary', {
-      sessionId,
-      turn: session.turns,
-      rawContentLength: content.length,
-      hasShellScriptTag,
-      hasFinalAnswerTag,
-    });
+    if (hasShellScriptTag && !isFinalTurn) {
+      log.info('Completed agent turn. Sending back scripts, waiting for results.', {
+        sessionId,
+        subscriptionId: subscription.id,
+        turn: session.turns,
+        responseLength: result.content.length,
+      });
 
-    const normalizedContent =
-      !hasShellScriptTag && !hasFinalAnswerTag && session.turns >= MAX_TURNS
-        ? `<final_answer>\n${content}\n</final_answer>`
-        : content;
+      session.history.push({
+        role: 'assistant',
+        content,
+      });
 
-    log.info('Agent LLM normalized response summary', {
-      sessionId,
-      turn: session.turns,
-      normalizedContentLength: normalizedContent.length,
-    });
+      send({
+        session_id: sessionId,
+        sender: 'agent',
+        content,
+        is_terminal_output: false,
+        is_error: false,
+      });
+      return;
+    }
 
-    // Record assistant message back into history for future turns.
-    session.history.push({
-      role: 'assistant',
-      content: normalizedContent,
-    });
-
-    send({
-      session_id: sessionId,
-      sender: 'agent',
-      content: normalizedContent,
-      is_terminal_output: false,
-      is_error: false,
-    });
-
-    // After the MAX_TURNS iteration or if a final answer tag is present, treat this as the final answer
-    // and clear the session from memory while marking it completed.
-    if (session.turns >= MAX_TURNS || hasFinalAnswerTag) {
+    if (isFinalTurn || hasFinalAnswerTag) {
       log.info('Finalizing agent session after max turns or final answer tag', {
         sessionId,
         subscriptionId: subscription.id,
         turns: session.turns,
         hasFinalAnswerTag,
       });
+
+      send({
+        session_id: sessionId,
+        sender: 'agent',
+        content: hasFinalAnswerTag ? content : `<final_answer>\n${content}\n</final_answer>`,
+      });
       sessionMessages.delete(sessionId);
     }
-
-    log.info('Completed agent turn', {
-      sessionId,
-      subscriptionId: subscription.id,
-      turn: session.turns,
-      responseLength: normalizedContent.length,
-    });
   } catch (err) {
     log.error('Agent LLM call failed', { error: err });
     const errorMessage = 'Agent failed to call language model. Please try again later.';
