@@ -7,11 +7,11 @@ namespace OmniKey.Windows
     {
         public ManualForm()
         {
-            Text            = "OmniKey \u2013 Manual";
-            ClientSize      = new Size(900, 620);
-            MinimumSize     = new Size(880, 580);
-            StartPosition   = FormStartPosition.CenterScreen;
-            BackColor       = NordColors.WindowBackground;
+            Text          = "OmniKey \u2013 Manual";
+            ClientSize    = new Size(900, 620);
+            MinimumSize   = new Size(880, 580);
+            StartPosition = FormStartPosition.CenterScreen;
+            BackColor     = NordColors.WindowBackground;
 
             // ── Header ────────────────────────────────────────────────────
             var titleLabel = new Label
@@ -21,7 +21,7 @@ namespace OmniKey.Windows
                 ForeColor = NordColors.PrimaryText,
                 AutoSize  = true,
                 Location  = new Point(24, 20),
-                Anchor    = AnchorStyles.Top | AnchorStyles.Left,
+                Anchor    = AnchorStyles.Top | AnchorStyles.Left
             };
             Controls.Add(titleLabel);
 
@@ -31,20 +31,30 @@ namespace OmniKey.Windows
                             "OmniKey will process your selected text and paste the improved version back in place.",
                 Font      = new Font("Segoe UI", 9),
                 ForeColor = NordColors.SecondaryText,
-                Location  = new Point(24, 56),
+                Location  = new Point(24, 52),
                 Size      = new Size(852, 34),
-                Anchor    = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+                Anchor    = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
             };
             Controls.Add(subtitleLabel);
 
-            // ── Content panel (padded wrapper so RTB has inner margins) ───
+            // Thin separator at y=88
+            var separator = new Panel
+            {
+                BackColor = NordColors.Border,
+                Location  = new Point(0, 88),
+                Size      = new Size(900, 1),
+                Anchor    = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
+            };
+            Controls.Add(separator);
+
+            // ── Content panel ─────────────────────────────────────────────
             var wrapper = new Panel
             {
-                Location    = new Point(16, 98),
-                Size        = new Size(868, 472),
-                BackColor   = NordColors.PanelBackground,
-                Padding     = new Padding(20, 14, 20, 14),
-                Anchor      = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right,
+                Location  = new Point(16, 94),
+                Size      = new Size(868, 466),
+                BackColor = NordColors.PanelBackground,
+                Padding   = new Padding(20, 14, 20, 14),
+                Anchor    = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right
             };
             Controls.Add(wrapper);
 
@@ -58,19 +68,27 @@ namespace OmniKey.Windows
                 WordWrap    = true,
                 Dock        = DockStyle.Fill,
                 Font        = new Font("Segoe UI", 10),
-                DetectUrls  = false,
+                DetectUrls  = false
             };
             wrapper.Controls.Add(rtb);
 
             // ── Content ───────────────────────────────────────────────────
             AppendTitle(rtb, "Keyboard shortcuts");
-            AppendBody(rtb,
-                "• Ctrl+E  \u2013  Enhance prompts\n" +
-                "    Improves clarity, structure, and tone of your selected text so it works better as an AI prompt.\n\n" +
-                "• Ctrl+G  \u2013  Fix grammar and clarity\n" +
-                "    Focuses on grammar, spelling, and readability without changing the core meaning.\n\n" +
-                "• Ctrl+T  \u2013  Run your custom task\n" +
-                "    Applies your saved task instructions to the selected text. Configure these in \"Task Instructions\" from the tray menu.");
+
+            AppendShortcutLine(rtb,
+                "Ctrl+E",
+                "Enhance prompts",
+                "Improves clarity, structure, and tone of your selected text so it works better as an AI prompt.");
+
+            AppendShortcutLine(rtb,
+                "Ctrl+G",
+                "Fix grammar and clarity",
+                "Focuses on grammar, spelling, and readability without changing the core meaning.");
+
+            AppendShortcutLine(rtb,
+                "Ctrl+T",
+                "Run your custom task",
+                "Applies your saved task instructions to the selected text. Configure these in \"Task Instructions\" from the tray menu.");
 
             AppendDivider(rtb);
             AppendTitle(rtb, "How OmniKey works");
@@ -119,14 +137,14 @@ namespace OmniKey.Windows
                 Text      = "Close",
                 Font      = new Font("Segoe UI", 9, FontStyle.Bold),
                 ForeColor = NordColors.PrimaryText,
-                BackColor = NordColors.Nord2,
+                BackColor = NordColors.SurfaceBackground,
                 FlatStyle = FlatStyle.Flat,
                 Size      = new Size(80, 28),
                 Location  = new Point(804, 580),
-                Anchor    = AnchorStyles.Bottom | AnchorStyles.Right,
+                Anchor    = AnchorStyles.Bottom | AnchorStyles.Right
             };
-            closeButton.FlatAppearance.BorderColor         = NordColors.Border;
-            closeButton.FlatAppearance.MouseOverBackColor  = NordColors.Nord3;
+            closeButton.FlatAppearance.BorderColor        = NordColors.Border;
+            closeButton.FlatAppearance.MouseOverBackColor = NordColors.PanelBackground;
             closeButton.Click += (_, _) => Close();
             Controls.Add(closeButton);
         }
@@ -135,7 +153,12 @@ namespace OmniKey.Windows
 
         private static void AppendTitle(RichTextBox rtb, string text)
         {
-            rtb.SelectionFont  = new Font("Segoe UI", 10, FontStyle.Bold);
+            // Accent bar prefix in AccentCyan
+            rtb.SelectionFont  = new Font("Segoe UI", 11, FontStyle.Bold);
+            rtb.SelectionColor = NordColors.AccentCyan;
+            rtb.AppendText("\u258c ");
+
+            // Title text in AccentBlue
             rtb.SelectionColor = NordColors.AccentBlue;
             rtb.AppendText(text + "\n\n");
         }
@@ -149,9 +172,28 @@ namespace OmniKey.Windows
 
         private static void AppendDivider(RichTextBox rtb)
         {
-            rtb.SelectionFont  = new Font("Segoe UI", 10);
+            // Empty spacer instead of a line of ─ chars
+            rtb.SelectionFont  = new Font("Segoe UI", 6);
             rtb.SelectionColor = NordColors.Border;
-            rtb.AppendText(new string('\u2500', 72) + "\n\n");
+            rtb.AppendText("\n");
+        }
+
+        private static void AppendShortcutLine(RichTextBox rtb, string keys, string label, string desc)
+        {
+            // Key combo in AccentAmber bold monospace
+            rtb.SelectionFont  = new Font("Consolas", 10, FontStyle.Bold);
+            rtb.SelectionColor = NordColors.AccentAmber;
+            rtb.AppendText(keys + "  ");
+
+            // Label in PrimaryText bold
+            rtb.SelectionFont  = new Font("Segoe UI", 10, FontStyle.Bold);
+            rtb.SelectionColor = NordColors.PrimaryText;
+            rtb.AppendText(label + "\n");
+
+            // Description in SecondaryText
+            rtb.SelectionFont  = new Font("Segoe UI", 9);
+            rtb.SelectionColor = NordColors.SecondaryText;
+            rtb.AppendText("    " + desc + "\n\n");
         }
     }
 }

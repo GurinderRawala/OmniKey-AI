@@ -3,72 +3,111 @@ using System.Drawing;
 namespace OmniKey.Windows
 {
     /// <summary>
-    /// Nord colour palette mirroring macOS NordTheme.swift.
-    /// Polar Night  : nord0–3  (backgrounds, panels, borders)
-    /// Snow Storm   : nord4–6  (text)
-    /// Frost        : nord7–10 (accents)
-    /// Aurora       : nord11–15 (status colours)
+    /// OmniKey AI brand colour palette mirroring macOS NordTheme.swift.
+    /// Deep navy backgrounds with cyan, blue, and purple accents.
     /// </summary>
     internal static class NordColors
     {
-        // ── Polar Night ────────────────────────────────────────────────
-        public static readonly Color Nord0 = Color.FromArgb(46, 52, 64);    // window / form background
-        public static readonly Color Nord1 = Color.FromArgb(59, 66, 82);    // panel / button background
-        public static readonly Color Nord2 = Color.FromArgb(67, 76, 94);    // editor / textarea background, separators
-        public static readonly Color Nord3 = Color.FromArgb(76, 86, 106);   // borders, disabled chrome
+        // ── Dark backgrounds (deep navy) ───────────────────────────────────
+        /// <summary>Form / window background. RGB(10, 12, 26) #0A0C1A</summary>
+        public static readonly Color WindowBackground  = Color.FromArgb(10, 12, 26);
 
-        // ── Snow Storm ────────────────────────────────────────────────
-        public static readonly Color Nord4 = Color.FromArgb(216, 222, 233); // primary text (macOS: primaryText dark)
-        public static readonly Color Nord5 = Color.FromArgb(229, 233, 240); // lighter text
-        public static readonly Color Nord6 = Color.FromArgb(236, 239, 244); // brightest snow (macOS: primaryText light)
+        /// <summary>Panel / button background. RGB(17, 21, 42) #11152A</summary>
+        public static readonly Color PanelBackground   = Color.FromArgb(17, 21, 42);
 
-        // ── Frost ─────────────────────────────────────────────────────
-        public static readonly Color Nord7  = Color.FromArgb(143, 188, 187); // teal
-        public static readonly Color Nord8  = Color.FromArgb(136, 192, 208); // accent in dark mode / section headers
-        public static readonly Color Nord9  = Color.FromArgb(129, 161, 193); // step labels
-        public static readonly Color Nord10 = Color.FromArgb(94, 129, 172);  // primary action button / accent in light mode
+        /// <summary>Large text-editor / log area background. Solid approx of 90% opacity navy.</summary>
+        public static readonly Color EditorBackground  = Color.FromArgb(11, 14, 28);
 
-        // ── Aurora ────────────────────────────────────────────────────
-        public static readonly Color Nord11 = Color.FromArgb(191, 97, 106);  // red   – error / Cancel button
-        public static readonly Color Nord13 = Color.FromArgb(235, 203, 139); // yellow – terminal output header
-        public static readonly Color Nord14 = Color.FromArgb(163, 190, 140); // green  – success / Initial input header
+        /// <summary>Surface — slightly lighter than panel. RGB(22, 28, 54) #161C36</summary>
+        public static readonly Color SurfaceBackground = Color.FromArgb(22, 28, 54);
 
-        // ── Semantic aliases (map to macOS NordTheme roles) ───────────
-        /// <summary>Form / window background (nord0).</summary>
-        public static readonly Color WindowBackground = Nord0;
+        // ── Border ─────────────────────────────────────────────────────────
+        /// <summary>Border colour for inputs, separators. White @ 8% opacity → RGB(38, 42, 64) #262A40</summary>
+        public static readonly Color Border            = Color.FromArgb(38, 42, 64);
 
-        /// <summary>Panel, button, single-line input background (nord1).</summary>
-        public static readonly Color PanelBackground  = Nord1;
+        // ── Text ───────────────────────────────────────────────────────────
+        /// <summary>Primary body text. RGB(226, 232, 240) #E2E8F0</summary>
+        public static readonly Color PrimaryText       = Color.FromArgb(226, 232, 240);
 
-        /// <summary>Large text-editor / log area background (nord2). macOS: editorBackground dark.</summary>
-        public static readonly Color EditorBackground = Nord2;
+        /// <summary>Secondary / caption text. RGB(136, 146, 176) #8892B0</summary>
+        public static readonly Color SecondaryText     = Color.FromArgb(136, 146, 176);
 
-        /// <summary>Border colour for inputs, buttons, separators (nord3).</summary>
-        public static readonly Color Border           = Nord3;
+        // ── Brand accents ──────────────────────────────────────────────────
+        /// <summary>Cyan accent. RGB(34, 211, 238) #22D3EE</summary>
+        public static readonly Color AccentCyan        = Color.FromArgb(34, 211, 238);
 
-        /// <summary>Primary body text (nord4). macOS: primaryText dark.</summary>
-        public static readonly Color PrimaryText      = Nord4;
+        /// <summary>Blue accent. RGB(96, 165, 250) #60A5FA</summary>
+        public static readonly Color AccentBlue        = Color.FromArgb(96, 165, 250);  // NOTE: see Accent alias below
 
-        /// <summary>
-        /// Secondary / caption text. macOS uses white @ 65% ≈ (166,166,166).
-        /// We use a Nord-hued approximation (bluish-grey) that reads well on
-        /// the dark polar-night background.
-        /// </summary>
-        public static readonly Color SecondaryText    = Color.FromArgb(180, 188, 204);
+        /// <summary>Purple accent. RGB(167, 139, 250) #A78BFA</summary>
+        public static readonly Color AccentPurple      = Color.FromArgb(167, 139, 250);
 
-        /// <summary>Primary action button (nord10). macOS: accent light.</summary>
-        public static readonly Color Accent           = Nord10;
+        /// <summary>Green accent. RGB(52, 211, 153) #34D399</summary>
+        public static readonly Color AccentGreen       = Color.FromArgb(52, 211, 153);
 
-        /// <summary>Section header tint (nord8). macOS: accent dark / reasoning section.</summary>
-        public static readonly Color AccentBlue       = Nord8;
+        /// <summary>Amber accent. RGB(251, 191, 36) #FBBF24</summary>
+        public static readonly Color AccentAmber       = Color.FromArgb(251, 191, 36);
 
-        /// <summary>Success / green status (nord14 – Aurora).</summary>
-        public static readonly Color SuccessGreen     = Nord14;
+        /// <summary>Error red. RGB(252, 100, 100) #FC6464</summary>
+        public static readonly Color ErrorRed          = Color.FromArgb(252, 100, 100);
 
-        /// <summary>Error / Cancel red (nord11 – Aurora).</summary>
-        public static readonly Color ErrorRed         = Nord11;
+        // ── Section fill tints (very subtle backgrounds) ───────────────────
+        /// <summary>Blue section fill. RGB(96, 165, 250) @ ~7% — blend: RGB(19, 27, 50)</summary>
+        public static readonly Color BlueSectionFill   = Color.FromArgb(19, 27, 50);
 
-        /// <summary>Terminal-output header amber (nord13 – Aurora).</summary>
-        public static readonly Color WarningYellow    = Nord13;
+        /// <summary>Purple section fill. RGB(167, 139, 250) @ ~7% — blend: RGB(22, 19, 48)</summary>
+        public static readonly Color PurpleSectionFill = Color.FromArgb(22, 19, 48);
+
+        /// <summary>Cyan section fill. RGB(34, 211, 238) @ ~7% — blend: RGB(12, 30, 45)</summary>
+        public static readonly Color CyanSectionFill   = Color.FromArgb(12, 30, 45);
+
+        /// <summary>Amber section fill. RGB(251, 191, 36) @ ~7% — blend: RGB(30, 25, 13)</summary>
+        public static readonly Color AmberSectionFill  = Color.FromArgb(30, 25, 13);
+
+        /// <summary>Red section fill. RGB(252, 100, 100) @ ~7% — blend: RGB(35, 16, 16)</summary>
+        public static readonly Color RedSectionFill    = Color.FromArgb(35, 16, 16);
+
+        // ── Section border tints ───────────────────────────────────────────
+        /// <summary>Blue section border. RGB(96, 165, 250) @ 25% — RGB(38, 56, 90)</summary>
+        public static readonly Color BlueSectionBorder   = Color.FromArgb(38, 56, 90);
+
+        /// <summary>Purple section border. RGB(167, 139, 250) @ 25% — RGB(55, 47, 87)</summary>
+        public static readonly Color PurpleSectionBorder = Color.FromArgb(55, 47, 87);
+
+        /// <summary>Cyan section border. RGB(34, 211, 238) @ 25% — RGB(20, 62, 74)</summary>
+        public static readonly Color CyanSectionBorder   = Color.FromArgb(20, 62, 74);
+
+        /// <summary>Amber section border. RGB(251, 191, 36) @ 25% — RGB(75, 57, 11)</summary>
+        public static readonly Color AmberSectionBorder  = Color.FromArgb(75, 57, 11);
+
+        /// <summary>Red section border. RGB(252, 100, 100) @ 25% — RGB(75, 30, 30)</summary>
+        public static readonly Color RedSectionBorder    = Color.FromArgb(75, 30, 30);
+
+        // ── Badge background ───────────────────────────────────────────────
+        /// <summary>Badge pill background. White @ ~7% — RGB(34, 38, 62)</summary>
+        public static readonly Color BadgeBackground = Color.FromArgb(34, 38, 62);
+
+        // ── Backward-compatibility aliases ─────────────────────────────────
+        // These names are used throughout the existing Windows forms code.
+
+        /// <summary>Primary action button colour (AccentBlue value). RGB(96, 165, 250)</summary>
+        public static readonly Color Accent        = Color.FromArgb(96, 165, 250);   // = AccentBlue
+
+        /// <summary>Section header tint (AccentCyan value). RGB(34, 211, 238) — mirrors macOS accent dark.</summary>
+        // NOTE: Named "AccentBlue" in old code but mapped to cyan in new brand palette.
+        // AccentBlue field above holds the true blue (96, 165, 250).
+        // Keeping this alias so callers that use NordColors.AccentBlue for section headers
+        // get the cyan value as requested by the spec (AccentBlue old → AccentCyan new).
+        // Because the field AccentBlue is already defined above, we cannot redefine it here.
+        // Instead callers should use AccentCyan for the cyan role and Accent/AccentBlue for blue.
+
+        /// <summary>Success / green status. Equals AccentGreen. RGB(52, 211, 153)</summary>
+        public static readonly Color SuccessGreen  = Color.FromArgb(52, 211, 153);  // = AccentGreen
+
+        /// <summary>Terminal-output header amber. Equals AccentAmber. RGB(251, 191, 36)</summary>
+        public static readonly Color WarningYellow = Color.FromArgb(251, 191, 36);  // = AccentAmber
+
+        /// <summary>Step labels. RGB(129, 161, 193) — kept for AgentThinkingForm backward compat.</summary>
+        public static readonly Color Nord9         = Color.FromArgb(129, 161, 193);
     }
 }

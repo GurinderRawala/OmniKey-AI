@@ -8,89 +8,140 @@ namespace OmniKey.Windows
     internal sealed class AgentThinkingForm : Form
     {
         private readonly RichTextBox _logBox;
-        private readonly Label _statusLabel;
-        private readonly Button _cancelButton;
-        private readonly Panel _bottomPanel;
+        private readonly Label       _statusLabel;
+        private readonly Button      _cancelButton;
+        private readonly Panel       _bottomPanel;
+        private readonly Panel       _statusBadgePanel;
 
-        private int _stepCount = 0;
+        private int  _stepCount = 0;
         private bool _isRunning = false;
 
         public CancellationTokenSource CancellationSource { get; } = new();
 
         public AgentThinkingForm()
         {
-            Text = "OmniAgent Session – OmniKey AI";
-            Size = new Size(620, 440);
-            MinimumSize = new Size(520, 360);
-            StartPosition = FormStartPosition.CenterScreen;
-            BackColor = NordColors.WindowBackground;
+            Text            = "OmniAgent Session \u2013 OmniKey AI";
+            Size            = new Size(660, 480);
+            MinimumSize     = new Size(520, 380);
+            StartPosition   = FormStartPosition.CenterScreen;
+            BackColor       = NordColors.WindowBackground;
             FormBorderStyle = FormBorderStyle.Sizable;
 
+            // ── Header ────────────────────────────────────────────────────
             var titleLabel = new Label
             {
-                Text = "OmniAgent Session",
-                Font = new Font("Segoe UI", 14, FontStyle.Bold),
+                Text      = "OmniAgent Session",
+                Font      = new Font("Segoe UI", 15, FontStyle.Bold),
                 ForeColor = NordColors.PrimaryText,
-                AutoSize = true,
-                Location = new Point(16, 14)
+                AutoSize  = true,
+                Location  = new Point(20, 16)
             };
 
             var subtitleLabel = new Label
             {
-                Text = "You can keep working while the agent plans and runs any commands it needs.",
-                Font = new Font("Segoe UI", 9),
+                Text      = "You can keep working while the agent plans and runs any commands it needs.",
+                Font      = new Font("Segoe UI", 9),
                 ForeColor = NordColors.SecondaryText,
-                AutoSize = true,
-                Location = new Point(16, 44)
+                AutoSize  = false,
+                Location  = new Point(20, 44),
+                Size      = new Size(440, 20)
             };
 
-            // Horizontal rule matching macOS Divider()
+            // Status badge — top right
+            _statusBadgePanel = new Panel
+            {
+                BackColor = NordColors.SurfaceBackground,
+                Size      = new Size(130, 28),
+                Location  = new Point(Width - 150, 14),
+                Anchor    = AnchorStyles.Top | AnchorStyles.Right
+            };
+
+            var dotPanel = new Panel
+            {
+                Size      = new Size(10, 10),
+                BackColor = NordColors.AccentCyan,
+                Location  = new Point(8, 9)
+            };
+            dotPanel.Paint += (_, e) =>
+            {
+                e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                using var brush = new SolidBrush(NordColors.AccentCyan);
+                e.Graphics.FillEllipse(brush, 0, 0, dotPanel.Width - 1, dotPanel.Height - 1);
+            };
+
+            var badgeLabel = new Label
+            {
+                Text      = "Running\u2026",
+                Font      = new Font("Segoe UI", 9, FontStyle.Bold),
+                ForeColor = NordColors.AccentCyan,
+                AutoSize  = true,
+                Location  = new Point(24, 6)
+            };
+
+            _statusBadgePanel.Controls.Add(dotPanel);
+            _statusBadgePanel.Controls.Add(badgeLabel);
+
+            // Thin separator line at y=74
             var separator = new Panel
             {
-                BackColor = NordColors.EditorBackground,  // nord2
-                Location = new Point(16, 68),
-                Size = new Size(572, 1),
-                Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top
+                BackColor = NordColors.Border,
+                Location  = new Point(0, 74),
+                Size      = new Size(Width, 1),
+                Anchor    = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top
             };
 
-            // Log area: editorBackground (nord2) — matches macOS TextEditor background
+            // ── Log area surround ─────────────────────────────────────────
+            var logSurround = new Panel
+            {
+                BackColor = NordColors.SurfaceBackground,
+                Location  = new Point(16, 82),
+                Padding   = new Padding(2),
+                Anchor    = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right
+            };
+
             _logBox = new RichTextBox
             {
-                Location = new Point(16, 78),
-                Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right,
-                BackColor = NordColors.EditorBackground,
-                ForeColor = NordColors.PrimaryText,
-                Font = new Font("Consolas", 10),
+                BackColor   = NordColors.EditorBackground,
+                ForeColor   = NordColors.PrimaryText,
+                Font        = new Font("Consolas", 10),
                 BorderStyle = BorderStyle.None,
-                ReadOnly = true,
-                ScrollBars = RichTextBoxScrollBars.Vertical,
-                WordWrap = true
+                ReadOnly    = true,
+                ScrollBars  = RichTextBoxScrollBars.Vertical,
+                WordWrap    = true,
+                Dock        = DockStyle.Fill
             };
+            logSurround.Controls.Add(_logBox);
 
+            // ── Bottom panel ──────────────────────────────────────────────
             _bottomPanel = new Panel
             {
-                Dock = DockStyle.Bottom,
-                Height = 40,
-                BackColor = NordColors.WindowBackground,
-                Padding = new Padding(8, 6, 8, 6)
+                Dock      = DockStyle.Bottom,
+                Height    = 50,
+                BackColor = NordColors.WindowBackground
+            };
+
+            // 1px top border on bottom panel
+            var bottomSep = new Panel
+            {
+                BackColor = NordColors.Border,
+                Location  = new Point(0, 0),
+                Size      = new Size(Width, 1),
+                Anchor    = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top
             };
 
             _cancelButton = new Button
             {
-                Text = "Cancel",
-                Size = new Size(70, 28),
-                Location = new Point(8, 6),
+                Text      = "\u25a0 Cancel",
+                Size      = new Size(90, 30),
+                Location  = new Point(16, 10),
                 FlatStyle = FlatStyle.Flat,
-                BackColor = NordColors.ErrorRed,
-                ForeColor = Color.White,
-                Visible = false
+                BackColor = NordColors.RedSectionFill,
+                ForeColor = NordColors.ErrorRed,
+                Visible   = false
             };
-            _cancelButton.FlatAppearance.BorderColor = NordColors.ErrorRed;
+            _cancelButton.FlatAppearance.BorderColor = NordColors.RedSectionBorder;
             _cancelButton.Click += (_, _) =>
             {
-                // Explicitly abort the active WebSocket (mirrors macOS
-                // AgentRunner.shared.cancelCurrentSession()), then cancel
-                // the token so any running shell command is also killed.
                 AgentRunner.CancelCurrentSession();
                 CancellationSource.Cancel();
                 SetRunning(false);
@@ -98,28 +149,58 @@ namespace OmniKey.Windows
 
             _statusLabel = new Label
             {
-                Text = "Running\u2026",
-                Font = new Font("Segoe UI", 9),
-                ForeColor = NordColors.SecondaryText,
-                AutoSize = true,
-                Location = new Point(8, 12)
+                Text      = "\u25cf Running\u2026",
+                Font      = new Font("Segoe UI", 9, FontStyle.Bold),
+                ForeColor = NordColors.AccentCyan,
+                AutoSize  = true,
+                Location  = new Point(16, 16),
+                Anchor    = AnchorStyles.Right | AnchorStyles.Top
             };
 
+            _bottomPanel.Controls.Add(bottomSep);
             _bottomPanel.Controls.Add(_cancelButton);
             _bottomPanel.Controls.Add(_statusLabel);
+            _bottomPanel.SizeChanged += (_, _) => PositionStatusLabel();
 
-            Controls.AddRange(new Control[] { titleLabel, subtitleLabel, separator, _logBox, _bottomPanel });
+            Controls.AddRange(new Control[]
+            {
+                titleLabel, subtitleLabel, _statusBadgePanel, separator, logSurround, _bottomPanel
+            });
 
             SizeChanged += (_, _) => ResizeLog();
             ResizeLog();
+            PositionStatusLabel();
         }
 
         private void ResizeLog()
         {
-            int logHeight = ClientSize.Height - 78 - _bottomPanel.Height - 8;
-            _logBox.Size = new Size(ClientSize.Width - 32, Math.Max(logHeight, 80));
-            var sep = Controls[2] as Panel;
-            if (sep != null) sep.Size = new Size(ClientSize.Width - 32, 1);
+            int logTop = 82;
+            int logHeight = ClientSize.Height - logTop - _bottomPanel.Height - 8;
+            // logSurround is Controls[4]
+            if (Controls.Count > 4 && Controls[4] is Panel surround)
+            {
+                surround.Size     = new Size(ClientSize.Width - 32, Math.Max(logHeight, 80));
+                surround.Location = new Point(16, logTop);
+            }
+            // separator is Controls[3]
+            if (Controls.Count > 3 && Controls[3] is Panel sep)
+                sep.Size = new Size(ClientSize.Width, 1);
+            // bottomSep inside _bottomPanel
+            if (_bottomPanel.Controls.Count > 0 && _bottomPanel.Controls[0] is Panel bsep)
+                bsep.Size = new Size(_bottomPanel.ClientSize.Width, 1);
+
+            PositionStatusBadge();
+        }
+
+        private void PositionStatusBadge()
+        {
+            _statusBadgePanel.Location = new Point(ClientSize.Width - _statusBadgePanel.Width - 20, 14);
+        }
+
+        private void PositionStatusLabel()
+        {
+            int right = _bottomPanel.ClientSize.Width - 16;
+            _statusLabel.Location = new Point(right - _statusLabel.Width, (_bottomPanel.Height - _statusLabel.Height) / 2);
         }
 
         // ── Public API called from AgentRunner (may be on background thread) ──
@@ -128,8 +209,7 @@ namespace OmniKey.Windows
         {
             InvokeIfNeeded(() =>
             {
-                // "Initial input" header in SuccessGreen, matching macOS nord14
-                AppendSection("Initial input", NordColors.SuccessGreen);
+                AppendSection("Initial input", NordColors.AccentCyan);
                 AppendText(text + "\n\n", NordColors.PrimaryText);
             });
         }
@@ -139,11 +219,9 @@ namespace OmniKey.Windows
             InvokeIfNeeded(() =>
             {
                 if (_stepCount == 0)
-                    // "OmniKey reasoning & responses" header in nord8 (AccentBlue)
-                    AppendSection("OmniKey reasoning & responses", NordColors.AccentBlue);
+                    AppendSection("OmniKey reasoning & responses", NordColors.AccentPurple);
 
                 _stepCount++;
-                // Step N label: nord9, small (9pt), matches macOS `.system(size: 9, weight: .medium)`
                 AppendText($"Step {_stepCount}\n", NordColors.Nord9, bold: true, size: 9f);
                 AppendText(text + "\n\n", NordColors.PrimaryText);
 
@@ -155,8 +233,7 @@ namespace OmniKey.Windows
         {
             InvokeIfNeeded(() =>
             {
-                // Web call header: AccentBlue (nord8), bold — mirrors macOS [web_call] prefix
-                AppendText("[web_call] ", NordColors.AccentBlue, bold: true);
+                AppendText("[web_call] ", NordColors.AccentCyan, bold: true);
                 AppendText(text.Trim() + "\n\n", NordColors.SecondaryText);
                 _logBox.ScrollToCaret();
             });
@@ -166,12 +243,11 @@ namespace OmniKey.Windows
         {
             InvokeIfNeeded(() =>
             {
-                var lines = text.Split('\n', 2);
+                var lines  = text.Split('\n', 2);
                 string header = lines.Length > 0 ? lines[0] : text;
                 string body   = lines.Length > 1 ? lines[1] : "";
 
-                // Terminal header: WarningYellow (nord13), bold — matches macOS secondaryText medium
-                AppendText(header + "\n", NordColors.WarningYellow, bold: true);
+                AppendText(header + "\n", NordColors.AccentAmber, bold: true);
                 if (!string.IsNullOrWhiteSpace(body))
                     AppendText(body.TrimEnd() + "\n\n", NordColors.SecondaryText);
                 else
@@ -187,23 +263,48 @@ namespace OmniKey.Windows
             {
                 _isRunning = running;
                 _cancelButton.Visible = running;
-                _statusLabel.Text = running ? "Running\u2026" : "Finished";
-                _statusLabel.Location = running
-                    ? new Point(_cancelButton.Right + 8, 12)
-                    : new Point(8, 12);
+
+                if (running)
+                {
+                    _statusLabel.Text     = "\u25cf Running\u2026";
+                    _statusLabel.ForeColor = NordColors.AccentCyan;
+                }
+                else
+                {
+                    _statusLabel.Text     = "\u2713 Finished";
+                    _statusLabel.ForeColor = NordColors.AccentGreen;
+                }
+
+                // Update badge label text to match
+                if (_statusBadgePanel.Controls.Count > 1 && _statusBadgePanel.Controls[1] is Label bl)
+                {
+                    bl.Text      = running ? "Running\u2026" : "Finished";
+                    bl.ForeColor = running ? NordColors.AccentCyan : NordColors.AccentGreen;
+                }
+                if (_statusBadgePanel.Controls.Count > 0 && _statusBadgePanel.Controls[0] is Panel dot)
+                    dot.BackColor = running ? NordColors.AccentCyan : NordColors.AccentGreen;
+
+                PositionStatusLabel();
             });
         }
 
-        // ── Private rendering helpers ──────────────────────────────────
+        // ── Private rendering helpers ──────────────────────────────────────
 
         private void AppendSection(string title, Color color)
         {
             _logBox.SelectionStart  = _logBox.TextLength;
             _logBox.SelectionLength = 0;
-            _logBox.SelectionColor  = color;
-            _logBox.SelectionFont   = new Font("Segoe UI", 10, FontStyle.Bold);
+
+            // Accent bar prefix "▌ " in the accent colour
+            _logBox.SelectionFont  = new Font("Segoe UI", 10, FontStyle.Bold);
+            _logBox.SelectionColor = color;
+            _logBox.AppendText("\u258c ");
+
+            // Title text
+            _logBox.SelectionColor = color;
+            _logBox.SelectionFont  = new Font("Segoe UI", 10, FontStyle.Bold);
             _logBox.AppendText(title + "\n");
-            _logBox.SelectionFont   = _logBox.Font;
+            _logBox.SelectionFont  = _logBox.Font;
         }
 
         private void AppendText(string text, Color color, bool bold = false, float size = 10f)

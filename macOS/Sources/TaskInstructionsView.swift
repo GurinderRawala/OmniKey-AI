@@ -22,26 +22,47 @@ struct TaskInstructionsView: View {
             NordTheme.windowBackground(colorScheme)
                 .ignoresSafeArea()
 
-            VStack {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Task templates for ⌘T")
-                        .font(.system(size: 20, weight: .semibold))
-                        .foregroundColor(NordTheme.primaryText(colorScheme))
+            VStack(alignment: .leading, spacing: 0) {
+                // Header area
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 10) {
+                        Image(systemName: "list.bullet.rectangle.portrait")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundColor(NordTheme.accent(colorScheme))
 
-                    Text("You can save up to 5 task instruction templates. Choose one as the default to run whenever you press ⌘T.")
+                        Text("Task Templates for Cmd+T")
+                            .font(.system(size: 20, weight: .semibold))
+                            .foregroundColor(NordTheme.primaryText(colorScheme))
+                    }
+
+                    Text("Save up to 5 task instruction templates. Choose one as the default to run whenever you press Cmd+T.")
                         .font(.system(size: 13))
                         .foregroundColor(NordTheme.secondaryText(colorScheme))
+                }
+                .padding(.bottom, 16)
 
-                    // Compact layout: first row = heading + saved templates, second row (when new) = examples
-                    VStack(spacing: 8) {
-                        HStack(alignment: .center, spacing: 16) {
-                            TextField("Template heading", text: $templateHeadingInput)
-                                .textFieldStyle(.roundedBorder)
-                                .frame(maxWidth: 400)
+                Rectangle()
+                    .fill(NordTheme.border(colorScheme))
+                    .frame(height: 1)
+                    .padding(.bottom, 16)
+
+                // Controls row
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(alignment: .center, spacing: 14) {
+                        // Template heading field
+                        TextField("Template heading", text: $templateHeadingInput)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(maxWidth: 380)
+
+                        // Template picker with label
+                        HStack(spacing: 6) {
+                            Text("Template:")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundColor(NordTheme.secondaryText(colorScheme))
 
                             Picker("Template", selection: $selectedTemplateId) {
                                 ForEach(savedTemplates) { template in
-                                    Text(template.isDefault ? "★ \(template.heading)" : template.heading)
+                                    Text(template.isDefault ? "\(template.heading) (default)" : template.heading)
                                         .tag(Optional(template.id))
                                 }
                                 if savedTemplates.count < 5 {
@@ -50,54 +71,108 @@ struct TaskInstructionsView: View {
                                 }
                             }
                             .labelsHidden()
-                            .frame(maxWidth: 260)
+                            .frame(maxWidth: 240)
                             .onChange(of: selectedTemplateId) { _ in
                                 loadSelectedTemplateIntoEditor()
+                            }
+                        }
+
+                        Spacer(minLength: 0)
+                    }
+
+                    // Example picker — only visible when creating new template
+                    if selectedTemplateId == nil {
+                        HStack(spacing: 6) {
+                            Text("Load example:")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundColor(NordTheme.secondaryText(colorScheme))
+
+                            Picker("Load example", selection: $selectedExampleIndex) {
+                                Text("None")
+                                    .tag(-1)
+                                ForEach(exampleTemplates.indices, id: \.self) { index in
+                                    Text(exampleTemplates[index].name)
+                                        .tag(index)
+                                }
+                            }
+                            .labelsHidden()
+                            .frame(maxWidth: 220)
+                            .onChange(of: selectedExampleIndex) { newValue in
+                                applyExampleTemplate(at: newValue)
                             }
 
                             Spacer(minLength: 0)
                         }
-
-                        if selectedTemplateId == nil {
-                            HStack {
-                                Picker("Example", selection: $selectedExampleIndex) {
-                                    Text("None")
-                                        .tag(-1)
-                                    ForEach(exampleTemplates.indices, id: \.self) { index in
-                                        Text(exampleTemplates[index].name)
-                                            .tag(index)
-                                    }
-                                }
-                                .labelsHidden()
-                                .frame(maxWidth: 220)
-                                .onChange(of: selectedExampleIndex) { newValue in
-                                    applyExampleTemplate(at: newValue)
-                                }
-
-                                Spacer(minLength: 0)
-                            }
-                        }
-
-                        templateTextEditor()
                     }
+
+                    // Text editor
+                    templateTextEditor()
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 16)
+                .padding(16)
                 .background(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .fill(NordTheme.panelBackground(colorScheme))
-                        .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.5 : 0.12), radius: 18, x: 0, y: 14)
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(NordTheme.panelBackground(colorScheme))
+
+                        LinearGradient(
+                            gradient: Gradient(colors: [
+                                NordTheme.accent(colorScheme).opacity(colorScheme == .dark ? 0.03 : 0.02),
+                                Color.clear,
+                            ]),
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    }
+                    .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.5 : 0.12), radius: 18, x: 0, y: 14)
                 )
 
-                HStack(spacing: 8) {
-                    Button("Delete Template") {
+                // Bottom button bar
+                HStack(spacing: 10) {
+                    // Destructive delete
+                    Button(role: .destructive) {
                         deleteCurrentTemplate()
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "trash")
+                                .font(.system(size: 11))
+                            Text("Delete Template")
+                                .font(.system(size: 12))
+                        }
                     }
+                    .buttonStyle(.plain)
+                    .foregroundColor(Color(red: 252 / 255, green: 100 / 255, blue: 100 / 255))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(Color(red: 252 / 255, green: 100 / 255, blue: 100 / 255).opacity(colorScheme == .dark ? 0.09 : 0.06))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .strokeBorder(Color(red: 252 / 255, green: 100 / 255, blue: 100 / 255).opacity(0.22), lineWidth: 1)
+                    )
                     .disabled(selectedTemplateId == nil)
 
-                    Text(statusMessage)
-                        .font(.system(size: 11))
-                        .foregroundColor(NordTheme.secondaryText(colorScheme))
+                    // Status message
+                    if !statusMessage.isEmpty {
+                        HStack(spacing: 5) {
+                            if isPositiveStatus(statusMessage) {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(NordTheme.accentGreen(colorScheme))
+                            } else if isNegativeStatus(statusMessage) {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(Color(red: 252 / 255, green: 100 / 255, blue: 100 / 255))
+                            }
+
+                            Text(statusMessage)
+                                .font(.system(size: 11))
+                                .foregroundColor(statusMessageColor(statusMessage))
+                                .lineLimit(1)
+                        }
+                    }
 
                     if isLoading {
                         ProgressView()
@@ -109,8 +184,10 @@ struct TaskInstructionsView: View {
                     Button("Close") {
                         NSApp.keyWindow?.performClose(nil)
                     }
+                    .buttonStyle(.plain)
+                    .foregroundColor(NordTheme.secondaryText(colorScheme))
 
-                    Button("Use for ⌘T") {
+                    Button("Use for Cmd+T") {
                         setCurrentTemplateAsDefault()
                     }
                     .disabled(selectedTemplateId == nil)
@@ -119,14 +196,15 @@ struct TaskInstructionsView: View {
                         saveCurrentTemplate()
                     }
                     .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+                    .tint(NordTheme.accentBlue(colorScheme))
                     .disabled(isLoading || templateHeadingInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || savedTemplates.count >= 5 && selectedTemplateId == nil)
-                    .tint(NordTheme.accent(colorScheme))
                 }
-                .padding(.horizontal, 4)
-                .padding(.top, 10)
+                .padding(.top, 12)
+                .padding(.horizontal, 2)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 20)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 22)
             .frame(maxWidth: 980, maxHeight: .infinity, alignment: .top)
         }
         .frame(minWidth: 900, minHeight: 640)
@@ -136,6 +214,28 @@ struct TaskInstructionsView: View {
         .onChange(of: templateInstructionsInput) { _ in
             guard !isLoading else { return }
             statusMessage = ""
+        }
+    }
+
+    // MARK: - Status Message Helpers
+
+    private func isPositiveStatus(_ message: String) -> Bool {
+        let lower = message.lowercased()
+        return lower.contains("success") || lower.contains("created") || lower.contains("updated") || lower.contains("loaded") || lower.contains("set")
+    }
+
+    private func isNegativeStatus(_ message: String) -> Bool {
+        let lower = message.lowercased()
+        return lower.contains("failed") || lower.contains("error")
+    }
+
+    private func statusMessageColor(_ message: String) -> Color {
+        if isPositiveStatus(message) {
+            return NordTheme.accentGreen(colorScheme)
+        } else if isNegativeStatus(message) {
+            return Color(red: 252 / 255, green: 100 / 255, blue: 100 / 255)
+        } else {
+            return NordTheme.secondaryText(colorScheme)
         }
     }
 
@@ -215,7 +315,6 @@ struct TaskInstructionsView: View {
     }
 
     private func applyExampleTemplate(at index: Int) {
-        // Only allow applying example templates when creating a new template.
         guard selectedTemplateId == nil, index >= 0, exampleTemplates.indices.contains(index) else { return }
 
         let example = exampleTemplates[index]
@@ -235,9 +334,6 @@ struct TaskInstructionsView: View {
             DispatchQueue.main.async {
                 switch result {
                 case let .success(updatedDefault):
-                    // Update local templates so that only the returned
-                    // template is marked as default, and use the
-                    // server-provided fields for that template.
                     self.savedTemplates = self.savedTemplates.map { tpl in
                         if tpl.id == updatedDefault.id {
                             return updatedDefault
@@ -250,7 +346,7 @@ struct TaskInstructionsView: View {
                             )
                         }
                     }
-                    self.statusMessage = "Default template set for ⌘T."
+                    self.statusMessage = "Default template set for Cmd+T."
 
                 case let .failure(error):
                     self.statusMessage = "Failed to set default: \(error.localizedDescription)"
@@ -260,16 +356,13 @@ struct TaskInstructionsView: View {
     }
 
     private func loadSelectedTemplateIntoEditor() {
-        // When a template is selected from the dropdown, load it into the editor.
         if let id = selectedTemplateId,
            let template = savedTemplates.first(where: { $0.id == id })
         {
             templateHeadingInput = template.heading
             templateInstructionsInput = template.instructions
-            // Reset example picker when switching to an existing template.
             selectedExampleIndex = -1
         } else {
-            // "New template" selection clears the editor.
             newTemplate()
         }
     }
@@ -314,28 +407,35 @@ struct TaskInstructionsView: View {
     private func templateTextEditor() -> some View {
         ZStack(alignment: .topLeading) {
             if templateInstructionsInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Text("Describe the role, context, and task this template should apply when you press ⌘T…")
+                Text("Describe the role, context, and task this template should apply when you press Cmd+T...")
                     .font(.system(size: 12))
-                    .foregroundColor(NordTheme.primaryText(colorScheme).opacity(0.8))
-                    .padding(.top, 8)
-                    .padding(.leading, 5)
+                    .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.7))
+                    .padding(.top, 10)
+                    .padding(.leading, 6)
+                    .allowsHitTesting(false)
             }
 
             if #available(macOS 13.0, *) {
                 TextEditor(text: $templateInstructionsInput)
-                    .font(.system(size: 12, design: .monospaced))
+                    .font(.system(size: 13, design: .monospaced))
                     .scrollContentBackground(.hidden)
-                    .background(NordTheme.editorBackground(colorScheme))
+                    .background(Color.clear)
+                    .padding(4)
             } else {
                 TextEditor(text: $templateInstructionsInput)
-                    .font(.system(size: 12, design: .monospaced))
-                    .background(NordTheme.editorBackground(colorScheme))
+                    .font(.system(size: 13, design: .monospaced))
+                    .background(Color.clear)
+                    .padding(4)
             }
         }
-        .frame(minHeight: 260)
+        .frame(minHeight: 280)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(NordTheme.editorBackground(colorScheme))
+        )
         .overlay(
-            RoundedRectangle(cornerRadius: 6)
-                .stroke(NordTheme.border(colorScheme))
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(NordTheme.accentBlue(colorScheme).opacity(colorScheme == .dark ? 0.35 : 0.28), lineWidth: 1)
         )
     }
 }
