@@ -81,9 +81,49 @@ The daemon is registered as a **launchd agent** (`~/Library/LaunchAgents/com.omn
 
 ### Windows
 
-The daemon is registered as a **Windows Task Scheduler** task (`OmnikeyDaemon`) that runs at every logon. A wrapper script (`~/.omnikey/start-daemon.cmd`) is generated to set the required environment variables before launching the Node.js backend.
+The daemon runs as a **Windows Service** managed by [NSSM (Non-Sucking Service Manager)](https://nssm.cc/). This gives it production-grade persistence:
 
-> **Note:** `schtasks` is a built-in Windows command — no third-party tools or administrator rights are required for user-level scheduled tasks.
+| Behaviour | Detail |
+|---|---|
+| Starts on boot | Runs as `SERVICE_AUTO_START` — no login required |
+| Auto-restarts on crash | Restarts after a 3-second delay on any unexpected exit |
+| Runs in the background | No console window, no logged-in user needed |
+| Log rotation | stdout/stderr written to `~/.omnikey/daemon.log` and `daemon-error.log` with rotation enabled |
+
+#### Prerequisites
+
+NSSM must be installed and the command must be run from an **elevated (Administrator) terminal**.
+
+If NSSM is not found, `omnikey daemon` will prompt you:
+
+```
+? NSSM is required but not found. Install it now via winget? (Y/n)
+```
+
+Answering **Y** runs `winget install nssm` automatically and continues setup. Alternatively install it manually:
+
+```sh
+winget install nssm          # Windows Package Manager (built-in on Win 10/11)
+scoop install nssm           # Scoop
+choco install nssm           # Chocolatey
+```
+
+#### Service management
+
+```sh
+# View service status in Services console
+services.msc
+
+# Or via the command line
+sc query OmnikeyDaemon
+
+# Stop / start manually
+nssm stop OmnikeyDaemon
+nssm start OmnikeyDaemon
+
+# Uninstall (also done automatically by omnikey kill-daemon / remove-config)
+nssm remove OmnikeyDaemon confirm
+```
 
 Commands that query process state use `netstat` (instead of `lsof`) on Windows, and process termination uses `taskkill` (instead of `SIGTERM`).
 

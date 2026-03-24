@@ -28,9 +28,9 @@ program
   .command('daemon')
   .description('Start the Omnikey API backend as a daemon on a specified port')
   .option('--port <port>', 'Port to run the backend on', '7071')
-  .action((options) => {
+  .action(async (options) => {
     const port = Number(options.port) || 7071;
-    startDaemon(port);
+    await startDaemon(port);
   });
 
 program
@@ -84,10 +84,10 @@ program
   .command('restart-daemon')
   .description('Restart the Omnikey API backend daemon')
   .option('--port <port>', 'Port to run the backend on', '7071')
-  .action((options) => {
+  .action(async (options) => {
     killDaemon();
     const port = Number(options.port) || 7071;
-    startDaemon(port);
+    await startDaemon(port);
   });
 
 program.parseAsync(process.argv);

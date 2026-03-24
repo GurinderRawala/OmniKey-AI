@@ -1,7 +1,7 @@
-import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
-import { execSync } from 'child_process';
+import { execSync, execFileSync } from 'child_process';
+import inquirer from 'inquirer';
 import {
   isWindows,
   getHomeDir,
@@ -14,10 +14,10 @@ import {
 /**
  * Start the Omnikey API backend as a daemon on the specified port.
  * On macOS: creates and registers a launchd agent for persistence.
- * On Windows: creates a wrapper script and registers a Windows Task Scheduler task.
+ * On Windows: installs an NSSM Windows service for boot-time persistence.
  * @param port The port to run the backend on
  */
-export function startDaemon(port: number = 7071) {
+export async function startDaemon(port: number = 7071) {
   const backendPath = path.resolve(__dirname, '../backend-dist/index.js');
 
   const configDir = getConfigDir();
@@ -38,7 +38,7 @@ export function startDaemon(port: number = 7071) {
   const errorLogPath = path.join(configDir, 'daemon-error.log');
 
   if (isWindows) {
-    startDaemonWindows({
+    await startDaemonWindows({
       port,
       configDir,
       configVars,
@@ -62,102 +62,115 @@ interface DaemonOptions {
   errorLogPath: string;
 }
 
-function startDaemonWindows(opts: DaemonOptions) {
-  const { port, configDir, configVars, nodePath, backendPath, logPath, errorLogPath } = opts;
-
-  // Write a wrapper .cmd script that sets env vars and launches the backend
-  const wrapperPath = path.join(configDir, 'start-daemon.cmd');
-  const envSetLines = Object.entries({ ...configVars, OMNIKEY_PORT: String(port) })
-    .map(([k, v]) => `set "${k}=${v}"`)
-    .join('\r\n');
-  const wrapperContent = [
-    '@echo off',
-    envSetLines,
-    `"${nodePath}" "${backendPath}" >> "${logPath}" 2>> "${errorLogPath}"`,
-    '',
-  ].join('\r\n');
-
+function resolveNssm(): string | null {
   try {
-    fs.mkdirSync(configDir, { recursive: true });
-    fs.writeFileSync(wrapperPath, wrapperContent, 'utf-8');
-  } catch (e) {
-    console.error('Failed to write start-daemon.cmd:', e);
-    return;
-  }
-
-  // Register with Windows Task Scheduler so the daemon persists across reboots.
-  // Use XML-based registration to avoid cmd.exe quoting issues with paths containing spaces.
-  const taskName = 'OmnikeyDaemon';
-  const username = process.env.USERNAME || process.env.USER || '';
-  // Escape characters that are special in XML
-  const xmlEscape = (s: string) =>
-    s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-  const taskXml = `<?xml version="1.0" encoding="UTF-16"?>
-<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
-  <RegistrationInfo>
-    <Description>Omnikey API Backend Daemon</Description>
-  </RegistrationInfo>
-  <Triggers>
-    <LogonTrigger>
-      <Enabled>true</Enabled>
-      <UserId>${xmlEscape(username)}</UserId>
-    </LogonTrigger>
-  </Triggers>
-  <Principals>
-    <Principal id="Author">
-      <UserId>${xmlEscape(username)}</UserId>
-      <LogonType>InteractiveToken</LogonType>
-      <RunLevel>LeastPrivilege</RunLevel>
-    </Principal>
-  </Principals>
-  <Settings>
-    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
-    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
-    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
-    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
-    <Hidden>true</Hidden>
-  </Settings>
-  <Actions Context="Author">
-    <Exec>
-      <Command>cmd.exe</Command>
-      <Arguments>/c &quot;${xmlEscape(wrapperPath)}&quot;</Arguments>
-      <WorkingDirectory>${xmlEscape(configDir)}</WorkingDirectory>
-    </Exec>
-  </Actions>
-</Task>`;
-  const taskXmlPath = path.join(configDir, 'task.xml');
-  try {
-    // Task Scheduler XML must be UTF-16 LE encoded
-    fs.writeFileSync(taskXmlPath, '\ufeff' + taskXml, 'utf16le');
-  } catch (e) {
-    console.error('Failed to write task XML:', e);
-    return;
-  }
-  try {
-    // Delete existing task silently before creating a fresh one
-    execSync(`schtasks /delete /tn "${taskName}" /f`, { stdio: 'pipe' });
+    return execSync('where nssm', { stdio: 'pipe' }).toString().trim().split('\n')[0].trim();
   } catch {
-    // Task may not exist — that's fine
+    return null;
   }
-  try {
-    execSync(`schtasks /create /tn "${taskName}" /xml "${taskXmlPath}" /f`, { stdio: 'pipe' });
-    console.log(`Windows Task Scheduler task created: ${taskName}`);
-    console.log('Omnikey daemon will auto-start on next logon.');
-  } catch (e) {
-    console.error('Failed to create Windows Task Scheduler task:', e);
-  } finally {
-    try { fs.rmSync(taskXmlPath); } catch { /* ignore */ }
+}
+
+async function startDaemonWindows(opts: DaemonOptions) {
+  const { port, configDir, configVars, nodePath, backendPath, logPath, errorLogPath } = opts;
+  const serviceName = 'OmnikeyDaemon';
+
+  let nssmPath = resolveNssm();
+  if (!nssmPath) {
+    const { install } = await inquirer.prompt<{ install: boolean }>([
+      {
+        type: 'confirm',
+        name: 'install',
+        message: 'NSSM is required but not found. Install it now via winget?',
+        default: true,
+      },
+    ]);
+
+    if (!install) {
+      console.log('Aborted. Install NSSM manually and re-run in an elevated (Administrator) terminal.');
+      return;
+    }
+
+    console.log('Installing NSSM via winget...');
+    try {
+      execSync('winget install nssm --accept-package-agreements --accept-source-agreements', {
+        stdio: 'inherit',
+      });
+    } catch (e) {
+      console.error('winget install failed:', (e as any)?.message ?? e);
+      console.log('Try manually: scoop install nssm  or  choco install nssm');
+      return;
+    }
+
+    // winget updates the machine PATH in the registry but the current process
+    // won't see it — spawn a fresh cmd to resolve the new location.
+    try {
+      nssmPath = execSync('cmd /c where nssm', { stdio: 'pipe' })
+        .toString().trim().split('\n')[0].trim();
+    } catch {
+      nssmPath = null;
+    }
+
+    if (!nssmPath) {
+      console.log('NSSM installed successfully.');
+      console.log('Please open a new elevated (Administrator) terminal and re-run this command.');
+      return;
+    }
   }
 
-  // Also start the backend immediately for the current session
-  const { out, err } = initLogFiles(logPath, errorLogPath);
-  const child = spawn(nodePath, [backendPath], {
-    env: { ...configVars, OMNIKEY_PORT: String(port) },
-    detached: true,
-    stdio: ['ignore', out, err],
-  });
-  child.unref();
-  console.log(`Omnikey API backend started as a daemon on port ${port}. PID: ${child.pid}`);
+  initLogFiles(logPath, errorLogPath);
+
+  // Remove any existing service (stop first, then remove)
+  try { execFileSync(nssmPath, ['stop', serviceName], { stdio: 'pipe' }); } catch { /* not running */ }
+  try { execFileSync(nssmPath, ['remove', serviceName, 'confirm'], { stdio: 'pipe' }); } catch { /* didn't exist */ }
+
+  // NSSM services run as LocalSystem; pass USERPROFILE so the backend's
+  // getHomeDir() resolves to the correct user config directory.
+  const env: Record<string, string> = {
+    ...configVars,
+    OMNIKEY_PORT: String(port),
+    USERPROFILE: process.env.USERPROFILE || configDir.replace(/[/\\]\.omnikey$/, ''),
+    HOME: process.env.USERPROFILE || configDir.replace(/[/\\]\.omnikey$/, ''),
+  };
+
+  try {
+    // Install: nssm install <name> <application> [args...]
+    execFileSync(nssmPath, ['install', serviceName, nodePath, backendPath], { stdio: 'pipe' });
+
+    execFileSync(nssmPath, ['set', serviceName, 'AppDirectory', configDir], { stdio: 'pipe' });
+
+    // Pass all env vars in a single call (replaces the entire AppEnvironmentExtra key)
+    const envEntries = Object.entries(env).map(([k, v]) => `${k}=${v}`);
+    execFileSync(nssmPath, ['set', serviceName, 'AppEnvironmentExtra', ...envEntries], { stdio: 'pipe' });
+
+    execFileSync(nssmPath, ['set', serviceName, 'AppStdout', logPath], { stdio: 'pipe' });
+    execFileSync(nssmPath, ['set', serviceName, 'AppStderr', errorLogPath], { stdio: 'pipe' });
+    execFileSync(nssmPath, ['set', serviceName, 'AppRotateFiles', '1'], { stdio: 'pipe' });
+
+    // Restart automatically after a 3-second delay on any exit
+    execFileSync(nssmPath, ['set', serviceName, 'AppExit', 'Default', 'Restart'], { stdio: 'pipe' });
+    execFileSync(nssmPath, ['set', serviceName, 'AppRestartDelay', '3000'], { stdio: 'pipe' });
+
+    // Start automatically at boot (no login required)
+    execFileSync(nssmPath, ['set', serviceName, 'Start', 'SERVICE_AUTO_START'], { stdio: 'pipe' });
+
+    execFileSync(nssmPath, ['set', serviceName, 'DisplayName', 'Omnikey API Backend'], { stdio: 'pipe' });
+    execFileSync(nssmPath, ['set', serviceName, 'Description', 'Omnikey API Backend Daemon'], { stdio: 'pipe' });
+
+    execFileSync(nssmPath, ['start', serviceName], { stdio: 'pipe' });
+
+    console.log(`NSSM service installed and started: ${serviceName}`);
+    console.log('Omnikey daemon runs on boot, without login, and auto-restarts on crash.');
+    console.log(`Logs: ${logPath}`);
+    console.log(`      ${errorLogPath}`);
+  } catch (e: any) {
+    const msg: string = e?.stderr?.toString() || e?.message || String(e);
+    if (msg.toLowerCase().includes('access') || msg.toLowerCase().includes('privilege')) {
+      console.error('Failed to install NSSM service: administrator privileges are required.');
+      console.error('Re-run this command in an elevated (Administrator) terminal.');
+    } else {
+      console.error('Failed to install NSSM service:', msg);
+    }
+  }
 }
 
 function startDaemonMacOS(opts: DaemonOptions) {
