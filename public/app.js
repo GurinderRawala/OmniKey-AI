@@ -34,6 +34,19 @@ document.getElementById('year').textContent = new Date().getFullYear();
     });
   });
 
+  // Inline install command tab switcher
+  document.querySelectorAll('.code-tab').forEach((tab) => {
+    tab.addEventListener('click', () => {
+      const target = tab.dataset.codeTab;
+      const block = tab.closest('.code-block');
+      block.querySelectorAll('.code-tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      block.querySelectorAll('[data-code-content]').forEach(panel => {
+        panel.hidden = panel.dataset.codeContent !== target;
+      });
+    });
+  });
+
   // Scroll-reveal via IntersectionObserver
   const observer = new IntersectionObserver(
     (entries) => {

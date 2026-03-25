@@ -862,7 +862,42 @@ code {
 /* ── Setup / Getting started ── */
 .setup-section { padding: 0 0 80px; }
 
+
 .steps { display: flex; flex-direction: column; gap: 4px; }
+.steps[hidden] { display: none; }
+
+.code-block { margin-bottom: 10px; }
+.code-block pre { margin-bottom: 0; border-top-left-radius: 0; border-top-right-radius: 0; border-top: none; }
+.code-block-header {
+  display: flex;
+  gap: 4px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: 10px 10px 0 0;
+  padding: 5px 8px;
+}
+.code-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 12px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  font-family: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.18s, color 0.18s;
+}
+.code-tab:hover { color: var(--text); }
+.code-tab.active {
+  background: linear-gradient(135deg, var(--purple), var(--blue));
+  color: #fff;
+  box-shadow: 0 1px 6px var(--glow-purple);
+}
 
 .step {
   display: flex;

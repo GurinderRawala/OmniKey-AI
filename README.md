@@ -12,8 +12,15 @@ OmniKey AI is a productivity tool that enhances your workflow with AI-powered pr
 
 Follow these steps to set up OmniKey:
 
-1. **Install OmniKey CLI via npm:**
+1. **Install OmniKey CLI:**
 
+   **Via Homebrew (macOS recommended):**
+   ```sh
+   brew tap GurinderRawala/omnikey-ai https://github.com/GurinderRawala/OmniKey-AI.git
+   brew install omnikey-cli
+   ```
+
+   **Via npm:**
    ```sh
    npm install -g omnikey-cli
    ```

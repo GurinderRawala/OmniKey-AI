@@ -338,13 +338,27 @@
           <h2>Up and running in minutes</h2>
           <p class="section-desc">Four simple steps to get OmniKey working on your machine.</p>
         </div>
+
         <div class="steps">
           <div class="step">
             <div class="step-number">1</div>
             <div class="step-content">
               <h3>Install the CLI</h3>
-              <p>Install the OmniKey CLI globally via npm:</p>
-              <pre><code>npm install -g omnikey-cli</code></pre>
+              <p>Install the OmniKey CLI:</p>
+              <div class="code-block">
+                <div class="code-block-header">
+                  <button class="code-tab active" data-code-tab="brew">
+                    <svg viewBox="0 0 24 24" fill="currentColor" width="13" height="13" aria-hidden="true"><path d="M17.07 11.01c-.47-1.3-.77-2.97-.79-4.73 0-.14-.12-.26-.26-.26h-2.31c-.15 0-.26.12-.26.27.02 1.2.17 2.35.44 3.39-1.04-.7-2.29-1.12-3.63-1.12C6.56 8.56 4 11.12 4 14.28 4 17.44 6.56 20 9.26 20c1.87 0 3.51-.99 4.43-2.48.35.2.72.35 1.12.42v1.8c0 .14.11.26.26.26h2.31c.15 0 .26-.12.26-.26V12.6c0-.15-.11-.26-.26-.26h-.22a6.26 6.26 0 0 1-.09-1.33zm-7.81 6.26c-1.65 0-2.98-1.34-2.98-2.98s1.33-2.98 2.98-2.98 2.98 1.34 2.98 2.98-1.33 2.98-2.98 2.98z"/></svg>
+                    brew
+                  </button>
+                  <button class="code-tab" data-code-tab="npm">
+                    <svg viewBox="0 0 24 24" fill="currentColor" width="13" height="13" aria-hidden="true"><path d="M1.763 0C.786 0 0 .786 0 1.763v20.474C0 23.214.786 24 1.763 24h20.474C23.214 24 24 23.214 24 22.237V1.763C24 .786 23.214 0 22.237 0H1.763zm6.027 18.516V5.484h4.757v10.526h2.38V5.484h2.378v13.032H7.79z"/></svg>
+                    npm
+                  </button>
+                </div>
+                <pre data-code-content="brew"><code>brew install GurinderRawala/omnikey/omnikey-cli</code></pre>
+                <pre data-code-content="npm" hidden><code>npm install -g omnikey-cli</code></pre>
+              </div>
             </div>
           </div>
           <div class="step">

@@ -1,0 +1,143 @@
+name: Release Omnikey CLI
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    name: Build ${{ matrix.arch }} tarball
+    strategy:
+      matrix:
+        include:
+          - os: macos-14
+            arch: arm64
+          - os: macos-13
+            arch: x86_64
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.14.0'
+
+      - name: Get version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Install and build backend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install CLI dependencies
+        run: npm ci
+        working-directory: ./cli
+
+      - name: Build CLI TypeScript
+        run: npm run build
+        working-directory: ./cli
+
+      - name: Copy backend dist to CLI
+        run: |
+          rm -rf ./cli/backend-dist
+          mkdir -p ./cli/backend-dist
+          cp -R ./dist/* ./cli/backend-dist/
+
+      - name: Prune dev dependencies
+        run: npm prune --production
+        working-directory: ./cli
+
+      - name: Create release tarball
+        run: |
+          VERSION=${{ steps.version.outputs.VERSION }}
+          TARBALL="omnikey-cli-${VERSION}-darwin-${{ matrix.arch }}.tar.gz"
+          tar -czf "$TARBALL" \
+            -C cli \
+            dist/ \
+            backend-dist/ \
+            node_modules/ \
+            package.json \
+            README.md
+          echo "TARBALL=$TARBALL" >> "$GITHUB_ENV"
+
+      - name: Upload tarball artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tarball-darwin-${{ matrix.arch }}
+          path: ${{ env.TARBALL }}
+          retention-days: 1
+
+  release:
+    name: Create GitHub Release and update formula
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Download arm64 tarball
+        uses: actions/download-artifact@v4
+        with:
+          name: tarball-darwin-arm64
+          path: ./release-assets
+
+      - name: Download x86_64 tarball
+        uses: actions/download-artifact@v4
+        with:
+          name: tarball-darwin-x86_64
+          path: ./release-assets
+
+      - name: Compute SHA256 checksums
+        id: sha256
+        run: |
+          VERSION=${{ steps.version.outputs.VERSION }}
+          ARM64_FILE="release-assets/omnikey-cli-${VERSION}-darwin-arm64.tar.gz"
+          X86_FILE="release-assets/omnikey-cli-${VERSION}-darwin-x86_64.tar.gz"
+          ARM64_SHA=$(sha256sum "$ARM64_FILE" | awk '{print $1}')
+          X86_SHA=$(sha256sum "$X86_FILE" | awk '{print $1}')
+          echo "ARM64_SHA=$ARM64_SHA" >> "$GITHUB_OUTPUT"
+          echo "X86_SHA=$X86_SHA" >> "$GITHUB_OUTPUT"
+          echo "ARM64: $ARM64_SHA"
+          echo "x86_64: $X86_SHA"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*.tar.gz
+          generate_release_notes: true
+          tag_name: ${{ github.ref_name }}
+
+      - name: Update Homebrew formula
+        run: |
+          VERSION=${{ steps.version.outputs.VERSION }}
+          ARM64_SHA=${{ steps.sha256.outputs.ARM64_SHA }}
+          X86_SHA=${{ steps.sha256.outputs.X86_SHA }}
+
+          sed -i \
+            -e "s/version \".*\"/version \"${VERSION}\"/" \
+            -e "/darwin-arm64/,/sha256 \"/{s/sha256 \"[^\"]*\"/sha256 \"${ARM64_SHA}\"/}" \
+            -e "/darwin-x86_64/,/sha256 \"/{s/sha256 \"[^\"]*\"/sha256 \"${X86_SHA}\"/}" \
+            Formula/omnikey-cli.rb
+
+      - name: Commit updated formula
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/omnikey-cli.rb
+          git diff --cached --quiet || git commit -m "chore: update Homebrew formula to v${{ steps.version.outputs.VERSION }} [skip ci]"
+          git push origin HEAD:main
