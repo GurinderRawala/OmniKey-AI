@@ -111,6 +111,25 @@ async function runToolLoop(
     await onUsage(result);
   }
 
+  // If we exhausted the iteration cap and the model still wants to call tools,
+  // force a final text response by calling again without tools.
+  if (result.finish_reason === 'tool_calls') {
+    log.warn('Tool loop hit MAX_TOOL_ITERATIONS; forcing final conclusion', { sessionId });
+
+    session.history.push(result.assistantMessage);
+    session.history.push({
+      role: 'user',
+      content:
+        'You have reached the maximum number of tool calls. Based on all the information gathered so far, provide a single, final, concise answer. Do not call any more tools.',
+    });
+
+    result = await aiClient.complete(aiModel, session.history, {
+      tools: undefined,
+      temperature: 0.2,
+    });
+    await onUsage(result);
+  }
+
   log.info('Finished reasoning and tool calls: ', {
     reason: result.finish_reason,
   });
