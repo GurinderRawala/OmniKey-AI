@@ -120,7 +120,7 @@ async function runToolLoop(
     session.history.push({
       role: 'user',
       content:
-        'You have reached the maximum number of tool calls. Based on all the information gathered so far, provide a single, final, concise answer. Do not call any more tools.',
+        'You have reached the maximum number of tool calls. Do NOT make any further tool calls or web searches. You MUST now provide a final answer directly. If you still need to gather information from the system, generate a `<shell_scripts>` block instead of making tool calls.',
     });
 
     result = await aiClient.complete(aiModel, session.history, {
@@ -133,10 +133,6 @@ async function runToolLoop(
   log.info('Finished reasoning and tool calls: ', {
     reason: result.finish_reason,
   });
-
-  if (result.assistantMessage) {
-    session.history.push(result.assistantMessage);
-  }
 
   return result;
 }
@@ -357,6 +353,7 @@ async function runAgentTurn(
     isError: isErrorFlag,
     rawContentLength: (clientMessage.content || '').length,
     userContentLength: userContent.length,
+    isRecursiveCall: clientMessage.is_web_call,
   });
 
   const isAssistance = isTerminalOutput || isErrorFlag;
@@ -442,7 +439,7 @@ async function runAgentTurn(
         turn: session.turns,
       });
 
-      result = await runToolLoop(
+      const toolLoopResult = await runToolLoop(
         result,
         session,
         sessionId,
@@ -451,34 +448,72 @@ async function runAgentTurn(
         buildAvailableTools(),
         recordUsage,
       );
-      content = result.content.trim();
+      const toolLoopContent = toolLoopResult.content.trim();
 
-      if (!content) {
-        log.warn('Agent returned empty content after tool loop; sending generic error.');
-        sendFinalAnswer(
-          send,
-          sessionId,
-          'The agent returned an empty response. Please try again.',
-          true,
-        );
-        sessionMessages.delete(sessionId);
-        return;
-      }
-
-      await runAgentTurn(
-        sessionId,
-        subscription,
-        {
-          sender: 'agent',
-          session_id: sessionId,
-          content: '',
-          is_web_call: true,
-        },
-        send,
-        logger,
+      const toolLoopHasShell = toolLoopContent.includes('<shell_script>');
+      const toolLoopHasFinal = toolLoopContent.includes('<final_answer>');
+      const webToolFailed = session.history.some(
+        (msg) =>
+          msg.role === 'tool' && typeof msg.content === 'string' && msg.content.startsWith('Error'),
       );
 
-      return;
+      if (toolLoopHasShell || (toolLoopHasFinal && !webToolFailed)) {
+        // The tool loop already produced a shell script — use it directly.
+        // This avoids a redundant AI call and handles the case where the model
+        // emits a <shell_script> immediately after its web tool calls.
+        log.info('Tool loop produced shell script; processing inline', { sessionId });
+        content = toolLoopContent;
+        result = toolLoopResult;
+        // Fall through to the <shell_script> handling below.
+      } else {
+        // The tool loop returned either plain text or a <final_answer>.
+        // We always make one more AI turn here so the model has a chance to
+        // correct itself — specifically when web tools failed (404 / error) the
+        // model tends to wrap a "please run this manually" message in
+        // <final_answer>. The directive below tells it to use <shell_script> as
+        // a fallback instead of asking the user to run commands.
+        if (toolLoopResult.assistantMessage) {
+          session.history.push(toolLoopResult.assistantMessage);
+        }
+
+        session.history.push({
+          role: 'user',
+          content: webToolFailed
+            ? [
+                'IMPORTANT: The web search tool failed and is unavailable. Do NOT attempt any further web calls or ask the user to run commands manually.',
+                'You MUST retrieve any needed data by generating a <shell_script> that runs terminal commands (curl, grep, cat, etc.).',
+                'The shell script output will be returned to you automatically.',
+                '',
+                'Respond with exactly one of:',
+                '- <shell_script>...</shell_script> — to fetch or retrieve data via terminal commands',
+                '- <final_answer>...</final_answer> — only if you already have enough information',
+                'No plain text. No web tool calls. No other format.',
+              ].join('\n')
+            : [
+                'Web research is complete. The results are in the conversation above.',
+                '',
+                'Now respond with exactly one of:',
+                '- <shell_script>...</shell_script> — to run terminal commands (output will be returned to you automatically)',
+                '- <final_answer>...</final_answer> — only if you genuinely have enough information',
+                'No plain text. No other format.',
+              ].join('\n'),
+        });
+
+        await runAgentTurn(
+          sessionId,
+          subscription,
+          {
+            sender: 'agent',
+            session_id: sessionId,
+            content: '',
+            is_web_call: true,
+          },
+          send,
+          logger,
+        );
+
+        return;
+      }
     }
 
     // Ensure that a proper <final_answer> block is produced for the

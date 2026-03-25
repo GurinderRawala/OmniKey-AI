@@ -77,14 +77,22 @@ func runShellCommandWithStatus(_ command: String) -> (output: String, status: In
     process.standardError = pipe
 
     process.launch()
+
+    // Drain the pipe BEFORE calling waitUntilExit. The pipe's internal
+    // buffer is ~64 KB on macOS. If the script produces more output than
+    // that, the child blocks trying to write while the parent is stuck in
+    // waitUntilExit waiting for the child to exit — a deadlock. Reading
+    // first continuously empties the buffer so the child can always write,
+    // and readDataToEndOfFile returns once the child closes the write end
+    // (i.e. exits). waitUntilExit then returns immediately.
+    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+
     process.waitUntilExit()
 
     // Clear the tracked process once it has finished.
     Task {
         await AgentSessionState.shared.registerShellProcess(nil)
     }
-
-    let data = pipe.fileHandleForReading.readDataToEndOfFile()
     let output = String(data: data, encoding: .utf8) ?? ""
 
     let outputForLog: String
