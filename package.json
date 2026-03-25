@@ -1,6 +1,6 @@
 {
   "name": "omnikey-ai-api",
-  "version": "1.0.19",
+  "version": "1.0.20",
   "private": true,
   "main": "dist/index.js",
   "description": "Omnikey SaaS backend API. Use Yarn for install/build/start.",

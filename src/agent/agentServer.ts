@@ -134,6 +134,10 @@ async function runToolLoop(
     reason: result.finish_reason,
   });
 
+  if (result.assistantMessage) {
+    session.history.push(result.assistantMessage);
+  }
+
   return result;
 }
 
@@ -293,7 +297,12 @@ async function authenticateFromAuthHeader(
 }
 
 function createUserContent(content: string, hasStoredPrompt: boolean) {
-  return hasStoredPrompt ? content.replace(/@omniAgent/g, '').trim() : content;
+  return hasStoredPrompt
+    ? content
+        .toLowerCase()
+        .replace(/@omniagent/g, '')
+        .trim()
+    : content;
 }
 
 async function runAgentTurn(
@@ -353,6 +362,10 @@ async function runAgentTurn(
   const isAssistance = isTerminalOutput || isErrorFlag;
 
   if (!clientMessage?.is_web_call) {
+    // Terminal output and command errors are always user-role messages — they
+    // represent environment feedback that the agent must reason about next.
+    // Pushing them as 'assistant' would create two consecutive assistant turns
+    // which breaks most LLM APIs and prevents the model from processing the output.
     session.history.push({
       role: 'user',
       content: isAssistance
@@ -368,7 +381,7 @@ async function runAgentTurn(
 
   const recordUsage = async (result: AICompletionResult) => {
     const usage = result.usage;
-    if (!usage || !subscription.id) return;
+    if (!usage || !subscription.id || config.isSelfHosted) return;
     try {
       await SubscriptionUsage.create({
         subscriptionId: subscription.id,
@@ -451,6 +464,21 @@ async function runAgentTurn(
         sessionMessages.delete(sessionId);
         return;
       }
+
+      await runAgentTurn(
+        sessionId,
+        subscription,
+        {
+          sender: 'agent',
+          session_id: sessionId,
+          content: '',
+          is_web_call: true,
+        },
+        send,
+        logger,
+      );
+
+      return;
     }
 
     // Ensure that a proper <final_answer> block is produced for the
@@ -498,6 +526,35 @@ async function runAgentTurn(
         sender: 'agent',
         content: hasFinalAnswerTag ? content : `<final_answer>\n${content}\n</final_answer>`,
       });
+      sessionMessages.delete(sessionId);
+    } else if (content) {
+      // Fallback: the LLM returned content without any recognized tag and it
+      // is not the final turn (e.g. plain-text conclusion after terminal
+      // output). Treat it as a final answer so the client is never left
+      // hanging.
+      log.info('Agent returned untagged content on a non-final turn; treating as final answer', {
+        sessionId,
+        subscriptionId: subscription.id,
+        turn: session.turns,
+      });
+
+      session.history.push({ role: 'assistant', content });
+      send({
+        session_id: sessionId,
+        sender: 'agent',
+        content: `<final_answer>\n${content}\n</final_answer>`,
+      });
+      sessionMessages.delete(sessionId);
+    } else {
+      log.warn('Agent returned empty content with no recognized tags; sending error', {
+        sessionId,
+      });
+      sendFinalAnswer(
+        send,
+        sessionId,
+        'The agent returned an empty response. Please try again.',
+        true,
+      );
       sessionMessages.delete(sessionId);
     }
   } catch (err) {

@@ -161,7 +161,7 @@ async function enhanceText(
 
     // Record token usage for this subscription and model, if usage
     // data is available and we know which subscription made the call.
-    if (usage && subscription.id) {
+    if (usage && subscription.id && !config.isSelfHosted) {
       try {
         await SubscriptionUsage.create({
           subscriptionId: subscription.id,
@@ -253,7 +253,7 @@ async function streamEnhanceResponse(
 
     const { usage, model } = result;
 
-    if (usage && subscription.id) {
+    if (usage && subscription.id && !config.isSelfHosted) {
       try {
         await SubscriptionUsage.create({
           subscriptionId: subscription.id,
