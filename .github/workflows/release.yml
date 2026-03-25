@@ -13,8 +13,10 @@ jobs:
         include:
           - os: macos-14
             arch: arm64
-          - os: macos-13
+            npm_arch: arm64
+          - os: macos-14
             arch: x86_64
+            npm_arch: x64
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -38,6 +40,8 @@ jobs:
       - name: Install CLI dependencies
         run: npm ci
         working-directory: ./cli
+        env:
+          npm_config_arch: ${{ matrix.npm_arch }}
 
       - name: Build CLI TypeScript
         run: npm run build
