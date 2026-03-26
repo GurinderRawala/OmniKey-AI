@@ -14,6 +14,7 @@ import { attachAgentWebSocketServer } from './agent/agentServer';
 const app = express();
 const PORT = Number(config.port);
 
+app.set('trust proxy', 1);
 app.use(cors());
 app.use(express.json());
 
@@ -68,7 +69,7 @@ app.get('/macos/appcast', (req, res) => {
     logger.error('Failed to stat OmniKeyAI.dmg for appcast.', { error });
   }
 
-  const baseUrl = `${req.protocol}://${req.get('host')}`;
+  const baseUrl = `https://${req.get('host')}`;
   const downloadUrl = `${baseUrl}/macos/download`;
   const appcastUrl = `${baseUrl}/macos/appcast`;
 
@@ -141,7 +142,7 @@ app.get('/windows/download', (_req, res) => {
 // Returns the latest version + download URL so the client can decide whether
 // to prompt the user for an update.
 app.get('/windows/update', (req, res) => {
-  const baseUrl = `${req.protocol}://${req.get('host')}`;
+  const baseUrl = `https://${req.get('host')}`;
 
   let fileSize = 0;
   try {
