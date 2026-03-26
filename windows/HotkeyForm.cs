@@ -259,14 +259,18 @@ namespace OmniKey.Windows
                     _                      => "Processing",
                 };
 
-                ShowBalloon("OmniKey AI", actionName + "\u2026");
-
+                // Capture the selection BEFORE showing any balloon so that the
+                // balloon tip (which on Windows 10/11 becomes a toast notification)
+                // cannot steal keyboard focus before Ctrl+C is sent to the user's
+                // window, which would cause the clipboard capture to fail.
                 string? selected = await ClipboardHelper.CaptureSelectionAsync();
                 if (string.IsNullOrWhiteSpace(selected))
                 {
                     ShowBalloon("OmniKey AI", "No text selected. Please select text and try again.");
                     return;
                 }
+
+                ShowBalloon("OmniKey AI", actionName + "\u2026");
 
                 string normalized = ClipboardHelper.NormalizeOriginalText(selected);
 
