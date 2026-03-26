@@ -313,15 +313,37 @@ namespace OmniKey.Windows
 
         private void AppendSectionHeader(string title, Color color)
         {
+            // Use a Panel-based accent bar instead of U+258C (Left Half Block),
+            // which is not reliably present in Segoe UI on all Windows versions.
+            var container = new FlowLayoutPanel
+            {
+                FlowDirection = FlowDirection.LeftToRight,
+                WrapContents  = false,
+                AutoSize      = true,
+                AutoSizeMode  = AutoSizeMode.GrowAndShrink,
+                BackColor     = NordColors.EditorBackground,
+                Margin        = new Padding(0, 6, 0, 4),
+            };
+
+            var bar = new Panel
+            {
+                Size      = new Size(3, 16),
+                BackColor = color,
+                Margin    = new Padding(0, 2, 6, 2),
+            };
+
             var label = new Label
             {
-                Text      = $"\u258c {title}",
-                Font      = new Font("Segoe UI", 10, FontStyle.Bold),
+                Text     = title,
+                Font     = new Font("Segoe UI", 10, FontStyle.Bold),
                 ForeColor = color,
                 AutoSize  = true,
-                Margin    = new Padding(0, 6, 0, 4),
+                Margin    = Padding.Empty,
             };
-            _logFlow.Controls.Add(label);
+
+            container.Controls.Add(bar);
+            container.Controls.Add(label);
+            _logFlow.Controls.Add(container);
         }
 
         private void AppendInlineLabel(string text, Color color, Font font)
@@ -339,7 +361,24 @@ namespace OmniKey.Windows
 
         private void AppendEntry(string text, Color textColor, Color linkColor, Font font)
         {
+            // _logFlow.Width is 0 before the form is shown/laid out (e.g. when
+            // SetInitialRequest is called right after construction).  Fall back to
+            // _logPanel or form client width so entries are never invisible.
+            // A zero or negative entryWidth passed to CollapsibleEntryPanel causes
+            // the RichTextBox handle creation to fail and throws, so we enforce a
+            // hard minimum of 400 here.
             int entryWidth = _logFlow.Width - _logFlow.Padding.Horizontal;
+            if (entryWidth <= 0)
+            {
+                entryWidth = _logPanel.ClientSize.Width
+                           - SystemInformation.VerticalScrollBarWidth
+                           - _logFlow.Padding.Horizontal;
+            }
+            if (entryWidth <= 0)
+                entryWidth = ClientSize.Width - 64;
+            if (entryWidth <= 0)
+                entryWidth = 400;
+
             var entry = new CollapsibleEntryPanel(text, textColor, font, linkColor, entryWidth);
             _logFlow.Controls.Add(entry);
             _logPanel.AutoScrollPosition = new Point(0, _logFlow.Height);
@@ -428,6 +467,7 @@ namespace OmniKey.Windows
 
             private void LayoutControls()
             {
+                if (_rtb == null) return;
                 _rtb.Width = Width;
                 if (_toggleLink != null)
                 {

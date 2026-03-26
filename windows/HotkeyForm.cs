@@ -272,14 +272,23 @@ namespace OmniKey.Windows
 
                 ShowBalloon("OmniKey AI", actionName + "\u2026");
 
-                string normalized = ClipboardHelper.NormalizeOriginalText(selected);
-
-                // Agent workflow for Ctrl+T when @omniAgent directive is present
-                if (command == EnhanceCommand.Task && AgentRunner.ContainsAgentDirective(normalized))
+                // Check directive on raw text before any normalization so the
+                // @omniAgent token is never accidentally stripped or transformed.
+                if (command == EnhanceCommand.Task && AgentRunner.ContainsAgentDirective(selected))
                 {
-                    await RunAgentWorkflowAsync(normalized, originalWindow);
+                    string normalizedForAgent = ClipboardHelper.NormalizeOriginalText(selected);
+                    try
+                    {
+                        await RunAgentWorkflowAsync(normalizedForAgent, originalWindow);
+                    }
+                    catch (Exception ex)
+                    {
+                        ShowBalloon("OmniKey AI", "Agent error: " + ex.Message);
+                    }
                     return;
                 }
+
+                string normalized = ClipboardHelper.NormalizeOriginalText(selected);
 
                 string result;
                 try

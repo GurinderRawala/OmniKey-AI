@@ -153,12 +153,13 @@ namespace OmniKey.Windows
 
         private static void AppendTitle(RichTextBox rtb, string text)
         {
-            // Accent bar prefix in AccentCyan
-            rtb.SelectionFont  = new Font("Segoe UI", 11, FontStyle.Bold);
+            // Accent bar prefix — use Consolas which reliably includes Block Elements (U+258C)
+            rtb.SelectionFont  = new Font("Consolas", 11, FontStyle.Bold);
             rtb.SelectionColor = NordColors.AccentCyan;
             rtb.AppendText("\u258c ");
 
             // Title text in AccentBlue
+            rtb.SelectionFont  = new Font("Segoe UI", 11, FontStyle.Bold);
             rtb.SelectionColor = NordColors.AccentBlue;
             rtb.AppendText(text + "\n\n");
         }
