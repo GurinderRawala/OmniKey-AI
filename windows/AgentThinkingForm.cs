@@ -342,6 +342,9 @@ namespace OmniKey.Windows
             // _logFlow.Width is 0 before the form is shown/laid out (e.g. when
             // SetInitialRequest is called right after construction).  Fall back to
             // _logPanel or form client width so entries are never invisible.
+            // A zero or negative entryWidth passed to CollapsibleEntryPanel causes
+            // the RichTextBox handle creation to fail and throws, so we enforce a
+            // hard minimum of 400 here.
             int entryWidth = _logFlow.Width - _logFlow.Padding.Horizontal;
             if (entryWidth <= 0)
             {
@@ -351,6 +354,8 @@ namespace OmniKey.Windows
             }
             if (entryWidth <= 0)
                 entryWidth = ClientSize.Width - 64;
+            if (entryWidth <= 0)
+                entryWidth = 400;
 
             var entry = new CollapsibleEntryPanel(text, textColor, font, linkColor, entryWidth);
             _logFlow.Controls.Add(entry);

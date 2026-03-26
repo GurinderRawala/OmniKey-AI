@@ -277,7 +277,14 @@ namespace OmniKey.Windows
                 if (command == EnhanceCommand.Task && AgentRunner.ContainsAgentDirective(selected))
                 {
                     string normalizedForAgent = ClipboardHelper.NormalizeOriginalText(selected);
-                    await RunAgentWorkflowAsync(normalizedForAgent, originalWindow);
+                    try
+                    {
+                        await RunAgentWorkflowAsync(normalizedForAgent, originalWindow);
+                    }
+                    catch (Exception ex)
+                    {
+                        ShowBalloon("OmniKey AI", "Agent error: " + ex.Message);
+                    }
                     return;
                 }
 
