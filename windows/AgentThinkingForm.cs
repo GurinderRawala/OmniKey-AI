@@ -313,15 +313,37 @@ namespace OmniKey.Windows
 
         private void AppendSectionHeader(string title, Color color)
         {
+            // Use a Panel-based accent bar instead of U+258C (Left Half Block),
+            // which is not reliably present in Segoe UI on all Windows versions.
+            var container = new FlowLayoutPanel
+            {
+                FlowDirection = FlowDirection.LeftToRight,
+                WrapContents  = false,
+                AutoSize      = true,
+                AutoSizeMode  = AutoSizeMode.GrowAndShrink,
+                BackColor     = NordColors.EditorBackground,
+                Margin        = new Padding(0, 6, 0, 4),
+            };
+
+            var bar = new Panel
+            {
+                Size      = new Size(3, 16),
+                BackColor = color,
+                Margin    = new Padding(0, 2, 6, 2),
+            };
+
             var label = new Label
             {
-                Text      = $"\u258c {title}",
-                Font      = new Font("Segoe UI", 10, FontStyle.Bold),
+                Text     = title,
+                Font     = new Font("Segoe UI", 10, FontStyle.Bold),
                 ForeColor = color,
                 AutoSize  = true,
-                Margin    = new Padding(0, 6, 0, 4),
+                Margin    = Padding.Empty,
             };
-            _logFlow.Controls.Add(label);
+
+            container.Controls.Add(bar);
+            container.Controls.Add(label);
+            _logFlow.Controls.Add(container);
         }
 
         private void AppendInlineLabel(string text, Color color, Font font)
