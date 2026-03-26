@@ -339,7 +339,19 @@ namespace OmniKey.Windows
 
         private void AppendEntry(string text, Color textColor, Color linkColor, Font font)
         {
+            // _logFlow.Width is 0 before the form is shown/laid out (e.g. when
+            // SetInitialRequest is called right after construction).  Fall back to
+            // _logPanel or form client width so entries are never invisible.
             int entryWidth = _logFlow.Width - _logFlow.Padding.Horizontal;
+            if (entryWidth <= 0)
+            {
+                entryWidth = _logPanel.ClientSize.Width
+                           - SystemInformation.VerticalScrollBarWidth
+                           - _logFlow.Padding.Horizontal;
+            }
+            if (entryWidth <= 0)
+                entryWidth = ClientSize.Width - 64;
+
             var entry = new CollapsibleEntryPanel(text, textColor, font, linkColor, entryWidth);
             _logFlow.Controls.Add(entry);
             _logPanel.AutoScrollPosition = new Point(0, _logFlow.Height);
