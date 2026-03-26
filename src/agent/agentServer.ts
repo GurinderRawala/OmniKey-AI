@@ -117,6 +117,19 @@ async function runToolLoop(
     log.warn('Tool loop hit MAX_TOOL_ITERATIONS; forcing final conclusion', { sessionId });
 
     session.history.push(result.assistantMessage);
+
+    // The API requires a tool_result for every tool_use in the preceding
+    // assistant message. Add synthetic results for any unexecuted calls so
+    // the history remains valid before we send the follow-up user message.
+    for (const tc of result.tool_calls ?? []) {
+      session.history.push({
+        role: 'tool',
+        tool_call_id: tc.id,
+        tool_name: tc.name,
+        content: 'Tool call limit reached. Result unavailable.',
+      });
+    }
+
     session.history.push({
       role: 'user',
       content:

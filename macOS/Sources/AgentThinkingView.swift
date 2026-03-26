@@ -91,19 +91,21 @@ struct AgentThinkingView: View {
                                         title: "Your Request",
                                         accentColor: NordTheme.accentBlue(colorScheme)
                                     ) {
-                                        Text(model.initialRequest)
-                                            .font(.system(size: 13))
-                                            .foregroundColor(NordTheme.primaryText(colorScheme))
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                            .padding(10)
-                                            .background(
-                                                RoundedRectangle(cornerRadius: 6)
-                                                    .fill(NordTheme.sectionFill(accent: NordTheme.accentBlue(colorScheme), scheme: colorScheme))
-                                            )
-                                            .overlay(
-                                                RoundedRectangle(cornerRadius: 6)
-                                                    .strokeBorder(NordTheme.sectionBorder(accent: NordTheme.accentBlue(colorScheme), scheme: colorScheme), lineWidth: 1)
-                                            )
+                                        CollapsibleText(
+                                            text: model.initialRequest,
+                                            font: .system(size: 13),
+                                            foregroundColor: NordTheme.primaryText(colorScheme),
+                                            accentColor: NordTheme.accentBlue(colorScheme)
+                                        )
+                                        .padding(10)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 6)
+                                                .fill(NordTheme.sectionFill(accent: NordTheme.accentBlue(colorScheme), scheme: colorScheme))
+                                        )
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 6)
+                                                .strokeBorder(NordTheme.sectionBorder(accent: NordTheme.accentBlue(colorScheme), scheme: colorScheme), lineWidth: 1)
+                                        )
                                     }
                                 }
 
@@ -132,19 +134,21 @@ struct AgentThinkingView: View {
                                                                 .strokeBorder(NordTheme.sectionBorder(accent: purple, scheme: colorScheme), lineWidth: 1)
                                                         )
 
-                                                    Text(message)
-                                                        .font(.system(size: 12))
-                                                        .foregroundColor(NordTheme.primaryText(colorScheme))
-                                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                                        .padding(8)
-                                                        .background(
-                                                            RoundedRectangle(cornerRadius: 6)
-                                                                .fill(NordTheme.sectionFill(accent: purple, scheme: colorScheme))
-                                                        )
-                                                        .overlay(
-                                                            RoundedRectangle(cornerRadius: 6)
-                                                                .strokeBorder(NordTheme.sectionBorder(accent: purple, scheme: colorScheme), lineWidth: 1)
-                                                        )
+                                                    CollapsibleText(
+                                                        text: message,
+                                                        font: .system(size: 12),
+                                                        foregroundColor: NordTheme.primaryText(colorScheme),
+                                                        accentColor: purple
+                                                    )
+                                                    .padding(8)
+                                                    .background(
+                                                        RoundedRectangle(cornerRadius: 6)
+                                                            .fill(NordTheme.sectionFill(accent: purple, scheme: colorScheme))
+                                                    )
+                                                    .overlay(
+                                                        RoundedRectangle(cornerRadius: 6)
+                                                            .strokeBorder(NordTheme.sectionBorder(accent: purple, scheme: colorScheme), lineWidth: 1)
+                                                    )
                                                 }
                                             }
                                         }
@@ -161,19 +165,21 @@ struct AgentThinkingView: View {
                                     ) {
                                         VStack(alignment: .leading, spacing: 6) {
                                             ForEach(Array(model.webCalls.enumerated()), id: \.offset) { _, entry in
-                                                Text(entry)
-                                                    .font(.system(size: 12, design: .monospaced))
-                                                    .foregroundColor(NordTheme.primaryText(colorScheme))
-                                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                                    .padding(8)
-                                                    .background(
-                                                        RoundedRectangle(cornerRadius: 6)
-                                                            .fill(NordTheme.sectionFill(accent: cyan, scheme: colorScheme))
-                                                    )
-                                                    .overlay(
-                                                        RoundedRectangle(cornerRadius: 6)
-                                                            .strokeBorder(NordTheme.sectionBorder(accent: cyan, scheme: colorScheme), lineWidth: 1)
-                                                    )
+                                                CollapsibleText(
+                                                    text: entry,
+                                                    font: .system(size: 12, design: .monospaced),
+                                                    foregroundColor: NordTheme.primaryText(colorScheme),
+                                                    accentColor: cyan
+                                                )
+                                                .padding(8)
+                                                .background(
+                                                    RoundedRectangle(cornerRadius: 6)
+                                                        .fill(NordTheme.sectionFill(accent: cyan, scheme: colorScheme))
+                                                )
+                                                .overlay(
+                                                    RoundedRectangle(cornerRadius: 6)
+                                                        .strokeBorder(NordTheme.sectionBorder(accent: cyan, scheme: colorScheme), lineWidth: 1)
+                                                )
                                             }
                                         }
                                     }
@@ -201,19 +207,21 @@ struct AgentThinkingView: View {
                                                     }
 
                                                     if !body.isEmpty {
-                                                        Text(body)
-                                                            .font(.system(size: 12, design: .monospaced))
-                                                            .foregroundColor(NordTheme.primaryText(colorScheme))
-                                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                                            .padding(8)
-                                                            .background(
-                                                                RoundedRectangle(cornerRadius: 6)
-                                                                    .fill(NordTheme.sectionFill(accent: amber, scheme: colorScheme))
-                                                            )
-                                                            .overlay(
-                                                                RoundedRectangle(cornerRadius: 6)
-                                                                    .strokeBorder(NordTheme.sectionBorder(accent: amber, scheme: colorScheme), lineWidth: 1)
-                                                            )
+                                                        CollapsibleText(
+                                                            text: body,
+                                                            font: .system(size: 12, design: .monospaced),
+                                                            foregroundColor: NordTheme.primaryText(colorScheme),
+                                                            accentColor: amber
+                                                        )
+                                                        .padding(8)
+                                                        .background(
+                                                            RoundedRectangle(cornerRadius: 6)
+                                                                .fill(NordTheme.sectionFill(accent: amber, scheme: colorScheme))
+                                                        )
+                                                        .overlay(
+                                                            RoundedRectangle(cornerRadius: 6)
+                                                                .strokeBorder(NordTheme.sectionBorder(accent: amber, scheme: colorScheme), lineWidth: 1)
+                                                        )
                                                     }
                                                 }
                                             }
@@ -335,6 +343,55 @@ struct AgentThinkingView: View {
             }
 
             content()
+        }
+    }
+}
+
+// MARK: - Collapsible Text
+
+private struct CollapsibleText: View {
+    let text: String
+    let font: Font
+    let foregroundColor: Color
+    let accentColor: Color
+    var wordLimit: Int = 10
+
+    @State private var isExpanded = false
+
+    private static let previewWordCount = 60
+
+    private var words: [Substring] { text.split(whereSeparator: \.isWhitespace) }
+    private var isLong: Bool { words.count > wordLimit }
+
+    private var previewText: String {
+        guard isLong else { return text }
+        return words.prefix(Self.previewWordCount).joined(separator: " ") + "…"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(isExpanded ? text : previewText)
+                .font(font)
+                .foregroundColor(foregroundColor)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            if isLong {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        isExpanded.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 10, weight: .semibold))
+                        Text(isExpanded ? "Show less" : "Show more (\(words.count) words)")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .foregroundColor(accentColor)
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 2)
+            }
         }
     }
 }

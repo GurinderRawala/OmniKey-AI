@@ -1,9 +1,8 @@
 {
   "name": "omnikey-ai-api",
-  "version": "1.0.21",
-  "private": true,
+  "version": "1.0.22",
   "main": "dist/index.js",
-  "description": "Omnikey SaaS backend API. Use Yarn for install/build/start.",
+  "description": "Omnikey AI backend API. Use Yarn for install/build/start.",
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
     "build": "tsc",
