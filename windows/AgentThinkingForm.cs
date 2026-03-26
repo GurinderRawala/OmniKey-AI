@@ -445,6 +445,7 @@ namespace OmniKey.Windows
 
             private void LayoutControls()
             {
+                if (_rtb == null) return;
                 _rtb.Width = Width;
                 if (_toggleLink != null)
                 {
