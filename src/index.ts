@@ -10,6 +10,7 @@ import { logger } from './logger';
 import { taskInstructionRouter } from './taskInstructionRoutes';
 import { config } from './config';
 import { attachAgentWebSocketServer } from './agent/agentServer';
+import { AppDownload } from './models/appDownload';
 
 const app = express();
 const PORT = Number(config.port);
@@ -33,6 +34,12 @@ app.get('/macos/download', (_req, res) => {
   if (!fs.existsSync(dmgPath)) {
     res.status(404).send('File not found.');
     return;
+  }
+
+  if (!config.isSelfHosted) {
+    AppDownload.findOrCreate({ where: { platform: 'macos' }, defaults: { platform: 'macos', count: 0 } })
+      .then(([record]) => record.increment('count'))
+      .catch((err) => logger.error('Failed to increment macOS download count.', { error: err }));
   }
 
   res.set({
@@ -75,8 +82,8 @@ app.get('/macos/appcast', (req, res) => {
 
   // These should match the values embedded into the macOS app
   // Info.plist in macOS/build_release_dmg.sh.
-  const bundleVersion = '18';
-  const shortVersion = '1.0.17';
+  const bundleVersion = '19';
+  const shortVersion = '1.0.18';
 
   const xml = `<?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0"
@@ -119,6 +126,12 @@ app.get('/windows/download', (_req, res) => {
     return;
   }
 
+  if (!config.isSelfHosted) {
+    AppDownload.findOrCreate({ where: { platform: 'windows' }, defaults: { platform: 'windows', count: 0 } })
+      .then(([record]) => record.increment('count'))
+      .catch((err) => logger.error('Failed to increment Windows download count.', { error: err }));
+  }
+
   res.set({
     'Content-Type': 'application/zip',
     'Content-Disposition': `attachment; filename="${WIN_ZIP_FILENAME}"`,
@@ -157,6 +170,12 @@ app.get('/windows/update', (req, res) => {
     fileSize,
     releaseNotes: '',
   });
+});
+
+app.get('/api/downloads', async (_req, res) => {
+  const rows = await AppDownload.findAll({ where: { platform: ['macos', 'windows'] } });
+  const find = (p: string) => Number(rows.find((r) => r.platform === p)?.count ?? 0);
+  res.json({ macos: find('macos'), windows: find('windows') });
 });
 
 app.get('/health', (_req, res) => {

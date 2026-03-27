@@ -49,6 +49,54 @@ actor AgentSessionState {
     }
 }
 
+/// Returns the path of the user's preferred login shell by reading $SHELL
+/// from the current process environment. Falls back to /bin/zsh then
+/// /bin/bash if the value is absent or points to a non-executable path.
+func resolvedLoginShell() -> String {
+    let envShell = ProcessInfo.processInfo.environment["SHELL"] ?? ""
+    let candidates = [
+        envShell,
+        // zsh — default on macOS Catalina+; also available via Homebrew
+        "/bin/zsh",
+        "/usr/bin/zsh",
+        "/usr/local/bin/zsh",       // Homebrew (Intel)
+        "/opt/homebrew/bin/zsh",    // Homebrew (Apple Silicon)
+        // bash — default on older macOS / most Linux distros
+        "/bin/bash",
+        "/usr/bin/bash",
+        "/usr/local/bin/bash",      // Homebrew (Intel)
+        "/opt/homebrew/bin/bash",   // Homebrew (Apple Silicon)
+        // fish — popular third-party shell, installed via Homebrew or package manager
+        "/usr/local/bin/fish",      // Homebrew (Intel)
+        "/opt/homebrew/bin/fish",   // Homebrew (Apple Silicon)
+        "/usr/bin/fish",
+        // ksh — KornShell, common on Linux
+        "/bin/ksh",
+        "/usr/bin/ksh",
+        "/usr/local/bin/ksh",
+        // tcsh — legacy, still present on some macOS/BSD systems
+        "/bin/tcsh",
+        "/usr/bin/tcsh",
+        // sh — POSIX fallback, always present
+        "/bin/sh",
+        "/usr/bin/sh",
+    ]
+    for candidate in candidates where !candidate.isEmpty {
+        if FileManager.default.isExecutableFile(atPath: candidate) {
+            return candidate
+        }
+    }
+    return "/bin/sh"
+}
+
+/// Thread-safe boolean flag used to guard against calling a completion
+/// handler more than once across URLSession WebSocket callbacks.
+final class BoolBox: @unchecked Sendable { var value = false }
+
+/// Box that holds an optional closure so it can be captured by reference
+/// inside @Sendable closures without triggering data-race warnings.
+final class ClosureBox<T>: @unchecked Sendable { var call: T? }
+
 /// Simple shell execution helper that captures both the
 /// output and the exit status of the command.
 func runShellCommandWithStatus(_ command: String) -> (output: String, status: Int32) {
@@ -62,8 +110,11 @@ func runShellCommandWithStatus(_ command: String) -> (output: String, status: In
 
     print("[AgentRunner] About to run shell command (length: \(command.count)):\n\(trimmedCommandForLog)")
 
+    let shellPath = resolvedLoginShell()
+    print("[AgentRunner] Using shell: \(shellPath)")
+
     let process = Process()
-    process.launchPath = "/bin/zsh"
+    process.launchPath = shellPath
     process.arguments = ["-l", "-c", command]
 
     // Remember this process so it can be cancelled if the user
@@ -138,10 +189,11 @@ final class AgentRunner {
     /// with either the final answer or an error.
     func runAgentSession(
         originalText: String,
-        completion: @escaping (Result<String, Error>) -> Void
+        completion: @escaping @Sendable (Result<String, Error>) -> Void
     ) {
-        func startSession(with jwt: String, allowReauth: Bool) {
-            connectAndRun(originalText: originalText, jwt: jwt) { result in
+        let sessionBox = ClosureBox<@MainActor @Sendable (String, Bool) -> Void>()
+        sessionBox.call = { [self] jwt, allowReauth in
+            self.connectAndRun(originalText: originalText, jwt: jwt) { result in
                 // If the user pressed Cancel, surface a dedicated
                 // cancellation error and skip any re-auth logic.
                 Task { @MainActor in
@@ -172,7 +224,7 @@ final class AgentRunner {
                         case .success:
                             let newJwt = SubscriptionManager.shared.jwtToken ?? ""
                             DispatchQueue.main.async {
-                                startSession(with: newJwt, allowReauth: false)
+                                sessionBox.call?(newJwt, false)
                             }
 
                         case .noStoredKey, .expired:
@@ -194,7 +246,7 @@ final class AgentRunner {
         // Ensure we have (or can obtain) a JWT before
         // attempting to connect to the agent.
         if let token = SubscriptionManager.shared.jwtToken, !token.isEmpty {
-            startSession(with: token, allowReauth: true)
+            sessionBox.call?(token, true)
             return
         }
 
@@ -203,7 +255,7 @@ final class AgentRunner {
             case .success:
                 let jwt = SubscriptionManager.shared.jwtToken ?? ""
                 DispatchQueue.main.async {
-                    startSession(with: jwt, allowReauth: false)
+                    sessionBox.call?(jwt, false)
                 }
 
             case .noStoredKey, .expired:
@@ -261,7 +313,7 @@ final class AgentRunner {
     private func connectAndRun(
         originalText: String,
         jwt: String,
-        completion: @escaping (Result<String, Error>) -> Void
+        completion: @escaping @Sendable (Result<String, Error>) -> Void
     ) {
         guard let url = makeAgentWebSocketURL() else {
             let error = NSError(
@@ -337,7 +389,7 @@ final class AgentRunner {
         sessionID: String,
         jwt: String,
         originalText: String,
-        completion: @escaping (Result<String, Error>) -> Void
+        completion: @escaping @Sendable (Result<String, Error>) -> Void
     ) {
         var request = URLRequest(url: url)
         request.addValue("Bearer \(jwt)", forHTTPHeaderField: "Authorization")
@@ -386,14 +438,14 @@ final class AgentRunner {
         let encoder = JSONEncoder()
         let decoder = JSONDecoder()
 
-        var finalAnswerDelivered = false
+        let finalAnswerDelivered = BoolBox()
 
         func receiveNext() {
             task.receive { result in
                 switch result {
                 case let .failure(error):
                     print("[AgentRunner] WebSocket receive failed: \(error.localizedDescription)")
-                    if !finalAnswerDelivered {
+                    if !finalAnswerDelivered.value {
                         DispatchQueue.main.async {
                             completion(.failure(error))
                         }
@@ -473,7 +525,7 @@ final class AgentRunner {
                                   let jsonString = String(data: jsonData, encoding: .utf8)
                             else {
                                 print("[AgentRunner] Failed to encode terminal output reply; aborting session.")
-                                if !finalAnswerDelivered {
+                                if !finalAnswerDelivered.value {
                                     DispatchQueue.main.async {
                                         completion(.failure(NSError(
                                             domain: "AgentRunner",
@@ -496,7 +548,7 @@ final class AgentRunner {
                             task.send(.string(jsonString)) { error in
                                 if let error = error {
                                     print("[AgentRunner] Failed to send terminal output: \(error.localizedDescription)")
-                                    if !finalAnswerDelivered {
+                                    if !finalAnswerDelivered.value {
                                         DispatchQueue.main.async {
                                             completion(.failure(error))
                                         }
@@ -516,7 +568,7 @@ final class AgentRunner {
                     // caller and close the stream.
                     if let final = AgentRunner.extractFinalAnswer(from: content) {
                         print("[AgentRunner] Detected <final_answer> block in agent response. Length: \(final.count)")
-                        finalAnswerDelivered = true
+                        finalAnswerDelivered.value = true
                         DispatchQueue.main.async {
                             completion(.success(final))
                         }
@@ -534,7 +586,7 @@ final class AgentRunner {
                     // just stream plain text without special tags.
                     let answerText = !displayText.isEmpty ? displayText : content
                     print("[AgentRunner] Treating agent message as implicit final answer. Length: \(answerText.count)")
-                    finalAnswerDelivered = true
+                    finalAnswerDelivered.value = true
                     DispatchQueue.main.async {
                         completion(.success(answerText))
                     }
@@ -564,7 +616,7 @@ final class AgentRunner {
         {
             print("[AgentRunner] Sending initial WebSocket message (length: \(json.count))")
             task.send(.string(json)) { error in
-                if let error, !finalAnswerDelivered {
+                if let error, !finalAnswerDelivered.value {
                     print("[AgentRunner] Failed to send initial WebSocket message: \(error.localizedDescription)")
                     DispatchQueue.main.async {
                         completion(.failure(error))
