@@ -154,7 +154,7 @@ namespace OmniKey.Windows
                 FlowDirection = FlowDirection.TopDown,
                 WrapContents  = false,
                 BackColor     = NordColors.EditorBackground,
-                Padding       = new Padding(12),
+                Padding       = new Padding(12, 16, 12, 16),
             };
 
             _logPanel = new Panel
@@ -409,6 +409,11 @@ namespace OmniKey.Windows
         {
             if (field != null) return field;
             field = new SectionCard(title, accent, icon, EffectiveFlowWidth());
+            // When an RTB.ContentsResized fires asynchronously it cascades:
+            // RTB → CollapsibleEntryPanel → EntryCard → SectionCard.ReLayout().
+            // Without this hook _logFlow.Height stays stale and the last item
+            // is clipped by the panel boundary.
+            field.SizeChanged += (_, _) => RefreshFlowHeight();
             _logFlow.Controls.Add(field);
             return field;
         }
