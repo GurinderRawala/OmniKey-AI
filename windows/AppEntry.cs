@@ -14,7 +14,6 @@ namespace OmniKey.Windows
             _mainForm.FormClosed += (s, e) => ExitThread();
             _hotkeyForm = new HotkeyForm();
             _hotkeyForm.Show(); // Hidden, message-only
-            _hotkeyForm.CreateHandle();
             _mainForm.Show();
         }
     }
