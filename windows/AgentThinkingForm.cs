@@ -153,8 +153,6 @@ namespace OmniKey.Windows
             {
                 FlowDirection = FlowDirection.TopDown,
                 WrapContents  = false,
-                AutoSize      = true,
-                AutoSizeMode  = AutoSizeMode.GrowAndShrink,
                 BackColor     = NordColors.EditorBackground,
                 Padding       = new Padding(12),
             };
@@ -262,6 +260,12 @@ namespace OmniKey.Windows
                 else if (c is CollapsibleEntryPanel ep)
                     ep.Width = w;
             }
+            RefreshFlowHeight();
+        }
+
+        private void RefreshFlowHeight()
+        {
+            _logFlow.Height = _logFlow.GetPreferredSize(new Size(_logFlow.Width, 0)).Height;
         }
 
         private void ResizeLog()
@@ -301,6 +305,7 @@ namespace OmniKey.Windows
                     NordColors.BlueSectionFill,
                     NordColors.BlueSectionBorder,
                     section.ItemWidth));
+                RefreshFlowHeight();
             });
         }
 
@@ -409,7 +414,10 @@ namespace OmniKey.Windows
         }
 
         private void ScrollToBottom()
-            => _logPanel.AutoScrollPosition = new Point(0, _logFlow.Height);
+        {
+            RefreshFlowHeight();
+            _logPanel.AutoScrollPosition = new Point(0, _logFlow.Height);
+        }
 
         private void InvokeIfNeeded(Action action)
         {
