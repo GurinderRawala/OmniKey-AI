@@ -1,5 +1,6 @@
 using System;
 using System.Drawing;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -24,9 +25,11 @@ namespace OmniKey.Windows
 
         public HotkeyForm()
         {
+            Opacity         = 0;
             ShowInTaskbar   = false;
             FormBorderStyle = FormBorderStyle.None;
-            Size            = new Size(0, 0);
+            Size            = new Size(1, 1);
+            WindowState     = FormWindowState.Minimized;
             var assembly = System.Reflection.Assembly.GetExecutingAssembly();
             using var iconStream = assembly.GetManifestResourceStream("OmniKey.Windows.app.ico");
             var appIcon = iconStream != null ? new Icon(iconStream) : SystemIcons.Information;
@@ -42,8 +45,6 @@ namespace OmniKey.Windows
         protected override void OnLoad(EventArgs e)
         {
             base.OnLoad(e);
-            if (!IsHandleCreated)
-                CreateHandle();
             RegisterHotkeys();
             // No UI, no auth/init logic here
         }
@@ -86,7 +87,9 @@ namespace OmniKey.Windows
             if (m.Msg == WM_HOTKEY)
             {
                 int id = m.WParam.ToInt32();
-                _ = HandleHotkeyAsync(id);
+                HandleHotkeyAsync(id).ContinueWith(
+                    t => ShowBalloon("OmniKey AI", "Error: " + t.Exception?.GetBaseException().Message),
+                    TaskContinuationOptions.OnlyOnFaulted);
             }
 
             base.WndProc(ref m);
@@ -182,7 +185,7 @@ namespace OmniKey.Windows
 
         private async Task RunAgentWorkflowAsync(string originalText, IntPtr originalWindow)
         {
-            var mainForm = Application.OpenForms["MainForm"] as MainForm;
+            var mainForm = Application.OpenForms.OfType<MainForm>().FirstOrDefault();
             if (mainForm == null)
                 return;
 

@@ -6,6 +6,8 @@ namespace OmniKey.Windows
     /// </summary>
     internal interface IAgentSession
     {
+        void SetInitialRequest(string text);
+        void SetRunning(bool running);
         void AppendAgentMessage(string text);
         void AppendWebCall(string text);
         void AppendTerminalOutput(string text);

@@ -51,10 +51,9 @@ namespace OmniKey.Windows
             // ── Header ────────────────────────────────────────────────────
             var headerPanel = new Panel
             {
-                Location  = new Point(0, 0),
-                Size      = new Size(Width, 78),
+                Dock      = DockStyle.Top,
+                Height    = 78,
                 BackColor = NordColors.SurfaceBackground,
-                Anchor    = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
             };
             headerPanel.Paint += (_, e) =>
             {
@@ -139,9 +138,8 @@ namespace OmniKey.Windows
             var logSurround = new Panel
             {
                 BackColor = NordColors.SurfaceBackground,
-                Location  = new Point(16, 86),
-                Padding   = new Padding(2),
-                Anchor    = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right
+                Dock      = DockStyle.Fill,
+                Padding   = new Padding(16, 0, 16, 0),
             };
             logSurround.Paint += (_, e) =>
             {
@@ -170,7 +168,6 @@ namespace OmniKey.Windows
             _logPanel.Controls.Add(_logFlow);
             _logPanel.SizeChanged += (_, _) => UpdateFlowWidth();
             logSurround.Controls.Add(_logPanel);
-            Controls.Add(logSurround);
 
             // ── Bottom panel ──────────────────────────────────────────────
             _bottomPanel = new Panel
@@ -220,6 +217,7 @@ namespace OmniKey.Windows
             _bottomPanel.Controls.Add(_statusLabel);
             _bottomPanel.SizeChanged += (_, _) => PositionStatusLabel();
             Controls.Add(_bottomPanel);
+            Controls.Add(logSurround);
 
             // ── Pulse animation ───────────────────────────────────────────
             _pulseTimer = new System.Windows.Forms.Timer { Interval = 50 };
@@ -268,18 +266,6 @@ namespace OmniKey.Windows
 
         private void ResizeLog()
         {
-            if (Controls.Count < 2) return;
-            var header   = Controls[0] as Panel;
-            var surround = Controls[1] as Panel;
-            if (header == null || surround == null) return;
-
-            header.Size = new Size(ClientSize.Width, 78);
-
-            int logTop    = 86;
-            int logHeight = ClientSize.Height - logTop - _bottomPanel.Height - 8;
-            surround.Size     = new Size(ClientSize.Width - 32, Math.Max(logHeight, 80));
-            surround.Location = new Point(16, logTop);
-
             PositionStatusBadge();
         }
 
@@ -427,6 +413,7 @@ namespace OmniKey.Windows
 
         private void InvokeIfNeeded(Action action)
         {
+            if (!IsHandleCreated) return;
             if (InvokeRequired) Invoke(action);
             else action();
         }

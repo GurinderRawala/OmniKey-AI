@@ -27,6 +27,7 @@ namespace OmniKey.Windows
 
         public MainForm()
         {
+            this.Name = "MainForm";
             Text = "OmniKey AI";
             ShowInTaskbar = true;
             StartPosition = FormStartPosition.CenterScreen;
@@ -122,13 +123,14 @@ namespace OmniKey.Windows
             _licenseTab.Controls.Add(_licenseForm);
             _licenseForm.Show();
 
-            // Agent Session Tab (hidden by default)
+            // Agent Session Tab
             _agentThinkingForm = new AgentThinkingForm { TopLevel = false, FormBorderStyle = FormBorderStyle.None, Dock = DockStyle.Fill, Visible = true };
+            _agentThinkingForm.SizeChanged += (s, e) => _agentThinkingForm.Invalidate();
             _agentSessionTab = new TabPage("Agent Session")
             {
                 BackColor = NordColors.PanelBackground,
                 ForeColor = NordColors.PrimaryText,
-                Visible = false
+                Visible = true
             };
             _agentSessionTab.Controls.Add(_agentThinkingForm);
             _agentThinkingForm.Show();
@@ -145,7 +147,6 @@ namespace OmniKey.Windows
 
         public void ShowAgentSessionTab()
         {
-            _agentSessionTab.Visible = true;
             _tabControl.SelectedTab = _agentSessionTab;
             this.Show();
             this.Activate();
