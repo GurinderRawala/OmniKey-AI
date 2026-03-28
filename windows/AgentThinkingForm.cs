@@ -42,8 +42,8 @@ namespace OmniKey.Windows
         public AgentThinkingForm()
         {
             Text            = "OmniAgent Session - OmniKey AI";
-            Size            = new Size(680, 500);
-            MinimumSize     = new Size(540, 400);
+            Size            = new Size(780, 640);
+            MinimumSize     = new Size(620, 500);
             StartPosition   = FormStartPosition.CenterScreen;
             BackColor       = NordColors.WindowBackground;
             FormBorderStyle = FormBorderStyle.Sizable;
@@ -251,6 +251,12 @@ namespace OmniKey.Windows
 
         private void UpdateFlowWidth()
         {
+            // WinForms resets AutoScrollPosition during a layout pass triggered by
+            // a resize. Save and restore it so the view doesn't jump to the top.
+            var savedScroll = new Point(
+                Math.Abs(_logPanel.AutoScrollPosition.X),
+                Math.Abs(_logPanel.AutoScrollPosition.Y));
+
             int w = EffectiveFlowWidth();
             _logFlow.Width = w + _logFlow.Padding.Horizontal;
             foreach (Control c in _logFlow.Controls)
@@ -261,11 +267,16 @@ namespace OmniKey.Windows
                     ep.Width = w;
             }
             RefreshFlowHeight();
+
+            _logPanel.AutoScrollPosition = savedScroll;
         }
 
         private void RefreshFlowHeight()
         {
-            _logFlow.Height = _logFlow.GetPreferredSize(new Size(_logFlow.Width, 0)).Height;
+            int h = _logFlow.GetPreferredSize(new Size(_logFlow.Width, 0)).Height;
+            // GetPreferredSize omits Padding.Bottom in some WinForms builds.
+            // Adding it explicitly guarantees clearance below the last item.
+            _logFlow.Height = h + _logFlow.Padding.Bottom;
         }
 
         private void ResizeLog()
@@ -409,11 +420,23 @@ namespace OmniKey.Windows
         {
             if (field != null) return field;
             field = new SectionCard(title, accent, icon, EffectiveFlowWidth());
-            // When an RTB.ContentsResized fires asynchronously it cascades:
+            // RTB.ContentsResized fires after the initial render, cascading:
             // RTB → CollapsibleEntryPanel → EntryCard → SectionCard.ReLayout().
-            // Without this hook _logFlow.Height stays stale and the last item
-            // is clipped by the panel boundary.
-            field.SizeChanged += (_, _) => RefreshFlowHeight();
+            // Refresh the flow height and, if already near the bottom, scroll
+            // so the newly revealed content stays in view.
+            field.SizeChanged += (_, _) =>
+            {
+                RefreshFlowHeight();
+                if (!IsHandleCreated) return;
+                BeginInvoke(new Action(() =>
+                {
+                    var vs = _logPanel.VerticalScroll;
+                    bool atBottom = !vs.Visible
+                                 || vs.Value >= vs.Maximum - vs.LargeChange - 20;
+                    if (atBottom)
+                        _logPanel.AutoScrollPosition = new Point(0, _logFlow.Height);
+                }));
+            };
             _logFlow.Controls.Add(field);
             return field;
         }
@@ -421,7 +444,11 @@ namespace OmniKey.Windows
         private void ScrollToBottom()
         {
             RefreshFlowHeight();
-            _logPanel.AutoScrollPosition = new Point(0, _logFlow.Height);
+            // Defer the actual scroll one message-pump cycle so that any pending
+            // ContentsResized / layout events finish before we set the position.
+            if (!IsHandleCreated) return;
+            BeginInvoke(new Action(() =>
+                _logPanel.AutoScrollPosition = new Point(0, _logFlow.Height)));
         }
 
         private void InvokeIfNeeded(Action action)
