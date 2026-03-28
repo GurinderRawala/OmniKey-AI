@@ -34,7 +34,7 @@ namespace OmniKey.Windows
         /// Returns the final answer text on success.
         public static async Task<string> RunAgentSessionAsync(
             string originalText,
-            AgentThinkingForm thinkingForm,
+            IAgentSession thinkingForm,
             CancellationToken ct)
         {
             // Mirror macOS: if a JWT already exists use it with allowReauth:true so
@@ -54,7 +54,7 @@ namespace OmniKey.Windows
 
         private static async Task<string> ConnectAndRunAsync(
             string originalText,
-            AgentThinkingForm thinkingForm,
+            IAgentSession thinkingForm,
             CancellationToken ct,
             bool allowReauth)
         {
@@ -223,26 +223,52 @@ namespace OmniKey.Windows
         private static async Task<(string output, int exitCode)> RunShellCommandAsync(
             string script, CancellationToken ct)
         {
-            // Encode the script as Base64 UTF-16LE so that powershell.exe -EncodedCommand
+            // Encode the script as Base64 UTF-16LE so that PowerShell -EncodedCommand
             // receives it verbatim — no quoting, escaping, or curly-brace conflicts.
+            // Both powershell.exe and pwsh.exe accept this encoding.
             string encodedScript = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
 
+            // Resolve the best available PowerShell (7+ preferred over 5.1),
+            // mirroring the macOS resolvedLoginShell() approach.
+            string shell = ResolvedPowerShell();
+
+            // Omit -NoProfile so the user's profile scripts run and load PATH
+            // modifications and tool configurations (GitHub CLI, git, nvm, etc.).
+            // This mirrors the macOS approach of launching with -l (login shell)
+            // so that agent commands see the same environment as a normal terminal.
             var psi = new ProcessStartInfo
             {
-                FileName = "powershell.exe",
-                Arguments = $"-NoProfile -NonInteractive -EncodedCommand {encodedScript}",
+                FileName               = shell,
+                Arguments              = $"-NonInteractive -EncodedCommand {encodedScript}",
                 RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
+                RedirectStandardError  = true,
+                UseShellExecute        = false,
+                CreateNoWindow         = true,
+                // Start in the user's home directory, mirroring the macOS login
+                // shell which opens in ~. This ensures relative paths and tools
+                // that rely on HOME/USERPROFILE work as expected.
+                WorkingDirectory       = Environment.GetFolderPath(
+                                             Environment.SpecialFolder.UserProfile),
             };
+
+            // Build the child environment by layering machine-level vars (HKLM)
+            // then user-level vars (HKCU), mirroring what macOS's -l (login shell)
+            // flag does by sourcing /etc/profile then ~/.bash_profile / ~/.zshrc.
+            // This ensures agent commands see PATH entries added by installers,
+            // Scoop, nvm, pyenv, conda, etc. even if they were installed after
+            // OmniKey started and therefore aren't in our current process environment.
+            ApplyUserEnvironment(psi);
+
+            Console.WriteLine($"[AgentRunner] About to run PowerShell command. " +
+                              $"Script length: {script.Length}, encoded length: {encodedScript.Length}");
+            Console.WriteLine($"[AgentRunner] Using shell: {shell}");
 
             using var process = new Process { StartInfo = psi, EnableRaisingEvents = true };
 
             var outputSb = new StringBuilder();
 
             process.OutputDataReceived += (_, e) => { if (e.Data != null) outputSb.AppendLine(e.Data); };
-            process.ErrorDataReceived += (_, e) => { if (e.Data != null) outputSb.AppendLine(e.Data); };
+            process.ErrorDataReceived  += (_, e) => { if (e.Data != null) outputSb.AppendLine(e.Data); };
 
             process.Start();
             process.BeginOutputReadLine();
@@ -258,6 +284,92 @@ namespace OmniKey.Windows
             await process.WaitForExitAsync(ct).ConfigureAwait(false);
 
             return (outputSb.ToString(), process.ExitCode);
+        }
+
+        /// Returns the path to the best available PowerShell executable.
+        /// Prefers PowerShell 7+ (pwsh.exe) over Windows PowerShell 5.1 (powershell.exe),
+        /// analogous to macOS resolvedLoginShell() which prefers the user's configured
+        /// shell over a bare /bin/sh fallback.
+        private static string ResolvedPowerShell()
+        {
+            // Check known absolute install paths for PowerShell 7+.
+            var knownPaths = new[]
+            {
+                @"C:\Program Files\PowerShell\7\pwsh.exe",
+                @"C:\Program Files\PowerShell\7-preview\pwsh.exe",
+            };
+
+            foreach (var path in knownPaths)
+            {
+                if (System.IO.File.Exists(path))
+                    return path;
+            }
+
+            // Check if pwsh.exe is on PATH using where.exe (available since Vista).
+            try
+            {
+                using var probe = new Process
+                {
+                    StartInfo = new ProcessStartInfo
+                    {
+                        FileName               = "where.exe",
+                        Arguments              = "pwsh.exe",
+                        UseShellExecute        = false,
+                        CreateNoWindow         = true,
+                        RedirectStandardOutput = true,
+                    }
+                };
+                probe.Start();
+                string found = probe.StandardOutput.ReadLine() ?? "";
+                probe.WaitForExit();
+                if (probe.ExitCode == 0 && !string.IsNullOrWhiteSpace(found))
+                    return found.Trim();
+            }
+            catch { }
+
+            // Windows PowerShell 5.1 — always present on modern Windows.
+            return "powershell.exe";
+        }
+
+        /// Populate psi.Environment with the full user logon environment by
+        /// layering machine-level then user-level variables from the Windows
+        /// registry — the same two sources Windows merges during an interactive
+        /// logon session. Mirrors the macOS -l (login shell) flag that sources
+        /// /etc/profile then the user's shell rc files so that PATH entries added
+        /// by Scoop, winget, nvm, conda, etc. are visible to spawned commands.
+        private static void ApplyUserEnvironment(ProcessStartInfo psi)
+        {
+            // Layer 1 — machine-wide variables (equivalent to /etc/environment).
+            foreach (System.Collections.DictionaryEntry kv in
+                     Environment.GetEnvironmentVariables(EnvironmentVariableTarget.Machine))
+            {
+                if (kv.Key is not string key || kv.Value?.ToString() is not string val)
+                    continue;
+                psi.Environment[key] = Environment.ExpandEnvironmentVariables(val);
+            }
+
+            // Layer 2 — user-level variables (HKCU\Environment), equivalent to
+            // ~/.bash_profile / ~/.zshrc entries. PATH is additive so that the
+            // user's bin folders are appended rather than replacing the system PATH.
+            foreach (System.Collections.DictionaryEntry kv in
+                     Environment.GetEnvironmentVariables(EnvironmentVariableTarget.User))
+            {
+                if (kv.Key is not string key || kv.Value?.ToString() is not string val)
+                    continue;
+
+                string expanded = Environment.ExpandEnvironmentVariables(val);
+
+                if (key.Equals("PATH", StringComparison.OrdinalIgnoreCase) &&
+                    psi.Environment.TryGetValue("PATH", out string? existingPath) &&
+                    !string.IsNullOrEmpty(existingPath))
+                {
+                    psi.Environment[key] = existingPath.TrimEnd(';') + ";" + expanded;
+                }
+                else
+                {
+                    psi.Environment[key] = expanded;
+                }
+            }
         }
 
         private static string MakeWebSocketUrl()

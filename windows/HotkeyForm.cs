@@ -322,9 +322,9 @@ namespace OmniKey.Windows
             _agentThinkingForm?.Close();
             _agentThinkingForm = new AgentThinkingForm();
 
+            _agentThinkingForm.Show(this);
             _agentThinkingForm.SetInitialRequest(originalText);
             _agentThinkingForm.SetRunning(true);
-            _agentThinkingForm.Show(this);
 
             var ct = _agentThinkingForm.CancellationSource.Token;
 

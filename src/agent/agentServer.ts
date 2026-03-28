@@ -11,7 +11,14 @@ import { getAgentPrompt } from './agentPrompts';
 import { getPromptForCommand } from '../featureRoutes';
 import { selfHostedSubscription } from '../authMiddleware';
 import { WEB_FETCH_TOOL, WEB_SEARCH_TOOL, executeTool } from '../web-search-provider';
-import { aiClient, AIMessage, AITool, AICompletionResult, getDefaultModel } from '../ai-client';
+import {
+  aiClient,
+  AIMessage,
+  AITool,
+  AICompletionResult,
+  getDefaultModel,
+  getMaxContentLength,
+} from '../ai-client';
 
 interface AgentMessage {
   session_id: string;
@@ -162,6 +169,7 @@ const sessionMessages = new Map<string, SessionState>();
 type AgentSendFn = (msg: AgentMessage) => void;
 
 const MAX_TURNS = 10;
+const MAX_CONTENT_LENGTH = getMaxContentLength(config.aiProvider);
 
 async function getOrCreateSession(
   sessionId: string,
@@ -305,13 +313,8 @@ async function authenticateFromAuthHeader(
   }
 }
 
-function createUserContent(content: string, hasStoredPrompt: boolean) {
-  return hasStoredPrompt
-    ? content
-        .toLowerCase()
-        .replace(/@omniagent/g, '')
-        .trim()
-    : content;
+function createUserContent(content: string, _hasStoredPrompt: boolean) {
+  return content.replace(/@omniagent/gi, '').trim();
 }
 
 async function runAgentTurn(
@@ -358,6 +361,18 @@ async function runAgentTurn(
   }
   if (isErrorFlag) {
     userContent = `COMMAND ERROR:\n${userContent}`;
+  }
+
+  if (userContent.length > MAX_CONTENT_LENGTH) {
+    const truncated = userContent.length - MAX_CONTENT_LENGTH;
+    userContent =
+      userContent.slice(0, MAX_CONTENT_LENGTH) +
+      `\n\n[...${truncated} characters truncated due to length limit...]`;
+    log.warn('Agent user content truncated to fit API limits', {
+      sessionId,
+      originalLength: (clientMessage.content || '').length,
+      truncatedLength: userContent.length,
+    });
   }
 
   log.info('Agent turn received client message', {
