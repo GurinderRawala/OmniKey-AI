@@ -244,21 +244,20 @@ namespace OmniKey.Windows
                 RedirectStandardError  = true,
                 UseShellExecute        = false,
                 CreateNoWindow         = true,
+                // Start in the user's home directory, mirroring the macOS login
+                // shell which opens in ~. This ensures relative paths and tools
+                // that rely on HOME/USERPROFILE work as expected.
+                WorkingDirectory       = Environment.GetFolderPath(
+                                             Environment.SpecialFolder.UserProfile),
             };
 
-            // Explicitly copy the current process's environment into the child so
-            // that variables set by the launcher (GITHUB_TOKEN, GH_TOKEN, PATH
-            // overrides, etc.) are visible to the spawned PowerShell session.
-            // With UseShellExecute=false the child already inherits these by default,
-            // but being explicit makes the intent clear and allows future per-variable
-            // overrides without accidentally wiping the inherited environment.
-            foreach (System.Collections.DictionaryEntry kv in Environment.GetEnvironmentVariables())
-            {
-                string  key = (string)kv.Key;
-                string? val = kv.Value?.ToString();
-                if (val != null)
-                    psi.Environment[key] = val;
-            }
+            // Build the child environment by layering machine-level vars (HKLM)
+            // then user-level vars (HKCU), mirroring what macOS's -l (login shell)
+            // flag does by sourcing /etc/profile then ~/.bash_profile / ~/.zshrc.
+            // This ensures agent commands see PATH entries added by installers,
+            // Scoop, nvm, pyenv, conda, etc. even if they were installed after
+            // OmniKey started and therefore aren't in our current process environment.
+            ApplyUserEnvironment(psi);
 
             Console.WriteLine($"[AgentRunner] About to run PowerShell command. " +
                               $"Script length: {script.Length}, encoded length: {encodedScript.Length}");
@@ -330,6 +329,47 @@ namespace OmniKey.Windows
 
             // Windows PowerShell 5.1 — always present on modern Windows.
             return "powershell.exe";
+        }
+
+        /// Populate psi.Environment with the full user logon environment by
+        /// layering machine-level then user-level variables from the Windows
+        /// registry — the same two sources Windows merges during an interactive
+        /// logon session. Mirrors the macOS -l (login shell) flag that sources
+        /// /etc/profile then the user's shell rc files so that PATH entries added
+        /// by Scoop, winget, nvm, conda, etc. are visible to spawned commands.
+        private static void ApplyUserEnvironment(ProcessStartInfo psi)
+        {
+            // Layer 1 — machine-wide variables (equivalent to /etc/environment).
+            foreach (System.Collections.DictionaryEntry kv in
+                     Environment.GetEnvironmentVariables(EnvironmentVariableTarget.Machine))
+            {
+                if (kv.Key is not string key || kv.Value?.ToString() is not string val)
+                    continue;
+                psi.Environment[key] = Environment.ExpandEnvironmentVariables(val);
+            }
+
+            // Layer 2 — user-level variables (HKCU\Environment), equivalent to
+            // ~/.bash_profile / ~/.zshrc entries. PATH is additive so that the
+            // user's bin folders are appended rather than replacing the system PATH.
+            foreach (System.Collections.DictionaryEntry kv in
+                     Environment.GetEnvironmentVariables(EnvironmentVariableTarget.User))
+            {
+                if (kv.Key is not string key || kv.Value?.ToString() is not string val)
+                    continue;
+
+                string expanded = Environment.ExpandEnvironmentVariables(val);
+
+                if (key.Equals("PATH", StringComparison.OrdinalIgnoreCase) &&
+                    psi.Environment.TryGetValue("PATH", out string? existingPath) &&
+                    !string.IsNullOrEmpty(existingPath))
+                {
+                    psi.Environment[key] = existingPath.TrimEnd(';') + ";" + expanded;
+                }
+                else
+                {
+                    psi.Environment[key] = expanded;
+                }
+            }
         }
 
         private static string MakeWebSocketUrl()

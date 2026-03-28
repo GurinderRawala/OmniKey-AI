@@ -139,7 +139,7 @@ namespace OmniKey.Windows
             {
                 BackColor = NordColors.SurfaceBackground,
                 Dock      = DockStyle.Fill,
-                Padding   = new Padding(16, 0, 16, 0),
+                Padding   = new Padding(16, 8, 16, 8),
             };
             logSurround.Paint += (_, e) =>
             {
