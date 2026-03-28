@@ -11,8 +11,7 @@ namespace OmniKey.Windows
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
 
-            using var mainForm = new MainForm();
-            Application.Run(mainForm);
+            Application.Run(new AppEntry());
         }
     }
 }
