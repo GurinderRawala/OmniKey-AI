@@ -8,7 +8,7 @@ using System.Windows.Forms;
 
 namespace OmniKey.Windows
 {
-    internal sealed class AgentThinkingForm : Form
+    internal sealed class AgentThinkingForm : Form, IAgentSession
     {
         // Preview: collapse trigger = 10 words, but show 60-word preview (mirrors macOS CollapsibleText).
         private const int CollapseWordThreshold = 10;
@@ -787,7 +787,7 @@ namespace OmniKey.Windows
             internal CollapsibleEntryPanel(
                 string text, Color textColor, Font font, Color linkColor, int width)
             {
-                BackColor = Color.Transparent;
+                BackColor = NordColors.EditorBackground;
                 Margin    = new Padding(0);
                 AutoSize  = false;
                 Width     = width;
@@ -803,7 +803,7 @@ namespace OmniKey.Windows
 
                 _rtb = new RichTextBox
                 {
-                    BackColor   = Color.Transparent,
+                    BackColor   = NordColors.EditorBackground,
                     ForeColor   = textColor,
                     Font        = font,
                     BorderStyle = BorderStyle.None,
@@ -862,6 +862,13 @@ namespace OmniKey.Windows
                 _toggleLink!.Text = _expanded
                     ? "Show less"
                     : $"Show more ({wordCount} words)";
+            }
+
+            protected override void OnBackColorChanged(EventArgs e)
+            {
+                base.OnBackColorChanged(e);
+                if (_rtb != null)
+                    _rtb.BackColor = BackColor;
             }
 
             protected override void OnSizeChanged(EventArgs e)

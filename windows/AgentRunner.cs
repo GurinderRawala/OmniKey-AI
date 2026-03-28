@@ -34,7 +34,7 @@ namespace OmniKey.Windows
         /// Returns the final answer text on success.
         public static async Task<string> RunAgentSessionAsync(
             string originalText,
-            AgentThinkingForm thinkingForm,
+            IAgentSession thinkingForm,
             CancellationToken ct)
         {
             // Mirror macOS: if a JWT already exists use it with allowReauth:true so
@@ -54,7 +54,7 @@ namespace OmniKey.Windows
 
         private static async Task<string> ConnectAndRunAsync(
             string originalText,
-            AgentThinkingForm thinkingForm,
+            IAgentSession thinkingForm,
             CancellationToken ct,
             bool allowReauth)
         {
