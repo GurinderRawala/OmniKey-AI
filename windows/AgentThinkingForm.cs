@@ -646,14 +646,12 @@ namespace OmniKey.Windows
                          ControlStyles.ResizeRedraw, true);
 
                 // Step badge
-                _badge = new Panel
+                _badge = new DoubleBufferedPanel
                 {
                     Size      = new Size(BadgeSize, BadgeSize),
                     BackColor = fillColor,
                     Location  = new Point(0, 0)
                 };
-                _badge.SetStyle(ControlStyles.AllPaintingInWmPaint |
-                                ControlStyles.OptimizedDoubleBuffer, true);
                 _badge.Paint += (_, e) =>
                 {
                     var g = e.Graphics;
@@ -755,6 +753,19 @@ namespace OmniKey.Windows
                 base.OnSizeChanged(e);
                 if (_body != null)
                     _body.Width = Width;
+            }
+        }
+
+        // ── DoubleBufferedPanel ────────────────────────────────────────────
+        // Thin Panel subclass that enables double-buffering via SetStyle (which
+        // is protected on Control and cannot be called on an external instance).
+
+        private sealed class DoubleBufferedPanel : Panel
+        {
+            internal DoubleBufferedPanel()
+            {
+                SetStyle(ControlStyles.AllPaintingInWmPaint |
+                         ControlStyles.OptimizedDoubleBuffer, true);
             }
         }
 
