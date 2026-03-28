@@ -20,6 +20,7 @@ namespace OmniKey.Windows
         private readonly ApiClient _apiClient = new();
         private bool _isProcessing;
         private AgentThinkingForm? _agentThinkingForm;
+        private CancellationTokenSource? _agentCts;
 
         public HotkeyForm()
         {
@@ -172,15 +173,50 @@ namespace OmniKey.Windows
 
         private async Task RunAgentWorkflowAsync(string originalText, IntPtr originalWindow)
         {
-            // Instead of opening a new AgentThinkingForm, show the Agent Session tab in MainForm
             var mainForm = Application.OpenForms["MainForm"] as MainForm;
-            if (mainForm != null)
+            if (mainForm == null)
+                return;
+
+            mainForm.ShowAgentSessionTab();
+
+            // Cancel any previous agent session
+            _agentCts?.Cancel();
+            _agentCts = new CancellationTokenSource();
+            var agentForm = mainForm.AgentThinkingForm;
+            agentForm.SetInitialRequest(originalText);
+            agentForm.SetRunning(true);
+            var ct = _agentCts.Token;
+
+            ShowBalloon("OmniKey AI", "OmniAgent session started…");
+
+            string result;
+            try
             {
-                mainForm.ShowAgentSessionTab();
-                // Optionally, set the request text in the embedded AgentThinkingForm
-                // mainForm.AgentThinkingForm.SetInitialRequest(originalText);
+                result = await AgentRunner.RunAgentSessionAsync(originalText, agentForm, ct);
             }
-            // The rest of the agent workflow logic should be handled by MainForm/AgentThinkingForm
+            catch (OperationCanceledException)
+            {
+                agentForm.SetRunning(false);
+                ShowBalloon("OmniKey AI", "Agent session cancelled.");
+                return;
+            }
+            catch (Exception ex)
+            {
+                agentForm.SetRunning(false);
+                ShowBalloon("OmniKey AI", "Agent error: " + ex.Message);
+                return;
+            }
+
+            agentForm.SetRunning(false);
+
+            if (string.IsNullOrWhiteSpace(result))
+            {
+                ShowBalloon("OmniKey AI", "Agent returned empty response.");
+                return;
+            }
+
+            await RestoreFocusAndPasteAsync(originalWindow, result);
+            ShowBalloon("OmniKey AI", "Agent finished. Text updated.");
         }
 
         // Brings the original window back to the foreground (mirroring macOS behavior),

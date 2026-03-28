@@ -19,6 +19,7 @@ namespace OmniKey.Windows
         private readonly UpdateForm? _updateForm; // Will be instantiated as needed
         private readonly LicenseForm _licenseForm;
         private readonly AgentThinkingForm _agentThinkingForm;
+        public AgentThinkingForm AgentThinkingForm => _agentThinkingForm;
 
         private readonly NotifyIcon _notifyIcon;
         private readonly ApiClient _apiClient = new();
