@@ -1,179 +1,235 @@
 using System.Drawing;
+using Microsoft.Win32;
 
 namespace OmniKey.Windows
 {
     /// <summary>
-    /// OmniKey AI brand colour palette — light theme, mirroring the light-mode
-    /// branches of macOS NordTheme.swift.
-    /// Soft lavender-white backgrounds with deep-navy text and saturated accents.
+    /// OmniKey AI brand colour palette — mirrors the light/dark branches of macOS NordTheme.swift.
+    /// All colours are resolved at access time based on the Windows "Apps use light theme" setting,
+    /// so forms opened after a system theme change automatically use the correct palette.
     /// </summary>
     internal static class NordColors
     {
-        // ── Light backgrounds ──────────────────────────────────────────────────
+        // ── Theme detection ────────────────────────────────────────────────────
+        /// <summary>
+        /// Returns true when Windows Apps-use-light-theme is off (dark mode active).
+        /// Falls back to false (light) if the registry key is absent.
+        /// </summary>
+        public static bool IsDarkMode
+        {
+            get
+            {
+                try
+                {
+                    using var key = Registry.CurrentUser.OpenSubKey(
+                        @"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
+                    return key?.GetValue("AppsUseLightTheme") is int v && v == 0;
+                }
+                catch { return false; }
+            }
+        }
+
+        // ── Window & Panel Backgrounds ─────────────────────────────────────────
         /// <summary>
         /// Form / window background.
-        /// macOS: windowBackground(.light) gradient start Color(238,242,255).
-        /// Windows uses a solid colour; the gradient start value is chosen as the
-        /// representative solid.  RGB(238, 242, 255) #EEF2FF
+        /// Dark:  gradient start (10,12,26) from macOS windowBackground(.dark).
+        /// Light: gradient start (238,242,255) from macOS windowBackground(.light).
         /// </summary>
-        public static readonly Color WindowBackground  = Color.FromArgb(238, 242, 255);
+        public static Color WindowBackground  => IsDarkMode
+            ? Color.FromArgb(10,  12,  26)
+            : Color.FromArgb(238, 242, 255);
 
         /// <summary>
         /// Panel / card background.
-        /// macOS: panelBackground(.light) = Color.white.opacity(0.98) ≈ RGB(250,250,250).
-        /// RGB(250, 250, 250) #FAFAFA
+        /// Dark:  (17,21,42) ≈ macOS panelBackground(.dark) solid.
+        /// Light: (250,250,250) ≈ Color.white.opacity(0.98).
         /// </summary>
-        public static readonly Color PanelBackground   = Color.FromArgb(250, 250, 250);
+        public static Color PanelBackground   => IsDarkMode
+            ? Color.FromArgb(17,  21,  42)
+            : Color.FromArgb(250, 250, 250);
 
         /// <summary>
         /// Large text-editor / log area background.
-        /// macOS: editorBackground(.light) = Color(245,247,255).
-        /// RGB(245, 247, 255) #F5F7FF
+        /// Dark:  (10,12,26) ≈ macOS editorBackground(.dark) solid.
+        /// Light: (245,247,255) from macOS editorBackground(.light).
         /// </summary>
-        public static readonly Color EditorBackground  = Color.FromArgb(245, 247, 255);
+        public static Color EditorBackground  => IsDarkMode
+            ? Color.FromArgb(10,  12,  26)
+            : Color.FromArgb(245, 247, 255);
 
         /// <summary>
-        /// Surface — slightly bluer than PanelBackground; used for raised cards.
-        /// Approximated as the windowBackground gradient end Color(232,238,255).
-        /// RGB(232, 238, 255) #E8EEFF
+        /// Surface — raised cards / header panels.
+        /// Dark:  gradient end (14,17,36) from macOS windowBackground(.dark).
+        /// Light: gradient end (232,238,255) from macOS windowBackground(.light).
         /// </summary>
-        public static readonly Color SurfaceBackground = Color.FromArgb(232, 238, 255);
+        public static Color SurfaceBackground => IsDarkMode
+            ? Color.FromArgb(14,  17,  36)
+            : Color.FromArgb(232, 238, 255);
 
-        // ── Border ────────────────────────────────────────────────────────────
+        // ── Border ─────────────────────────────────────────────────────────────
         /// <summary>
-        /// Border colour for inputs, separators.
-        /// macOS: border(.light) = Color(15,21,53).opacity(0.09) blended over
-        /// WindowBackground (238,242,255) → RGB(218, 222, 237) #DADEED
+        /// Border colour for inputs and separators.
+        /// Dark:  white @8% pre-blended over WindowBackground → (30,31,44).
+        /// Light: (15,21,53) @9% pre-blended over WindowBackground → (218,222,237).
         /// </summary>
-        public static readonly Color Border            = Color.FromArgb(218, 222, 237);
+        public static Color Border => IsDarkMode
+            ? Color.FromArgb(30,  31,  44)
+            : Color.FromArgb(218, 222, 237);
 
-        // ── Text ──────────────────────────────────────────────────────────────
+        // ── Text ───────────────────────────────────────────────────────────────
         /// <summary>
         /// Primary body text.
-        /// macOS: primaryText(.light) = Color(15,21,53).
-        /// RGB(15, 21, 53) #0F1535
+        /// Dark:  (226,232,240) from macOS primaryText(.dark).
+        /// Light: (15,21,53) from macOS primaryText(.light).
         /// </summary>
-        public static readonly Color PrimaryText       = Color.FromArgb(15, 21, 53);
+        public static Color PrimaryText   => IsDarkMode
+            ? Color.FromArgb(226, 232, 240)
+            : Color.FromArgb(15,  21,  53);
 
         /// <summary>
         /// Secondary / caption text.
-        /// macOS: secondaryText(.light) = Color(74,85,120).opacity(0.85).
-        /// Stored as the solid base colour; the 0.85 opacity is a Swift rendering
-        /// artefact that blends against the background at paint time.
-        /// RGB(74, 85, 120) #4A5578
+        /// Dark:  (136,146,176) from macOS secondaryText(.dark).
+        /// Light: (74,85,120) from macOS secondaryText(.light).
         /// </summary>
-        public static readonly Color SecondaryText     = Color.FromArgb(74, 85, 120);
+        public static Color SecondaryText => IsDarkMode
+            ? Color.FromArgb(136, 146, 176)
+            : Color.FromArgb(74,  85,  120);
 
-        // ── Brand accents (light-theme variants from NordTheme.swift) ─────────
+        // ── Brand accents ──────────────────────────────────────────────────────
         /// <summary>
-        /// Cyan accent — same hue as dark theme; no explicit light override in
-        /// NordTheme.swift for "accentCyan", so the brand cyan is kept.
-        /// RGB(34, 211, 238) #22D3EE
+        /// Cyan accent — same hue in both themes. RGB(34,211,238) #22D3EE
         /// </summary>
-        public static readonly Color AccentCyan        = Color.FromArgb(34, 211, 238);
+        public static Color AccentCyan   => Color.FromArgb(34,  211, 238);
 
         /// <summary>
         /// Blue accent.
-        /// macOS: accentBlue(.light) = Color(37,99,235).
-        /// RGB(37, 99, 235) #2563EB
+        /// Dark:  (96,165,250) from macOS accentBlue(.dark).
+        /// Light: (37,99,235) from macOS accentBlue(.light).
         /// </summary>
-        public static readonly Color AccentBlue        = Color.FromArgb(37, 99, 235);
+        public static Color AccentBlue   => IsDarkMode
+            ? Color.FromArgb(96,  165, 250)
+            : Color.FromArgb(37,  99,  235);
 
         /// <summary>
         /// Purple accent.
-        /// macOS: accentPurple(.light) = Color(124,58,237).
-        /// RGB(124, 58, 237) #7C3AED
+        /// Dark:  (167,139,250) from macOS accentPurple(.dark).
+        /// Light: (124,58,237) from macOS accentPurple(.light).
         /// </summary>
-        public static readonly Color AccentPurple      = Color.FromArgb(124, 58, 237);
+        public static Color AccentPurple => IsDarkMode
+            ? Color.FromArgb(167, 139, 250)
+            : Color.FromArgb(124, 58,  237);
 
         /// <summary>
         /// Green accent.
-        /// macOS: accentGreen(.light) = Color(5,150,105).
-        /// RGB(5, 150, 105) #059669
+        /// Dark:  (52,211,153) from macOS accentGreen(.dark).
+        /// Light: (5,150,105) from macOS accentGreen(.light).
         /// </summary>
-        public static readonly Color AccentGreen       = Color.FromArgb(5, 150, 105);
+        public static Color AccentGreen  => IsDarkMode
+            ? Color.FromArgb(52,  211, 153)
+            : Color.FromArgb(5,   150, 105);
 
         /// <summary>
         /// Amber accent.
-        /// macOS: accentAmber(.light) = Color(217,119,6).
-        /// RGB(217, 119, 6) #D97706
+        /// Dark:  (251,191,36) from macOS accentAmber(.dark).
+        /// Light: (217,119,6) from macOS accentAmber(.light).
         /// </summary>
-        public static readonly Color AccentAmber       = Color.FromArgb(217, 119, 6);
+        public static Color AccentAmber  => IsDarkMode
+            ? Color.FromArgb(251, 191, 36)
+            : Color.FromArgb(217, 119, 6);
 
         /// <summary>
-        /// Error red. No light-specific override in NordTheme.swift; the brand red
-        /// is retained (visible against the light background).
-        /// RGB(252, 100, 100) #FC6464
+        /// Error red — same in both themes. RGB(252,100,100) #FC6464
         /// </summary>
-        public static readonly Color ErrorRed          = Color.FromArgb(252, 100, 100);
+        public static Color ErrorRed     => Color.FromArgb(252, 100, 100);
 
-        // ── Section fill tints ── accent @ 5% opacity over WindowBackground ──
-        // Formula: round(accent * 0.05 + WindowBackground * 0.95)
-        // per NordTheme.swift sectionFill(accent:scheme:) → opacity 0.05 for light.
+        // ── Section fill tints ─────────────────────────────────────────────────
+        // Dark:  accent @7% pre-blended over WindowBackground (10,12,26).
+        // Light: accent @5% pre-blended over WindowBackground (238,242,255).
 
-        /// <summary>Blue section fill. AccentBlue(37,99,235)@5% → RGB(228, 235, 254)</summary>
-        public static readonly Color BlueSectionFill   = Color.FromArgb(228, 235, 254);
+        /// <summary>Blue section fill.</summary>
+        public static Color BlueSectionFill   => IsDarkMode
+            ? Color.FromArgb(16,  23,  43)
+            : Color.FromArgb(228, 235, 254);
 
-        /// <summary>Purple section fill. AccentPurple(124,58,237)@5% → RGB(232, 233, 254)</summary>
-        public static readonly Color PurpleSectionFill = Color.FromArgb(232, 233, 254);
+        /// <summary>Purple section fill.</summary>
+        public static Color PurpleSectionFill => IsDarkMode
+            ? Color.FromArgb(21,  21,  43)
+            : Color.FromArgb(232, 233, 254);
 
-        /// <summary>Cyan section fill. AccentCyan(34,211,238)@5% → RGB(228, 240, 254)</summary>
-        public static readonly Color CyanSectionFill   = Color.FromArgb(228, 240, 254);
+        /// <summary>Cyan section fill.</summary>
+        public static Color CyanSectionFill   => IsDarkMode
+            ? Color.FromArgb(12,  26,  41)
+            : Color.FromArgb(228, 240, 254);
 
-        /// <summary>Amber section fill. AccentAmber(217,119,6)@5% → RGB(237, 236, 243)</summary>
-        public static readonly Color AmberSectionFill  = Color.FromArgb(237, 236, 243);
+        /// <summary>Amber section fill.</summary>
+        public static Color AmberSectionFill  => IsDarkMode
+            ? Color.FromArgb(27,  25,  27)
+            : Color.FromArgb(237, 236, 243);
 
-        /// <summary>Red section fill. ErrorRed(252,100,100)@5% → RGB(239, 235, 247)</summary>
-        public static readonly Color RedSectionFill    = Color.FromArgb(239, 235, 247);
+        /// <summary>Red section fill.</summary>
+        public static Color RedSectionFill    => IsDarkMode
+            ? Color.FromArgb(27,  18,  32)
+            : Color.FromArgb(239, 235, 247);
 
-        // ── Section border tints ── accent @ 20% opacity over WindowBackground ─
-        // Formula: round(accent * 0.20 + WindowBackground * 0.80)
-        // per NordTheme.swift sectionBorder(accent:scheme:) → opacity 0.20 for light.
+        // ── Section border tints ───────────────────────────────────────────────
+        // Dark:  accent @25% pre-blended over WindowBackground (10,12,26).
+        // Light: accent @20% pre-blended over WindowBackground (238,242,255).
 
-        /// <summary>Blue section border. AccentBlue(37,99,235)@20% → RGB(198, 213, 251)</summary>
-        public static readonly Color BlueSectionBorder   = Color.FromArgb(198, 213, 251);
+        /// <summary>Blue section border.</summary>
+        public static Color BlueSectionBorder   => IsDarkMode
+            ? Color.FromArgb(32,  50,  86)
+            : Color.FromArgb(198, 213, 251);
 
-        /// <summary>Purple section border. AccentPurple(124,58,237)@20% → RGB(215, 205, 251)</summary>
-        public static readonly Color PurpleSectionBorder = Color.FromArgb(215, 205, 251);
+        /// <summary>Purple section border.</summary>
+        public static Color PurpleSectionBorder => IsDarkMode
+            ? Color.FromArgb(49,  44,  86)
+            : Color.FromArgb(215, 205, 251);
 
-        /// <summary>Cyan section border. AccentCyan(34,211,238)@20% → RGB(197, 236, 252)</summary>
-        public static readonly Color CyanSectionBorder   = Color.FromArgb(197, 236, 252);
+        /// <summary>Cyan section border.</summary>
+        public static Color CyanSectionBorder   => IsDarkMode
+            ? Color.FromArgb(16,  62,  83)
+            : Color.FromArgb(197, 236, 252);
 
-        /// <summary>Amber section border. AccentAmber(217,119,6)@20% → RGB(234, 217, 205)</summary>
-        public static readonly Color AmberSectionBorder  = Color.FromArgb(234, 217, 205);
+        /// <summary>Amber section border.</summary>
+        public static Color AmberSectionBorder  => IsDarkMode
+            ? Color.FromArgb(70,  57,  33)
+            : Color.FromArgb(234, 217, 205);
 
-        /// <summary>Red section border. ErrorRed(252,100,100)@20% → RGB(241, 214, 224)</summary>
-        public static readonly Color RedSectionBorder    = Color.FromArgb(241, 214, 224);
+        /// <summary>Red section border.</summary>
+        public static Color RedSectionBorder    => IsDarkMode
+            ? Color.FromArgb(71,  35,  49)
+            : Color.FromArgb(241, 214, 224);
 
-        // ── Badge background ──────────────────────────────────────────────────
+        // ── Badge background ───────────────────────────────────────────────────
         /// <summary>
         /// Badge pill background.
-        /// macOS: badgeFill(.light) = Color(15,21,53).opacity(0.06) blended over
-        /// WindowBackground (238,242,255) → RGB(225, 229, 243) #E1E5F3
+        /// Dark:  white @7% pre-blended over WindowBackground → (27,29,42).
+        /// Light: (15,21,53) @6% pre-blended over WindowBackground → (225,229,243).
         /// </summary>
-        public static readonly Color BadgeBackground = Color.FromArgb(225, 229, 243);
+        public static Color BadgeBackground => IsDarkMode
+            ? Color.FromArgb(27,  29,  42)
+            : Color.FromArgb(225, 229, 243);
 
-        // ── Backward-compatibility aliases ────────────────────────────────────
-        // These names are used throughout the existing Windows forms code.
-
+        // ── Backward-compatibility aliases ─────────────────────────────────────
         /// <summary>
         /// Primary action button colour.
-        /// macOS: accent(.light) = Color(79,70,229) — indigo.
-        /// RGB(79, 70, 229) #4F46E5
+        /// Dark:  cyan (34,211,238) — macOS accent(.dark).
+        /// Light: indigo (79,70,229) — macOS accent(.light).
         /// </summary>
-        public static readonly Color Accent        = Color.FromArgb(79, 70, 229);
+        public static Color Accent        => IsDarkMode
+            ? AccentCyan
+            : Color.FromArgb(79, 70, 229);
 
-        /// <summary>Success / green status. Equals AccentGreen. RGB(5, 150, 105)</summary>
-        public static readonly Color SuccessGreen  = Color.FromArgb(5, 150, 105);   // = AccentGreen
+        /// <summary>Success / green status. Equals AccentGreen.</summary>
+        public static Color SuccessGreen  => AccentGreen;
 
-        /// <summary>Terminal-output header amber. Equals AccentAmber. RGB(217, 119, 6)</summary>
-        public static readonly Color WarningYellow = Color.FromArgb(217, 119, 6);   // = AccentAmber
+        /// <summary>Terminal-output header amber. Equals AccentAmber.</summary>
+        public static Color WarningYellow => AccentAmber;
 
         /// <summary>
-        /// Step labels. Nord9 blue-gray — kept for AgentThinkingForm backward compat.
-        /// The classic Nord9 value (129,161,193) has sufficient contrast on the light
-        /// background; kept as-is.  RGB(129, 161, 193) #81A1C1
+        /// Step labels. Nord9 blue-gray — same in both themes.
+        /// RGB(129,161,193) #81A1C1
         /// </summary>
-        public static readonly Color Nord9         = Color.FromArgb(129, 161, 193);
+        public static Color Nord9         => Color.FromArgb(129, 161, 193);
     }
 }

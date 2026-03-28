@@ -608,6 +608,7 @@ namespace OmniKey.Windows
             protected override void OnSizeChanged(EventArgs e)
             {
                 base.OnSizeChanged(e);
+                if (_content == null) return;
                 int innerW = Math.Max(Width - Pad * 2, 40);
                 _content.Width    = innerW;
                 _content.Location = new Point(Pad, Pad);
@@ -690,6 +691,7 @@ namespace OmniKey.Windows
             protected override void OnSizeChanged(EventArgs e)
             {
                 base.OnSizeChanged(e);
+                if (_card == null) return;
                 int cardWidth = Math.Max(Width - BadgeSize - Gap, 40);
                 _card.Width = cardWidth;
             }
