@@ -139,7 +139,7 @@ namespace OmniKey.Windows
             {
                 BackColor = NordColors.SurfaceBackground,
                 Dock      = DockStyle.Fill,
-                Padding   = new Padding(16, 8, 16, 8),
+                Padding   = new Padding(0),
             };
             logSurround.Paint += (_, e) =>
             {
@@ -154,7 +154,7 @@ namespace OmniKey.Windows
                 FlowDirection = FlowDirection.TopDown,
                 WrapContents  = false,
                 BackColor     = NordColors.EditorBackground,
-                Padding       = new Padding(12, 16, 12, 16),
+                Padding       = new Padding(12, 20, 12, 16),
             };
 
             _logPanel = new Panel
@@ -275,8 +275,8 @@ namespace OmniKey.Windows
         {
             int h = _logFlow.GetPreferredSize(new Size(_logFlow.Width, 0)).Height;
             // GetPreferredSize omits Padding.Bottom in some WinForms builds.
-            // Adding it explicitly guarantees clearance below the last item.
-            _logFlow.Height = h + _logFlow.Padding.Bottom;
+            // Adding it explicitly (plus a 32px buffer) guarantees clearance below the last item.
+            _logFlow.Height = h + _logFlow.Padding.Bottom + 32;
         }
 
         private void ResizeLog()
@@ -317,6 +317,7 @@ namespace OmniKey.Windows
                     NordColors.BlueSectionBorder,
                     section.ItemWidth));
                 RefreshFlowHeight();
+                ScrollToBottom();
             });
         }
 
@@ -430,11 +431,8 @@ namespace OmniKey.Windows
                 if (!IsHandleCreated) return;
                 BeginInvoke(new Action(() =>
                 {
-                    var vs = _logPanel.VerticalScroll;
-                    bool atBottom = !vs.Visible
-                                 || vs.Value >= vs.Maximum - vs.LargeChange - 20;
-                    if (atBottom)
-                        _logPanel.AutoScrollPosition = new Point(0, _logFlow.Height);
+                    RefreshFlowHeight();
+                    _logPanel.AutoScrollPosition = new Point(0, _logFlow.Height);
                 }));
             };
             _logFlow.Controls.Add(field);
@@ -448,7 +446,10 @@ namespace OmniKey.Windows
             // ContentsResized / layout events finish before we set the position.
             if (!IsHandleCreated) return;
             BeginInvoke(new Action(() =>
-                _logPanel.AutoScrollPosition = new Point(0, _logFlow.Height)));
+            {
+                RefreshFlowHeight();
+                _logPanel.AutoScrollPosition = new Point(0, _logFlow.Height);
+            }));
         }
 
         private void InvokeIfNeeded(Action action)
