@@ -35,6 +35,8 @@ namespace OmniKey.Windows
         protected override void OnLoad(EventArgs e)
         {
             base.OnLoad(e);
+            if (!IsHandleCreated)
+                CreateHandle();
             RegisterHotkeys();
             // No UI, no auth/init logic here
         }
