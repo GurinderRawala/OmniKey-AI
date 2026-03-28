@@ -55,7 +55,33 @@ namespace OmniKey.Windows
                 BackColor = NordColors.PanelBackground,
                 ForeColor = NordColors.PrimaryText,
                 Font = new Font("Segoe UI", 10f),
+                DrawMode = TabDrawMode.OwnerDrawFixed,
+                ItemSize = new Size(120, 36)
             };
+            _tabControl.DrawItem += (s, e) =>
+            {
+                var g = e.Graphics;
+                var tab = _tabControl.TabPages[e.Index];
+                var rect = e.Bounds;
+                bool selected = (e.State & DrawItemState.Selected) != 0;
+                var bg = selected ? NordColors.PanelBackground : NordColors.SurfaceBackground;
+                using (var b = new SolidBrush(bg)) g.FillRectangle(b, rect);
+                var font = new Font(_tabControl.Font, selected ? FontStyle.Bold : FontStyle.Regular);
+                var textColor = selected ? NordColors.PrimaryText : NordColors.SecondaryText;
+                TextRenderer.DrawText(g, tab.Text, font, rect, textColor, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                if (selected)
+                {
+                    using var accent = new SolidBrush(NordColors.AccentBlue);
+                    g.FillRectangle(accent, rect.Left + 12, rect.Bottom - 4, rect.Width - 24, 3);
+                }
+            };
+            var tabBorder = new Panel
+            {
+                Dock = DockStyle.Top,
+                Height = 1,
+                BackColor = NordColors.Border
+            };
+            Controls.Add(tabBorder);
 
             // Task Instructions Tab
             _taskInstructionsForm = new TaskInstructionsForm { TopLevel = false, FormBorderStyle = FormBorderStyle.None, Dock = DockStyle.Fill, Visible = true };

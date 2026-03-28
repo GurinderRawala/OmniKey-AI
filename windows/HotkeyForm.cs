@@ -27,7 +27,14 @@ namespace OmniKey.Windows
             ShowInTaskbar   = false;
             FormBorderStyle = FormBorderStyle.None;
             Size            = new Size(0, 0);
-            _notifyIcon = new NotifyIcon { Visible = false };
+            var assembly = System.Reflection.Assembly.GetExecutingAssembly();
+            using var iconStream = assembly.GetManifestResourceStream("OmniKey.Windows.app.ico");
+            var appIcon = iconStream != null ? new Icon(iconStream) : SystemIcons.Information;
+            _notifyIcon = new NotifyIcon {
+                Visible = true,
+                Icon = appIcon,
+                Text = "OmniKey AI"
+            };
         }
 
         // UI removed; HotkeyForm is now message-only

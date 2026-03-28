@@ -262,9 +262,6 @@ namespace OmniKey.Windows
                 Location  = new Point(148, 18)
             };
 
-            var closeButton = MakeButton("Close", ButtonRole.Default);
-            closeButton.Anchor = AnchorStyles.Right | AnchorStyles.Top;
-            closeButton.Click += (_, _) => Close();
 
             _defaultButton        = MakeButton("Use for Ctrl+T", ButtonRole.Default);
             _defaultButton.Anchor = AnchorStyles.Right | AnchorStyles.Top;
@@ -276,9 +273,9 @@ namespace OmniKey.Windows
 
             bottomPanel.Controls.AddRange(new Control[]
             {
-                _deleteButton, _statusLabel, closeButton, _defaultButton, _saveButton
+                _deleteButton, _statusLabel, _defaultButton, _saveButton
             });
-            bottomPanel.SizeChanged += (_, _) => LayoutBottomButtons(bottomPanel, closeButton);
+            bottomPanel.SizeChanged += (_, _) => LayoutBottomButtons(bottomPanel);
             Controls.Add(bottomPanel);
 
             SizeChanged += (_, _) => ResizeInstructions();
@@ -365,12 +362,11 @@ namespace OmniKey.Windows
             }
         }
 
-        private void LayoutBottomButtons(Panel panel, Button close)
+        private void LayoutBottomButtons(Panel panel)
         {
             int right           = panel.ClientSize.Width - 8;
             _saveButton.Location    = new Point(right - _saveButton.Width, 10);
             _defaultButton.Location = new Point(_saveButton.Left - _defaultButton.Width - 4, 10);
-            close.Location          = new Point(_defaultButton.Left - close.Width - 4, 10);
         }
 
         private void SetExampleSectionVisible(bool visible)

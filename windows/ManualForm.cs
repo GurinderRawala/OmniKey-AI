@@ -111,23 +111,24 @@ namespace OmniKey.Windows
             // ── Section: Keyboard Shortcuts ───────────────────────────────
             contentFlow.Controls.Add(MakeSectionHeader("Keyboard Shortcuts", NordColors.AccentBlue, contentW));
 
+            int shortcutW = contentFlow.ClientSize.Width - contentFlow.Padding.Horizontal - SystemInformation.VerticalScrollBarWidth;
             contentFlow.Controls.Add(MakeShortcutRow(
                 "Ctrl+E",
                 "Enhance Prompts",
                 "Improves clarity, structure, and tone of your selected text so it works better as an AI prompt.",
-                contentW));
+                shortcutW));
 
             contentFlow.Controls.Add(MakeShortcutRow(
                 "Ctrl+G",
                 "Fix Grammar & Clarity",
                 "Focuses on grammar, spelling, and readability without changing the core meaning.",
-                contentW));
+                shortcutW));
 
             contentFlow.Controls.Add(MakeShortcutRow(
                 "Ctrl+T",
                 "Run Custom Task",
                 "Applies your saved task instructions to the selected text. Configure these in \"Task Instructions\" from the tray menu.",
-                contentW));
+                shortcutW));
 
             contentFlow.Controls.Add(MakeDivider(contentW));
 
@@ -378,7 +379,7 @@ namespace OmniKey.Windows
                 Font      = bodyFont,
                 ForeColor = NordColors.PrimaryText,
                 AutoSize  = false,
-                Size      = new Size(width - 8, measured.Height + 8),
+                Size      = new Size(width - 24, measured.Height + 8),
                 BackColor = NordColors.PanelBackground,
                 Padding   = new Padding(4, 0, 0, 0),
             };
