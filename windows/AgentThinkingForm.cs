@@ -19,9 +19,6 @@ namespace OmniKey.Windows
         private readonly Label           _statusLabel;
         private readonly Button          _cancelButton;
         private readonly Panel           _bottomPanel;
-        private readonly Panel           _statusBadgePanel;
-        private readonly Panel           _dotPanel;
-        private readonly Label           _badgeLabel;
 
         // Pulsing animation
         private readonly System.Windows.Forms.Timer _pulseTimer;
@@ -47,92 +44,6 @@ namespace OmniKey.Windows
             StartPosition   = FormStartPosition.CenterScreen;
             BackColor       = NordColors.WindowBackground;
             FormBorderStyle = FormBorderStyle.Sizable;
-
-            // ── Header ────────────────────────────────────────────────────
-            var headerPanel = new Panel
-            {
-                Dock      = DockStyle.Top,
-                Height    = 78,
-                BackColor = NordColors.SurfaceBackground,
-            };
-            headerPanel.Paint += (_, e) =>
-            {
-                using var sep = new Pen(NordColors.Border, 1);
-                e.Graphics.DrawLine(sep, 0, headerPanel.Height - 1,
-                                    headerPanel.Width, headerPanel.Height - 1);
-            };
-
-            var titleLabel = new Label
-            {
-                Text      = "OmniAgent Session",
-                Font      = new Font("Segoe UI", 14, FontStyle.Bold),
-                ForeColor = NordColors.PrimaryText,
-                AutoSize  = true,
-                Location  = new Point(20, 14),
-                BackColor = Color.Transparent
-            };
-            headerPanel.Controls.Add(titleLabel);
-
-            var subtitleLabel = new Label
-            {
-                Text      = "You can keep working while the agent plans and runs any commands it needs.",
-                Font      = new Font("Segoe UI", 8.5f),
-                ForeColor = NordColors.SecondaryText,
-                AutoSize  = false,
-                Location  = new Point(20, 42),
-                Size      = new Size(440, 18),
-                BackColor = Color.Transparent
-            };
-            headerPanel.Controls.Add(subtitleLabel);
-
-            // Status badge — top-right of header
-            _statusBadgePanel = new Panel
-            {
-                Size      = new Size(130, 28),
-                Location  = new Point(Width - 150, 24),
-                Anchor    = AnchorStyles.Top | AnchorStyles.Right,
-                BackColor = NordColors.BadgeBackground
-            };
-            _statusBadgePanel.Paint += (_, e) =>
-            {
-                e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-                using var brush = new SolidBrush(NordColors.BadgeBackground);
-                using var pen   = new Pen(NordColors.Border, 1);
-                GfxHelpers.FillRoundedRect(e.Graphics, brush,
-                    new RectangleF(0, 0, _statusBadgePanel.Width - 1, _statusBadgePanel.Height - 1), 14);
-                GfxHelpers.DrawRoundedRect(e.Graphics, pen,
-                    new RectangleF(0, 0, _statusBadgePanel.Width - 1, _statusBadgePanel.Height - 1), 14);
-            };
-
-            _dotPanel = new Panel
-            {
-                Size      = new Size(8, 8),
-                BackColor = Color.Transparent,
-                Location  = new Point(10, 10)
-            };
-            _dotPanel.Paint += (_, e) =>
-            {
-                e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-                Color baseColor = _isRunning ? NordColors.Accent : NordColors.AccentGreen;
-                int a = _isRunning ? (int)(255 * _pulseAlpha) : 255;
-                using var brush = new SolidBrush(Color.FromArgb(a, baseColor));
-                e.Graphics.FillEllipse(brush, 0, 0, _dotPanel.Width - 1, _dotPanel.Height - 1);
-            };
-
-            _badgeLabel = new Label
-            {
-                Text      = "Running",
-                Font      = new Font("Segoe UI", 8.5f, FontStyle.Bold),
-                ForeColor = NordColors.Accent,
-                AutoSize  = true,
-                Location  = new Point(24, 7),
-                BackColor = Color.Transparent
-            };
-
-            _statusBadgePanel.Controls.Add(_dotPanel);
-            _statusBadgePanel.Controls.Add(_badgeLabel);
-            headerPanel.Controls.Add(_statusBadgePanel);
-            Controls.Add(headerPanel);
 
             // ── Log area ─────────────────────────────────────────────────
             var logSurround = new Panel
@@ -222,10 +133,7 @@ namespace OmniKey.Windows
             _pulseTimer.Tick += OnPulseTick;
             _pulseTimer.Start();
 
-            SizeChanged += (_, _) => ResizeLog();
-            ResizeLog();
             PositionStatusLabel();
-            PositionStatusBadge();
         }
 
         // ── Pulse animation ────────────────────────────────────────────────
@@ -236,7 +144,6 @@ namespace OmniKey.Windows
             _pulseAlpha += _pulseUp ? 0.06f : -0.06f;
             if (_pulseAlpha >= 1.0f) { _pulseAlpha = 1.0f; _pulseUp = false; }
             if (_pulseAlpha <= 0.35f) { _pulseAlpha = 0.35f; _pulseUp = true; }
-            _dotPanel?.Invalidate();
         }
 
         // ── Layout helpers ─────────────────────────────────────────────────
@@ -277,18 +184,6 @@ namespace OmniKey.Windows
             // GetPreferredSize omits Padding.Bottom in some WinForms builds.
             // Adding it explicitly (plus a 32px buffer) guarantees clearance below the last item.
             _logFlow.Height = h + _logFlow.Padding.Bottom + 32;
-        }
-
-        private void ResizeLog()
-        {
-            PositionStatusBadge();
-        }
-
-        private void PositionStatusBadge()
-        {
-            if (Controls.Count > 0 && Controls[0] is Panel header)
-                _statusBadgePanel.Location =
-                    new Point(header.Width - _statusBadgePanel.Width - 20, 24);
         }
 
         private void PositionStatusLabel()
@@ -396,8 +291,6 @@ namespace OmniKey.Windows
                 {
                     _statusLabel.Text      = "Running...";
                     _statusLabel.ForeColor = NordColors.Accent;
-                    _badgeLabel.Text       = "Running";
-                    _badgeLabel.ForeColor  = NordColors.Accent;
                     _pulseAlpha = 1f;
                     _pulseUp    = false;
                 }
@@ -405,9 +298,6 @@ namespace OmniKey.Windows
                 {
                     _statusLabel.Text      = "Finished";
                     _statusLabel.ForeColor = NordColors.AccentGreen;
-                    _badgeLabel.Text       = "Finished";
-                    _badgeLabel.ForeColor  = NordColors.AccentGreen;
-                    _dotPanel?.Invalidate();
                 }
 
                 PositionStatusLabel();
