@@ -10,10 +10,6 @@ namespace OmniKey.Windows
 {
     internal sealed class AgentThinkingForm : Form, IAgentSession
     {
-        // Preview: collapse trigger = 10 words, but show 60-word preview (mirrors macOS CollapsibleText).
-        private const int CollapseWordThreshold = 10;
-        private const int PreviewWordCount      = 60;
-
         private readonly Panel           _logPanel;
         private readonly FlowLayoutPanel _logFlow;
         private readonly Label           _statusLabel;
@@ -170,8 +166,6 @@ namespace OmniKey.Windows
             {
                 if (c is SectionCard sc)
                     sc.UpdateWidth(w);
-                else if (c is CollapsibleEntryPanel ep)
-                    ep.Width = w;
             }
             RefreshFlowHeight();
 
@@ -312,8 +306,8 @@ namespace OmniKey.Windows
             if (field != null) return field;
             field = new SectionCard(title, accent, icon, EffectiveFlowWidth());
             // RTB.ContentsResized fires after the initial render, cascading:
-            // RTB → CollapsibleEntryPanel → EntryCard → SectionCard.ReLayout().
-            // Refresh the flow height and, if already near the bottom, scroll
+            // RTB → EntryCard → SectionCard.ReLayout().
+            // Refresh the flow height and, if already at the bottom, scroll
             // so the newly revealed content stays in view.
             field.SizeChanged += (_, _) =>
             {
@@ -321,9 +315,8 @@ namespace OmniKey.Windows
                 if (!IsHandleCreated) return;
                 BeginInvoke(new Action(() =>
                 {
-                    // Only follow the scroll if we're already at the bottom.
-                    // This prevents a "Show more" expand mid-list from hijacking
-                    // the scroll position.
+                    // Only follow the scroll if we're already at the bottom
+                    // so that a mid-list resize doesn't hijack the scroll position.
                     var vs = _logPanel.VerticalScroll;
                     bool atBottom = !vs.Visible
                                  || vs.Value >= vs.Maximum - vs.LargeChange - 20;
@@ -488,39 +481,84 @@ namespace OmniKey.Windows
         }
 
         // ── EntryCard ──────────────────────────────────────────────────────
-        // Rounded-rect panel (fill + border) wrapping a CollapsibleEntryPanel.
-        // Mirrors macOS: .padding(8).background(RoundedRectangle.fill).overlay(strokeBorder).
+        // Rounded-rect panel with an inner RichTextBox capped at MaxTextH px.
+        // Text that would exceed the cap is pre-truncated with an ellipsis.
 
         private sealed class EntryCard : Panel
         {
-            private const int Pad = 8;
-            private readonly CollapsibleEntryPanel _content;
-            private readonly Color _fill;
-            private readonly Color _border;
+            private const int Pad      = 8;
+            private const int MaxTextH = 150;
+
+            private readonly RichTextBox _rtb;
+            private readonly Color       _border;
+            private readonly string      _fullText;
+            private readonly Font        _font;
+            private bool                 _applying;
 
             internal EntryCard(
                 string text, Color textColor, Font font, Color accentColor,
                 Color fillColor, Color borderColor, int width)
             {
-                _fill   = fillColor;
-                _border = borderColor;
-                Width   = width;
+                _ = accentColor; // no longer used
+                _border   = borderColor;
+                _fullText = text;
+                _font     = font;
+                Width     = width;
                 BackColor = fillColor;
-                Margin    = new Padding(0, 0, 0, 0);
+                Margin    = new Padding(0);
 
                 SetStyle(ControlStyles.AllPaintingInWmPaint |
                          ControlStyles.OptimizedDoubleBuffer |
                          ControlStyles.ResizeRedraw, true);
 
-                _content = new CollapsibleEntryPanel(
-                    text, textColor, font, accentColor,
-                    Math.Max(width - Pad * 2, 40));
-                _content.Location  = new Point(Pad, Pad);
-                _content.BackColor = fillColor;
-                Controls.Add(_content);
+                _rtb = new RichTextBox
+                {
+                    BackColor   = fillColor,
+                    ForeColor   = textColor,
+                    Font        = font,
+                    BorderStyle = BorderStyle.None,
+                    ReadOnly    = true,
+                    WordWrap    = true,
+                    ScrollBars  = RichTextBoxScrollBars.None,
+                    Location    = new Point(Pad, Pad),
+                    Width       = Math.Max(width - Pad * 2, 40),
+                    Height      = 20,
+                };
+                _rtb.ContentsResized += (_, e) =>
+                {
+                    _rtb.Height = e.NewRectangle.Height + 4;
+                    Height      = _rtb.Height + Pad * 2;
+                };
+                Controls.Add(_rtb);
 
-                _content.SizeChanged += (_, _) => Height = _content.Height + Pad * 2;
-                Height = _content.Height + Pad * 2;
+                ApplyText(Math.Max(width - Pad * 2, 40));
+            }
+
+            private void ApplyText(int innerW)
+            {
+                if (_applying) return;
+                _applying = true;
+                _rtb.Text = TruncateToHeight(_fullText, _font, innerW);
+                _applying = false;
+            }
+
+            // Uses GDI+ MeasureString to binary-search the longest prefix of
+            // `text` whose rendered height fits within MaxTextH, then appends "…".
+            private static string TruncateToHeight(string text, Font font, int width)
+            {
+                if (string.IsNullOrEmpty(text)) return text;
+                using var g = Graphics.FromHwnd(IntPtr.Zero);
+                if (g.MeasureString(text, font, width).Height <= MaxTextH) return text;
+                int lo = 0, hi = text.Length;
+                while (lo < hi - 1)
+                {
+                    int mid = (lo + hi) / 2;
+                    if (g.MeasureString(text[..mid] + "\u2026", font, width).Height <= MaxTextH)
+                        lo = mid;
+                    else
+                        hi = mid;
+                }
+                return text[..lo] + "\u2026";
             }
 
             protected override void OnPaint(PaintEventArgs e)
@@ -535,10 +573,12 @@ namespace OmniKey.Windows
             protected override void OnSizeChanged(EventArgs e)
             {
                 base.OnSizeChanged(e);
-                if (_content == null) return;
+                if (_rtb == null || _applying) return;
                 int innerW = Math.Max(Width - Pad * 2, 40);
-                _content.Width    = innerW;
-                _content.Location = new Point(Pad, Pad);
+                if (_rtb.Width == innerW) return; // height-only change — skip
+                _rtb.Width    = innerW;
+                _rtb.Location = new Point(Pad, Pad);
+                ApplyText(innerW);
             }
         }
 
@@ -698,111 +738,5 @@ namespace OmniKey.Windows
             }
         }
 
-        // ── CollapsibleEntryPanel ──────────────────────────────────────────
-        // Shows a RichTextBox preview with an optional "Show more / Show less" link.
-        // Preview = 60 words (matches macOS previewWordCount = 60).
-
-        private sealed class CollapsibleEntryPanel : Panel
-        {
-            private readonly RichTextBox _rtb;
-            private readonly LinkLabel?  _toggleLink;
-            private readonly string      _fullText;
-            private readonly string      _previewText;
-            private readonly bool        _isLong;
-            private bool                 _expanded;
-
-            internal CollapsibleEntryPanel(
-                string text, Color textColor, Font font, Color linkColor, int width)
-            {
-                BackColor = NordColors.EditorBackground;
-                Margin    = new Padding(0);
-                AutoSize  = false;
-                Width     = width;
-
-                var words    = text.Split(new[] { ' ', '\t', '\n', '\r' },
-                                   StringSplitOptions.RemoveEmptyEntries);
-                _fullText    = text;
-                _isLong      = words.Length > CollapseWordThreshold;
-                _previewText = _isLong
-                    ? string.Join(" ", words.Take(PreviewWordCount)) + "\u2026"
-                    : text;
-                _expanded = false;
-
-                _rtb = new RichTextBox
-                {
-                    BackColor   = NordColors.EditorBackground,
-                    ForeColor   = textColor,
-                    Font        = font,
-                    BorderStyle = BorderStyle.None,
-                    ReadOnly    = true,
-                    WordWrap    = true,
-                    ScrollBars  = RichTextBoxScrollBars.None,
-                    Text        = _isLong ? _previewText : _fullText,
-                    Location    = new Point(0, 0),
-                    Width       = width,
-                    Height      = 20,
-                };
-                _rtb.ContentsResized += (_, e) =>
-                {
-                    _rtb.Height = e.NewRectangle.Height + 4;
-                    LayoutControls();
-                };
-                Controls.Add(_rtb);
-
-                if (_isLong)
-                {
-                    int wordCount = words.Length;
-                    _toggleLink = new LinkLabel
-                    {
-                        Text      = $"Show more ({wordCount} words)",
-                        Font      = new Font("Segoe UI", 8.5f),
-                        LinkColor = linkColor,
-                        AutoSize  = true,
-                        Location  = new Point(0, _rtb.Bottom + 2),
-                    };
-                    _toggleLink.LinkClicked += (_, _) => Toggle(wordCount);
-                    Controls.Add(_toggleLink);
-                }
-
-                LayoutControls();
-            }
-
-            private void LayoutControls()
-            {
-                if (_rtb == null) return;
-                _rtb.Width = Width;
-                if (_toggleLink != null)
-                {
-                    _toggleLink.Location = new Point(0, _rtb.Bottom + 2);
-                    Height = _toggleLink.Bottom + 2;
-                }
-                else
-                {
-                    Height = _rtb.Bottom + 2;
-                }
-            }
-
-            private void Toggle(int wordCount)
-            {
-                _expanded         = !_expanded;
-                _rtb.Text         = _expanded ? _fullText : _previewText;
-                _toggleLink!.Text = _expanded
-                    ? "Show less"
-                    : $"Show more ({wordCount} words)";
-            }
-
-            protected override void OnBackColorChanged(EventArgs e)
-            {
-                base.OnBackColorChanged(e);
-                if (_rtb != null)
-                    _rtb.BackColor = BackColor;
-            }
-
-            protected override void OnSizeChanged(EventArgs e)
-            {
-                base.OnSizeChanged(e);
-                LayoutControls();
-            }
-        }
     }
 }
