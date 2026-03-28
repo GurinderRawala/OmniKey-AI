@@ -8,57 +8,89 @@ namespace OmniKey.Windows
     {
         public ManualForm()
         {
-            Text          = "OmniKey - Manual";
-            ClientSize    = new Size(900, 640);
-            MinimumSize   = new Size(880, 580);
-            StartPosition = FormStartPosition.CenterScreen;
-            BackColor     = NordColors.WindowBackground;
+            Text            = "OmniKey - Manual";
+            ClientSize      = new Size(900, 640);
+            MinimumSize     = new Size(640, 480);
+            StartPosition   = FormStartPosition.CenterScreen;
+            BackColor       = NordColors.WindowBackground;
+            DoubleBuffered  = true;
 
-            // ── Header ────────────────────────────────────────────────────
+            // ── Footer panel (docked bottom) ──────────────────────────────
+            var footerPanel = new Panel
+            {
+                Dock      = DockStyle.Bottom,
+                Height    = 52,
+                BackColor = NordColors.WindowBackground,
+            };
+            var footerSep = new Panel
+            {
+                Dock      = DockStyle.Top,
+                Height    = 1,
+                BackColor = NordColors.Border,
+            };
+            var closeButton = new Button
+            {
+                Text      = "Close",
+                Font      = new Font("Segoe UI", 9, FontStyle.Bold),
+                ForeColor = NordColors.PrimaryText,
+                BackColor = NordColors.SurfaceBackground,
+                FlatStyle = FlatStyle.Flat,
+                Size      = new Size(88, 32),
+                Anchor    = AnchorStyles.Top | AnchorStyles.Right,
+            };
+            closeButton.Location = new Point(ClientSize.Width - closeButton.Width - 16, 10);
+            closeButton.FlatAppearance.BorderColor        = NordColors.Border;
+            closeButton.FlatAppearance.MouseOverBackColor = NordColors.PanelBackground;
+            closeButton.Click += (_, _) => Close();
+            footerPanel.Controls.Add(closeButton);
+            footerPanel.Controls.Add(footerSep);
+
+            // ── Header panel (docked top) ─────────────────────────────────
+            var headerPanel = new Panel
+            {
+                Dock      = DockStyle.Top,
+                Height    = 88,
+                BackColor = NordColors.WindowBackground,
+            };
             var titleLabel = new Label
             {
                 Text      = "OmniKey Manual",
                 Font      = new Font("Segoe UI", 16, FontStyle.Bold),
                 ForeColor = NordColors.PrimaryText,
                 AutoSize  = true,
-                Location  = new Point(24, 20),
-                Anchor    = AnchorStyles.Top | AnchorStyles.Left
+                Location  = new Point(24, 18),
+                Anchor    = AnchorStyles.Top | AnchorStyles.Left,
             };
-            Controls.Add(titleLabel);
-
             var subtitleLabel = new Label
             {
                 Text      = "Use OmniKey AI anywhere on your Windows PC. Select text and activate one of the shortcuts below. " +
                             "OmniKey will process your selected text and paste the improved version back in place.",
                 Font      = new Font("Segoe UI", 9),
                 ForeColor = NordColors.SecondaryText,
+                AutoSize  = false,
                 Location  = new Point(24, 52),
-                Size      = new Size(852, 34),
-                Anchor    = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
+                Size      = new Size(ClientSize.Width - 48, 32),
+                Anchor    = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
             };
-            Controls.Add(subtitleLabel);
+            headerPanel.Controls.Add(titleLabel);
+            headerPanel.Controls.Add(subtitleLabel);
 
+            // ── Header separator ──────────────────────────────────────────
             var separator = new Panel
             {
+                Dock      = DockStyle.Top,
+                Height    = 1,
                 BackColor = NordColors.Border,
-                Location  = new Point(0, 90),
-                Size      = new Size(900, 1),
-                Anchor    = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
             };
-            Controls.Add(separator);
 
-            // ── Scrollable content area ────────────────────────────────────
+            // ── Scrollable content area (fill) ────────────────────────────
             var scrollWrapper = new Panel
             {
-                Location   = new Point(16, 98),
-                Size       = new Size(868, 490),
+                Dock       = DockStyle.Fill,
                 BackColor  = NordColors.PanelBackground,
                 AutoScroll = true,
-                Anchor     = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right
             };
-            Controls.Add(scrollWrapper);
 
-            // Inner flow: stacks section panels vertically
             var contentFlow = new FlowLayoutPanel
             {
                 FlowDirection = FlowDirection.TopDown,
@@ -66,11 +98,15 @@ namespace OmniKey.Windows
                 AutoSize      = true,
                 AutoSizeMode  = AutoSizeMode.GrowAndShrink,
                 BackColor     = NordColors.PanelBackground,
-                Padding       = new Padding(12, 12, 20, 12),
+                Padding       = new Padding(16, 16, 24, 16),
             };
             scrollWrapper.Controls.Add(contentFlow);
 
-            int contentW = 820; // inner content width (accounts for scrollbar)
+            // Compute content width from current client size
+            int contentW = ClientSize.Width
+                           - contentFlow.Padding.Left
+                           - contentFlow.Padding.Right
+                           - SystemInformation.VerticalScrollBarWidth;
 
             // ── Section: Keyboard Shortcuts ───────────────────────────────
             contentFlow.Controls.Add(MakeSectionHeader("Keyboard Shortcuts", NordColors.AccentBlue, contentW));
@@ -140,25 +176,26 @@ namespace OmniKey.Windows
                 "It cannot run commands with \"sudo\" or install additional software.",
                 contentW));
 
-            // Scroll back to top
+            // ── Keep scroll position at top ───────────────────────────────
             scrollWrapper.AutoScrollPosition = new Point(0, 0);
 
-            // ── Close button ──────────────────────────────────────────────
-            var closeButton = new Button
+            // ── Resize: keep content width in sync with scroll area ───────
+            scrollWrapper.SizeChanged += (_, _) =>
             {
-                Text      = "Close",
-                Font      = new Font("Segoe UI", 9, FontStyle.Bold),
-                ForeColor = NordColors.PrimaryText,
-                BackColor = NordColors.SurfaceBackground,
-                FlatStyle = FlatStyle.Flat,
-                Size      = new Size(80, 30),
-                Location  = new Point(804, 600),
-                Anchor    = AnchorStyles.Bottom | AnchorStyles.Right
+                int w = scrollWrapper.ClientSize.Width
+                        - contentFlow.Padding.Left
+                        - contentFlow.Padding.Right
+                        - SystemInformation.VerticalScrollBarWidth;
+                if (w < 100) return;
+                foreach (Control c in contentFlow.Controls)
+                    c.Width = w;
             };
-            closeButton.FlatAppearance.BorderColor        = NordColors.Border;
-            closeButton.FlatAppearance.MouseOverBackColor = NordColors.PanelBackground;
-            closeButton.Click += (_, _) => Close();
-            Controls.Add(closeButton);
+
+            // ── Add panels to form (order matters for docking) ────────────
+            Controls.Add(footerPanel);
+            Controls.Add(headerPanel);
+            Controls.Add(separator);
+            Controls.Add(scrollWrapper);
         }
 
         // ── Section header: colored left bar + circle icon + bold title ────
@@ -168,9 +205,9 @@ namespace OmniKey.Windows
             var panel = new Panel
             {
                 Width     = width,
-                Height    = 36,
+                Height    = 44,
                 BackColor = NordColors.PanelBackground,
-                Margin    = new Padding(0, 4, 0, 6),
+                Margin    = new Padding(0, 8, 0, 8),
             };
             panel.Paint += (_, e) =>
             {
@@ -178,25 +215,25 @@ namespace OmniKey.Windows
 
                 // Left accent bar
                 using var barBrush = new SolidBrush(accent);
-                using var barPath  = GfxHelpers.RoundedPath(new RectangleF(0, 6, 3, 24), 1.5f);
+                using var barPath  = GfxHelpers.RoundedPath(new RectangleF(0, 8, 4, 28), 2f);
                 e.Graphics.FillPath(barBrush, barPath);
 
                 // Icon circle background
                 using var iconBg = new SolidBrush(Color.FromArgb(30, accent));
-                e.Graphics.FillEllipse(iconBg, 10, 8, 20, 20);
+                e.Graphics.FillEllipse(iconBg, 12, 10, 24, 24);
 
                 // Icon dots (simple list-like indicator)
                 using var dotBrush = new SolidBrush(accent);
-                float cx = 20, cy = 18;
+                float cx = 24, cy = 22;
                 float dr = 2.5f;
-                e.Graphics.FillEllipse(dotBrush, cx - dr, cy - 5.5f, dr * 2, dr * 2);
-                e.Graphics.FillEllipse(dotBrush, cx - dr, cy - 0.5f, dr * 2, dr * 2);
-                e.Graphics.FillEllipse(dotBrush, cx - dr, cy + 4.5f, dr * 2, dr * 2);
+                e.Graphics.FillEllipse(dotBrush, cx - dr, cy - 6f,  dr * 2, dr * 2);
+                e.Graphics.FillEllipse(dotBrush, cx - dr, cy - 1f,  dr * 2, dr * 2);
+                e.Graphics.FillEllipse(dotBrush, cx - dr, cy + 4f,  dr * 2, dr * 2);
 
                 // Title text
                 TextRenderer.DrawText(e.Graphics, title,
                     new Font("Segoe UI", 11, FontStyle.Bold),
-                    new Rectangle(36, 8, panel.Width - 40, 20),
+                    new Rectangle(42, 0, panel.Width - 46, panel.Height),
                     accent, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
             };
             return panel;
@@ -206,12 +243,13 @@ namespace OmniKey.Windows
 
         private static Panel MakeShortcutRow(string keys, string label, string desc, int width)
         {
-            const int padH = 14, padV = 12;
-            const int badgeH = 24;
-            const int gap = 8;
+            const int padH   = 16;
+            const int padV   = 14;
+            const int badgeH = 26;
+            const int gap    = 10;
 
-            int innerW = width - padH * 2;
-            var descFont = new Font("Segoe UI", 8.5f);
+            int innerW   = width - padH * 2;
+            var descFont = new Font("Segoe UI", 9f);
             var descSize = TextRenderer.MeasureText(desc, descFont, new Size(innerW, int.MaxValue),
                 TextFormatFlags.WordBreak);
             int rowH = padV + badgeH + gap + descSize.Height + padV;
@@ -221,14 +259,14 @@ namespace OmniKey.Windows
                 Width     = width,
                 Height    = rowH,
                 BackColor = NordColors.SurfaceBackground,
-                Margin    = new Padding(0, 0, 0, 8),
+                Margin    = new Padding(0, 0, 0, 10),
             };
             row.Paint += (_, e) =>
             {
                 e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
                 using var pen = new Pen(NordColors.Border, 1);
                 GfxHelpers.DrawRoundedRect(e.Graphics, pen,
-                    new RectangleF(0, 0, row.Width - 1, row.Height - 1), 7);
+                    new RectangleF(0, 0, row.Width - 1, row.Height - 1), 8);
             };
 
             // Key badges flow (left side of top row)
@@ -251,11 +289,11 @@ namespace OmniKey.Windows
                     badgesFlow.Controls.Add(new Label
                     {
                         Text      = "+",
-                        Font      = new Font("Segoe UI", 8, FontStyle.Bold),
+                        Font      = new Font("Segoe UI", 8.5f, FontStyle.Bold),
                         ForeColor = NordColors.SecondaryText,
                         AutoSize  = true,
-                        Margin    = new Padding(2, 4, 2, 0),
-                        BackColor = Color.Transparent
+                        Margin    = new Padding(3, 5, 3, 0),
+                        BackColor = Color.Transparent,
                     });
                 }
             }
@@ -267,8 +305,8 @@ namespace OmniKey.Windows
                 Font      = new Font("Segoe UI", 10, FontStyle.Bold),
                 ForeColor = NordColors.PrimaryText,
                 AutoSize  = true,
-                Margin    = new Padding(8, 2, 0, 0),
-                BackColor = Color.Transparent
+                Margin    = new Padding(10, 3, 0, 0),
+                BackColor = Color.Transparent,
             };
             badgesFlow.Controls.Add(nameLabel);
 
@@ -281,7 +319,7 @@ namespace OmniKey.Windows
                 AutoSize  = false,
                 Location  = new Point(padH, padV + badgeH + gap),
                 Size      = new Size(innerW, descSize.Height),
-                BackColor = Color.Transparent
+                BackColor = Color.Transparent,
             };
 
             row.Controls.Add(badgesFlow);
@@ -296,22 +334,22 @@ namespace OmniKey.Windows
             var lbl = new Label
             {
                 Text      = keyText,
-                Font      = new Font("Segoe UI", 8, FontStyle.Bold),
+                Font      = new Font("Segoe UI", 8.5f, FontStyle.Bold),
                 ForeColor = NordColors.AccentAmber,
                 AutoSize  = true,
                 BackColor = Color.Transparent,
-                Location  = new Point(8, 4),
-                Margin    = Padding.Empty
+                Location  = new Point(9, 5),
+                Margin    = Padding.Empty,
             };
 
-            int w = lbl.PreferredWidth + 16;
-            int h = lbl.PreferredHeight + 8;
+            int w = lbl.PreferredWidth + 20;
+            int h = lbl.PreferredHeight + 10;
 
             var badge = new Panel
             {
                 Size      = new Size(w, h),
                 BackColor = Color.Transparent,
-                Margin    = new Padding(0, 0, 3, 0)
+                Margin    = new Padding(0, 0, 4, 0),
             };
             badge.Paint += (_, e) =>
             {
@@ -319,9 +357,9 @@ namespace OmniKey.Windows
                 using var bgBrush = new SolidBrush(NordColors.AmberSectionFill);
                 using var border  = new Pen(NordColors.AmberSectionBorder, 1);
                 GfxHelpers.FillRoundedRect(e.Graphics, bgBrush,
-                    new RectangleF(0, 0, badge.Width - 1, badge.Height - 1), 5);
+                    new RectangleF(0, 0, badge.Width - 1, badge.Height - 1), 6);
                 GfxHelpers.DrawRoundedRect(e.Graphics, border,
-                    new RectangleF(0, 0, badge.Width - 1, badge.Height - 1), 5);
+                    new RectangleF(0, 0, badge.Width - 1, badge.Height - 1), 6);
             };
             badge.Controls.Add(lbl);
             return badge;
@@ -332,7 +370,7 @@ namespace OmniKey.Windows
         private static Panel MakeBodyBlock(string text, int width)
         {
             var bodyFont = new Font("Segoe UI", 9.5f);
-            var measured = TextRenderer.MeasureText(text, bodyFont, new Size(width - 16, int.MaxValue),
+            var measured = TextRenderer.MeasureText(text, bodyFont, new Size(width - 24, int.MaxValue),
                 TextFormatFlags.WordBreak);
             var lbl = new Label
             {
@@ -340,18 +378,17 @@ namespace OmniKey.Windows
                 Font      = bodyFont,
                 ForeColor = NordColors.PrimaryText,
                 AutoSize  = false,
-                Size      = new Size(width - 8, measured.Height + 6),
+                Size      = new Size(width - 8, measured.Height + 8),
                 BackColor = NordColors.PanelBackground,
-                Margin    = new Padding(0, 0, 0, 6),
-                Padding   = Padding.Empty
+                Padding   = new Padding(4, 0, 0, 0),
             };
             return new Panel
             {
                 Width     = width,
                 Height    = lbl.Height,
                 BackColor = NordColors.PanelBackground,
-                Margin    = new Padding(0, 0, 0, 4),
-                Controls  = { lbl }
+                Margin    = new Padding(0, 2, 0, 8),
+                Controls  = { lbl },
             };
         }
 
@@ -364,7 +401,7 @@ namespace OmniKey.Windows
                 Width     = width,
                 Height    = 1,
                 BackColor = NordColors.Border,
-                Margin    = new Padding(0, 8, 0, 12)
+                Margin    = new Padding(0, 12, 0, 16),
             };
         }
     }

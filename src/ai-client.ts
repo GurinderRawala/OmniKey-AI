@@ -70,6 +70,24 @@ export function getDefaultModel(provider: AIProvider, tier: 'fast' | 'smart'): s
   return DEFAULT_MODELS[provider][tier];
 }
 
+/**
+ * Maximum character length for a single message content string per provider.
+ *
+ * - anthropic: hard API limit of 10,485,760 chars (we leave a small buffer)
+ * - openai:    no documented per-string limit, but GPT-4o context is ~128K
+ *              tokens (~512K chars total); 400K is a safe single-message cap
+ * - gemini:    1M-token context window (~4M chars); 1M chars is conservative
+ */
+const MAX_CONTENT_LENGTH_BY_PROVIDER: Record<AIProvider, number> = {
+  anthropic: 10_000_000,
+  openai: 400_000,
+  gemini: 1_000_000,
+};
+
+export function getMaxContentLength(provider: AIProvider): number {
+  return MAX_CONTENT_LENGTH_BY_PROVIDER[provider];
+}
+
 // ---------------------------------------------------------------------------
 // OpenAI adapter
 // ---------------------------------------------------------------------------
