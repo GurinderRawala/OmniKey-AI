@@ -19,151 +19,23 @@ namespace OmniKey.Windows
         private readonly NotifyIcon _notifyIcon;
         private readonly ApiClient _apiClient = new();
         private bool _isProcessing;
-        private ToolStripMenuItem? _statusMenuItem;
         private AgentThinkingForm? _agentThinkingForm;
-        private ToolStripMenuItem? _checkUpdatesMenuItem;
-        private Label? _statusLabel;
 
         public HotkeyForm()
         {
-            Text            = "OmniKey AI";
-            ShowInTaskbar   = true;
-            WindowState     = FormWindowState.Normal;
-            FormBorderStyle = FormBorderStyle.FixedSingle;
-            MaximizeBox     = false;
-            ClientSize      = new Size(420, 320);
-            StartPosition   = FormStartPosition.CenterScreen;
-
-            var assembly = System.Reflection.Assembly.GetExecutingAssembly();
-            using var iconStream = assembly.GetManifestResourceStream("OmniKey.Windows.app.ico");
-            var appIcon = iconStream != null ? new Icon(iconStream) : SystemIcons.Information;
-            Icon = appIcon;
-
-            _notifyIcon = new NotifyIcon
-            {
-                Text             = "OmniKey AI",
-                Icon             = appIcon,
-                Visible          = true,
-                ContextMenuStrip = BuildContextMenu(),
-            };
-
-            BuildMainWindow();
+            ShowInTaskbar   = false;
+            FormBorderStyle = FormBorderStyle.None;
+            Size            = new Size(0, 0);
+            _notifyIcon = new NotifyIcon { Visible = false };
         }
 
-        private void BuildMainWindow()
-        {
-            BackColor = NordColors.WindowBackground;
-
-            var titleLabel = new Label
-            {
-                Text      = "OmniKey AI",
-                Font      = new Font("Segoe UI", 18f, FontStyle.Bold),
-                ForeColor = NordColors.PrimaryText,
-                AutoSize  = true,
-                Location  = new Point(24, 24),
-            };
-            Controls.Add(titleLabel);
-
-            var subtitleLabel = new Label
-            {
-                Text      = "AI-powered text enhancement",
-                Font      = new Font("Segoe UI", 9f),
-                ForeColor = NordColors.SecondaryText,
-                AutoSize  = true,
-                Location  = new Point(26, 58),
-            };
-            Controls.Add(subtitleLabel);
-
-            var separator = new Panel
-            {
-                BackColor = NordColors.Border,
-                Location  = new Point(24, 84),
-                Size      = new Size(372, 1),
-            };
-            Controls.Add(separator);
-
-            _statusLabel = new Label
-            {
-                Text      = "Status: Checking\u2026",
-                Font      = new Font("Segoe UI", 10f),
-                ForeColor = NordColors.AccentGreen,
-                AutoSize  = true,
-                Location  = new Point(24, 100),
-            };
-            Controls.Add(_statusLabel);
-
-            var hotkeysLabel = new Label
-            {
-                Text      = "Hotkeys:",
-                Font      = new Font("Segoe UI", 9f, FontStyle.Bold),
-                ForeColor = NordColors.PrimaryText,
-                AutoSize  = true,
-                Location  = new Point(24, 136),
-            };
-            Controls.Add(hotkeysLabel);
-
-            var hotkeysInfo = new Label
-            {
-                Text      = "Ctrl+E  \u2014 Enhance selected text\r\nCtrl+G  \u2014 Fix grammar\r\nCtrl+T  \u2014 Run custom task",
-                Font      = new Font("Segoe UI", 9f),
-                ForeColor = NordColors.PrimaryText,
-                AutoSize  = true,
-                Location  = new Point(24, 158),
-            };
-            Controls.Add(hotkeysInfo);
-
-            var btnTask = new Button
-            {
-                Text      = "Task Instructions",
-                Location  = new Point(24, 240),
-                Size      = new Size(140, 32),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = NordColors.PanelBackground,
-                ForeColor = NordColors.PrimaryText,
-                Font      = new Font("Segoe UI", 9f),
-                Cursor    = Cursors.Hand,
-            };
-            btnTask.FlatAppearance.BorderColor = NordColors.Border;
-            btnTask.Click += (_, _) => ShowTaskInstructions();
-            Controls.Add(btnTask);
-
-            var btnManual = new Button
-            {
-                Text      = "Manual",
-                Location  = new Point(172, 240),
-                Size      = new Size(100, 32),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = NordColors.PanelBackground,
-                ForeColor = NordColors.PrimaryText,
-                Font      = new Font("Segoe UI", 9f),
-                Cursor    = Cursors.Hand,
-            };
-            btnManual.FlatAppearance.BorderColor = NordColors.Border;
-            btnManual.Click += (_, _) => ShowManual();
-            Controls.Add(btnManual);
-
-            var btnExit = new Button
-            {
-                Text      = "Exit",
-                Location  = new Point(356, 240),
-                Size      = new Size(60, 32),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = NordColors.ErrorRed,
-                ForeColor = Color.White,
-                Font      = new Font("Segoe UI", 9f),
-                Cursor    = Cursors.Hand,
-            };
-            btnExit.FlatAppearance.BorderColor = NordColors.ErrorRed;
-            btnExit.Click += (_, _) => Application.Exit();
-            Controls.Add(btnExit);
-        }
+        // UI removed; HotkeyForm is now message-only
 
         protected override void OnLoad(EventArgs e)
         {
             base.OnLoad(e);
             RegisterHotkeys();
-            _ = InitializeAuthAsync();
-            _ = CheckForUpdatesBackgroundAsync();
+            // No UI, no auth/init logic here
         }
 
         protected override void OnFormClosing(FormClosingEventArgs e)
@@ -176,163 +48,26 @@ namespace OmniKey.Windows
 
         // ─── Auth initialisation ──────────────────────────────────────
 
-        private async Task InitializeAuthAsync()
-        {
-            if (ApiClient.IsSelfHosted)
-            {
-                // Self-hosted backend issues a JWT without a subscription key.
-                // We still need to call /activate so the agent WebSocket has a
-                // valid token; skip this check if it fails (server may not be
-                // ready yet — the agent will retry on first use).
-                UpdateStatus("Activating\u2026 (self-hosted)");
-                bool ok = await SubscriptionManager.Instance.ActivateStoredKeyAsync();
-                UpdateStatus(ok ? "Active (self-hosted)" : "Active (self-hosted)");
-                return;
-            }
-
-            if (SubscriptionManager.Instance.HasStoredKey)
-            {
-                UpdateStatus("Activating\u2026");
-                bool ok = await SubscriptionManager.Instance.ActivateStoredKeyAsync();
-                if (ok)
-                {
-                    UpdateStatus("Active");
-                    return;
-                }
-            }
-
-            // No key, or activation failed – show the license form
-            ShowLicenseForm();
-        }
-
-        private void ShowLicenseForm()
-        {
-            using var form = new LicenseForm();
-            var result = form.ShowDialog(this);
-
-            if (result == DialogResult.OK)
-                UpdateStatus("Active");
-            else
-                Application.Exit();
-        }
-
-        private void UpdateStatus(string status)
-        {
-            if (_statusMenuItem != null)
-            {
-                _statusMenuItem.Text  = "Status: " + status;
-                _statusMenuItem.Image = CreateDotIcon(status.StartsWith("Active"));
-            }
-            if (_statusLabel != null)
-                _statusLabel.Text = "Status: " + status;
-        }
-
-        private static Bitmap CreateDotIcon(bool active)
-        {
-            var bmp = new Bitmap(16, 16);
-            using var g = Graphics.FromImage(bmp);
-            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-            g.Clear(Color.Transparent);
-            using var brush = new SolidBrush(active ? NordColors.SuccessGreen : NordColors.ErrorRed);
-            g.FillEllipse(brush, 2, 2, 12, 12);
-            return bmp;
-        }
+        // Auth/status UI removed
 
         // ─── Context menu ─────────────────────────────────────────────
 
-        private ContextMenuStrip BuildContextMenu()
-        {
-            var menu = new ContextMenuStrip();
+        // Context menu removed
 
-            _statusMenuItem = new ToolStripMenuItem("Status: Checking\u2026") { Enabled = false };
-            menu.Items.Add(_statusMenuItem);
-            menu.Items.Add(new ToolStripSeparator());
-
-            var taskInstructionsItem = new ToolStripMenuItem("Task Instructions");
-            taskInstructionsItem.Click += (_, _) => ShowTaskInstructions();
-            menu.Items.Add(taskInstructionsItem);
-
-            var manualItem = new ToolStripMenuItem("Manual");
-            manualItem.Click += (_, _) => ShowManual();
-            menu.Items.Add(manualItem);
-
-            var licenseItem = new ToolStripMenuItem("Subscription / Activate");
-            licenseItem.Click += (_, _) => ShowLicenseForm();
-            if (ApiClient.IsSelfHosted) licenseItem.Visible = false;
-            menu.Items.Add(licenseItem);
-
-            _checkUpdatesMenuItem = new ToolStripMenuItem("Check for Updates");
-            _checkUpdatesMenuItem.Click += async (_, _) => await CheckForUpdatesFromMenuAsync();
-            menu.Items.Add(_checkUpdatesMenuItem);
-
-            menu.Items.Add(new ToolStripSeparator());
-
-            var exitItem = new ToolStripMenuItem("Exit");
-            exitItem.Click += (_, _) => Application.Exit();
-            menu.Items.Add(exitItem);
-
-            return menu;
-        }
-
-        private void ShowTaskInstructions()
-        {
-            var form = new TaskInstructionsForm();
-            form.Show(this);
-        }
-
-        private void ShowManual()
-        {
-            var form = new ManualForm();
-            form.Show(this);
-        }
+        // Navigation UI removed
 
         // ─── Update checking ──────────────────────────────────────────
 
         /// <summary>
         /// Runs silently at startup. Shows a balloon tip when an update is found.
         /// </summary>
-        private async Task CheckForUpdatesBackgroundAsync()
-        {
-            var info = await UpdateChecker.CheckAsync();
-            if (info == null) return;
-
-            ShowBalloon("OmniKey AI", $"Update {info.Version} is available! Click \u2018Check for Updates\u2019 to install.");
-        }
+        // Update checking UI removed
 
         /// <summary>
         /// Triggered by the "Check for Updates" tray menu item.
         /// Shows the update window when available, or a "you're up to date" balloon.
         /// </summary>
-        private async Task CheckForUpdatesFromMenuAsync()
-        {
-            if (_checkUpdatesMenuItem != null)
-            {
-                _checkUpdatesMenuItem.Enabled = false;
-                _checkUpdatesMenuItem.Text    = "Checking\u2026";
-            }
-
-            try
-            {
-                var info = await UpdateChecker.CheckAsync();
-
-                if (info == null)
-                {
-                    ShowBalloon("OmniKey AI", "You\u2019re up to date! No new version available.");
-                    return;
-                }
-
-                var form = new UpdateForm(info);
-                form.Show(this);
-            }
-            finally
-            {
-                if (_checkUpdatesMenuItem != null)
-                {
-                    _checkUpdatesMenuItem.Enabled = true;
-                    _checkUpdatesMenuItem.Text    = "Check for Updates";
-                }
-            }
-        }
+        // Update checking UI removed
 
         // ─── Hotkey handling ──────────────────────────────────────────
 
@@ -437,46 +172,15 @@ namespace OmniKey.Windows
 
         private async Task RunAgentWorkflowAsync(string originalText, IntPtr originalWindow)
         {
-            // Close any existing agent window
-            _agentThinkingForm?.Close();
-            _agentThinkingForm = new AgentThinkingForm();
-
-            _agentThinkingForm.SetInitialRequest(originalText);
-            _agentThinkingForm.SetRunning(true);
-            _agentThinkingForm.Show(this);
-
-            var ct = _agentThinkingForm.CancellationSource.Token;
-
-            ShowBalloon("OmniKey AI", "OmniAgent session started\u2026");
-
-            string result;
-            try
+            // Instead of opening a new AgentThinkingForm, show the Agent Session tab in MainForm
+            var mainForm = Application.OpenForms["MainForm"] as MainForm;
+            if (mainForm != null)
             {
-                result = await AgentRunner.RunAgentSessionAsync(originalText, _agentThinkingForm, ct);
+                mainForm.ShowAgentSessionTab();
+                // Optionally, set the request text in the embedded AgentThinkingForm
+                // mainForm.AgentThinkingForm.SetInitialRequest(originalText);
             }
-            catch (OperationCanceledException)
-            {
-                _agentThinkingForm?.SetRunning(false);
-                ShowBalloon("OmniKey AI", "Agent session cancelled.");
-                return;
-            }
-            catch (Exception ex)
-            {
-                _agentThinkingForm?.SetRunning(false);
-                ShowBalloon("OmniKey AI", "Agent error: " + ex.Message);
-                return;
-            }
-
-            _agentThinkingForm?.SetRunning(false);
-
-            if (string.IsNullOrWhiteSpace(result))
-            {
-                ShowBalloon("OmniKey AI", "Agent returned empty response.");
-                return;
-            }
-
-            await RestoreFocusAndPasteAsync(originalWindow, result);
-            ShowBalloon("OmniKey AI", "Agent finished. Text updated.");
+            // The rest of the agent workflow logic should be handled by MainForm/AgentThinkingForm
         }
 
         // Brings the original window back to the foreground (mirroring macOS behavior),
