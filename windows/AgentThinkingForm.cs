@@ -321,8 +321,17 @@ namespace OmniKey.Windows
                 if (!IsHandleCreated) return;
                 BeginInvoke(new Action(() =>
                 {
-                    RefreshFlowHeight();
-                    _logPanel.AutoScrollPosition = new Point(0, _logFlow.Height);
+                    // Only follow the scroll if we're already at the bottom.
+                    // This prevents a "Show more" expand mid-list from hijacking
+                    // the scroll position.
+                    var vs = _logPanel.VerticalScroll;
+                    bool atBottom = !vs.Visible
+                                 || vs.Value >= vs.Maximum - vs.LargeChange - 20;
+                    if (atBottom)
+                    {
+                        RefreshFlowHeight();
+                        _logPanel.AutoScrollPosition = new Point(0, _logFlow.Height);
+                    }
                 }));
             };
             _logFlow.Controls.Add(field);
