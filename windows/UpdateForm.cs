@@ -189,15 +189,15 @@ namespace OmniKey.Windows
                 Size      = new Size(116, 34),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = NordColors.AccentGreen,
-                ForeColor = Color.FromArgb(10, 12, 26),
+                ForeColor = NordColors.PrimaryText,
                 Font      = new Font("Segoe UI", 8.5f, FontStyle.Bold),
-                Image     = WinIcons.ArrowRight(14, Color.FromArgb(10, 12, 26)),
+                Image     = WinIcons.ArrowRight(14, NordColors.PrimaryText),
                 ImageAlign = ContentAlignment.MiddleLeft,
                 TextImageRelation = TextImageRelation.ImageBeforeText,
                 Padding   = new Padding(6, 0, 6, 0)
             };
             downloadButton.FlatAppearance.BorderColor        = NordColors.AccentGreen;
-            downloadButton.FlatAppearance.MouseOverBackColor = Color.FromArgb(72, 231, 173);
+            downloadButton.FlatAppearance.MouseOverBackColor = Color.FromArgb(40, 170, 125); // lighter hover for light AccentGreen
             downloadButton.Click += (_, _) =>
             {
                 if (!string.IsNullOrEmpty(info.DownloadUrl))

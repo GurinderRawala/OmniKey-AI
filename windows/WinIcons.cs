@@ -91,6 +91,57 @@ namespace OmniKey.Windows
             return bmp;
         }
 
+        public static Bitmap Globe(int size, Color color)
+        {
+            var bmp = Blank(size);
+            using var g = AA(bmp);
+            using var pen = RoundPen(color, size * 0.09f);
+            float cx = size / 2f, cy = size / 2f, r = size * 0.42f;
+            g.DrawEllipse(pen, cx - r, cy - r, r * 2, r * 2);
+            g.DrawLine(pen, cx - r, cy, cx + r, cy);           // equator
+            g.DrawLine(pen, cx, cy - r, cx, cy + r);           // prime meridian
+            return bmp;
+        }
+
+        public static Bitmap BrainIcon(int size, Color color)
+        {
+            var bmp = Blank(size);
+            using var g = AA(bmp);
+            using var pen = RoundPen(color, size * 0.09f);
+            float cx = size / 2f, cy = size * 0.52f, r = size * 0.36f;
+            g.DrawEllipse(pen, cx - r, cy - r, r * 2, r * 2);
+            g.DrawLine(pen, cx, cy - r, cx, cy + r * 0.4f);   // center crease
+            g.DrawLine(pen, cx - r * 0.5f, cy, cx + r * 0.5f, cy); // horizontal ridge
+            return bmp;
+        }
+
+        public static Bitmap TerminalIcon(int size, Color color)
+        {
+            var bmp = Blank(size);
+            using var g = AA(bmp);
+            using var pen = RoundPen(color, size * 0.11f);
+            float cx = size * 0.42f, cy = size / 2f, r = size * 0.24f;
+            g.DrawLine(pen, cx - r, cy - r, cx + r, cy);      // ">" upper arm
+            g.DrawLine(pen, cx - r, cy + r, cx + r, cy);      // ">" lower arm
+            return bmp;
+        }
+
+        public static Bitmap QuoteIcon(int size, Color color)
+        {
+            var bmp = Blank(size);
+            using var g = AA(bmp);
+            float r = size * 0.14f;
+            float y1 = size * 0.22f, y2 = size * 0.50f;
+            float x1 = size * 0.16f, x2 = size * 0.48f;
+            using var pen = RoundPen(color, size * 0.10f);
+            // Two open-quote marks (arc + tail)
+            g.DrawArc(pen, x1, y1, r * 2, r * 2, 0, 360);
+            g.DrawLine(pen, x1 + r, y1 + r * 2, x1 + r * 0.3f, y2);
+            g.DrawArc(pen, x2, y1, r * 2, r * 2, 0, 360);
+            g.DrawLine(pen, x2 + r, y1 + r * 2, x2 + r * 0.3f, y2);
+            return bmp;
+        }
+
         /// <summary>
         /// Draws a simple key outline icon (used in the LicenseForm).
         /// </summary>

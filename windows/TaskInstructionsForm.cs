@@ -306,13 +306,13 @@ namespace OmniKey.Windows
                     b.BackColor = NordColors.AccentBlue;
                     b.ForeColor = Color.White;
                     b.FlatAppearance.BorderColor        = NordColors.AccentBlue;
-                    b.FlatAppearance.MouseOverBackColor = Color.FromArgb(116, 185, 255);
+                    b.FlatAppearance.MouseOverBackColor = Color.FromArgb(100, 158, 255); // light-blue hover for light AccentBlue
                     break;
                 case ButtonRole.Danger:
                     b.BackColor = NordColors.RedSectionFill;
                     b.ForeColor = NordColors.ErrorRed;
                     b.FlatAppearance.BorderColor        = NordColors.RedSectionBorder;
-                    b.FlatAppearance.MouseOverBackColor = Color.FromArgb(55, 30, 30);
+                    b.FlatAppearance.MouseOverBackColor = Color.FromArgb(255, 215, 220); // light-red hover for light RedSectionFill
                     break;
                 default:
                     b.BackColor = NordColors.SurfaceBackground;

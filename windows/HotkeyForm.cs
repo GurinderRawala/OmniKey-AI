@@ -22,17 +22,22 @@ namespace OmniKey.Windows
         private ToolStripMenuItem? _statusMenuItem;
         private AgentThinkingForm? _agentThinkingForm;
         private ToolStripMenuItem? _checkUpdatesMenuItem;
+        private Label? _statusLabel;
 
         public HotkeyForm()
         {
-            ShowInTaskbar  = false;
-            WindowState    = FormWindowState.Minimized;
-            FormBorderStyle = FormBorderStyle.FixedToolWindow;
-            Opacity        = 0;
+            Text            = "OmniKey AI";
+            ShowInTaskbar   = true;
+            WindowState     = FormWindowState.Normal;
+            FormBorderStyle = FormBorderStyle.FixedSingle;
+            MaximizeBox     = false;
+            ClientSize      = new Size(420, 320);
+            StartPosition   = FormStartPosition.CenterScreen;
 
             var assembly = System.Reflection.Assembly.GetExecutingAssembly();
             using var iconStream = assembly.GetManifestResourceStream("OmniKey.Windows.app.ico");
             var appIcon = iconStream != null ? new Icon(iconStream) : SystemIcons.Information;
+            Icon = appIcon;
 
             _notifyIcon = new NotifyIcon
             {
@@ -41,6 +46,116 @@ namespace OmniKey.Windows
                 Visible          = true,
                 ContextMenuStrip = BuildContextMenu(),
             };
+
+            BuildMainWindow();
+        }
+
+        private void BuildMainWindow()
+        {
+            BackColor = NordColors.WindowBackground;
+
+            var titleLabel = new Label
+            {
+                Text      = "OmniKey AI",
+                Font      = new Font("Segoe UI", 18f, FontStyle.Bold),
+                ForeColor = NordColors.PrimaryText,
+                AutoSize  = true,
+                Location  = new Point(24, 24),
+            };
+            Controls.Add(titleLabel);
+
+            var subtitleLabel = new Label
+            {
+                Text      = "AI-powered text enhancement",
+                Font      = new Font("Segoe UI", 9f),
+                ForeColor = NordColors.SecondaryText,
+                AutoSize  = true,
+                Location  = new Point(26, 58),
+            };
+            Controls.Add(subtitleLabel);
+
+            var separator = new Panel
+            {
+                BackColor = NordColors.Border,
+                Location  = new Point(24, 84),
+                Size      = new Size(372, 1),
+            };
+            Controls.Add(separator);
+
+            _statusLabel = new Label
+            {
+                Text      = "Status: Checking\u2026",
+                Font      = new Font("Segoe UI", 10f),
+                ForeColor = NordColors.AccentGreen,
+                AutoSize  = true,
+                Location  = new Point(24, 100),
+            };
+            Controls.Add(_statusLabel);
+
+            var hotkeysLabel = new Label
+            {
+                Text      = "Hotkeys:",
+                Font      = new Font("Segoe UI", 9f, FontStyle.Bold),
+                ForeColor = NordColors.PrimaryText,
+                AutoSize  = true,
+                Location  = new Point(24, 136),
+            };
+            Controls.Add(hotkeysLabel);
+
+            var hotkeysInfo = new Label
+            {
+                Text      = "Ctrl+E  \u2014 Enhance selected text\r\nCtrl+G  \u2014 Fix grammar\r\nCtrl+T  \u2014 Run custom task",
+                Font      = new Font("Segoe UI", 9f),
+                ForeColor = NordColors.PrimaryText,
+                AutoSize  = true,
+                Location  = new Point(24, 158),
+            };
+            Controls.Add(hotkeysInfo);
+
+            var btnTask = new Button
+            {
+                Text      = "Task Instructions",
+                Location  = new Point(24, 240),
+                Size      = new Size(140, 32),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = NordColors.PanelBackground,
+                ForeColor = NordColors.PrimaryText,
+                Font      = new Font("Segoe UI", 9f),
+                Cursor    = Cursors.Hand,
+            };
+            btnTask.FlatAppearance.BorderColor = NordColors.Border;
+            btnTask.Click += (_, _) => ShowTaskInstructions();
+            Controls.Add(btnTask);
+
+            var btnManual = new Button
+            {
+                Text      = "Manual",
+                Location  = new Point(172, 240),
+                Size      = new Size(100, 32),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = NordColors.PanelBackground,
+                ForeColor = NordColors.PrimaryText,
+                Font      = new Font("Segoe UI", 9f),
+                Cursor    = Cursors.Hand,
+            };
+            btnManual.FlatAppearance.BorderColor = NordColors.Border;
+            btnManual.Click += (_, _) => ShowManual();
+            Controls.Add(btnManual);
+
+            var btnExit = new Button
+            {
+                Text      = "Exit",
+                Location  = new Point(356, 240),
+                Size      = new Size(60, 32),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = NordColors.ErrorRed,
+                ForeColor = Color.White,
+                Font      = new Font("Segoe UI", 9f),
+                Cursor    = Cursors.Hand,
+            };
+            btnExit.FlatAppearance.BorderColor = NordColors.ErrorRed;
+            btnExit.Click += (_, _) => Application.Exit();
+            Controls.Add(btnExit);
         }
 
         protected override void OnLoad(EventArgs e)
@@ -103,9 +218,13 @@ namespace OmniKey.Windows
 
         private void UpdateStatus(string status)
         {
-            if (_statusMenuItem == null) return;
-            _statusMenuItem.Text  = "Status: " + status;
-            _statusMenuItem.Image = CreateDotIcon(status.StartsWith("Active"));
+            if (_statusMenuItem != null)
+            {
+                _statusMenuItem.Text  = "Status: " + status;
+                _statusMenuItem.Image = CreateDotIcon(status.StartsWith("Active"));
+            }
+            if (_statusLabel != null)
+                _statusLabel.Text = "Status: " + status;
         }
 
         private static Bitmap CreateDotIcon(bool active)
@@ -114,7 +233,7 @@ namespace OmniKey.Windows
             using var g = Graphics.FromImage(bmp);
             g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
             g.Clear(Color.Transparent);
-            using var brush = new SolidBrush(active ? Color.FromArgb(34, 197, 94) : Color.FromArgb(239, 68, 68));
+            using var brush = new SolidBrush(active ? NordColors.SuccessGreen : NordColors.ErrorRed);
             g.FillEllipse(brush, 2, 2, 12, 12);
             return bmp;
         }
