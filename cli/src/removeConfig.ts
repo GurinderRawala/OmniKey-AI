@@ -26,10 +26,16 @@ export function killWindowsTask() {
   let nssmPath: string | null = null;
   try {
     nssmPath = execSync('where nssm', { stdio: 'pipe' }).toString().trim().split('\n')[0].trim();
-  } catch { /* NSSM not installed */ }
+  } catch {
+    /* NSSM not installed */
+  }
 
   if (nssmPath) {
-    try { execFileSync(nssmPath, ['stop', serviceName], { stdio: 'pipe' }); } catch { /* not running */ }
+    try {
+      execFileSync(nssmPath, ['stop', serviceName], { stdio: 'pipe' });
+    } catch {
+      /* not running */
+    }
     try {
       execFileSync(nssmPath, ['remove', serviceName, 'confirm'], { stdio: 'pipe' });
       console.log(`Removed NSSM service: ${serviceName}`);
@@ -38,7 +44,11 @@ export function killWindowsTask() {
     }
   } else {
     // Fallback: remove legacy Task Scheduler task from previous installs
-    try { execSync(`schtasks /end /tn "${serviceName}"`, { stdio: 'pipe' }); } catch { /* not running */ }
+    try {
+      execSync(`schtasks /end /tn "${serviceName}"`, { stdio: 'pipe' });
+    } catch {
+      /* not running */
+    }
     try {
       execSync(`schtasks /delete /tn "${serviceName}" /f`, { stdio: 'pipe' });
       console.log(`Removed Windows Task Scheduler task: ${serviceName}`);
@@ -50,7 +60,11 @@ export function killWindowsTask() {
   // Remove legacy wrapper script if present
   const wrapperPath = path.join(getConfigDir(), 'start-daemon.cmd');
   if (fs.existsSync(wrapperPath)) {
-    try { fs.rmSync(wrapperPath); } catch { /* ignore */ }
+    try {
+      fs.rmSync(wrapperPath);
+    } catch {
+      /* ignore */
+    }
   }
 }
 

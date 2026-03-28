@@ -94,5 +94,5 @@ export const config = {
   tavilyApiKey: getEnv('TAVILY_API_KEY', false),
   searxngUrl: getEnv('SEARXNG_URL', false),
 
-  terminalPlatform: getEnv('TERMINAL_PLATFORM', false)
+  terminalPlatform: getEnv('TERMINAL_PLATFORM', false),
 };

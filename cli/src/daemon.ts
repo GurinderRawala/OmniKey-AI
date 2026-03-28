@@ -86,7 +86,9 @@ async function startDaemonWindows(opts: DaemonOptions) {
     ]);
 
     if (!install) {
-      console.log('Aborted. Install NSSM manually and re-run in an elevated (Administrator) terminal.');
+      console.log(
+        'Aborted. Install NSSM manually and re-run in an elevated (Administrator) terminal.',
+      );
       return;
     }
 
@@ -105,7 +107,10 @@ async function startDaemonWindows(opts: DaemonOptions) {
     // won't see it — spawn a fresh cmd to resolve the new location.
     try {
       nssmPath = execSync('cmd /c where nssm', { stdio: 'pipe' })
-        .toString().trim().split('\n')[0].trim();
+        .toString()
+        .trim()
+        .split('\n')[0]
+        .trim();
     } catch {
       nssmPath = null;
     }
@@ -120,8 +125,16 @@ async function startDaemonWindows(opts: DaemonOptions) {
   initLogFiles(logPath, errorLogPath);
 
   // Remove any existing service (stop first, then remove)
-  try { execFileSync(nssmPath, ['stop', serviceName], { stdio: 'pipe' }); } catch { /* not running */ }
-  try { execFileSync(nssmPath, ['remove', serviceName, 'confirm'], { stdio: 'pipe' }); } catch { /* didn't exist */ }
+  try {
+    execFileSync(nssmPath, ['stop', serviceName], { stdio: 'pipe' });
+  } catch {
+    /* not running */
+  }
+  try {
+    execFileSync(nssmPath, ['remove', serviceName, 'confirm'], { stdio: 'pipe' });
+  } catch {
+    /* didn't exist */
+  }
 
   // NSSM services run as LocalSystem; pass USERPROFILE so the backend's
   // getHomeDir() resolves to the correct user config directory.
@@ -140,21 +153,29 @@ async function startDaemonWindows(opts: DaemonOptions) {
 
     // Pass all env vars in a single call (replaces the entire AppEnvironmentExtra key)
     const envEntries = Object.entries(env).map(([k, v]) => `${k}=${v}`);
-    execFileSync(nssmPath, ['set', serviceName, 'AppEnvironmentExtra', ...envEntries], { stdio: 'pipe' });
+    execFileSync(nssmPath, ['set', serviceName, 'AppEnvironmentExtra', ...envEntries], {
+      stdio: 'pipe',
+    });
 
     execFileSync(nssmPath, ['set', serviceName, 'AppStdout', logPath], { stdio: 'pipe' });
     execFileSync(nssmPath, ['set', serviceName, 'AppStderr', errorLogPath], { stdio: 'pipe' });
     execFileSync(nssmPath, ['set', serviceName, 'AppRotateFiles', '1'], { stdio: 'pipe' });
 
     // Restart automatically after a 3-second delay on any exit
-    execFileSync(nssmPath, ['set', serviceName, 'AppExit', 'Default', 'Restart'], { stdio: 'pipe' });
+    execFileSync(nssmPath, ['set', serviceName, 'AppExit', 'Default', 'Restart'], {
+      stdio: 'pipe',
+    });
     execFileSync(nssmPath, ['set', serviceName, 'AppRestartDelay', '3000'], { stdio: 'pipe' });
 
     // Start automatically at boot (no login required)
     execFileSync(nssmPath, ['set', serviceName, 'Start', 'SERVICE_AUTO_START'], { stdio: 'pipe' });
 
-    execFileSync(nssmPath, ['set', serviceName, 'DisplayName', 'Omnikey API Backend'], { stdio: 'pipe' });
-    execFileSync(nssmPath, ['set', serviceName, 'Description', 'Omnikey API Backend Daemon'], { stdio: 'pipe' });
+    execFileSync(nssmPath, ['set', serviceName, 'DisplayName', 'Omnikey API Backend'], {
+      stdio: 'pipe',
+    });
+    execFileSync(nssmPath, ['set', serviceName, 'Description', 'Omnikey API Backend Daemon'], {
+      stdio: 'pipe',
+    });
 
     execFileSync(nssmPath, ['start', serviceName], { stdio: 'pipe' });
 

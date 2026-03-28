@@ -37,7 +37,10 @@ app.get('/macos/download', (_req, res) => {
   }
 
   if (!config.isSelfHosted) {
-    AppDownload.findOrCreate({ where: { platform: 'macos' }, defaults: { platform: 'macos', count: 0 } })
+    AppDownload.findOrCreate({
+      where: { platform: 'macos' },
+      defaults: { platform: 'macos', count: 0 },
+    })
       .then(([record]) => record.increment('count'))
       .catch((err) => logger.error('Failed to increment macOS download count.', { error: err }));
   }
@@ -127,7 +130,10 @@ app.get('/windows/download', (_req, res) => {
   }
 
   if (!config.isSelfHosted) {
-    AppDownload.findOrCreate({ where: { platform: 'windows' }, defaults: { platform: 'windows', count: 0 } })
+    AppDownload.findOrCreate({
+      where: { platform: 'windows' },
+      defaults: { platform: 'windows', count: 0 },
+    })
       .then(([record]) => record.increment('count'))
       .catch((err) => logger.error('Failed to increment Windows download count.', { error: err }));
   }

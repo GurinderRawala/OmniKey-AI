@@ -73,19 +73,43 @@ export function getDefaultModel(provider: AIProvider, tier: 'fast' | 'smart'): s
 /**
  * Maximum character length for a single message content string per provider.
  *
- * - anthropic: hard API limit of 10,485,760 chars (we leave a small buffer)
- * - openai:    no documented per-string limit, but GPT-4o context is ~128K
- *              tokens (~512K chars total); 400K is a safe single-message cap
- * - gemini:    1M-token context window (~4M chars); 1M chars is conservative
+ * - anthropic: hard API-enforced string limit of 10,485,760 chars; we stay
+ *              just below it with a small safety buffer.
+ * - openai:    no documented per-string limit; bounded by the context window
+ *              (~272K tokens for GPT-5.1 ≈ ~1M chars). Use the history cap.
+ * - gemini:    no documented per-string limit; bounded by the 1M-token
+ *              context window (~4M chars). Use the history cap.
  */
-const MAX_CONTENT_LENGTH_BY_PROVIDER: Record<AIProvider, number> = {
+const MAX_MESSAGE_CONTENT_LENGTH_BY_PROVIDER: Record<AIProvider, number> = {
   anthropic: 10_000_000,
-  openai: 400_000,
-  gemini: 1_000_000,
+  openai: 800_000,
+  gemini: 3_500_000,
 };
 
-export function getMaxContentLength(provider: AIProvider): number {
-  return MAX_CONTENT_LENGTH_BY_PROVIDER[provider];
+/**
+ * Maximum total character length across all messages in the conversation
+ * history, derived from each provider's context-window size minus headroom
+ * for the system prompt and max output tokens.
+ *
+ * - anthropic: Claude Sonnet 4.6 — 1M token ctx, 64K max output
+ *              ≈ (1,000,000 - 64,000 - 10,000) tokens × 4 chars ≈ 3.7M chars
+ * - openai:    GPT-5.1 — ~272K token ctx, ~32K max output
+ *              ≈ (272,000 - 32,000 - 5,000) tokens × 4 chars ≈ 940K chars
+ * - gemini:    Gemini 2.5 Pro — 1M token ctx, ~32K max output
+ *              ≈ (1,000,000 - 32,000 - 10,000) tokens × 4 chars ≈ 3.8M chars
+ */
+const MAX_HISTORY_LENGTH_BY_PROVIDER: Record<AIProvider, number> = {
+  anthropic: 3_500_000,
+  openai: 800_000,
+  gemini: 3_500_000,
+};
+
+export function getMaxMessageContentLength(provider: AIProvider): number {
+  return MAX_MESSAGE_CONTENT_LENGTH_BY_PROVIDER[provider];
+}
+
+export function getMaxHistoryLength(provider: AIProvider): number {
+  return MAX_HISTORY_LENGTH_BY_PROVIDER[provider];
 }
 
 // ---------------------------------------------------------------------------

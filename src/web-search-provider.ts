@@ -191,7 +191,10 @@ export async function executeTool(
         .slice(0, MAX_TOOL_CONTENT_CHARS);
       return text || 'No content retrieved';
     } catch (err) {
-      log.warn('web_fetch tool failed', { url, error: err });
+      log.warn('web_fetch tool failed', {
+        url,
+        error: err instanceof Error ? err.message : String(err),
+      });
       return `Error fetching URL: ${err instanceof Error ? err.message : String(err)}`;
     }
   }
@@ -203,7 +206,10 @@ export async function executeTool(
       log.info('Executing web_search tool', { query });
       return await executeWebSearch(query, log);
     } catch (err) {
-      log.warn('web_search tool failed', { query, error: err });
+      log.warn('web_search tool failed', {
+        query,
+        error: err instanceof Error ? err.message : String(err),
+      });
       return `Error searching: ${err instanceof Error ? err.message : String(err)}`;
     }
   }

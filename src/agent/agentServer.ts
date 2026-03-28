@@ -1,7 +1,5 @@
 import type http from 'http';
 import WebSocket, { WebSocketServer } from 'ws';
-import jwt from 'jsonwebtoken';
-import axios from 'axios';
 import cuid from 'cuid';
 import { config } from '../config';
 import { logger } from '../logger';
@@ -9,38 +7,16 @@ import { Subscription } from '../models/subscription';
 import { SubscriptionUsage } from '../models/subscriptionUsage';
 import { getAgentPrompt } from './agentPrompts';
 import { getPromptForCommand } from '../featureRoutes';
-import { selfHostedSubscription } from '../authMiddleware';
-import { WEB_FETCH_TOOL, WEB_SEARCH_TOOL, executeTool } from '../web-search-provider';
+import { executeTool } from '../web-search-provider';
+import { createLazyAuthContext } from './agentAuth';
 import {
-  aiClient,
-  AIMessage,
-  AITool,
-  AICompletionResult,
-  getDefaultModel,
-  getMaxContentLength,
-} from '../ai-client';
-
-interface AgentMessage {
-  session_id: string;
-  sender: string;
-  content: string;
-  is_terminal_output?: boolean;
-  is_error?: boolean;
-  is_web_call?: boolean;
-  platform?: string;
-}
-
-interface DecodedJwtPayload {
-  sid: string;
-}
-
-// In-memory conversation state per session.
-type SessionState = {
-  subscription: Subscription;
-  history: AIMessage[];
-  // Number of agent turns that have been run for this session.
-  turns: number;
-};
+  buildAvailableTools,
+  createUserContent,
+  sendFinalAnswer,
+  pushToSessionHistory,
+} from './utils';
+import { aiClient, AITool, AICompletionResult, getDefaultModel } from '../ai-client';
+import type { AgentMessage, AgentSendFn, SessionState } from './types';
 
 async function runToolLoop(
   initialResult: AICompletionResult,
@@ -65,7 +41,7 @@ async function runToolLoop(
     // would leave the history ending with an assistant turn, causing a 400.
     if (!toolCalls.length) break;
 
-    session.history.push(result.assistantMessage);
+    pushToSessionHistory(logger, session, result.assistantMessage);
     log.info('Agent executing tool calls', {
       sessionId,
       turn: session.turns,
@@ -102,7 +78,7 @@ async function runToolLoop(
     );
 
     for (const { id, name, result: toolResult } of toolResults) {
-      session.history.push({
+      pushToSessionHistory(logger, session, {
         role: 'tool',
         tool_call_id: id,
         tool_name: name,
@@ -123,13 +99,13 @@ async function runToolLoop(
   if (result.finish_reason === 'tool_calls') {
     log.warn('Tool loop hit MAX_TOOL_ITERATIONS; forcing final conclusion', { sessionId });
 
-    session.history.push(result.assistantMessage);
+    pushToSessionHistory(logger, session, result.assistantMessage);
 
     // The API requires a tool_result for every tool_use in the preceding
     // assistant message. Add synthetic results for any unexecuted calls so
     // the history remains valid before we send the follow-up user message.
     for (const tc of result.tool_calls ?? []) {
-      session.history.push({
+      pushToSessionHistory(logger, session, {
         role: 'tool',
         tool_call_id: tc.id,
         tool_name: tc.name,
@@ -137,7 +113,7 @@ async function runToolLoop(
       });
     }
 
-    session.history.push({
+    pushToSessionHistory(logger, session, {
       role: 'user',
       content:
         'You have reached the maximum number of tool calls. Do NOT make any further tool calls or web searches. You MUST now provide a final answer directly. If you still need to gather information from the system, generate a `<shell_scripts>` block instead of making tool calls.',
@@ -157,19 +133,11 @@ async function runToolLoop(
   return result;
 }
 
-function buildAvailableTools(): AITool[] {
-  // web_search is always available — DuckDuckGo is used as free fallback
-  return [WEB_FETCH_TOOL, WEB_SEARCH_TOOL];
-}
-
 const aiModel = getDefaultModel(config.aiProvider, 'smart');
 
 const sessionMessages = new Map<string, SessionState>();
 
-type AgentSendFn = (msg: AgentMessage) => void;
-
 const MAX_TURNS = 10;
-const MAX_CONTENT_LENGTH = getMaxContentLength(config.aiProvider);
 
 async function getOrCreateSession(
   sessionId: string,
@@ -237,86 +205,6 @@ ${prompt}
   };
 }
 
-async function authenticateFromAuthHeader(
-  authHeader: string | undefined,
-  log: typeof logger,
-): Promise<Subscription | null> {
-  if (config.isSelfHosted) {
-    log.info('Self-hosted mode: skipping JWT authentication for agent WebSocket connection.');
-    try {
-      const subscription = await selfHostedSubscription();
-      log.info('Retrieved self-hosted subscription for agent WebSocket connection', {
-        subscriptionId: subscription.id,
-      });
-      return subscription;
-    } catch (err) {
-      log.error('Failed to retrieve self-hosted subscription for agent WebSocket connection', {
-        error: err,
-      });
-      return null;
-    }
-  }
-
-  if (!config.jwtSecret) {
-    log.error('JWT secret is not configured. Cannot authenticate subscription from auth header.');
-    return null;
-  }
-  if (!authHeader) {
-    log.warn('Agent WebSocket connection missing authorization header');
-    return null;
-  }
-
-  const [scheme, token] = authHeader.split(' ');
-  if (scheme !== 'Bearer' || !token) {
-    log.warn('Agent WebSocket connection has malformed authorization header');
-    return null;
-  }
-
-  try {
-    const decoded = jwt.verify(token, config.jwtSecret) as DecodedJwtPayload;
-    const subscription = await Subscription.findByPk(decoded.sid);
-
-    if (!subscription) {
-      log.warn('Agent WebSocket auth failed: subscription not found', {
-        sid: decoded.sid,
-      });
-      return null;
-    }
-
-    if (subscription.subscriptionStatus === 'expired') {
-      log.warn('Agent WebSocket auth failed: subscription expired', {
-        sid: decoded.sid,
-      });
-      return null;
-    }
-
-    const now = new Date();
-    if (subscription.licenseKeyExpiresAt && subscription.licenseKeyExpiresAt <= now) {
-      subscription.subscriptionStatus = 'expired';
-      await subscription.save();
-
-      log.info('Agent WebSocket auth: subscription key expired during connection', {
-        subscriptionId: subscription.id,
-      });
-
-      return null;
-    }
-
-    log.debug('Agent WebSocket auth succeeded', {
-      subscriptionId: subscription.id,
-      status: subscription.subscriptionStatus,
-    });
-    return subscription;
-  } catch (err) {
-    log.warn('Agent WebSocket auth failed: invalid or expired JWT', { error: err });
-    return null;
-  }
-}
-
-function createUserContent(content: string, _hasStoredPrompt: boolean) {
-  return content.replace(/@omniagent/gi, '').trim();
-}
-
 async function runAgentTurn(
   sessionId: string,
   subscription: Subscription,
@@ -343,7 +231,7 @@ async function runAgentTurn(
   // On the MAX_TURNS iteration, instruct the LLM to provide a final,
   // consolidated answer based on the full conversation context.
   if (session.turns === MAX_TURNS) {
-    session.history.push({
+    pushToSessionHistory(logger, session, {
       role: 'system',
       content:
         'Provide a single, final, concise answer based on the entire conversation so far. Wrap the answer in a <final_answer>...</final_answer> block and do not ask for further input or mention additional shell scripts to run. Do not include any <shell_script> block in this response.',
@@ -363,18 +251,6 @@ async function runAgentTurn(
     userContent = `COMMAND ERROR:\n${userContent}`;
   }
 
-  if (userContent.length > MAX_CONTENT_LENGTH) {
-    const truncated = userContent.length - MAX_CONTENT_LENGTH;
-    userContent =
-      userContent.slice(0, MAX_CONTENT_LENGTH) +
-      `\n\n[...${truncated} characters truncated due to length limit...]`;
-    log.warn('Agent user content truncated to fit API limits', {
-      sessionId,
-      originalLength: (clientMessage.content || '').length,
-      truncatedLength: userContent.length,
-    });
-  }
-
   log.info('Agent turn received client message', {
     sessionId,
     isTerminalOutput,
@@ -391,7 +267,7 @@ async function runAgentTurn(
     // represent environment feedback that the agent must reason about next.
     // Pushing them as 'assistant' would create two consecutive assistant turns
     // which breaks most LLM APIs and prevents the model from processing the output.
-    session.history.push({
+    pushToSessionHistory(logger, session, {
       role: 'user',
       content: isAssistance
         ? userContent
@@ -501,10 +377,10 @@ async function runAgentTurn(
         // <final_answer>. The directive below tells it to use <shell_script> as
         // a fallback instead of asking the user to run commands.
         if (toolLoopResult.assistantMessage) {
-          session.history.push(toolLoopResult.assistantMessage);
+          pushToSessionHistory(logger, session, toolLoopResult.assistantMessage);
         }
 
-        session.history.push({
+        pushToSessionHistory(logger, session, {
           role: 'user',
           content: webToolFailed
             ? [
@@ -561,7 +437,7 @@ async function runAgentTurn(
         responseLength: result.content.length,
       });
 
-      session.history.push({
+      pushToSessionHistory(logger, session, {
         role: 'assistant',
         content,
       });
@@ -601,7 +477,7 @@ async function runAgentTurn(
         turn: session.turns,
       });
 
-      session.history.push({ role: 'assistant', content });
+      pushToSessionHistory(log, session, { role: 'assistant', content });
       send({
         session_id: sessionId,
         sender: 'agent',
@@ -629,67 +505,6 @@ async function runAgentTurn(
     // start fresh without being polluted by a failed turn.
     sessionMessages.delete(sessionId);
   }
-}
-
-function sendFinalAnswer(
-  send: AgentSendFn,
-  sessionId: string,
-  message: string,
-  isError: boolean,
-): void {
-  send({
-    session_id: sessionId,
-    sender: 'agent',
-    content: `<final_answer>\n${message}\n</final_answer>`,
-    is_terminal_output: false,
-    is_error: isError,
-  });
-}
-
-type AuthContext = {
-  ensureAuthenticated: () => Promise<boolean>;
-  getSubscription: () => Subscription | null;
-};
-
-function createLazyAuthContext(authHeader: string | undefined, log: typeof logger): AuthContext {
-  let authenticatedSubscription: Subscription | null = null;
-  let authFailed = false;
-  let authPromise: Promise<void> | null = null;
-
-  const ensureAuthenticated = async (): Promise<boolean> => {
-    if (authenticatedSubscription) {
-      return true;
-    }
-    if (authFailed) {
-      return false;
-    }
-
-    if (!authPromise) {
-      authPromise = (async () => {
-        try {
-          const sub = await authenticateFromAuthHeader(authHeader, log);
-          if (!sub) {
-            authFailed = true;
-            return;
-          }
-          authenticatedSubscription = sub;
-          log.info('Agent WebSocket authenticated', {
-            subscriptionId: authenticatedSubscription.id,
-          });
-        } catch (err) {
-          authFailed = true;
-          log.error('Unexpected error during agent WebSocket auth', { error: err });
-        }
-      })();
-    }
-
-    await authPromise;
-    return Boolean(authenticatedSubscription);
-  };
-
-  const getSubscription = () => authenticatedSubscription;
-
-  return { ensureAuthenticated, getSubscription };
 }
 
 export function attachAgentWebSocketServer(server: http.Server): WebSocketServer {
