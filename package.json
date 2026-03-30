@@ -1,6 +1,6 @@
 {
   "name": "omnikey-ai-api",
-  "version": "1.0.24",
+  "version": "1.0.25",
   "main": "dist/index.js",
   "description": "Omnikey AI backend API. Use Yarn for install/build/start.",
   "scripts": {
@@ -26,6 +26,7 @@
     "openai": "^6.16.0",
     "pg": "^8.18.0",
     "pg-hstore": "^2.3.4",
+    "playwright-core": "^1.50.0",
     "sequelize": "^6.37.7",
     "sqlite3": "^5.1.6",
     "winston": "^3.19.0",

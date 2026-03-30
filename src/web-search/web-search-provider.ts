@@ -1,7 +1,9 @@
 import axios from 'axios';
-import { config } from './config';
-import { logger } from './logger';
-import type { AITool } from './ai-client';
+import { config } from '../config';
+import { logger } from '../logger';
+import { fetchWithPlaywright, isBrowserOpenWithUrl } from './browser-playwright';
+import { isPageAuthenticated } from './llm-auth-check';
+import type { AITool } from '../ai-client';
 
 export const WEB_FETCH_TOOL: AITool = {
   name: 'web_fetch',
@@ -166,6 +168,127 @@ export async function executeWebSearch(query: string, log: typeof logger): Promi
   return formatSearchResults(await searchWithDuckDuckGo(query));
 }
 
+function stripHtml(raw: string): string {
+  return raw
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+const BASE_FETCH_HEADERS: Record<string, string> = {
+  'User-Agent': 'Mozilla/5.0 (compatible; OmniKeyAgent/1.0)',
+};
+
+// ── Step 1: plain HTTP fetch ──────────────────────────────────────────────────
+async function fetchPlainHttp(
+  url: string,
+  log: typeof logger,
+): Promise<{ html: string | null; authBlocked: boolean; finalUrl: string }> {
+  try {
+    const response = await axios.get<string>(url, {
+      timeout: 15_000,
+      responseType: 'text',
+      maxContentLength: MAX_WEB_FETCH_BYTES,
+      headers: BASE_FETCH_HEADERS,
+    });
+    const finalUrl: string = (response.request as any)?.res?.responseUrl ?? url;
+    return { html: String(response.data), authBlocked: false, finalUrl };
+  } catch (err) {
+    const status = axios.isAxiosError(err) ? err.response?.status : undefined;
+    log.warn('Initial fetch failed', {
+      url,
+      error: err instanceof Error ? err.message : String(err),
+      status,
+    });
+
+    // If a browser is running, any failure could be auth-related —
+    // sites use redirects, 302s, custom error pages, or soft-blocks
+    // rather than a clean 401/403, so checking status codes alone is
+    // unreliable. Fall through to the browser-session path instead.
+    if (isSelfHostedMacOS && isBrowserOpenWithUrl(url, log)) {
+      return { html: null, authBlocked: true, finalUrl: url };
+    }
+    if (status === 401 || status === 403) {
+      return { html: null, authBlocked: true, finalUrl: url };
+    }
+    throw err;
+  }
+}
+
+// ── Step 2: LLM auth check on plain response ──────────────────────────────────
+async function checkPlainResponseAuth(
+  plainText: string,
+  url: string,
+  log: typeof logger,
+  finalUrl?: string,
+): Promise<boolean> {
+  const authenticated = await isPageAuthenticated(plainText.slice(0, 5_000), url, log, finalUrl);
+  if (!authenticated) {
+    log.info('web_fetch: plain response failed auth check — trying active-tab strategy', { url });
+  }
+  return authenticated;
+}
+
+// ── Step 3: active-tab extraction (self-hosted macOS only) ───────────────────
+async function fetchFromActiveTab(url: string, log: typeof logger): Promise<string | null> {
+  log.info('web_fetch: falling back to active-tab extraction', { url });
+  return fetchWithPlaywright(url, log);
+}
+
+const isSelfHostedMacOS = config.isSelfHosted && config.terminalPlatform === 'macos';
+async function executeWebFetch(url: string, log: typeof logger): Promise<string> {
+  log.info('Executing web_fetch tool', { url });
+
+  // ── Step 1: plain HTTP request ────────────────────────────────────────────
+  const { html, authBlocked, finalUrl } = await fetchPlainHttp(url, log);
+
+  const plainText = html ? stripHtml(html) : '';
+
+  if (!isSelfHostedMacOS) {
+    if (authBlocked) {
+      log.warn(
+        'Error: page requires authentication. Run OmniKey in self-hosted mode on macOS to enable browser-session access.',
+      );
+    }
+    return plainText.slice(0, MAX_TOOL_CONTENT_CHARS) || 'No content retrieved';
+  }
+
+  // ── Step 2 (self-hosted macOS only): LLM auth check on plain response ─────
+  let looksUnauthenticated = false;
+  if (!authBlocked && plainText) {
+    log.info('web_fetch: performing LLM auth check on plain HTTP response', { url });
+    const authenticated = await checkPlainResponseAuth(plainText, url, log, finalUrl);
+    if (authenticated) {
+      return plainText.slice(0, MAX_TOOL_CONTENT_CHARS) || 'No content retrieved';
+    }
+    looksUnauthenticated = true;
+  }
+
+  // ── Step 3 (self-hosted macOS only): active-tab extraction ───────────────
+  // Only attempted when there is evidence authentication is required.
+  const needsAuth = authBlocked || looksUnauthenticated;
+  if (needsAuth) {
+    log.info(
+      'web_fetch: evidence of authentication requirement, attempting active-tab extraction',
+      { url },
+    );
+    const activeTabText = await fetchFromActiveTab(url, log);
+    if (activeTabText) {
+      return activeTabText.slice(0, MAX_TOOL_CONTENT_CHARS);
+    }
+  }
+
+  // All strategies exhausted.
+  if (authBlocked) {
+    log.warn(
+      'Error: page requires authentication. Open the page in Chrome and ensure "Allow JavaScript from Apple Events" is enabled (View → Developer → Allow JavaScript from Apple Events).',
+    );
+  }
+  return plainText.slice(0, MAX_TOOL_CONTENT_CHARS) || 'No content retrieved';
+}
+
 export async function executeTool(
   name: string,
   args: Record<string, string>,
@@ -175,21 +298,7 @@ export async function executeTool(
     const url = args.url;
     if (!url) return 'Error: url parameter is required';
     try {
-      log.info('Executing web_fetch tool', { url });
-      const response = await axios.get<string>(url, {
-        timeout: 15_000,
-        responseType: 'text',
-        maxContentLength: MAX_WEB_FETCH_BYTES,
-        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; OmniKeyAgent/1.0)' },
-      });
-      const text = String(response.data)
-        .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-        .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-        .replace(/<[^>]+>/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .slice(0, MAX_TOOL_CONTENT_CHARS);
-      return text || 'No content retrieved';
+      return await executeWebFetch(url, log);
     } catch (err) {
       log.warn('web_fetch tool failed', {
         url,

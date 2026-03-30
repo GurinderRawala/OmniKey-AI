@@ -7,7 +7,7 @@ import { Subscription } from '../models/subscription';
 import { SubscriptionUsage } from '../models/subscriptionUsage';
 import { getAgentPrompt } from './agentPrompts';
 import { getPromptForCommand } from '../featureRoutes';
-import { executeTool } from '../web-search-provider';
+import { executeTool } from '../web-search/web-search-provider';
 import { createLazyAuthContext } from './agentAuth';
 import {
   buildAvailableTools,

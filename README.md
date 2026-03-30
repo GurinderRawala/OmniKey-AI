@@ -48,6 +48,19 @@ Follow these steps to set up OmniKey:
 
 ## Features
 
+- **Authenticated Browser Session Reading** *(macOS only — New!)*: OmniKey can now read content from your live browser tab — including pages that require login — so the `@omniAgent` can work with authenticated resources like internal dashboards, private docs, and paid tools without you having to copy-paste anything. Works with **Chrome, Brave, Edge, Arc, Vivaldi, Opera, Chromium, and Safari** on macOS.
+
+  > **One-time setup required (macOS only):** You need to enable **Allow JavaScript from Apple Events** in your browser before OmniKey can read your active tab. The steps differ slightly by browser:
+  >
+  > **Chrome, Brave, Edge, Arc, Vivaldi, Opera, Chromium** (Chromium-based):
+  > Go to **View → Developer → Allow JavaScript from Apple Events** and make sure it is checked.
+  >
+  > **Safari:**
+  > First enable the Develop menu: **Safari → Settings → Advanced → check "Show features for web developers"**.
+  > Then go to **Develop → Allow JavaScript from Apple Events** and make sure it is checked.
+  >
+  > This is a one-time setting per browser. Once enabled, OmniKey can read the content of your active tab via Apple Events.
+
 - **Multiple LLM Providers**: Choose between OpenAI, Anthropic, or Google Gemini as your AI backend. Configure your preferred provider during onboarding or at any time via the CLI.
 - **Web Search**: Configure a web search provider during onboarding to allow `@omniAgent` to gather real-time context from the web alongside your terminal. Supported providers:
   - **DuckDuckGo** — default fallback, no key required

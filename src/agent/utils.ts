@@ -1,4 +1,4 @@
-import { WEB_FETCH_TOOL, WEB_SEARCH_TOOL } from '../web-search-provider';
+import { WEB_FETCH_TOOL, WEB_SEARCH_TOOL } from '../web-search/web-search-provider';
 import { AIMessage, AITool, getMaxMessageContentLength, getMaxHistoryLength } from '../ai-client';
 import { AgentSendFn, SessionState } from './types';
 import { config } from '../config';

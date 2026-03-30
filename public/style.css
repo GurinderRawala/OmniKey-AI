@@ -1096,3 +1096,97 @@ footer a:hover { color: var(--text); }
   .demo-card { display: none; }
   .hero-note { margin-bottom: 20px; }
 }
+
+/* ── New Feature Banner ── */
+.new-feature-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 10px 20px;
+  background: linear-gradient(90deg, rgba(167,139,250,0.12), rgba(251,191,36,0.12));
+  border-bottom: 1px solid rgba(251,191,36,0.2);
+  text-align: center;
+  flex-wrap: wrap;
+  margin-top: 58px; /* height of fixed nav */
+}
+
+.new-feature-pill {
+  display: inline-block;
+  background: var(--amber);
+  color: #0c0c0f;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 20px;
+  flex-shrink: 0;
+}
+
+.new-feature-text {
+  font-size: 0.875rem;
+  color: var(--text-2);
+}
+
+.new-feature-text code {
+  font-size: 0.82rem;
+  background: var(--surface-3);
+  padding: 1px 5px;
+  border-radius: 4px;
+  color: var(--cyan);
+}
+
+.new-feature-link {
+  color: var(--amber);
+  text-decoration: none;
+  font-weight: 600;
+  margin-left: 4px;
+}
+
+.new-feature-link:hover { text-decoration: underline; }
+
+/* ── Authenticated browsing feature card ── */
+.feature-item-new {
+  grid-column: 1 / -1;
+  border-color: rgba(251,191,36,0.3);
+  background: linear-gradient(135deg, rgba(251,191,36,0.05), var(--surface));
+  position: relative;
+}
+
+.feature-new-badge {
+  display: inline-block;
+  background: var(--amber);
+  color: #0c0c0f;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 20px;
+  margin-bottom: 10px;
+}
+
+.auth-setup-box {
+  margin-top: 14px;
+  padding: 14px 16px;
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.auth-setup-title {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.auth-browser-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--cyan);
+  margin-bottom: 6px;
+}
