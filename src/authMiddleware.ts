@@ -39,6 +39,11 @@ export async function authMiddleware(
   const authHeader = req.headers.authorization;
   logger.defaultMeta = { traceId: randomUUID() };
 
+  if (config.blockSaas) {
+    logger.warn('Blocking SaaS access: rejecting request due to BLOCK_SAAS=true');
+    return res.status(403).json({ error: 'SaaS access is blocked.' });
+  }
+
   if (config.isSelfHosted || !config.jwtSecret) {
     logger.info('Self-hosted mode: skipping auth middleware.');
     if (config.isSelfHosted) {

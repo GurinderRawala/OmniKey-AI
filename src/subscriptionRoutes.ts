@@ -105,6 +105,11 @@ export function createSubscriptionRouter(logger: Logger): express.Router {
     logger.defaultMeta = { traceId: randomUUID() };
     logger.info('Handling subscription activation request using user key.');
 
+    if (config.blockSaas) {
+      logger.warn('Blocking SaaS access: rejecting subscription activation due to BLOCK_SAAS=true');
+      return res.status(403).json({ error: 'SaaS access is blocked.' });
+    }
+
     try {
       const body = zod.custom<ActivateBody>().parse(req.body);
       const subscription = config.isSelfHosted

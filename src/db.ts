@@ -11,6 +11,12 @@ if (config.isSelfHosted) {
     storage: dbPath,
     logging: config.dbLogging ? console.log : false,
   });
+} else if (config.blockSaas) {
+  sequelize = new Sequelize({
+    dialect: 'sqlite',
+    storage: ':memory:',
+    logging: false,
+  });
 } else if (config.databaseUrl) {
   // Use Postgres for cloud/hosted
   sequelize = new Sequelize(config.databaseUrl, {

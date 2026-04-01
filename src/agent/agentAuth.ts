@@ -23,6 +23,10 @@ export async function authenticateFromAuthHeader(
   authHeader: string | undefined,
   log: typeof logger,
 ): Promise<Subscription | null> {
+  if (config.blockSaas) {
+    log.warn('Blocking SaaS access: rejecting agent WebSocket connection due to BLOCK_SAAS=true');
+    return null;
+  }
   if (config.isSelfHosted) {
     log.info('Self-hosted mode: skipping JWT authentication for agent WebSocket connection.');
     try {

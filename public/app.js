@@ -1,21 +1,5 @@
 document.getElementById('year').textContent = new Date().getFullYear();
 
-// Fetch and display download counts
-(function () {
-  fetch('/api/downloads')
-    .then((r) => r.json())
-    .then(({ macos, windows }) => {
-      const total = macos + windows;
-      if (!total) return;
-
-      ['hero', 'cta'].forEach((prefix) => {
-        document.getElementById(`${prefix}-total-count`).textContent = total.toLocaleString();
-        document.getElementById(`${prefix}-download-stats`).hidden = false;
-      });
-    })
-    .catch(() => {/* silently ignore */});
-})();
-
 // Detect platform and highlight the matching download button
 (function () {
   const ua = navigator.userAgent.toLowerCase();

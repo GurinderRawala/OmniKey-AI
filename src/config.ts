@@ -95,4 +95,5 @@ export const config = {
   searxngUrl: getEnv('SEARXNG_URL', false),
 
   terminalPlatform: getEnv('TERMINAL_PLATFORM', false),
+  blockSaas: getBooleanEnv('BLOCK_SAAS', false),
 };

@@ -36,15 +36,6 @@ app.get('/macos/download', (_req, res) => {
     return;
   }
 
-  if (!config.isSelfHosted) {
-    AppDownload.findOrCreate({
-      where: { platform: 'macos' },
-      defaults: { platform: 'macos', count: 0 },
-    })
-      .then(([record]) => record.increment('count'))
-      .catch((err) => logger.error('Failed to increment macOS download count.', { error: err }));
-  }
-
   res.set({
     'Content-Type': 'application/octet-stream',
     'Content-Disposition': 'attachment; filename="OmniKeyAI.dmg"',
@@ -129,15 +120,6 @@ app.get('/windows/download', (_req, res) => {
     return;
   }
 
-  if (!config.isSelfHosted) {
-    AppDownload.findOrCreate({
-      where: { platform: 'windows' },
-      defaults: { platform: 'windows', count: 0 },
-    })
-      .then(([record]) => record.increment('count'))
-      .catch((err) => logger.error('Failed to increment Windows download count.', { error: err }));
-  }
-
   res.set({
     'Content-Type': 'application/zip',
     'Content-Disposition': `attachment; filename="${WIN_ZIP_FILENAME}"`,
@@ -176,12 +158,6 @@ app.get('/windows/update', (req, res) => {
     fileSize,
     releaseNotes: '',
   });
-});
-
-app.get('/api/downloads', async (_req, res) => {
-  const rows = await AppDownload.findAll({ where: { platform: ['macos', 'windows'] } });
-  const find = (p: string) => Number(rows.find((r) => r.platform === p)?.count ?? 0);
-  res.json({ macos: find('macos'), windows: find('windows') });
 });
 
 app.get('/health', (_req, res) => {
