@@ -191,9 +191,59 @@ final class AgentRunner {
         originalText: String,
         completion: @escaping @Sendable (Result<String, Error>) -> Void
     ) {
+        // Fetch existing sessions first so we can offer the session picker.
+        AgentThinkingModel.shared.fetchSessions {
+            Task { @MainActor in
+                let sessions = AgentThinkingModel.shared.availableSessions
+
+                // Show the picker whenever there are existing sessions and the
+                // user has not already chosen one this run. This lets them
+                // continue an old session or start fresh every time.
+                if !sessions.isEmpty {
+                    AgentThinkingModel.shared.isShowingSessionPicker = true
+
+                    // The picker runs asynchronously. Poll until dismissed.
+                    self.waitForSessionPickerThenRun(originalText: originalText, completion: completion)
+                } else {
+                    // No existing sessions — start a brand-new one immediately.
+                    AgentThinkingModel.shared.selectedSessionId = nil
+                    AgentThinkingModel.shared.currentSessionTitle = "New Session"
+                    AgentThinkingModel.shared.remainingContextTokens = 0
+                    self.startSession(originalText: originalText, completion: completion)
+                }
+            }
+        }
+    }
+
+    /// Polls until the session picker sheet has been dismissed, then
+    /// proceeds with the agent run using the chosen session ID.
+    private func waitForSessionPickerThenRun(
+        originalText: String,
+        completion: @escaping @Sendable (Result<String, Error>) -> Void
+    ) {
+        if !AgentThinkingModel.shared.isShowingSessionPicker {
+            // Picker was dismissed — proceed with whatever the user chose.
+            startSession(originalText: originalText, completion: completion)
+            return
+        }
+        // Wait 100 ms and check again.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            self?.waitForSessionPickerThenRun(originalText: originalText, completion: completion)
+        }
+    }
+
+    /// Internal: kick off the JWT acquisition and WebSocket connection,
+    /// using `AgentThinkingModel.shared.selectedSessionId` as the
+    /// session ID (or a fresh UUID if nil).
+    private func startSession(
+        originalText: String,
+        completion: @escaping @Sendable (Result<String, Error>) -> Void
+    ) {
+        let chosenSessionId = AgentThinkingModel.shared.selectedSessionId ?? UUID().uuidString
+
         let sessionBox = ClosureBox<@MainActor @Sendable (String, Bool) -> Void>()
         sessionBox.call = { [self] jwt, allowReauth in
-            self.connectAndRun(originalText: originalText, jwt: jwt) { result in
+            self.connectAndRun(originalText: originalText, sessionId: chosenSessionId, jwt: jwt) { result in
                 // If the user pressed Cancel, surface a dedicated
                 // cancellation error and skip any re-auth logic.
                 Task { @MainActor in
@@ -312,6 +362,7 @@ final class AgentRunner {
 
     private func connectAndRun(
         originalText: String,
+        sessionId: String,
         jwt: String,
         completion: @escaping @Sendable (Result<String, Error>) -> Void
     ) {
@@ -329,10 +380,9 @@ final class AgentRunner {
 
         print("[AgentRunner] Connecting WebSocket to: \(url.absoluteString)")
 
-        let sessionID = UUID().uuidString
         startAgentWebSocketSession(
             url: url,
-            sessionID: sessionID,
+            sessionID: sessionId,
             jwt: jwt,
             originalText: originalText,
             completion: completion

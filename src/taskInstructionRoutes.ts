@@ -40,16 +40,6 @@ export function taskInstructionRouter(): express.Router {
     const { logger, subscription } = res.locals;
 
     try {
-      const existingCount = await SubscriptionTaskTemplate.count({
-        where: { subscriptionId: subscription.id },
-      });
-
-      if (existingCount >= 5) {
-        return res
-          .status(400)
-          .json({ error: 'You can save up to 5 task templates per subscription.' });
-      }
-
       const parseResult = taskTemplateSchema.parse(req.body);
 
       const template = await SubscriptionTaskTemplate.create({
@@ -173,6 +163,22 @@ export function taskInstructionRouter(): express.Router {
     } catch (err) {
       logger.error('Error setting default task template.', { error: err });
       res.status(500).json({ error: 'Failed to set default task template.' });
+    }
+  });
+
+  router.post('/templates/clear-default', authMiddleware, async (req, res) => {
+    const { logger, subscription } = res.locals;
+
+    try {
+      await SubscriptionTaskTemplate.update(
+        { isDefault: false },
+        { where: { subscriptionId: subscription.id, isDefault: true } },
+      );
+
+      res.status(204).send();
+    } catch (err) {
+      logger.error('Error clearing default task template.', { error: err });
+      res.status(500).json({ error: 'Failed to clear default task template.' });
     }
   });
 

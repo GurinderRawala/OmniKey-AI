@@ -35,7 +35,7 @@ struct TaskInstructionsView: View {
                             .foregroundColor(NordTheme.primaryText(colorScheme))
                     }
 
-                    Text("Save up to 5 task instruction templates. Choose one as the default to run whenever you press Cmd+T.")
+                    Text("Save and manage task instruction templates. Choose one as the default to run whenever you press Cmd+T.")
                         .font(.system(size: 13))
                         .foregroundColor(NordTheme.secondaryText(colorScheme))
                 }
@@ -65,10 +65,8 @@ struct TaskInstructionsView: View {
                                     Text(template.isDefault ? "\(template.heading) (default)" : template.heading)
                                         .tag(Optional(template.id))
                                 }
-                                if savedTemplates.count < 5 {
-                                    Text(savedTemplates.isEmpty ? "No templates yet" : "New template")
-                                        .tag(String?.none)
-                                }
+                                Text(savedTemplates.isEmpty ? "No templates yet" : "New template")
+                                    .tag(String?.none)
                             }
                             .labelsHidden()
                             .frame(maxWidth: 240)
@@ -187,6 +185,11 @@ struct TaskInstructionsView: View {
                     .buttonStyle(.plain)
                     .foregroundColor(NordTheme.secondaryText(colorScheme))
 
+                    Button("Clear Default") {
+                        clearDefaultTemplate()
+                    }
+                    .disabled(!savedTemplates.contains(where: { $0.isDefault }))
+
                     Button("Use for Cmd+T") {
                         setCurrentTemplateAsDefault()
                     }
@@ -198,7 +201,7 @@ struct TaskInstructionsView: View {
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.borderedProminent)
                     .tint(NordTheme.accentBlue(colorScheme))
-                    .disabled(isLoading || templateHeadingInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || savedTemplates.count >= 5 && selectedTemplateId == nil)
+                    .disabled(isLoading || templateHeadingInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
                 .padding(.top, 12)
                 .padding(.horizontal, 2)
@@ -350,6 +353,28 @@ struct TaskInstructionsView: View {
 
                 case let .failure(error):
                     self.statusMessage = "Failed to set default: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    private func clearDefaultTemplate() {
+        apiClient.clearDefaultTaskTemplate { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success:
+                    self.savedTemplates = self.savedTemplates.map { tpl in
+                        APIClient.TaskTemplateDTO(
+                            id: tpl.id,
+                            heading: tpl.heading,
+                            instructions: tpl.instructions,
+                            isDefault: false
+                        )
+                    }
+                    self.statusMessage = "Default cleared — no template is set for Cmd+T."
+
+                case let .failure(error):
+                    self.statusMessage = "Failed to clear default: \(error.localizedDescription)"
                 }
             }
         }

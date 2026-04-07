@@ -405,11 +405,14 @@ final class KeyboardMonitor {
         let original = normalizeOriginalText(text)
         print("\(logPrefix) Normalized @agent text to send (length: \(original.count)).")
 
-        // Reset and start the shared thinking model so the
-        // dedicated window can stream updates from the agent.
+        // Open the thinking window so the session picker sheet (if needed)
+        // has a surface to present from, and the user can watch progress.
+        AppDelegate.shared?.agentSessionDidStart()
+
+        // Reset and start the shared thinking model so the window is ready
+        // to stream updates from the agent.
         AgentThinkingModel.shared.reset(with: "Request:\n\(original)")
         AgentThinkingModel.shared.isRunning = true
-        AppDelegate.shared?.agentSessionDidStart()
 
         AgentRunner.shared.runAgentSession(
             originalText: original,

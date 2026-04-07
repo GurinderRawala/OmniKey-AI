@@ -1,22 +1,28 @@
 import type http from 'http';
+import express, { Response } from 'express';
 import WebSocket, { WebSocketServer } from 'ws';
 import cuid from 'cuid';
+import { Op } from 'sequelize';
 import { config } from '../config';
 import { logger } from '../logger';
 import { Subscription } from '../models/subscription';
 import { SubscriptionUsage } from '../models/subscriptionUsage';
+import { AgentSession } from '../models/agentSession';
 import { getAgentPrompt } from './agentPrompts';
 import { getPromptForCommand } from '../featureRoutes';
 import { executeTool } from '../web-search/web-search-provider';
 import { createLazyAuthContext } from './agentAuth';
+import { authMiddleware, AuthLocals } from '../authMiddleware';
 import {
   buildAvailableTools,
   createUserContent,
   sendFinalAnswer,
   pushToSessionHistory,
+  MAX_HISTORY_TOTAL,
 } from './utils';
 import { aiClient, AITool, AICompletionResult, getDefaultModel } from '../ai-client';
 import type { AgentMessage, AgentSendFn, SessionState } from './types';
+import { Logger } from 'winston';
 
 async function runToolLoop(
   initialResult: AICompletionResult,
@@ -135,9 +141,57 @@ async function runToolLoop(
 
 const aiModel = getDefaultModel(config.aiProvider, 'smart');
 
+// In-memory cache: sessionId -> live SessionState. Hydrated from DB on first
+// access and written back after each turn so restarts resume correctly.
 const sessionMessages = new Map<string, SessionState>();
 
 const MAX_TURNS = 10;
+
+// ─── DB helpers ───────────────────────────────────────────────────────────────
+
+async function persistSessionToDB(sessionId: string, state: SessionState): Promise<void> {
+  try {
+    const historyJson = JSON.stringify(state.history);
+    await AgentSession.update(
+      {
+        historyJson,
+        turns: state.turns,
+        lastActiveAt: new Date(),
+      },
+      { where: { id: sessionId } },
+    );
+  } catch (err) {
+    logger.error('Failed to persist agent session to DB', { sessionId, error: err });
+  }
+}
+
+// Maximum number of sessions stored per subscription. When this limit is
+// exceeded the oldest sessions (by lastActiveAt) are pruned automatically.
+const SESSION_CAP = 50;
+
+async function enforceSessionCap(subscriptionId: string, logger: Logger): Promise<void> {
+  try {
+    const count = await AgentSession.count({ where: { subscriptionId } });
+    if (count <= SESSION_CAP) return;
+
+    const excess = count - SESSION_CAP;
+    const oldest = await AgentSession.findAll({
+      where: { subscriptionId },
+      order: [['last_active_at', 'ASC']],
+      limit: excess,
+      attributes: ['id'],
+    });
+
+    const ids = oldest.map((s) => s.id);
+    await AgentSession.destroy({ where: { id: ids } });
+    logger.info('Pruned oldest agent sessions to enforce cap', {
+      subscriptionId,
+      pruned: ids.length,
+    });
+  } catch (err) {
+    logger.error('Failed to enforce agent session cap', { subscriptionId, error: err });
+  }
+}
 
 async function getOrCreateSession(
   sessionId: string,
@@ -145,9 +199,10 @@ async function getOrCreateSession(
   platform: string | undefined,
   log: typeof logger,
 ): Promise<{ sessionState: SessionState; hasStoredPrompt: boolean }> {
+  // 1. Return the live in-memory entry if already loaded this process lifetime.
   const existing = sessionMessages.get(sessionId);
   if (existing) {
-    log.debug('Reusing existing agent session', {
+    log.debug('Reusing existing agent session (in-memory)', {
       sessionId,
       subscriptionId: existing.subscription.id,
       turns: existing.turns,
@@ -156,11 +211,46 @@ async function getOrCreateSession(
       sessionState: existing,
       hasStoredPrompt: existing.history
         .filter((h) => h.role === 'user')
-        .some((h) => h.content.includes('<stored_instructions>')),
+        .some((h) => typeof h.content === 'string' && h.content.includes('<stored_instructions>')),
     };
   }
 
-  // use these instructions as user instructions
+  // 2. Try to resume from a persisted DB record.
+  try {
+    const dbSession = await AgentSession.findOne({
+      where: { id: sessionId, subscriptionId: subscription.id },
+    });
+
+    if (dbSession) {
+      const history = JSON.parse(dbSession.historyJson) as SessionState['history'];
+      const entry: SessionState = {
+        subscription,
+        history,
+        turns: dbSession.turns,
+      };
+      sessionMessages.set(sessionId, entry);
+      log.info('Resumed agent session from DB', {
+        sessionId,
+        subscriptionId: subscription.id,
+        turns: entry.turns,
+      });
+      return {
+        sessionState: entry,
+        hasStoredPrompt: history
+          .filter((h) => h.role === 'user')
+          .some(
+            (h) => typeof h.content === 'string' && h.content.includes('<stored_instructions>'),
+          ),
+      };
+    }
+  } catch (err) {
+    log.error('Failed to load agent session from DB; creating a fresh one', {
+      sessionId,
+      error: err,
+    });
+  }
+
+  // 3. Create a brand-new session in-memory and persist it to the DB.
   const prompt = await getPromptForCommand(log, 'task', subscription).catch((err) => {
     log.error('Failed to get system prompt for new agent session', { error: err });
     return '';
@@ -194,6 +284,24 @@ ${prompt}
   };
 
   sessionMessages.set(sessionId, entry);
+
+  // Persist immediately so that GET /sessions picks it up right away.
+  try {
+    await AgentSession.create({
+      id: sessionId,
+      subscriptionId: subscription.id,
+      title: 'New Session',
+      platform: platform ?? null,
+      historyJson: JSON.stringify(entry.history),
+      turns: 0,
+      lastActiveAt: new Date(),
+    });
+    // Prune oldest sessions after each creation so the cap is always respected.
+    void enforceSessionCap(subscription.id, log);
+  } catch (err) {
+    log.error('Failed to create agent session in DB', { sessionId, error: err });
+  }
+
   log.info('Created new agent session', {
     sessionId,
     subscriptionId: subscription.id,
@@ -273,6 +381,17 @@ async function runAgentTurn(
         ? userContent
         : `<user_input>${createUserContent(userContent, hasStoredPrompt)}</user_input>`,
     });
+
+    // Use the first real user message (turn 1) as the session title.
+    if (session.turns === 1 && !isAssistance) {
+      const rawInput = clientMessage.content || '';
+      const titleSlug = rawInput.trim().slice(0, 60).replace(/\s+/g, ' ');
+      if (titleSlug) {
+        AgentSession.update({ title: titleSlug }, { where: { id: sessionId } }).catch((err) => {
+          log.error('Failed to update agent session title', { sessionId, error: err });
+        });
+      }
+    }
   }
 
   // On the final turn we omit tools so the model is forced to emit a
@@ -282,7 +401,23 @@ async function runAgentTurn(
 
   const recordUsage = async (result: AICompletionResult) => {
     const usage = result.usage;
-    if (!usage || !subscription.id || config.isSelfHosted) return;
+    if (!usage) return;
+
+    // Always update the per-session token counters in the DB.
+    try {
+      await AgentSession.increment(
+        {
+          promptTokensUsed: usage.prompt_tokens,
+          completionTokensUsed: usage.completion_tokens,
+          totalTokensUsed: usage.total_tokens,
+        },
+        { where: { id: sessionId } },
+      );
+    } catch (err) {
+      log.error('Failed to update agent session token usage', { sessionId, error: err });
+    }
+
+    if (!subscription.id || config.isSelfHosted) return;
     try {
       await SubscriptionUsage.create({
         subscriptionId: subscription.id,
@@ -328,8 +463,8 @@ async function runAgentTurn(
 
       sendFinalAnswer(send, sessionId, errorMessage, true);
 
-      // Clear any cached session state so a subsequent attempt can
-      // start fresh without a polluted history.
+      // Evict from the in-memory cache; the DB record is kept so the session
+      // appears in the list and can be retried or deleted by the user.
       sessionMessages.delete(sessionId);
       return;
     }
@@ -465,6 +600,7 @@ async function runAgentTurn(
         sender: 'agent',
         content: hasFinalAnswerTag ? content : `<final_answer>\n${content}\n</final_answer>`,
       });
+      await persistSessionToDB(sessionId, session);
       sessionMessages.delete(sessionId);
     } else if (content) {
       // Fallback: the LLM returned content without any recognized tag and it
@@ -483,6 +619,7 @@ async function runAgentTurn(
         sender: 'agent',
         content: `<final_answer>\n${content}\n</final_answer>`,
       });
+      await persistSessionToDB(sessionId, session);
       sessionMessages.delete(sessionId);
     } else {
       log.warn('Agent returned empty content with no recognized tags; sending error', {
@@ -494,6 +631,7 @@ async function runAgentTurn(
         'The agent returned an empty response. Please try again.',
         true,
       );
+      // Evict from in-memory cache; DB record is preserved.
       sessionMessages.delete(sessionId);
     }
   } catch (err) {
@@ -501,8 +639,8 @@ async function runAgentTurn(
     const errorMessage = 'Agent failed to call language model. Please try again later.';
     sendFinalAnswer(send, sessionId, errorMessage, true);
 
-    // Clear any cached session state so a subsequent attempt can
-    // start fresh without being polluted by a failed turn.
+    // Evict from in-memory cache; DB record is preserved so the user can
+    // review or delete the session from the client.
     sessionMessages.delete(sessionId);
   }
 }
@@ -588,4 +726,143 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
   logger.info('Agent WebSocket server attached at path /ws/omni-agent');
 
   return wss;
+}
+
+// ─── REST router ─────────────────────────────────────────────────────────────
+// Exposes agent session management endpoints that the macOS (and Windows)
+// clients can call over plain HTTP before/during a session.
+
+export function createAgentRouter(): express.Router {
+  const router = express.Router();
+
+  // Apply auth to every route in this router.
+  router.use(authMiddleware);
+
+  // GET /api/agent/sessions
+  // Returns the most recent 50 sessions for the authenticated subscription,
+  // ordered by last activity descending.
+  router.get('/sessions', async (req, res: Response<any, AuthLocals>) => {
+    const { subscription, logger: log } = res.locals;
+
+    try {
+      const sessions = await AgentSession.findAll({
+        where: { subscriptionId: subscription.id },
+        order: [['last_active_at', 'DESC']],
+        limit: 50,
+        attributes: [
+          'id',
+          'title',
+          'platform',
+          'turns',
+          'totalTokensUsed',
+          'promptTokensUsed',
+          'completionTokensUsed',
+          'lastActiveAt',
+          'createdAt',
+          'updatedAt',
+        ],
+      });
+
+      res.json(
+        sessions.map((s) => ({
+          id: s.id,
+          title: s.title,
+          platform: s.platform,
+          turns: s.turns,
+          totalTokensUsed: Number(s.totalTokensUsed),
+          promptTokensUsed: Number(s.promptTokensUsed),
+          completionTokensUsed: Number(s.completionTokensUsed),
+          remainingContextTokens: Math.max(0, MAX_HISTORY_TOTAL - Number(s.totalTokensUsed)),
+          contextBudget: MAX_HISTORY_TOTAL,
+          lastActiveAt: s.lastActiveAt,
+          createdAt: s.createdAt,
+          updatedAt: s.updatedAt,
+        })),
+      );
+    } catch (err) {
+      log.error('Failed to list agent sessions', { error: err });
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  // DELETE /api/agent/sessions/:sessionId
+  // Allows the client to explicitly delete a session and its stored history.
+  router.delete('/sessions/:sessionId', async (req, res: Response<any, AuthLocals>) => {
+    const { subscription, logger: log } = res.locals;
+
+    const { sessionId } = req.params;
+    if (!sessionId || typeof sessionId !== 'string' || sessionId.length > 128) {
+      res.status(400).json({ error: 'Invalid session ID' });
+      return;
+    }
+
+    try {
+      const deleted = await AgentSession.destroy({
+        where: { id: sessionId, subscriptionId: subscription.id },
+      });
+
+      if (deleted === 0) {
+        res.status(404).json({ error: 'Session not found' });
+        return;
+      }
+
+      // Also remove from the in-memory cache if it was loaded.
+      sessionMessages.delete(sessionId);
+
+      res.status(200).json({ deleted: true });
+    } catch (err) {
+      log.error('Failed to delete agent session', { sessionId, error: err });
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  // GET /api/agent/sessions/:sessionId/context
+  // Returns token usage and remaining context budget for a single session.
+  router.get('/sessions/:sessionId/context', async (req, res: Response<any, AuthLocals>) => {
+    const { subscription, logger: log } = res.locals;
+
+    const { sessionId } = req.params;
+    // Validate that sessionId is a well-formed non-empty string (no path traversal).
+    if (!sessionId || typeof sessionId !== 'string' || sessionId.length > 128) {
+      res.status(400).json({ error: 'Invalid session ID' });
+      return;
+    }
+
+    try {
+      const session = await AgentSession.findOne({
+        where: { id: sessionId, subscriptionId: subscription.id },
+        attributes: [
+          'id',
+          'title',
+          'turns',
+          'totalTokensUsed',
+          'promptTokensUsed',
+          'completionTokensUsed',
+          'lastActiveAt',
+        ],
+      });
+
+      if (!session) {
+        res.status(404).json({ error: 'Session not found' });
+        return;
+      }
+
+      res.json({
+        id: session.id,
+        title: session.title,
+        turns: session.turns,
+        totalTokensUsed: Number(session.totalTokensUsed),
+        promptTokensUsed: Number(session.promptTokensUsed),
+        completionTokensUsed: Number(session.completionTokensUsed),
+        remainingContextTokens: Math.max(0, MAX_HISTORY_TOTAL - Number(session.totalTokensUsed)),
+        contextBudget: MAX_HISTORY_TOTAL,
+        lastActiveAt: session.lastActiveAt,
+      });
+    } catch (err) {
+      log.error('Failed to fetch agent session context', { error: err });
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  return router;
 }

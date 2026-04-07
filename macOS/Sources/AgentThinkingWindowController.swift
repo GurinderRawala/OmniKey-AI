@@ -7,12 +7,13 @@ final class AgentThinkingWindowController: NSWindowController {
         let hostingController = NSHostingController(rootView: rootView)
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 560, height: 360),
-            styleMask: [.titled, .closable, .miniaturizable],
+            contentRect: NSRect(x: 0, y: 0, width: 800, height: 620),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
         window.title = "OmniKey – OmniAgent Session"
+        window.minSize = NSSize(width: 800, height: 620)
         window.center()
         window.isReleasedWhenClosed = false
         window.contentViewController = hostingController

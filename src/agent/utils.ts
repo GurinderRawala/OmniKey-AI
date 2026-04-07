@@ -65,7 +65,7 @@ export function sendFinalAnswer(
 const MAX_MESSAGE_CONTENT = getMaxMessageContentLength(config.aiProvider);
 // Total character budget across all history messages (derived from the
 // provider's context-window size minus headroom for output + system prompt).
-const MAX_HISTORY_TOTAL = getMaxHistoryLength(config.aiProvider);
+export const MAX_HISTORY_TOTAL = getMaxHistoryLength(config.aiProvider);
 
 const FINAL_ANSWER_REQUEST: AIMessage = {
   role: 'user',

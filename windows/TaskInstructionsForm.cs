@@ -22,6 +22,7 @@ namespace OmniKey.Windows
         private readonly Label       _statusLabel;
         private readonly Button      _saveButton;
         private readonly Button      _defaultButton;
+        private readonly Button      _clearDefaultButton;
         private readonly Button      _deleteButton;
 
         // Top of the instructions area — shifts up when example section is hidden
@@ -101,7 +102,7 @@ namespace OmniKey.Windows
 
             Controls.Add(new Label
             {
-                Text      = "Save up to 5 task instruction templates. One can be set as default for Ctrl+T.",
+                Text      = "Save and manage task instruction templates. One can be set as default for Ctrl+T.",
                 Font      = new Font("Segoe UI", 9),
                 ForeColor = NordColors.SecondaryText,
                 BackColor = NordColors.WindowBackground,
@@ -256,13 +257,17 @@ namespace OmniKey.Windows
             _defaultButton.Anchor = AnchorStyles.Right | AnchorStyles.Top;
             _defaultButton.Click += async (_, _) => await SetDefaultAsync();
 
+            _clearDefaultButton        = MakeButton("Clear Default", ButtonRole.Default);
+            _clearDefaultButton.Anchor = AnchorStyles.Right | AnchorStyles.Top;
+            _clearDefaultButton.Click += async (_, _) => await ClearDefaultAsync();
+
             _saveButton        = MakeButton("Save Template", ButtonRole.Primary);
             _saveButton.Anchor = AnchorStyles.Right | AnchorStyles.Top;
             _saveButton.Click += async (_, _) => await SaveAsync();
 
             bottomPanel.Controls.AddRange(new Control[]
             {
-                _deleteButton, _statusLabel, closeButton, _defaultButton, _saveButton
+                _deleteButton, _statusLabel, closeButton, _clearDefaultButton, _defaultButton, _saveButton
             });
             bottomPanel.SizeChanged += (_, _) => LayoutBottomButtons(bottomPanel, closeButton);
             Controls.Add(bottomPanel);
@@ -325,10 +330,11 @@ namespace OmniKey.Windows
 
         private void LayoutBottomButtons(Panel panel, Button close)
         {
-            int right           = panel.ClientSize.Width - 8;
-            _saveButton.Location    = new Point(right - _saveButton.Width, 9);
-            _defaultButton.Location = new Point(_saveButton.Left - _defaultButton.Width - 4, 9);
-            close.Location          = new Point(_defaultButton.Left - close.Width - 4, 9);
+            int right                   = panel.ClientSize.Width - 8;
+            _saveButton.Location        = new Point(right - _saveButton.Width, 9);
+            _defaultButton.Location     = new Point(_saveButton.Left - _defaultButton.Width - 4, 9);
+            _clearDefaultButton.Location = new Point(_defaultButton.Left - _clearDefaultButton.Width - 4, 9);
+            close.Location              = new Point(_clearDefaultButton.Left - close.Width - 4, 9);
         }
 
         private void SetExampleSectionVisible(bool visible)
@@ -435,8 +441,7 @@ namespace OmniKey.Windows
             foreach (var t in _templates)
                 _templatePicker.Items.Add((t.IsDefault ? "\u2605 " : "") + t.Heading);
 
-            if (_templates.Count < 5)
-                _templatePicker.Items.Add(_templates.Count == 0 ? "No templates yet" : "New template");
+            _templatePicker.Items.Add(_templates.Count == 0 ? "No templates yet" : "New template");
 
             _templatePicker.SelectedIndexChanged += OnTemplatePickerChanged;
         }
@@ -462,12 +467,12 @@ namespace OmniKey.Windows
 
         private void UpdateButtons()
         {
-            bool has          = _selectedId != null;
-            _deleteButton.Enabled  = has;
-            _defaultButton.Enabled = has;
-            bool headingFilled = !string.IsNullOrWhiteSpace(_headingBox.Text);
-            bool atLimit       = _selectedId == null && _templates.Count >= 5;
-            _saveButton.Enabled    = headingFilled && !atLimit;
+            bool has                    = _selectedId != null;
+            _deleteButton.Enabled       = has;
+            _defaultButton.Enabled      = has;
+            _clearDefaultButton.Enabled = _templates.Any(t => t.IsDefault);
+            bool headingFilled          = !string.IsNullOrWhiteSpace(_headingBox.Text);
+            _saveButton.Enabled         = headingFilled;
         }
 
         private async Task SaveAsync()
@@ -492,7 +497,6 @@ namespace OmniKey.Windows
                 }
                 else
                 {
-                    if (_templates.Count >= 5) { SetStatus("Maximum of 5 templates reached."); return; }
                     var created = await _api.CreateTaskTemplateAsync(heading, instructions);
                     _templates.Add(created);
                     RebuildPicker();
@@ -573,6 +577,38 @@ namespace OmniKey.Windows
             catch (Exception ex)
             {
                 SetStatus("Failed to set default: " + ex.Message);
+            }
+        }
+
+        private async Task ClearDefaultAsync()
+        {
+            SetStatus("Clearing default...");
+
+            try
+            {
+                await _api.ClearDefaultTaskTemplateAsync();
+                _templates = _templates.Select(t => new TaskTemplateDto
+                {
+                    Id           = t.Id,
+                    Heading      = t.Heading,
+                    Instructions = t.Instructions,
+                    IsDefault    = false
+                }).ToList();
+                RebuildPicker();
+
+                // Re-select the current template (without the star) or keep the editor as-is
+                if (_selectedId != null)
+                {
+                    var current = _templates.FirstOrDefault(t => t.Id == _selectedId);
+                    if (current != null) SelectTemplate(current);
+                }
+
+                UpdateButtons();
+                SetStatus("Default cleared — no template is set for Ctrl+T.");
+            }
+            catch (Exception ex)
+            {
+                SetStatus("Failed to clear default: " + ex.Message);
             }
         }
 

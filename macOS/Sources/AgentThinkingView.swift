@@ -11,12 +11,24 @@ struct AgentThinkingView: View {
                 .ignoresSafeArea()
 
             VStack(alignment: .leading, spacing: 0) {
-                // Header
-                HStack(alignment: .center, spacing: 10) {
-                    VStack(alignment: .leading, spacing: 3) {
+                // ── Header ────────────────────────────────────────────────────
+                HStack(alignment: .top, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 4) {
                         Text("OmniAgent Session")
                             .font(.system(size: 18, weight: .semibold))
                             .foregroundColor(NordTheme.primaryText(colorScheme))
+
+                        // Current session name
+                        HStack(spacing: 4) {
+                            Image(systemName: "bubble.left.and.bubble.right")
+                                .font(.system(size: 10))
+                                .foregroundColor(NordTheme.accentBlue(colorScheme))
+                            Text(model.currentSessionTitle)
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundColor(NordTheme.accentBlue(colorScheme))
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
 
                         Text("You can keep working while the agent plans and runs any commands it needs.")
                             .font(.system(size: 12))
@@ -25,47 +37,67 @@ struct AgentThinkingView: View {
 
                     Spacer()
 
-                    // Live status badge
-                    HStack(spacing: 6) {
-                        if model.isRunning {
-                            Circle()
-                                .fill(NordTheme.accent(colorScheme))
-                                .frame(width: 8, height: 8)
-                                .scaleEffect(pulseAnimation ? 1.3 : 1.0)
-                                .opacity(pulseAnimation ? 0.6 : 1.0)
-                                .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: pulseAnimation)
-                                .onAppear { pulseAnimation = true }
+                    VStack(alignment: .trailing, spacing: 6) {
+                        // Live status badge
+                        HStack(spacing: 6) {
+                            if model.isRunning {
+                                Circle()
+                                    .fill(NordTheme.accent(colorScheme))
+                                    .frame(width: 8, height: 8)
+                                    .scaleEffect(pulseAnimation ? 1.3 : 1.0)
+                                    .opacity(pulseAnimation ? 0.6 : 1.0)
+                                    .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: pulseAnimation)
+                                    .onAppear { pulseAnimation = true }
 
-                            Text("Running")
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundColor(NordTheme.accent(colorScheme))
-                        } else {
-                            Image(systemName: "checkmark.circle.fill")
-                                .font(.system(size: 11))
-                                .foregroundColor(NordTheme.accentGreen(colorScheme))
+                                Text("Running")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundColor(NordTheme.accent(colorScheme))
+                            } else if !model.log.isEmpty {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(NordTheme.accentGreen(colorScheme))
 
-                            Text("Finished")
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundColor(NordTheme.accentGreen(colorScheme))
+                                Text("Finished")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundColor(NordTheme.accentGreen(colorScheme))
+                            } else {
+                                Image(systemName: "circle.dotted")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(NordTheme.secondaryText(colorScheme))
+
+                                Text("Ready")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundColor(NordTheme.secondaryText(colorScheme))
+                            }
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(Capsule().fill(NordTheme.badgeFill(colorScheme)))
+                        .overlay(Capsule().strokeBorder(NordTheme.border(colorScheme), lineWidth: 1))
+
+                        // Context budget badge
+                        if model.remainingContextTokens > 0 || model.selectedSessionId != nil {
+                            HStack(spacing: 4) {
+                                Image(systemName: "brain.head.profile")
+                                    .font(.system(size: 9))
+                                    .foregroundColor(NordTheme.accentAmber(colorScheme))
+                                Text("\(model.remainingContextTokens.formatted()) tokens left")
+                                    .font(.system(size: 10, weight: .medium))
+                                    .foregroundColor(NordTheme.accentAmber(colorScheme))
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Capsule().fill(NordTheme.badgeFill(colorScheme)))
+                            .overlay(Capsule().strokeBorder(NordTheme.border(colorScheme), lineWidth: 1))
                         }
                     }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(
-                        Capsule()
-                            .fill(NordTheme.badgeFill(colorScheme))
-                    )
-                    .overlay(
-                        Capsule()
-                            .strokeBorder(NordTheme.border(colorScheme), lineWidth: 1)
-                    )
                 }
-                .padding(.bottom, 14)
+                .padding(.bottom, 16)
 
                 Rectangle()
                     .fill(NordTheme.border(colorScheme))
                     .frame(height: 1)
-                    .padding(.bottom, 14)
+                    .padding(.bottom, 16)
 
                 // Scrollable content
                 ScrollViewReader { proxy in
@@ -73,11 +105,11 @@ struct AgentThinkingView: View {
                         VStack(alignment: .leading, spacing: 16) {
                             if model.log.isEmpty {
                                 VStack(spacing: 12) {
-                                    Image(systemName: "sparkles")
+                                    Image(systemName: model.isRunning ? "sparkles" : "sparkle")
                                         .font(.system(size: 28))
                                         .foregroundColor(NordTheme.secondaryText(colorScheme))
 
-                                    Text("Waiting for the agent to respond...")
+                                    Text(model.isRunning ? "Waiting for the agent to respond..." : "No active session")
                                         .font(.system(size: 13))
                                         .foregroundColor(NordTheme.secondaryText(colorScheme))
                                 }
@@ -239,11 +271,12 @@ struct AgentThinkingView: View {
                         .padding(12)
                     }
                     .background(
-                        RoundedRectangle(cornerRadius: 10)
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
                             .fill(NordTheme.editorBackground(colorScheme))
+                            .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.45 : 0.10), radius: 16, x: 0, y: 12)
                     )
                     .overlay(
-                        RoundedRectangle(cornerRadius: 10)
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
                             .strokeBorder(NordTheme.border(colorScheme), lineWidth: 1)
                     )
                     .onChange(of: model.log) { _ in
@@ -260,9 +293,9 @@ struct AgentThinkingView: View {
                     }
                 }
 
-                // Bottom status bar
-                HStack(spacing: 10) {
-                    if model.isRunning {
+                // Bottom action bar — Cancel only (status lives in the header badge)
+                if model.isRunning {
+                    HStack(spacing: 10) {
                         Button(role: .destructive) {
                             AgentRunner.shared.cancelCurrentSession()
                             model.isRunning = false
@@ -286,39 +319,21 @@ struct AgentThinkingView: View {
                             RoundedRectangle(cornerRadius: 6)
                                 .strokeBorder(Color(red: 252 / 255, green: 100 / 255, blue: 100 / 255).opacity(0.25), lineWidth: 1)
                         )
+
+                        Spacer()
                     }
-
-                    Spacer()
-
-                    if model.isRunning {
-                        HStack(spacing: 6) {
-                            Circle()
-                                .fill(NordTheme.accent(colorScheme))
-                                .frame(width: 7, height: 7)
-                                .scaleEffect(pulseAnimation ? 1.3 : 1.0)
-                                .opacity(pulseAnimation ? 0.6 : 1.0)
-                                .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: pulseAnimation)
-
-                            Text("Running...")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundColor(NordTheme.accent(colorScheme))
-                        }
-                    } else {
-                        HStack(spacing: 6) {
-                            Image(systemName: "checkmark.circle.fill")
-                                .font(.system(size: 13))
-                                .foregroundColor(NordTheme.accentGreen(colorScheme))
-
-                            Text("Finished")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundColor(NordTheme.accentGreen(colorScheme))
-                        }
-                    }
+                    .padding(.top, 12)
+                    .padding(.horizontal, 2)
                 }
-                .padding(.top, 12)
             }
-            .padding(20)
-            .frame(minWidth: 560, minHeight: 420)
+            .padding(.horizontal, 20)
+            .padding(.top, 22)
+            .padding(.bottom, 32)
+            .frame(minWidth: 800, minHeight: 620)
+        }
+        // ── Session picker sheet ──────────────────────────────────────────────
+        .sheet(isPresented: $model.isShowingSessionPicker) {
+            SessionPickerView(model: model)
         }
     }
 
@@ -344,6 +359,159 @@ struct AgentThinkingView: View {
 
             content()
         }
+    }
+}
+
+// MARK: - Session Picker Sheet
+
+struct SessionPickerView: View {
+    @ObservedObject var model: AgentThinkingModel
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Title bar
+            HStack {
+                Text("Choose Session")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(NordTheme.primaryText(colorScheme))
+                Spacer()
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 16))
+                        .foregroundColor(NordTheme.secondaryText(colorScheme))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 18)
+            .padding(.bottom, 12)
+
+            Divider()
+
+            // "Start a new session" option always present at the top
+            Button {
+                model.selectedSessionId = nil
+                model.currentSessionTitle = "New Session"
+                model.remainingContextTokens = 0
+                model.isShowingSessionPicker = false
+                dismiss()
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "plus.circle")
+                        .font(.system(size: 14))
+                        .foregroundColor(NordTheme.accentGreen(colorScheme))
+                        .frame(width: 20)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Start a New Session")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundColor(NordTheme.primaryText(colorScheme))
+                        Text("Begin a fresh conversation with the agent")
+                            .font(.system(size: 11))
+                            .foregroundColor(NordTheme.secondaryText(colorScheme))
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 10)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .background(
+                model.selectedSessionId == nil
+                    ? NordTheme.sectionFill(accent: NordTheme.accentGreen(colorScheme), scheme: colorScheme)
+                    : Color.clear
+            )
+
+            Divider()
+                .padding(.bottom, 4)
+
+            if model.availableSessions.isEmpty {
+                Text("No previous sessions found.")
+                    .font(.system(size: 12))
+                    .foregroundColor(NordTheme.secondaryText(colorScheme))
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 12)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(model.availableSessions) { session in
+                            HStack(spacing: 0) {
+                                // ── Select button ──────────────────────────
+                                Button {
+                                    model.selectedSessionId = session.id
+                                    model.currentSessionTitle = session.title
+                                    model.remainingContextTokens = session.remainingContextTokens
+                                    model.isShowingSessionPicker = false
+                                    dismiss()
+                                } label: {
+                                    HStack(spacing: 10) {
+                                        Image(systemName: "bubble.left.and.bubble.right")
+                                            .font(.system(size: 13))
+                                            .foregroundColor(NordTheme.accentBlue(colorScheme))
+                                            .frame(width: 20)
+                                        VStack(alignment: .leading, spacing: 3) {
+                                            Text(session.title)
+                                                .font(.system(size: 13, weight: .medium))
+                                                .foregroundColor(NordTheme.primaryText(colorScheme))
+                                                .lineLimit(1)
+                                                .truncationMode(.tail)
+
+                                            HStack(spacing: 8) {
+                                                Label("\(session.turns) turn\(session.turns == 1 ? "" : "s")", systemImage: "arrow.2.circlepath")
+                                                Label("\(session.remainingContextTokens.formatted()) tokens left", systemImage: "brain.head.profile")
+                                            }
+                                            .font(.system(size: 10))
+                                            .foregroundColor(NordTheme.secondaryText(colorScheme))
+                                        }
+                                        Spacer()
+                                        if model.selectedSessionId == session.id {
+                                            Image(systemName: "checkmark")
+                                                .font(.system(size: 11, weight: .semibold))
+                                                .foregroundColor(NordTheme.accentBlue(colorScheme))
+                                        }
+                                    }
+                                    .padding(.leading, 20)
+                                    .padding(.trailing, 8)
+                                    .padding(.vertical, 10)
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+
+                                // ── Delete button ──────────────────────────
+                                Button {
+                                    model.deleteSession(id: session.id)
+                                } label: {
+                                    Image(systemName: "trash")
+                                        .font(.system(size: 11))
+                                        .foregroundColor(Color(red: 252 / 255, green: 100 / 255, blue: 100 / 255))
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 10)
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .help("Delete this session")
+                            }
+                            .background(
+                                model.selectedSessionId == session.id
+                                    ? NordTheme.sectionFill(accent: NordTheme.accentBlue(colorScheme), scheme: colorScheme)
+                                    : Color.clear
+                            )
+
+                            Divider()
+                        }
+                    }
+                }
+                .frame(maxHeight: 340)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .frame(width: 420)
+        .background(NordTheme.windowBackground(colorScheme))
     }
 }
 
@@ -395,3 +563,4 @@ private struct CollapsibleText: View {
         }
     }
 }
+

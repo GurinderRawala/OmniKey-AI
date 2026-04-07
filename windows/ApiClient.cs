@@ -171,6 +171,14 @@ namespace OmniKey.Windows
             return ParseTemplate(doc.RootElement);
         }
 
+        public async Task ClearDefaultTaskTemplateAsync()
+        {
+            using var req = BuildRequest(HttpMethod.Post, "/api/instructions/templates/clear-default");
+            using var resp = await Http.SendAsync(req);
+            if (resp.StatusCode != HttpStatusCode.NoContent)
+                await EnsureSuccessAsync(resp);
+        }
+
         // ─── Helpers ──────────────────────────────────────────────────
 
         private static TaskTemplateDto ParseTemplate(JsonElement el) => new()

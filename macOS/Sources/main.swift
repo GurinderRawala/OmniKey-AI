@@ -125,8 +125,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         taskInstructionsMenuItem = instructionsItem
         let agentItem = NSMenuItem(title: "OmniAgent Session", action: #selector(showAgentThinkingWindowFromMenu), keyEquivalent: "")
         agentItem.target = self
-        agentItem.isEnabled = false
-        agentItem.isHidden = true
+        agentItem.isEnabled = true
         menu.addItem(agentItem)
         agentSessionMenuItem = agentItem
         let manualItem = NSMenuItem(title: "Manual", action: #selector(showManualWindowFromMenu), keyEquivalent: "")
@@ -251,20 +250,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         taskInstructionsMenuItem?.isEnabled = isAuthorized
     }
 
-    /// Called when an @omniAgent session starts so we can show
-    /// the thinking window and enable the status menu entry.
+    /// Called when an @omniAgent session starts — shows the thinking window.
     func agentSessionDidStart() {
-        agentSessionMenuItem?.isHidden = false
-        agentSessionMenuItem?.isEnabled = true
         showAgentThinkingWindow()
     }
 
-    /// Called when an @omniAgent session ends so we can hide the
-    /// thinking window and disable the status menu entry.
+    /// Called when an @omniAgent session ends. The OmniAgent Session menu item
+    /// is always visible so the user can open it and pick a session at any time.
     func agentSessionDidEnd() {
-        agentSessionMenuItem?.isEnabled = false
-        agentSessionMenuItem?.isHidden = true
-        agentThinkingWindowController?.close()
+        // Nothing to do — window and menu item remain available.
     }
 
     @objc private func handleSubscriptionUnauthorizedNotification() {

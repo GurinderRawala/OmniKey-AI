@@ -499,6 +499,38 @@ final class APIClient: @unchecked Sendable {
         task.resume()
     }
 
+    func clearDefaultTaskTemplate(completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
+        let url = taskTemplatesBaseURL.appendingPathComponent("clear-default")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+
+        if let token = SubscriptionManager.shared.jwtToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+
+        let task = URLSession.shared.dataTask(with: request) { _, response, error in
+            if let error = error {
+                completion(.failure(error))
+                return
+            }
+
+            guard let httpResponse = response as? HTTPURLResponse else {
+                completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response"])))
+                return
+            }
+
+            if !(200 ... 299).contains(httpResponse.statusCode), httpResponse.statusCode != 204 {
+                let error = APIClient.makeBackendError(statusCode: httpResponse.statusCode, data: nil)
+                completion(.failure(error))
+                return
+            }
+
+            completion(.success(()))
+        }
+
+        task.resume()
+    }
+
     func setDefaultTaskTemplate(id: String, completion: @escaping @Sendable (Result<TaskTemplateDTO, Error>) -> Void) {
         let url = taskTemplatesBaseURL.appendingPathComponent("\(id)/set-default")
         var request = URLRequest(url: url)

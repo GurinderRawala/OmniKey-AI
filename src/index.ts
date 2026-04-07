@@ -9,8 +9,10 @@ import { initDatabase } from './db';
 import { logger } from './logger';
 import { taskInstructionRouter } from './taskInstructionRoutes';
 import { config } from './config';
-import { attachAgentWebSocketServer } from './agent/agentServer';
+import { attachAgentWebSocketServer, createAgentRouter } from './agent/agentServer';
 import { AppDownload } from './models/appDownload';
+// Importing AgentSession ensures the model is registered with Sequelize before initDatabase().
+import './models/agentSession';
 
 const app = express();
 const PORT = Number(config.port);
@@ -27,6 +29,8 @@ app.use('/api/subscription', createSubscriptionRouter(logger));
 app.use('/api/feature', createFeatureRouter());
 
 app.use('/api/instructions', taskInstructionRouter());
+
+app.use('/api/agent', createAgentRouter());
 
 app.get('/macos/download', (_req, res) => {
   const dmgPath = path.join(process.cwd(), 'macOS', 'OmniKeyAI.dmg');
@@ -76,8 +80,8 @@ app.get('/macos/appcast', (req, res) => {
 
   // These should match the values embedded into the macOS app
   // Info.plist in macOS/build_release_dmg.sh.
-  const bundleVersion = '19';
-  const shortVersion = '1.0.18';
+  const bundleVersion = '20';
+  const shortVersion = '1.0.19';
 
   const xml = `<?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0"
