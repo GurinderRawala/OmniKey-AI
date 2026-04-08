@@ -4,6 +4,7 @@ struct AgentThinkingView: View {
     @ObservedObject var model: AgentThinkingModel
     @Environment(\.colorScheme) private var colorScheme
     @State private var pulseAnimation = false
+    @State private var showModelPopover = false
 
     var body: some View {
         ZStack {
@@ -37,7 +38,7 @@ struct AgentThinkingView: View {
 
                     Spacer()
 
-                    VStack(alignment: .trailing, spacing: 6) {
+                    VStack(alignment: .trailing, spacing: 10) {
                         // Live status badge
                         HStack(spacing: 6) {
                             if model.isRunning {
@@ -90,6 +91,29 @@ struct AgentThinkingView: View {
                             .background(Capsule().fill(NordTheme.badgeFill(colorScheme)))
                             .overlay(Capsule().strokeBorder(NordTheme.border(colorScheme), lineWidth: 1))
                         }
+
+                        // History / default-session button
+                        Button {
+                            model.fetchSessions()
+                            showModelPopover.toggle()
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "clock")
+                                    .font(.system(size: 9))
+                                    .foregroundColor(NordTheme.accentPurple(colorScheme))
+                                Text("History")
+                                    .font(.system(size: 10, weight: .medium))
+                                    .foregroundColor(NordTheme.accentPurple(colorScheme))
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Capsule().fill(NordTheme.badgeFill(colorScheme)))
+                            .overlay(Capsule().strokeBorder(NordTheme.border(colorScheme), lineWidth: 1))
+                        }
+                        .buttonStyle(.plain)
+                        .popover(isPresented: $showModelPopover, arrowEdge: .trailing) {
+                            ModelSettingsPopover(model: model)
+                        }
                     }
                 }
                 .padding(.bottom, 16)
@@ -103,6 +127,14 @@ struct AgentThinkingView: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         VStack(alignment: .leading, spacing: 16) {
+                            // Previous conversation history (shown when resuming a session)
+                            if !model.sessionHistory.isEmpty {
+                                PreviousConversationView(
+                                    history: model.sessionHistory,
+                                    colorScheme: colorScheme
+                                )
+                            }
+
                             if model.log.isEmpty {
                                 VStack(spacing: 12) {
                                     Image(systemName: model.isRunning ? "sparkles" : "sparkle")
@@ -512,6 +544,262 @@ struct SessionPickerView: View {
         }
         .frame(width: 420)
         .background(NordTheme.windowBackground(colorScheme))
+    }
+}
+
+// MARK: - Previous Conversation
+
+private struct PreviousConversationView: View {
+    let history: [SessionHistoryEntry]
+    let colorScheme: ColorScheme
+
+    @State private var isExpanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header row — always visible
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) { isExpanded.toggle() }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "clock")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(NordTheme.accentPurple(colorScheme))
+
+                    Text("Previous Conversation")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(NordTheme.secondaryText(colorScheme))
+
+                    Text("·  \(history.count) message\(history.count == 1 ? "" : "s")")
+                        .font(.system(size: 10))
+                        .foregroundColor(NordTheme.secondaryText(colorScheme))
+
+                    Spacer()
+
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(NordTheme.secondaryText(colorScheme))
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                Divider()
+                    .padding(.horizontal, 8)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(history) { entry in
+                        HStack(alignment: .top, spacing: 8) {
+                            // Role pill
+                            Text(entry.role == "user" ? "You" : "Agent")
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundColor(
+                                    entry.role == "user"
+                                        ? NordTheme.accentBlue(colorScheme)
+                                        : NordTheme.accentPurple(colorScheme)
+                                )
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(
+                                    Capsule().fill(
+                                        entry.role == "user"
+                                            ? NordTheme.sectionFill(accent: NordTheme.accentBlue(colorScheme), scheme: colorScheme)
+                                            : NordTheme.sectionFill(accent: NordTheme.accentPurple(colorScheme), scheme: colorScheme)
+                                    )
+                                )
+                                .fixedSize()
+
+                            Text(entry.text)
+                                .font(.system(size: 11))
+                                .foregroundColor(NordTheme.primaryText(colorScheme))
+                                .lineLimit(3)
+                                .truncationMode(.tail)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 4)
+                    }
+                }
+                .padding(.vertical, 6)
+            }
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(NordTheme.sectionFill(accent: NordTheme.accentPurple(colorScheme), scheme: colorScheme))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(NordTheme.sectionBorder(accent: NordTheme.accentPurple(colorScheme), scheme: colorScheme), lineWidth: 1)
+        )
+    }
+}
+
+// MARK: - Model Settings Popover
+
+private struct ModelSettingsPopover: View {
+    @ObservedObject var model: AgentThinkingModel
+    @Environment(\.colorScheme) private var colorScheme
+    /// @AppStorage gives SwiftUI reactivity: any write triggers a re-render automatically.
+    @AppStorage(AgentThinkingModel.defaultSessionStorageKey) private var storedDefaultRaw: String = ""
+
+    /// Converts the raw stored string to an optional (empty string = no default set).
+    private var storedDefault: String? { storedDefaultRaw.isEmpty ? nil : storedDefaultRaw }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header
+            Text("Agent Settings")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(NordTheme.primaryText(colorScheme))
+                .padding(.horizontal, 16)
+                .padding(.top, 14)
+                .padding(.bottom, 10)
+
+            Divider()
+
+            // Default session section
+            Text("DEFAULT SESSION")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundColor(NordTheme.secondaryText(colorScheme))
+                .padding(.horizontal, 16)
+                .padding(.top, 10)
+                .padding(.bottom, 6)
+
+            Text("When set, the session picker is skipped on every run.")
+                .font(.system(size: 10))
+                .foregroundColor(NordTheme.secondaryText(colorScheme))
+                .padding(.horizontal, 16)
+                .padding(.bottom, 8)
+
+            // "New Session" default option
+            defaultRow(
+                icon: "plus.circle",
+                iconColor: NordTheme.accentGreen(colorScheme),
+                title: "New Session",
+                subtitle: "Always start a fresh conversation",
+                isSelected: storedDefaultRaw == AgentThinkingModel.newSessionSentinel
+            ) {
+                storedDefaultRaw = AgentThinkingModel.newSessionSentinel
+                model.sessionHistory = []
+            }
+
+            if !model.availableSessions.isEmpty {
+                Divider()
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 4)
+
+                ScrollView {
+                    VStack(spacing: 0) {
+                        ForEach(model.availableSessions) { session in
+                            defaultRow(
+                                icon: "bubble.left.and.bubble.right",
+                                iconColor: NordTheme.accentBlue(colorScheme),
+                                title: session.title,
+                                subtitle: "\(session.turns) turn\(session.turns == 1 ? "" : "s") · \(session.remainingContextTokens.formatted()) tokens left",
+                                isSelected: storedDefaultRaw == session.id
+                            ) {
+                                storedDefaultRaw = session.id
+                                model.fetchSessionHistory(for: session.id)
+                            } onDelete: {
+                                if storedDefaultRaw == session.id { storedDefaultRaw = "" }
+                                model.deleteSession(id: session.id)
+                            }
+                        }
+                    }
+                }
+                .frame(minHeight: 120, maxHeight: 300)
+            }
+
+            // Clear default option
+            if !storedDefaultRaw.isEmpty {
+                Divider()
+                Button {
+                    storedDefaultRaw = ""
+                    model.sessionHistory = []
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "xmark.circle")
+                            .font(.system(size: 11))
+                        Text("Clear default — always show picker")
+                            .font(.system(size: 11))
+                    }
+                    .foregroundColor(Color(red: 252 / 255, green: 100 / 255, blue: 100 / 255))
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .frame(width: 340)
+        .frame(minHeight: 420)
+        .background(NordTheme.windowBackground(colorScheme))
+    }
+
+    @ViewBuilder
+    private func defaultRow(
+        icon: String,
+        iconColor: Color,
+        title: String,
+        subtitle: String,
+        isSelected: Bool,
+        action: @escaping () -> Void,
+        onDelete: (() -> Void)? = nil
+    ) -> some View {
+        HStack(spacing: 0) {
+            Button(action: action) {
+                HStack(spacing: 10) {
+                    Image(systemName: icon)
+                        .font(.system(size: 12))
+                        .foregroundColor(iconColor)
+                        .frame(width: 18)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(title)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(NordTheme.primaryText(colorScheme))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        Text(subtitle)
+                            .font(.system(size: 10))
+                            .foregroundColor(NordTheme.secondaryText(colorScheme))
+                    }
+                    Spacer()
+                    if isSelected {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundColor(NordTheme.accentBlue(colorScheme))
+                    }
+                }
+                .padding(.leading, 16)
+                .padding(.trailing, onDelete != nil ? 8 : 16)
+                .padding(.vertical, 8)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if let onDelete {
+                Button(action: onDelete) {
+                    Image(systemName: "trash")
+                        .font(.system(size: 11))
+                        .foregroundColor(Color(red: 252 / 255, green: 100 / 255, blue: 100 / 255))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Delete this session")
+            }
+        }
+        .background(
+            isSelected
+                ? NordTheme.sectionFill(accent: NordTheme.accentBlue(colorScheme), scheme: colorScheme)
+                : Color.clear
+        )
     }
 }
 

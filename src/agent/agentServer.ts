@@ -864,5 +864,69 @@ export function createAgentRouter(): express.Router {
     }
   });
 
+  // GET /api/agent/sessions/:sessionId/messages
+  // Returns a compact, human-readable transcript of the session history
+  // (user + assistant turns only, internal XML tags stripped).
+  router.get('/sessions/:sessionId/messages', async (req, res: Response<any, AuthLocals>) => {
+    const { subscription, logger: log } = res.locals;
+
+    const { sessionId } = req.params;
+    if (!sessionId || typeof sessionId !== 'string' || sessionId.length > 128) {
+      res.status(400).json({ error: 'Invalid session ID' });
+      return;
+    }
+
+    try {
+      const session = await AgentSession.findOne({
+        where: { id: sessionId, subscriptionId: subscription.id },
+        attributes: ['id', 'historyJson'],
+      });
+
+      if (!session) {
+        res.status(404).json({ error: 'Session not found' });
+        return;
+      }
+
+      type RawMessage = { role: string; content: unknown };
+      const raw: RawMessage[] = JSON.parse(session.historyJson || '[]');
+
+      // Strip / unwrap all internal XML-like tags used by the agent protocol.
+      const stripInternals = (text: string): string =>
+        text
+          // Unwrap user input — keep the inner text, drop the tag.
+          .replace(/<user_input>([\s\S]*?)<\/user_input>/gi, '$1')
+          // Unwrap final answer — keep the inner text, drop the tag.
+          .replace(/<final_answer>([\s\S]*?)<\/final_answer>/gi, '$1')
+          // Replace shell script blocks with a placeholder.
+          .replace(/<shell_script[\s\S]*?<\/shell_script>/gi, '[shell command]')
+          // Drop stored instructions entirely — not meaningful to the user.
+          .replace(/<stored_instructions>[\s\S]*?<\/stored_instructions>/gi, '')
+          // Drop terminal output blocks — shown separately on the client.
+          .replace(/<terminal[\s\S]*?<\/terminal>/gi, '')
+          // Drop the @omniAgent mention that triggers the agent.
+          .replace(/@omniagent/gi, '')
+          .trim();
+
+      const MAX_CHARS = 5000;
+      const messages = raw
+        .filter((m) => m.role === 'user' || m.role === 'assistant')
+        .map((m, index) => {
+          const rawText = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
+          const cleaned = stripInternals(rawText);
+          const truncated =
+            cleaned.length > MAX_CHARS
+              ? cleaned.slice(0, MAX_CHARS) + '… [message truncated]'
+              : cleaned;
+          return { id: `${index}-${m.role}`, role: m.role as 'user' | 'assistant', text: truncated };
+        })
+        .filter((m) => m.text.length > 0);
+
+      res.json({ messages });
+    } catch (err) {
+      log.error('Failed to fetch agent session messages', { sessionId, error: err });
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
   return router;
 }

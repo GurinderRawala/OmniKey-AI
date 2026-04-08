@@ -196,6 +196,27 @@ final class AgentRunner {
             Task { @MainActor in
                 let sessions = AgentThinkingModel.shared.availableSessions
 
+                // If the user has stored a default session, skip the picker entirely.
+                if let stored = AgentThinkingModel.storedDefaultSessionId {
+                    if stored == AgentThinkingModel.newSessionSentinel {
+                        // Default is "New Session" — start fresh immediately.
+                        AgentThinkingModel.shared.selectedSessionId = nil
+                        AgentThinkingModel.shared.currentSessionTitle = "New Session"
+                        AgentThinkingModel.shared.remainingContextTokens = 0
+                        self.startSession(originalText: originalText, completion: completion)
+                        return
+                    } else if let session = sessions.first(where: { $0.id == stored }) {
+                        // Default session still exists — auto-select it.
+                        AgentThinkingModel.shared.selectedSessionId = session.id
+                        AgentThinkingModel.shared.currentSessionTitle = session.title
+                        AgentThinkingModel.shared.remainingContextTokens = session.remainingContextTokens
+                        self.startSession(originalText: originalText, completion: completion)
+                        return
+                    }
+                    // Stored session no longer exists — clear it and fall through to the picker.
+                    AgentThinkingModel.storedDefaultSessionId = nil
+                }
+
                 // Show the picker whenever there are existing sessions and the
                 // user has not already chosen one this run. This lets them
                 // continue an old session or start fresh every time.
@@ -240,6 +261,11 @@ final class AgentRunner {
         completion: @escaping @Sendable (Result<String, Error>) -> Void
     ) {
         let chosenSessionId = AgentThinkingModel.shared.selectedSessionId ?? UUID().uuidString
+
+        // Pre-load prior turns so the view can show a compact history banner.
+        if AgentThinkingModel.shared.selectedSessionId != nil {
+            AgentThinkingModel.shared.fetchSessionHistory(for: chosenSessionId)
+        }
 
         let sessionBox = ClosureBox<@MainActor @Sendable (String, Bool) -> Void>()
         sessionBox.call = { [self] jwt, allowReauth in

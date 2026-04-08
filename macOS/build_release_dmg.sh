@@ -127,9 +127,9 @@ cat > "${INFO_PLIST}" <<EOF
     <key>CFBundleIdentifier</key>
     <string>${BUNDLE_ID}</string>
     <key>CFBundleVersion</key>
-    <string>20</string>
+    <string>21</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0.19</string>
+    <string>1.0.20</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>LSMinimumSystemVersion</key>
@@ -196,10 +196,75 @@ info "Preparing ZIP for notarization..."
 rm -f "${APP_ZIP}"
 ditto -c -k --keepParent "${APP_BUNDLE}" "${APP_ZIP}"
 
-info "Submitting app ZIP for notarization (profile: ${NOTARY_PROFILE})..."
-xcrun notarytool submit "${APP_ZIP}" \
-  --keychain-profile "${NOTARY_PROFILE}" \
-  --wait
+if [[ -n "${NOTARY_SUBMISSION_ID:-}" ]]; then
+  SUBMISSION_ID="${NOTARY_SUBMISSION_ID}"
+  info "Reusing existing notarization submission ID: ${SUBMISSION_ID}"
+else
+  info "Submitting app ZIP for notarization (profile: ${NOTARY_PROFILE})..."
+  SUBMIT_JSON="$(xcrun notarytool submit "${APP_ZIP}" \
+    --keychain-profile "${NOTARY_PROFILE}" \
+    --output-format json)"
+
+  SUBMISSION_ID="$(echo "${SUBMIT_JSON}" | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+  if [[ -z "${SUBMISSION_ID}" ]]; then
+    err "Could not parse notarization Submission ID from notarytool output."
+    err "Raw output: ${SUBMIT_JSON}"
+    exit 1
+  fi
+fi
+
+info "Notarization submission ID: ${SUBMISSION_ID}"
+
+# Poll notary status with a timeout to avoid indefinite waits.
+NOTARY_TIMEOUT_SECONDS="${NOTARY_TIMEOUT_SECONDS:-1800}"
+NOTARY_POLL_INTERVAL_SECONDS="${NOTARY_POLL_INTERVAL_SECONDS:-15}"
+START_TIME="$(date +%s)"
+FINAL_STATUS=""
+
+while true; do
+  INFO_JSON="$(xcrun notarytool info "${SUBMISSION_ID}" \
+    --keychain-profile "${NOTARY_PROFILE}" \
+    --output-format json)"
+
+  STATUS="$(echo "${INFO_JSON}" | sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+  NOW="$(date +%s)"
+  ELAPSED="$((NOW - START_TIME))"
+
+  if [[ -n "${STATUS}" ]]; then
+    info "Notarization status: ${STATUS} (elapsed ${ELAPSED}s)"
+  else
+    info "Notarization status unavailable yet (elapsed ${ELAPSED}s)"
+  fi
+
+  case "${STATUS}" in
+    Accepted)
+      FINAL_STATUS="Accepted"
+      break
+      ;;
+    Invalid|Rejected)
+      FINAL_STATUS="${STATUS}"
+      break
+      ;;
+  esac
+
+  if (( ELAPSED >= NOTARY_TIMEOUT_SECONDS )); then
+    err "Notarization timed out after ${NOTARY_TIMEOUT_SECONDS}s."
+    err "Check status manually with: xcrun notarytool info ${SUBMISSION_ID} --keychain-profile ${NOTARY_PROFILE}"
+    err "Fetch detailed log with: xcrun notarytool log ${SUBMISSION_ID} --keychain-profile ${NOTARY_PROFILE}"
+    exit 1
+  fi
+
+  sleep "${NOTARY_POLL_INTERVAL_SECONDS}"
+done
+
+if [[ "${FINAL_STATUS}" != "Accepted" ]]; then
+  err "Notarization failed with status: ${FINAL_STATUS}"
+  err "Fetching notarization log..."
+  xcrun notarytool log "${SUBMISSION_ID}" --keychain-profile "${NOTARY_PROFILE}" || true
+  exit 1
+fi
+
+info "Notarization accepted."
 
 # 9. Staple the notarization ticket
 info "Stapling notarization ticket to app bundle..."

@@ -1,6 +1,14 @@
 import Combine
 import Foundation
 
+// MARK: - Compact history entry returned by GET /api/agent/sessions/:id/messages
+
+struct SessionHistoryEntry: Decodable, Identifiable {
+    let id: String
+    let role: String   // "user" or "assistant"
+    let text: String
+}
+
 // MARK: - Session metadata returned by GET /api/agent/sessions
 
 struct AgentSessionInfo: Identifiable, Decodable {
@@ -44,6 +52,29 @@ final class AgentThinkingModel: ObservableObject {
     @Published var remainingContextTokens: Int = 0
     /// Human-readable name of the current session.
     @Published var currentSessionTitle: String = "New Session"
+    /// Compact transcript of the previous turns for a resumed session.
+    @Published var sessionHistory: [SessionHistoryEntry] = []
+    // MARK: - Default session (UserDefaults-backed)
+
+    /// UserDefaults key for the stored default session.
+    static let defaultSessionStorageKey = "AgentDefaultSessionId"
+    /// Sentinel stored in UserDefaults when "New Session" is the default.
+    static let newSessionSentinel = "__new_session__"
+
+    /// Read/write the stored default session value.
+    /// - `nil`  → no default configured (always show the picker)
+    /// - `newSessionSentinel` → always start a new session without showing the picker
+    /// - any other string → use that session ID as the default
+    static var storedDefaultSessionId: String? {
+        get {
+            let raw = UserDefaults.standard.string(forKey: defaultSessionStorageKey) ?? ""
+            return raw.isEmpty ? nil : raw
+        }
+        set {
+            // Store empty string for nil so @AppStorage(default:"") stays in sync.
+            UserDefaults.standard.set(newValue ?? "", forKey: defaultSessionStorageKey)
+        }
+    }
 
     private init() {}
 
@@ -58,6 +89,7 @@ final class AgentThinkingModel: ObservableObject {
         isShowingSessionPicker = false
         remainingContextTokens = 0
         currentSessionTitle = "New Session"
+        sessionHistory = []
 
         if let initial = initialText, !initial.isEmpty {
             log = initial
@@ -150,6 +182,25 @@ final class AgentThinkingModel: ObservableObject {
                     self.remainingContextTokens = ctx.remainingContextTokens
                     self.currentSessionTitle = ctx.title
                 }
+            }
+        }.resume()
+    }
+
+    /// Fetch the compact message transcript for a resumed session.
+    func fetchSessionHistory(for sessionId: String) {
+        guard let token = SubscriptionManager.shared.jwtToken, !token.isEmpty else { return }
+        let url = APIClient.baseURL
+            .appendingPathComponent("api/agent/sessions")
+            .appendingPathComponent(sessionId)
+            .appendingPathComponent("messages")
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, _, _ in
+            guard let self, let data else { return }
+            struct Response: Decodable { let messages: [SessionHistoryEntry] }
+            if let body = try? JSONDecoder().decode(Response.self, from: data) {
+                DispatchQueue.main.async { self.sessionHistory = body.messages }
             }
         }.resume()
     }
