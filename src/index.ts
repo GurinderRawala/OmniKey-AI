@@ -13,6 +13,7 @@ import { attachAgentWebSocketServer, createAgentRouter } from './agent/agentServ
 import { AppDownload } from './models/appDownload';
 // Importing AgentSession ensures the model is registered with Sequelize before initDatabase().
 import './models/agentSession';
+import { incrementDownloadCount, getDownloadCounts } from './bucket-adapter';
 
 const app = express();
 const PORT = Number(config.port);
@@ -45,6 +46,8 @@ app.get('/macos/download', (_req, res) => {
     'Content-Disposition': 'attachment; filename="OmniKeyAI.dmg"',
     'Content-Encoding': 'gzip',
   });
+
+  incrementDownloadCount('macos').catch(() => {});
 
   const fileStream = fs.createReadStream(dmgPath);
   const gzip = zlib.createGzip();
@@ -130,6 +133,8 @@ app.get('/windows/download', (_req, res) => {
     'Content-Encoding': 'gzip',
   });
 
+  incrementDownloadCount('windows').catch(() => {});
+
   const fileStream = fs.createReadStream(WIN_ZIP_PATH);
   const gzip = zlib.createGzip();
 
@@ -162,6 +167,16 @@ app.get('/windows/update', (req, res) => {
     fileSize,
     releaseNotes: '',
   });
+});
+
+app.get('/downloads/stats', async (_req, res) => {
+  try {
+    const counts = await getDownloadCounts();
+    res.json(counts);
+  } catch (err) {
+    logger.error('Failed to retrieve download stats.', { error: err });
+    res.status(500).json({ error: 'Unable to retrieve download stats.' });
+  }
 });
 
 app.get('/health', (_req, res) => {

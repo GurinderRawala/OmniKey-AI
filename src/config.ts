@@ -96,4 +96,8 @@ export const config = {
 
   terminalPlatform: getEnv('TERMINAL_PLATFORM', false),
   blockSaas: getBooleanEnv('BLOCK_SAAS', false),
+
+  // GCS download-count tracking (both must be set to enable counting)
+  gcsBucketName: getEnv('GCS_BUCKET_NAME', false),
+  gcsDownloadCountObject: getEnv('GCS_DOWNLOAD_COUNT_OBJECT', false),
 };
