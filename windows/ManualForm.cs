@@ -118,14 +118,64 @@ namespace OmniKey.Windows
             AppendDivider(rtb);
             AppendTitle(rtb, "Running tasks with @omniAgent");
             AppendBody(rtb,
-                "You can ask the Omni agent to perform tasks for you using the @omniAgent command.\n\n" +
+                "OmniAgent is an AI agent that can perform multi-step tasks by combining your instructions with " +
+                "real-time context gathered from your terminal and the web.\n\n" +
+                "How to use it:\n" +
                 "- Type \"@omniAgent\" followed by clear instructions for what you want done.\n" +
                 "    Example: \"@omniAgent Set up a new README section describing the API routes.\"\n" +
                 "- Select the text containing your @omniAgent instructions.\n" +
-                "- Press Ctrl+T to run your custom task.\n\n" +
-                "If you have Task Instructions configured, the agent will combine those with the instructions you provided using \"@omniAgent\" and then execute the task.\n\n" +
-                "The agent can access your terminal and perform actions through it, but it runs with restricted permissions. " +
-                "It cannot run commands with \"sudo\" or install additional software needed to complete tasks.");
+                "- Press Ctrl+T to trigger the agent.\n\n" +
+                "What the agent can do:\n" +
+                "- Run terminal commands to gather context (e.g. read files, check git status, run tests).\n" +
+                "- Search the web for real-time information using your configured search provider.\n" +
+                "- Combine results from both sources to produce a final answer, which is pasted back in place.\n\n" +
+                "If you have Task Instructions configured, the agent combines those with your @omniAgent " +
+                "instructions to tailor its behavior to your role and preferences.\n\n" +
+                "Note: The agent runs with the same permissions as your Windows user account. It cannot " +
+                "run commands that require elevation (\"Run as Administrator\").");
+
+            AppendDivider(rtb);
+            AppendTitle(rtb, "OmniAgent sessions");
+            AppendBody(rtb,
+                "Each @omniAgent run belongs to a session. Sessions let the agent remember prior " +
+                "context across multiple runs — useful for long-running or iterative tasks.\n\n" +
+                "Choosing a session when you run @omniAgent:\n" +
+                "- If no default is set, a picker dialog appears before each run.\n" +
+                "- Select \"Start a new session\" to begin fresh every time.\n" +
+                "- Select \"Resume an existing session\" and pick one from the list to continue where you left off.\n" +
+                "- Check \"Remember this as default and skip this picker next time\" to save your choice " +
+                "so the dialog is skipped automatically on future runs.\n\n" +
+                "Managing your default session:\n" +
+                "- Use the History button (bottom-left of the OmniAgent window) at any time to open the " +
+                "session settings and change your default.\n" +
+                "- You can also open \"OmniAgent Session\" from the tray menu to do the same.\n" +
+                "- Click \"Clear Default\" inside the session settings to go back to always being asked.\n\n" +
+                "The session list shows each session's name, number of turns, and remaining context tokens, " +
+                "so you can choose the right one for your task.");
+
+            AppendDivider(rtb);
+            AppendTitle(rtb, "Web search providers");
+            AppendBody(rtb,
+                "OmniAgent can search the web while working on your task. The provider is configured " +
+                "via the OmniKey CLI during onboarding (run \"omnikey onboard\").\n\n" +
+                "Supported providers:\n" +
+                "- DuckDuckGo        — default fallback, no API key required.\n" +
+                "- Serper            — Google Search API, ~2,500 free requests/month.\n" +
+                "- Brave Search      — ~2,000 free requests/month.\n" +
+                "- Tavily            — optimized for AI agents, ~1,000 free requests/month.\n" +
+                "- SearXNG           — self-hosted, no key needed (provide your instance URL).\n\n" +
+                "If no provider is configured, OmniKey falls back to DuckDuckGo automatically.");
+
+            AppendDivider(rtb);
+            AppendTitle(rtb, "LLM providers");
+            AppendBody(rtb,
+                "OmniKey supports multiple AI backends. Select and configure your preferred provider " +
+                "during setup by running \"omnikey onboard\" in the CLI.\n\n" +
+                "Supported providers:\n" +
+                "- OpenAI      — GPT-4 and later models.\n" +
+                "- Anthropic   — Claude models.\n" +
+                "- Google      — Gemini models.\n\n" +
+                "You can switch providers at any time by re-running \"omnikey onboard\".");
 
             // Scroll back to top after populating
             rtb.SelectionStart = 0;

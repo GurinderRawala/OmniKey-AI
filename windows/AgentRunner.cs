@@ -35,7 +35,8 @@ namespace OmniKey.Windows
         public static async Task<string> RunAgentSessionAsync(
             string originalText,
             IAgentSession thinkingForm,
-            CancellationToken ct)
+            CancellationToken ct,
+            string? selectedSessionId = null)
         {
             // Mirror macOS: if a JWT already exists use it with allowReauth:true so
             // an expired token is transparently refreshed on 401/403.  If we had to
@@ -49,14 +50,20 @@ namespace OmniKey.Windows
                     throw new InvalidOperationException("Subscription is not active.");
             }
 
-            return await ConnectAndRunAsync(originalText, thinkingForm, ct, allowReauth: hadToken);
+            return await ConnectAndRunAsync(
+                originalText,
+                thinkingForm,
+                ct,
+                allowReauth: hadToken,
+                selectedSessionId: selectedSessionId);
         }
 
         private static async Task<string> ConnectAndRunAsync(
             string originalText,
             IAgentSession thinkingForm,
             CancellationToken ct,
-            bool allowReauth)
+            bool allowReauth,
+            string? selectedSessionId)
         {
             string wsUrl = MakeWebSocketUrl();
             string jwt = SubscriptionManager.Instance.JwtToken ?? "";
@@ -77,10 +84,17 @@ namespace OmniKey.Windows
                 _activeWebSocket = null;
                 bool ok = await SubscriptionManager.Instance.ReactivateStoredKeyIfNeededAsync();
                 if (!ok) throw new InvalidOperationException("Subscription is not active.");
-                return await ConnectAndRunAsync(originalText, thinkingForm, ct, allowReauth: false);
+                return await ConnectAndRunAsync(
+                    originalText,
+                    thinkingForm,
+                    ct,
+                    allowReauth: false,
+                    selectedSessionId: selectedSessionId);
             }
 
-            string sessionId = Guid.NewGuid().ToString();
+            string sessionId = string.IsNullOrWhiteSpace(selectedSessionId)
+                ? Guid.NewGuid().ToString()
+                : selectedSessionId;
 
             // Send initial message
             var initial = new AgentMessage

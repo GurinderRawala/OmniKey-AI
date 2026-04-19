@@ -81,6 +81,18 @@ $README = @"
 OmniKey AI $APP_VERSION – Windows ($Runtime)
 =============================================
 
+What's new in $APP_VERSION
+--------------------------
+- OmniAgent session management: when you trigger @omniAgent, a picker lets you
+  start a new session or resume an existing one.  You can remember your choice
+  as a default so the picker is skipped on future runs.
+- History button in the OmniAgent window: change your default session at any time
+  without re-running the agent.
+- "OmniAgent Session" tray menu item: open session settings directly from the tray.
+- Left-clicking the tray icon now opens the menu (previously right-click only).
+- Manual updated with detailed OmniAgent, session management, web search provider,
+  and LLM provider documentation.
+
 Installation
 ------------
 1. Extract this ZIP to any folder (e.g. C:\Program Files\OmniKeyAI\).
@@ -101,7 +113,7 @@ Hotkeys
 -------
   Ctrl+E  Enhance selected text
   Ctrl+G  Fix grammar of selected text
-  Ctrl+T  Run custom task on selected text
+  Ctrl+T  Run custom task on selected text (@omniAgent supported)
 
 Auto-update
 -----------
@@ -112,8 +124,8 @@ and open the download page in your browser.
 Uninstallation
 --------------
 Delete the folder you extracted the ZIP into.
-Registry key: HKCU\SOFTWARE\OmniKeyAI (subscription key cache) can be removed
-with: reg delete HKCU\SOFTWARE\OmniKeyAI /f
+Registry key: HKCU\SOFTWARE\OmniKeyAI (subscription key + session default) can be
+removed with: reg delete HKCU\SOFTWARE\OmniKeyAI /f
 "@
 
 $README | Set-Content (Join-Path $PUBLISH_DIR "README.txt") -Encoding UTF8

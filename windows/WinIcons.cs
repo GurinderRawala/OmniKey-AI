@@ -161,6 +161,18 @@ namespace OmniKey.Windows
             return bmp;
         }
 
+        public static Bitmap ClockIcon(int size, Color color)
+        {
+            var bmp = Blank(size);
+            using var g = AA(bmp);
+            using var pen = RoundPen(color, size * 0.09f);
+            float cx = size / 2f, cy = size / 2f, r = size * 0.42f;
+            g.DrawEllipse(pen, cx - r, cy - r, r * 2, r * 2);
+            g.DrawLine(pen, cx, cy, cx, cy - r * 0.58f);         // hour hand (12)
+            g.DrawLine(pen, cx, cy, cx + r * 0.52f, cy);         // minute hand (3)
+            return bmp;
+        }
+
         // ── Private helpers ───────────────────────────────────────────────────
 
         private static Bitmap Blank(int size) => new Bitmap(size, size);

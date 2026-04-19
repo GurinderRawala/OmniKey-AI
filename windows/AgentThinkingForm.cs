@@ -14,6 +14,7 @@ namespace OmniKey.Windows
         private readonly FlowLayoutPanel _logFlow;
         private readonly Label           _statusLabel;
         private readonly Button          _cancelButton;
+        private readonly Button          _historyButton;
         private readonly Panel           _bottomPanel;
 
         // Pulsing animation
@@ -94,7 +95,7 @@ namespace OmniKey.Windows
                 ImageAlign = ContentAlignment.MiddleLeft,
                 TextImageRelation = TextImageRelation.ImageBeforeText,
                 Size      = new Size(100, 32),
-                Location  = new Point(14, 10),
+                Location  = new Point(122, 10),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = NordColors.RedSectionFill,
                 ForeColor = NordColors.ErrorRed,
@@ -109,6 +110,34 @@ namespace OmniKey.Windows
                 SetRunning(false);
             };
 
+            _historyButton = new Button
+            {
+                Text      = "  History",
+                Image     = WinIcons.ClockIcon(12, NordColors.SecondaryText),
+                ImageAlign = ContentAlignment.MiddleLeft,
+                TextImageRelation = TextImageRelation.ImageBeforeText,
+                Size      = new Size(104, 32),
+                Location  = new Point(14, 10),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = NordColors.SurfaceBackground,
+                ForeColor = NordColors.PrimaryText,
+            };
+            _historyButton.FlatAppearance.BorderColor = NordColors.Border;
+            _historyButton.Click += async (_, _) =>
+            {
+                _historyButton.Enabled = false;
+                try
+                {
+                    await AgentSessionService.ShowSessionSettingsAsync(this);
+                }
+                catch { }
+                finally
+                {
+                    if (!IsDisposed && IsHandleCreated)
+                        _historyButton.Enabled = true;
+                }
+            };
+
             _statusLabel = new Label
             {
                 Text      = "Running...",
@@ -119,6 +148,7 @@ namespace OmniKey.Windows
             };
 
             _bottomPanel.Controls.Add(_cancelButton);
+            _bottomPanel.Controls.Add(_historyButton);
             _bottomPanel.Controls.Add(_statusLabel);
             _bottomPanel.SizeChanged += (_, _) => PositionStatusLabel();
             Controls.Add(_bottomPanel);

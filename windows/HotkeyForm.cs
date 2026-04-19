@@ -34,12 +34,22 @@ namespace OmniKey.Windows
             using var iconStream = assembly.GetManifestResourceStream("OmniKey.Windows.app.ico");
             var appIcon = iconStream != null ? new Icon(iconStream) : SystemIcons.Information;
 
+            var contextMenu = BuildContextMenu();
             _notifyIcon = new NotifyIcon
             {
                 Text             = "OmniKey AI",
                 Icon             = appIcon,
                 Visible          = true,
-                ContextMenuStrip = BuildContextMenu(),
+                ContextMenuStrip = contextMenu,
+            };
+            _notifyIcon.MouseClick += (_, e) =>
+            {
+                if (e.Button == MouseButtons.Left)
+                {
+                    SetForegroundWindow(Handle);
+                    var workArea = Screen.GetWorkingArea(Cursor.Position);
+                    contextMenu.Show(Cursor.Position.X, workArea.Bottom);
+                }
             };
         }
 
@@ -133,6 +143,10 @@ namespace OmniKey.Windows
             taskInstructionsItem.Click += (_, _) => ShowTaskInstructions();
             menu.Items.Add(taskInstructionsItem);
 
+            var agentSessionItem = new ToolStripMenuItem("OmniAgent Session");
+            agentSessionItem.Click += async (_, _) => await ShowAgentSessionPickerFromMenuAsync();
+            menu.Items.Add(agentSessionItem);
+
             var manualItem = new ToolStripMenuItem("Manual");
             manualItem.Click += (_, _) => ShowManual();
             menu.Items.Add(manualItem);
@@ -165,6 +179,18 @@ namespace OmniKey.Windows
         {
             var form = new ManualForm();
             form.Show(this);
+        }
+
+        private async Task ShowAgentSessionPickerFromMenuAsync()
+        {
+            try
+            {
+                await AgentSessionService.ShowSessionSettingsAsync(this);
+            }
+            catch (Exception ex)
+            {
+                ShowBalloon("OmniKey AI", "Session settings error: " + ex.Message);
+            }
         }
 
         // ─── Update checking ──────────────────────────────────────────
@@ -318,9 +344,27 @@ namespace OmniKey.Windows
 
         private async Task RunAgentWorkflowAsync(string originalText, IntPtr originalWindow)
         {
+            AgentSessionSelection? sessionSelection;
+            try
+            {
+                sessionSelection = await AgentSessionService.ResolveSelectionAsync(this);
+            }
+            catch (Exception ex)
+            {
+                ShowBalloon("OmniKey AI", "Session picker error: " + ex.Message);
+                return;
+            }
+
+            if (sessionSelection == null)
+            {
+                ShowBalloon("OmniKey AI", "Agent session cancelled.");
+                return;
+            }
+
             // Close any existing agent window
             _agentThinkingForm?.Close();
             _agentThinkingForm = new AgentThinkingForm();
+            _agentThinkingForm.Text = $"OmniAgent Session - {sessionSelection.SessionTitle} - OmniKey AI";
 
             _agentThinkingForm.Show(this);
             _agentThinkingForm.SetInitialRequest(originalText);
@@ -333,7 +377,11 @@ namespace OmniKey.Windows
             string result;
             try
             {
-                result = await AgentRunner.RunAgentSessionAsync(originalText, _agentThinkingForm, ct);
+                result = await AgentRunner.RunAgentSessionAsync(
+                    originalText,
+                    _agentThinkingForm,
+                    ct,
+                    sessionSelection.SessionId);
             }
             catch (OperationCanceledException)
             {

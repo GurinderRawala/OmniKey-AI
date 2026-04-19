@@ -115,7 +115,7 @@ app.get('/macos/appcast', (req, res) => {
 // ── Windows distribution endpoints ───────────────────────────────────────────
 // These should match the values in windows/OmniKey.Windows.csproj
 // <Version> and windows/build_release_zip.ps1 $APP_VERSION.
-const WIN_VERSION = '1.7';
+const WIN_VERSION = '1.8';
 const WIN_ZIP_FILENAME = 'OmniKeyAI-windows-win-x64.zip';
 const WIN_ZIP_PATH = path.join(process.cwd(), 'windows', WIN_ZIP_FILENAME);
 
@@ -165,7 +165,7 @@ app.get('/windows/update', (req, res) => {
     version: WIN_VERSION,
     downloadUrl: `${baseUrl}/windows/download`,
     fileSize,
-    releaseNotes: '',
+    releaseNotes: `What's new in ${WIN_VERSION}\n\n• OmniAgent session management — choose to start a new session or resume an existing one each time you run @omniAgent. Save a default to skip the picker automatically on future runs.\n• History button in the OmniAgent window — change your default session at any time without re-running the agent.\n• OmniAgent Session tray menu item — open session settings directly from the system tray.\n• Left-clicking the tray icon now opens the menu (previously right-click only).`,
   });
 });
 
