@@ -17,11 +17,6 @@ interface InstalledBrowser extends BrowserEntry {
   executablePath: string;
 }
 
-interface ProfileInfo {
-  dirName: string;
-  displayName: string;
-}
-
 const home = os.homedir();
 
 const WINDOWS_BROWSERS: BrowserEntry[] = [
@@ -144,35 +139,6 @@ function getInstalledBrowsers(catalogue: BrowserEntry[]): InstalledBrowser[] {
     .filter((b): b is InstalledBrowser => b !== null);
 }
 
-function getProfiles(userDataDir: string): ProfileInfo[] {
-  const profiles: ProfileInfo[] = [];
-  let profileNames: Record<string, string> = {};
-
-  try {
-    const raw = fs.readFileSync(path.join(userDataDir, 'Local State'), 'utf8');
-    const infoCache = JSON.parse(raw)?.profile?.info_cache ?? {};
-    for (const [dirName, info] of Object.entries(infoCache)) {
-      profileNames[dirName] = (info as any)?.name ?? dirName;
-    }
-  } catch {}
-
-  try {
-    const entries = fs.readdirSync(userDataDir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      const { name } = entry;
-      if (name === 'Default' || /^Profile \d+$/.test(name)) {
-        profiles.push({ dirName: name, displayName: profileNames[name] || name });
-      }
-    }
-  } catch {}
-
-  if (profiles.length === 0) {
-    profiles.push({ dirName: 'Default', displayName: 'Default' });
-  }
-
-  return profiles;
-}
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise((resolve) => {
@@ -685,58 +651,13 @@ const MACOS_PROCESS_NAMES: Record<string, string> = {
   Safari: 'Safari',
 };
 
-function isBrowserRunning(browserName: string): boolean {
-  const processName = MACOS_PROCESS_NAMES[browserName];
-  if (!processName) return false;
-  try {
-    execSync(`pgrep -xq "${processName}"`, { stdio: ['pipe', 'pipe', 'pipe'] });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function patchChromiumPreferences(browserName: string, userDataDir: string): [number, number] {
-  const profiles = getProfiles(userDataDir);
-  let updated = 0;
-  let skipped = 0;
-
-  for (const profile of profiles) {
-    const prefsPath = path.join(userDataDir, profile.dirName, 'Preferences');
-    if (!fs.existsSync(prefsPath)) {
-      skipped++;
-      continue;
-    }
-    try {
-      const prefs = JSON.parse(fs.readFileSync(prefsPath, 'utf8'));
-      if (prefs?.devtools?.allow_javascript_apple_events === true) {
-        console.log(`  ${browserName} › ${profile.displayName}: already enabled`);
-        updated++;
-        continue;
-      }
-      if (!prefs.devtools) prefs.devtools = {};
-      prefs.devtools.allow_javascript_apple_events = true;
-      fs.writeFileSync(prefsPath, JSON.stringify(prefs), 'utf-8');
-      console.log(`  ${browserName} › ${profile.displayName}: enabled`);
-      updated++;
-    } catch (err) {
-      console.warn(
-        `  ${browserName} › ${profile.displayName}: failed — ${err instanceof Error ? err.message : String(err)}`,
-      );
-      skipped++;
-    }
-  }
-
-  return [updated, skipped];
-}
 
 async function setupAppleScript(): Promise<void> {
   const chromiumInstalled = getInstalledBrowsers(MACOS_BROWSERS);
   const safariPresent = fs.existsSync('/Applications/Safari.app');
 
-  type BrowserChoice = { name: string; value: string; userDataDir?: string };
-  const choices: BrowserChoice[] = [
-    ...chromiumInstalled.map((b) => ({ name: b.name, value: b.name, userDataDir: b.userDataDir })),
+  const choices = [
+    ...chromiumInstalled.map((b) => ({ name: b.name, value: b.name })),
     ...(safariPresent ? [{ name: 'Safari', value: 'Safari' }] : []),
   ];
 
@@ -750,67 +671,35 @@ async function setupAppleScript(): Promise<void> {
       type: 'checkbox',
       name: 'selectedNames',
       message: 'Select browsers to enable "Allow JavaScript from Apple Events":',
-      choices: choices.map((c) => ({ name: c.name, value: c.value })),
+      choices,
       validate: (input: string[]) => input.length > 0 || 'Select at least one browser.',
     },
   ]);
 
-  const runningSelected = selectedNames.filter((n) => n !== 'Safari' && isBrowserRunning(n));
-  if (runningSelected.length > 0) {
-    console.log(
-      `\nWarning: the following browser(s) are currently running and will overwrite` +
-        ` their Preferences file when they close, reverting this change:\n` +
-        runningSelected.map((n) => `  • ${n}`).join('\n'),
-    );
-    const { proceed } = await inquirer.prompt([
-      {
-        type: 'confirm',
-        name: 'proceed',
-        message: 'Quit those browsers now and then continue? (Choose No to cancel)',
-        default: true,
-      },
-    ]);
-    if (!proceed) {
-      console.log('Cancelled. Quit the browser(s) first, then re-run this command.');
-      return;
-    }
-    await inquirer.prompt([
-      {
-        type: 'input',
-        name: '_',
-        message: `Close ${runningSelected.join(', ')} completely, then press Enter to continue…`,
-      },
-    ]);
-  }
-
-  console.log('');
+  console.log('\nFollow these steps for each selected browser:\n');
 
   for (const name of selectedNames) {
     if (name === 'Safari') {
-      try {
-        execSync('defaults write com.apple.Safari AllowJavaScriptFromAppleEvents -bool YES', {
-          stdio: ['pipe', 'pipe', 'pipe'],
-        });
-        console.log('  Safari: enabled  (restart Safari to apply)');
-      } catch (err) {
-        console.error(`  Safari: failed — ${err instanceof Error ? err.message : String(err)}`);
-      }
-      continue;
-    }
-
-    const entry = chromiumInstalled.find((b) => b.name === name);
-    if (!entry) continue;
-
-    const [updated, skipped] = patchChromiumPreferences(name, entry.userDataDir);
-    if (skipped > 0) {
-      console.log(`  ${name}: ${updated} profile(s) updated, ${skipped} skipped`);
+      console.log(
+        'Safari:\n' +
+          '  1. Open Safari → Settings (Cmd + ,) → Advanced tab\n' +
+          '  2. Check "Show features for web developers" (enables the Develop menu)\n' +
+          '  3. In the menu bar choose Develop → Allow JavaScript from Apple Events\n',
+      );
+    } else {
+      console.log(
+        `${name}:\n` +
+          '  1. Open the browser\n' +
+          '  2. Open DevTools:  Cmd + Option + I\n' +
+          '  3. Click the gear icon (⚙) in the top-right corner of the DevTools panel\n' +
+          '  4. Under the "Preferences" tab scroll to the "Sources" section\n' +
+          '  5. Check "Allow JavaScript from Apple Events"\n' +
+          '  6. Close DevTools — the setting takes effect immediately\n',
+      );
     }
   }
 
-  console.log(
-    '\nDone. Restart each browser for the change to take effect.\n' +
-      'Omnikey will read content directly from the active tab — no port configuration needed.',
-  );
+  console.log('Once enabled, Omnikey can read content directly from the active tab.');
 }
 
 export async function grantBrowserAccess(): Promise<void> {
@@ -822,7 +711,7 @@ export async function grantBrowserAccess(): Promise<void> {
         message: 'How should Omnikey access authenticated browser tabs?',
         choices: [
           {
-            name: 'Remote Debugging Port  — launch browser with CDP; works on all Chromium browsers (recommended)',
+            name: 'Remote Debugging Port  — launch browser with CDP; works on all Chromium browsers',
             value: 'debugging-port',
           },
           {
