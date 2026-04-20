@@ -207,7 +207,7 @@ async function fetchPlainHttp(
     // sites use redirects, 302s, custom error pages, or soft-blocks
     // rather than a clean 401/403, so checking status codes alone is
     // unreliable. Fall through to the browser-session path instead.
-    if (isSelfHostedWithBrowserSession && await isBrowserOpenWithUrl(url, log)) {
+    if (isSelfHostedWithBrowserSession && (await isBrowserOpenWithUrl(url, log))) {
       return { html: null, authBlocked: true, finalUrl: url };
     }
     if (status === 401 || status === 403) {

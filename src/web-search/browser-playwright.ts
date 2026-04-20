@@ -492,10 +492,9 @@ async function isBrowserOpenWithUrlWindows(url: string, log: Logger): Promise<bo
 
   for (const port of candidatePorts) {
     try {
-      const resp = await axios.get<{ url?: string }[]>(
-        `http://127.0.0.1:${port}/json`,
-        { timeout: 800 },
-      );
+      const resp = await axios.get<{ url?: string }[]>(`http://127.0.0.1:${port}/json`, {
+        timeout: 800,
+      });
       if (!Array.isArray(resp.data)) continue;
       const found = resp.data.some((tab) => {
         try {

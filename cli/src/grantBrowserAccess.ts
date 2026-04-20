@@ -139,7 +139,6 @@ function getInstalledBrowsers(catalogue: BrowserEntry[]): InstalledBrowser[] {
     .filter((b): b is InstalledBrowser => b !== null);
 }
 
-
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise((resolve) => {
     const server = net.createServer();
@@ -651,7 +650,6 @@ const MACOS_PROCESS_NAMES: Record<string, string> = {
   Safari: 'Safari',
 };
 
-
 async function setupAppleScript(): Promise<void> {
   const chromiumInstalled = getInstalledBrowsers(MACOS_BROWSERS);
   const safariPresent = fs.existsSync('/Applications/Safari.app');
@@ -788,9 +786,7 @@ async function recoverDebugConfig(): Promise<DebugConfig | null> {
 
   if (candidates.length === 1) {
     chosen = candidates[0];
-    console.log(
-      `Recovered debug profile: ${chosen.browser.name} › ${chosen.profileDir}`,
-    );
+    console.log(`Recovered debug profile: ${chosen.browser.name} › ${chosen.profileDir}`);
   } else {
     const { selection } = await inquirer.prompt([
       {
@@ -807,9 +803,10 @@ async function recoverDebugConfig(): Promise<DebugConfig | null> {
   }
 
   const cfg = readConfig();
-  const port = Number.isFinite(Number(cfg['BROWSER_DEBUG_PORT'])) && Number(cfg['BROWSER_DEBUG_PORT']) > 0
-    ? Number(cfg['BROWSER_DEBUG_PORT'])
-    : await findAvailablePort(9222);
+  const port =
+    Number.isFinite(Number(cfg['BROWSER_DEBUG_PORT'])) && Number(cfg['BROWSER_DEBUG_PORT']) > 0
+      ? Number(cfg['BROWSER_DEBUG_PORT'])
+      : await findAvailablePort(9222);
 
   return {
     browserName: chosen.browser.name,
