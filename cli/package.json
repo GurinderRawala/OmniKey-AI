@@ -4,7 +4,7 @@
     "access": "public",
     "registry": "https://registry.npmjs.org/"
   },
-  "version": "1.0.27",
+  "version": "1.0.28",
   "description": "CLI for onboarding users to Omnikey AI and configuring OPENAI_API_KEY. Use Yarn for install/build.",
   "engines": {
     "node": ">=14.0.0",
@@ -27,25 +27,26 @@
   "author": "Gurinder Rawala",
   "license": "MIT",
   "dependencies": {
-    "commander": "^11.0.0",
-    "inquirer": "^9.0.0",
+    "@anthropic-ai/sdk": "^0.80.0",
+    "@google-cloud/storage": "^7.19.0",
+    "@google/genai": "^1.46.0",
     "axios": "^1.13.5",
+    "commander": "^11.0.0",
     "cors": "^2.8.5",
     "cuid": "^3.0.0",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
+    "inquirer": "^9.0.0",
     "jsonwebtoken": "^9.0.3",
     "openai": "^6.16.0",
-    "@anthropic-ai/sdk": "^0.80.0",
-    "@google/genai": "^1.46.0",
     "pg": "^8.18.0",
     "pg-hstore": "^2.3.4",
+    "playwright-core": "^1.50.0",
     "sequelize": "^6.37.7",
     "sqlite3": "^5.1.6",
     "winston": "^3.19.0",
     "ws": "^8.18.0",
-    "zod": "^4.3.6",
-    "playwright-core": "^1.50.0"
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/inquirer": "^9.0.9",

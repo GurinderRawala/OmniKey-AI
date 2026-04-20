@@ -9,6 +9,7 @@ import { statusCmd } from './status';
 import { showLogs } from './showLogs';
 import { showConfig } from './showConfig';
 import { setConfig } from './setConfig';
+import { grantBrowserAccess, reopenBrowserDebugProfile } from './grantBrowserAccess';
 
 const program = new Command();
 
@@ -88,6 +89,24 @@ program
     killDaemon();
     const port = Number(options.port) || 7071;
     await startDaemon(port);
+  });
+
+program
+  .command('grant-browser-access')
+  .description(
+    'Set up authenticated browser tab access for web fetch. ' +
+      'Detects installed browsers, selects a profile, and configures a remote debugging port (CDP). ' +
+      'On macOS you can also choose AppleScript mode instead.',
+  )
+  .action(async () => {
+    await grantBrowserAccess();
+  });
+
+program
+  .command('browser open')
+  .description('Reopen the browser with the Omnikey debug profile')
+  .action(async () => {
+    await reopenBrowserDebugProfile();
   });
 
 program.parseAsync(process.argv);

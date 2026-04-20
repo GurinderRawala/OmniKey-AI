@@ -1003,6 +1003,24 @@ code {
   color: var(--text-3);
 }
 
+.download-count-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-bottom: 14px;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--text-2);
+  background: rgba(109,40,217,0.07);
+  border: 1px solid rgba(109,40,217,0.18);
+  border-radius: 999px;
+  padding: 5px 14px;
+  width: fit-content;
+  margin-left: auto;
+  margin-right: auto;
+}
+
 .download-stats {
   display: flex;
   align-items: center;
@@ -1189,4 +1207,40 @@ footer a:hover { color: var(--text); }
   font-weight: 600;
   color: var(--cyan);
   margin-bottom: 6px;
+}
+
+/* Auth manual-setup tabs */
+.auth-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 2px;
+  flex-wrap: wrap;
+}
+
+.auth-tab {
+  padding: 5px 12px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  font-family: inherit;
+}
+
+.auth-tab:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.auth-tab-active {
+  background: var(--surface-2);
+  border-color: var(--cyan);
+  color: var(--cyan);
+}
+
+.auth-tab-panel {
+  padding-top: 4px;
 }

@@ -18,6 +18,7 @@ OmnikeyAI is a productivity tool that helps you quickly rewrite selected text us
 - Optional **web search tool** integration for enhanced responses.
 - Accepts CLI flags for non-interactive setup.
 - Configure and run the backend daemon — persisted across reboots on both macOS and Windows.
+- `omnikey grant-browser-access`: One-time setup to give Omnikey access to authenticated browser tabs for web fetch.
 
 ## Usage
 
@@ -57,6 +58,12 @@ omnikey logs --lines 100
 
 # Check daemon error logs only
 omnikey logs --errors
+
+# Grant Omnikey access to authenticated browser tabs
+omnikey grant-browser-access
+
+# Reopen the browser with its saved Omnikey debug profile at any time
+omnikey browser open
 ```
 
 ### Command reference
@@ -72,6 +79,49 @@ omnikey logs --errors
 | `omnikey remove-config [--db]` | Remove config files; add `--db` to also delete the database |
 | `omnikey status` | Show what process is using the daemon port |
 | `omnikey logs [--lines N] [--errors]` | Tail daemon logs |
+| `omnikey grant-browser-access` | Set up authenticated browser tab access for web fetch |
+| `omnikey browser open` | Reopen the browser with the saved Omnikey debug profile |
+
+## Browser access (`grant-browser-access` / `browser open`)
+
+Omnikey can read content from your authenticated browser tabs when fetching web pages that require a login. `omnikey grant-browser-access` performs a guided, one-time setup to enable this.
+
+After setup, run `omnikey browser open` at any time to relaunch the browser with its saved Omnikey debug profile (kills any running instance first, cleans up stale lock files, then re-launches and confirms the debug port is active).
+
+### Windows
+
+On Windows the only supported method is **Remote Debugging Port (CDP)**:
+
+1. Detects installed browsers (Chrome, Edge, Brave).
+2. Prompts you to select a browser and profile.
+3. Finds an available port starting at 9222.
+4. Saves `BROWSER_DEBUG_PORT` to `~/.omnikey/config.json`.
+5. Registers a **Windows Registry Run key** (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run\OmnikeyBrowserDebug`) so the browser launches automatically with `--remote-debugging-port=<port>` on every login.
+6. Force-kills any running browser processes, waits until they are fully gone, then launches the browser immediately.
+7. Verifies the debug port is reachable at `http://127.0.0.1:<port>/json` and reports success or a diagnostic error.
+
+Re-running the command when a startup entry already exists lets you **Update** (change browser/profile/port) or **Remove** (disable the startup entry).
+
+### macOS
+
+On macOS you choose between two methods:
+
+#### Remote Debugging Port (CDP) — recommended
+
+Same flow as Windows, but the startup entry is written as a **launchd agent** (`~/Library/LaunchAgents/com.omnikey.browser-debug.plist`) loaded immediately with `launchctl`.
+
+Supported browsers: Chrome, Brave, Edge, Arc, Vivaldi, Opera, Chromium.
+
+#### AppleScript
+
+No port or browser restart needed. Omnikey reads the live tab content directly via Apple Events.
+
+The CLI automatically enables **"Allow JavaScript from Apple Events"** for every selected browser:
+
+- **Chrome / Brave / Edge / Arc / Vivaldi / Opera** — patches the `devtools.allow_javascript_apple_events` key in each profile's `Preferences` JSON file. The browser must be closed before patching (the CLI will warn you if it is still running).
+- **Safari** — runs `defaults write com.apple.Safari AllowJavaScriptFromAppleEvents -bool YES`.
+
+Both changes are permanent and survive reboots. Restart each browser once after setup for the change to take effect.
 
 ## Platform notes
 
