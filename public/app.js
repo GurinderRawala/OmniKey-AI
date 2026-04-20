@@ -1,5 +1,26 @@
 document.getElementById('year').textContent = new Date().getFullYear();
 
+// Fetch total download count and display above download buttons
+(function () {
+  fetch('https://omnikeyai.ca/downloads/stats')
+    .then((r) => r.ok ? r.json() : Promise.reject(r.status))
+    .then((data) => {
+      const total = (data.macos || 0) + (data.windows || 0);
+      if (total <= 0) return;
+      const formatted = total.toLocaleString();
+      const label = `${formatted} total downloads`;
+      ['hero', 'cta'].forEach((id) => {
+        const badge = document.getElementById(`download-count-${id}`);
+        const text = document.getElementById(`download-count-${id}-text`);
+        if (badge && text) {
+          text.textContent = label;
+          badge.hidden = false;
+        }
+      });
+    })
+    .catch(() => { /* silently skip if unavailable */ });
+})();
+
 // Detect platform and highlight the matching download button
 (function () {
   const ua = navigator.userAgent.toLowerCase();
@@ -45,6 +66,28 @@ document.getElementById('year').textContent = new Date().getFullYear();
         panel.hidden = panel.dataset.codeContent !== target;
       });
     });
+  });
+
+  // Authenticated-browsing manual-setup tab switcher
+  function activateAuthTab(tab) {
+    const target = tab.dataset.authTab;
+    const box = tab.closest('.auth-setup-box');
+    box.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('auth-tab-active'));
+    tab.classList.add('auth-tab-active');
+    box.querySelectorAll('[data-auth-panel]').forEach(panel => {
+      panel.hidden = panel.dataset.authPanel !== target;
+    });
+  }
+
+  document.querySelectorAll('.auth-tab').forEach(tab => {
+    tab.addEventListener('click', () => activateAuthTab(tab));
+  });
+
+  // Pre-select the tab matching the visitor's OS — AppleScript is default on macOS (easiest setup)
+  const defaultAuthTab = isWin ? 'win' : 'mac-as';
+  document.querySelectorAll('.auth-tabs').forEach(tabList => {
+    const match = tabList.querySelector(`[data-auth-tab="${defaultAuthTab}"]`);
+    if (match) activateAuthTab(match);
   });
 
   // Scroll-reveal via IntersectionObserver

@@ -917,7 +917,11 @@ export function createAgentRouter(): express.Router {
             cleaned.length > MAX_CHARS
               ? cleaned.slice(0, MAX_CHARS) + '… [message truncated]'
               : cleaned;
-          return { id: `${index}-${m.role}`, role: m.role as 'user' | 'assistant', text: truncated };
+          return {
+            id: `${index}-${m.role}`,
+            role: m.role as 'user' | 'assistant',
+            text: truncated,
+          };
         })
         .filter((m) => m.text.length > 0);
 

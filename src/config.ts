@@ -97,6 +97,14 @@ export const config = {
   terminalPlatform: getEnv('TERMINAL_PLATFORM', false),
   blockSaas: getBooleanEnv('BLOCK_SAAS', false),
 
+  // User-configured CDP debug port (set by `omnikey grant-browser-access`)
+  browserDebugPort: (() => {
+    const raw = getEnv('BROWSER_DEBUG_PORT', false);
+    if (!raw) return undefined;
+    const n = parseInt(raw, 10);
+    return Number.isNaN(n) ? undefined : n;
+  })(),
+
   // GCS download-count tracking (both must be set to enable counting)
   gcsBucketName: getEnv('GCS_BUCKET_NAME', false),
   gcsDownloadCountObject: getEnv('GCS_DOWNLOAD_COUNT_OBJECT', false),

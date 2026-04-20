@@ -77,14 +77,6 @@
       </div>
     </nav>
 
-    <!-- ── New Feature Banner ── -->
-    <div class="new-feature-banner">
-      <span class="new-feature-pill">New</span>
-      <span class="new-feature-text">
-        OmniKey can now read authenticated sessions from your live browser tab — so <code>@omniAgent</code> works on private dashboards &amp; logged-in pages.
-        <a href="#authenticated-browsing" class="new-feature-link">Learn how to enable it &rarr;</a>
-      </span>
-    </div>
 
     <!-- ── Hero ── -->
     <section class="hero">
@@ -95,7 +87,7 @@
       <div class="hero-content">
         <div class="hero-badge">
           <span class="hero-badge-dot"></span>
-          Free &amp; Open Source &nbsp;·&nbsp; macOS + Windows &nbsp;·&nbsp; <strong style="color:var(--amber)">New: Authenticated Browser Reading</strong>
+          Free &amp; Open Source &nbsp;·&nbsp; macOS + Windows &nbsp;·&nbsp; <strong style="color:var(--amber)">Authenticated Browser Reading</strong>
         </div>
         <h1 class="hero-title">
           <span class="gradient-text">AI-powered</span> text<br>enhancement, anywhere.
@@ -103,6 +95,10 @@
         <p class="hero-desc">
           Select any text, press a shortcut — OmniKey enhances prompts, fixes grammar, and runs custom AI tasks in any app, on any screen.
         </p>
+        <div class="download-count-badge" id="download-count-hero" hidden>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          <span id="download-count-hero-text"></span>
+        </div>
         <div class="hero-actions">
           <a href="/macos/download" class="btn btn-primary btn-mac">
             <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18" aria-hidden="true">
@@ -338,28 +334,105 @@
             </ol>
           </div>
           <div class="feature-item feature-item-new scroll-reveal" id="authenticated-browsing">
-            <div class="feature-new-badge">New &mdash; macOS only</div>
+            <div class="feature-new-badge">macOS &amp; Windows</div>
             <h3>Authenticated Browser Session Reading</h3>
-            <p>OmniKey can now read content directly from your <strong>live browser tab</strong> — including pages that require login. The <code>@omniAgent</code> can work with private dashboards, internal docs, and authenticated tools without any copy-pasting.</p>
-            <p style="margin-top:8px;font-size:0.85rem;color:var(--text-2)">Works with: <strong>Chrome, Brave, Edge, Arc, Vivaldi, Opera, Chromium</strong> and <strong>Safari</strong>.</p>
+            <p>OmniKey reads content directly from your <strong>live browser tab</strong> — including pages that require login. The <code>@omniAgent</code> can work with private dashboards, internal docs, and authenticated tools without any copy-pasting.</p>
+            <p style="margin-top:8px;font-size:0.85rem;color:var(--text-2)">Works with: <strong>Chrome, Brave, Edge</strong> on Windows &nbsp;·&nbsp; <strong>Chrome, Brave, Edge, Arc, Vivaldi, Opera, Chromium, Safari</strong> on macOS.</p>
+
+            <!-- CLI setup -->
             <div class="auth-setup-box">
-              <p class="auth-setup-title">One-time setup — enable "Allow JavaScript from Apple Events"</p>
-              <div class="auth-browser-group">
-                <p class="auth-browser-label">Chrome, Brave, Edge, Arc, Vivaldi, Opera, Chromium</p>
+              <p class="auth-setup-title">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="vertical-align:-2px;margin-right:5px"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M8 10l4 4 4-4"/></svg>
+                Recommended: one command does everything
+              </p>
+              <pre><code>omnikey grant-browser-access</code></pre>
+              <p style="margin-top:8px;font-size:0.82rem;color:var(--text-2)">
+                The CLI detects your installed browsers, creates a <strong>dedicated Omnikey debug profile</strong> stored at
+                <code>~/.omnikey/browser-debug-profiles/</code>, finds a free debug port, registers a permanent login startup entry,
+                and verifies the connection — all in one guided flow.<br><br>
+                Because a fresh profile is used, you sign in to your accounts <strong>once</strong> inside it.
+                Your main browser profile is never touched, and the debug profile persists between sessions.
+              </p>
+              <p style="margin-top:10px;font-size:0.82rem;color:var(--text-2)">
+                After setup, reopen the browser with its Omnikey debug profile any time using:
+              </p>
+              <pre style="margin-top:6px"><code>omnikey browser open</code></pre>
+            </div>
+
+            <!-- Manual setup tabs -->
+            <div class="auth-setup-box" style="margin-top:12px">
+              <p class="auth-setup-title">Manual setup</p>
+              <div class="auth-tabs" role="tablist">
+                <button class="auth-tab" role="tab" data-auth-tab="win">Windows</button>
+                <button class="auth-tab" role="tab" data-auth-tab="mac-cdp">macOS — Debug Port</button>
+                <button class="auth-tab auth-tab-active" role="tab" data-auth-tab="mac-as">macOS — AppleScript</button>
+              </div>
+
+              <!-- Windows -->
+              <div class="auth-tab-panel" data-auth-panel="win" hidden>
+                <p class="auth-browser-label" style="margin-top:10px">Remote Debugging Port (CDP)</p>
+                <p style="font-size:0.82rem;color:var(--text-2);margin-bottom:8px">
+                  Modern Chrome no longer allows <code>--remote-debugging-port</code> with your existing user profile.
+                  You must point <code>--user-data-dir</code> at a <strong>dedicated, separate directory</strong>.
+                </p>
                 <ol class="how-list">
-                  <li>Open your page in any of the browsers above.</li>
+                  <li>Create a folder for the Omnikey debug profile — e.g.:
+                    <pre><code>mkdir "$env:USERPROFILE\.omnikey\browser-debug-profiles\chrome-default"</code></pre>
+                  </li>
+                  <li>Close all Chrome windows completely (check <strong>Task Manager → Details</strong> for any remaining <code>chrome.exe</code> processes).</li>
+                  <li>Launch Chrome pointing at the new profile — paste into <strong>PowerShell</strong>:
+                    <pre><code>& "C:\Program Files\Google\Chrome\Application\chrome.exe" `
+  '--remote-debugging-port=9222' `
+  "--user-data-dir=$env:USERPROFILE\.omnikey\browser-debug-profiles\chrome-default" `
+  '--no-first-run' '--no-default-browser-check'</code></pre>
+                  </li>
+                  <li>A fresh Chrome window opens. <strong>Sign in to your accounts</strong> — this profile persists, so you only do this once.</li>
+                  <li>Confirm the port is active: <a href="http://127.0.0.1:9222/json" target="_blank" rel="noopener noreferrer"><code>http://127.0.0.1:9222/json</code></a></li>
+                  <li>To auto-start on login, add this command as a Registry Run value under <code>HKCU\Software\Microsoft\Windows\CurrentVersion\Run</code>.</li>
+                </ol>
+                <p class="hint">Edge: replace <code>chrome.exe</code> with <code>msedge.exe</code>. Brave: use <code>brave.exe</code>.</p>
+              </div>
+
+              <!-- macOS CDP -->
+              <div class="auth-tab-panel" data-auth-panel="mac-cdp" hidden>
+                <p class="auth-browser-label" style="margin-top:10px">Remote Debugging Port (CDP) — Chrome, Brave, Edge, Arc, Vivaldi, Opera, Chromium</p>
+                <p style="font-size:0.82rem;color:var(--text-2);margin-bottom:8px">
+                  Modern Chrome requires a <strong>separate <code>--user-data-dir</code></strong> for remote debugging — using your existing profile is no longer supported.
+                </p>
+                <ol class="how-list">
+                  <li>Create a folder for the Omnikey debug profile:
+                    <pre><code>mkdir -p ~/.omnikey/browser-debug-profiles/chrome-default</code></pre>
+                  </li>
+                  <li>Quit the browser fully (<strong>⌘Q</strong>).</li>
+                  <li>Launch it from Terminal pointing at the new profile:
+                    <pre><code>"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  --remote-debugging-port=9222 \
+  --user-data-dir="$HOME/.omnikey/browser-debug-profiles/chrome-default" \
+  --no-first-run --no-default-browser-check</code></pre>
+                  </li>
+                  <li>A fresh browser window opens. <strong>Sign in to your accounts</strong> — this profile persists between sessions.</li>
+                  <li>Confirm the port is active: <a href="http://127.0.0.1:9222/json" target="_blank" rel="noopener noreferrer"><code>http://127.0.0.1:9222/json</code></a></li>
+                  <li>To auto-start on login, create a launchd plist at <code>~/Library/LaunchAgents/com.omnikey.browser-debug.plist</code> with <code>RunAtLoad = true</code> pointing to the same command.</li>
+                </ol>
+                <p class="hint">Replace the app path for Brave (<code>Brave Browser.app</code>), Edge (<code>Microsoft Edge.app</code>), etc. Use a different folder name per browser.</p>
+              </div>
+
+              <!-- macOS AppleScript -->
+              <div class="auth-tab-panel" data-auth-panel="mac-as">
+                <p class="auth-browser-label" style="margin-top:10px">Chrome, Brave, Edge, Arc, Vivaldi, Opera, Chromium</p>
+                <ol class="how-list">
                   <li>In the menu bar go to <strong>View &rarr; Developer &rarr; Allow JavaScript from Apple Events</strong>.</li>
-                  <li>Make sure it is <strong>checked</strong>.</li>
+                  <li>Make sure it is <strong>checked</strong>, then restart the browser.</li>
                 </ol>
+                <div class="auth-browser-group" style="margin-top:12px">
+                  <p class="auth-browser-label">Safari</p>
+                  <ol class="how-list">
+                    <li>Go to <strong>Safari &rarr; Settings &rarr; Advanced</strong> and enable <strong>"Show features for web developers"</strong>.</li>
+                    <li>Then go to <strong>Develop &rarr; Allow JavaScript from Apple Events</strong> and make sure it is <strong>checked</strong>.</li>
+                  </ol>
+                </div>
+                <p class="hint" style="margin-top:10px">No separate profile or port needed — Omnikey reads your existing open tabs directly. This is a permanent one-time setting.</p>
               </div>
-              <div class="auth-browser-group" style="margin-top:12px">
-                <p class="auth-browser-label">Safari</p>
-                <ol class="how-list">
-                  <li>Go to <strong>Safari &rarr; Settings &rarr; Advanced</strong> and check <strong>"Show features for web developers"</strong> to enable the Develop menu.</li>
-                  <li>Then go to <strong>Develop &rarr; Allow JavaScript from Apple Events</strong> and make sure it is <strong>checked</strong>.</li>
-                </ol>
-              </div>
-              <p class="hint" style="margin-top:10px">This is a one-time setting per browser. macOS only.</p>
             </div>
           </div>
         </div>
@@ -429,6 +502,10 @@
           <img src="/icon.png" alt="OmniKey AI" class="cta-icon" />
           <h2 class="cta-title">Download OmniKey AI</h2>
           <p class="cta-desc">Free to use. Open source. Works on macOS and Windows.</p>
+          <div class="download-count-badge" id="download-count-cta" hidden>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            <span id="download-count-cta-text"></span>
+          </div>
           <div class="buttons">
             <a href="/macos/download" class="btn btn-primary btn-mac">
               <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18" aria-hidden="true">

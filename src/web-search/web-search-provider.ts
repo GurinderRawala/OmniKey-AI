@@ -207,7 +207,7 @@ async function fetchPlainHttp(
     // sites use redirects, 302s, custom error pages, or soft-blocks
     // rather than a clean 401/403, so checking status codes alone is
     // unreliable. Fall through to the browser-session path instead.
-    if (isSelfHostedMacOS && isBrowserOpenWithUrl(url, log)) {
+    if (isSelfHostedWithBrowserSession && await isBrowserOpenWithUrl(url, log)) {
       return { html: null, authBlocked: true, finalUrl: url };
     }
     if (status === 401 || status === 403) {
@@ -237,7 +237,7 @@ async function fetchFromActiveTab(url: string, log: typeof logger): Promise<stri
   return fetchWithPlaywright(url, log);
 }
 
-const isSelfHostedMacOS = config.isSelfHosted && config.terminalPlatform === 'macos';
+const isSelfHostedWithBrowserSession = config.isSelfHosted;
 async function executeWebFetch(url: string, log: typeof logger): Promise<string> {
   log.info('Executing web_fetch tool', { url });
 
@@ -246,16 +246,16 @@ async function executeWebFetch(url: string, log: typeof logger): Promise<string>
 
   const plainText = html ? stripHtml(html) : '';
 
-  if (!isSelfHostedMacOS) {
+  if (!isSelfHostedWithBrowserSession) {
     if (authBlocked) {
       log.warn(
-        'Error: page requires authentication. Run OmniKey in self-hosted mode on macOS to enable browser-session access.',
+        'Error: page requires authentication. Run OmniKey in self-hosted mode on macOS or Windows to enable browser-session access.',
       );
     }
     return plainText.slice(0, MAX_TOOL_CONTENT_CHARS) || 'No content retrieved';
   }
 
-  // ── Step 2 (self-hosted macOS only): LLM auth check on plain response ─────
+  // ── Step 2 (self-hosted desktop): LLM auth check on plain response ────────
   let looksUnauthenticated = false;
   if (!authBlocked && plainText) {
     log.info('web_fetch: performing LLM auth check on plain HTTP response', { url });
@@ -266,7 +266,7 @@ async function executeWebFetch(url: string, log: typeof logger): Promise<string>
     looksUnauthenticated = true;
   }
 
-  // ── Step 3 (self-hosted macOS only): active-tab extraction ───────────────
+  // ── Step 3 (self-hosted desktop): active-tab extraction ──────────────────
   // Only attempted when there is evidence authentication is required.
   const needsAuth = authBlocked || looksUnauthenticated;
   if (needsAuth) {
@@ -282,9 +282,18 @@ async function executeWebFetch(url: string, log: typeof logger): Promise<string>
 
   // All strategies exhausted.
   if (authBlocked) {
-    log.warn(
-      'Error: page requires authentication. Open the page in Chrome and ensure "Allow JavaScript from Apple Events" is enabled (View → Developer → Allow JavaScript from Apple Events).',
-    );
+    if (config.terminalPlatform === 'macos') {
+      log.warn(
+        'Error: page requires authentication. Open the page in Chrome and ensure "Allow JavaScript from Apple Events" is enabled (View → Developer → Allow JavaScript from Apple Events).',
+      );
+    } else if (config.terminalPlatform === 'windows') {
+      log.warn(
+        'Error: page requires authentication. To enable live browser-session access on Windows, ' +
+          'launch Chrome with --remote-debugging-port=9222: right-click your Chrome shortcut → Properties, ' +
+          'and append "--remote-debugging-port=9222" to the Target field, then restart Chrome. ' +
+          'OmniKey will then read the authenticated tab directly.',
+      );
+    }
   }
   return plainText.slice(0, MAX_TOOL_CONTENT_CHARS) || 'No content retrieved';
 }

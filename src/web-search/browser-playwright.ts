@@ -1,50 +1,13 @@
 import axios from 'axios';
-
-// Utility: Promise with timeout
-async function withTimeout<T>(
-  promise: Promise<T>,
-  ms: number,
-  label: string,
-  log: Logger,
-): Promise<T | null> {
-  let timeoutId: NodeJS.Timeout;
-  return Promise.race([
-    promise,
-    new Promise<null>((resolve) => {
-      timeoutId = setTimeout(() => {
-        log.warn('browser-playwright: fetch timed out', { label, ms });
-        resolve(null);
-      }, ms);
-    }),
-  ]).then((result) => {
-    clearTimeout(timeoutId);
-    return result;
-  });
-}
-/**
- * Playwright-based web fetching using the user's installed browser profile.
- *
- * Key design decisions:
- *   1. Detects which Chromium browsers are currently RUNNING and tries those
- *      first — the active browser is where the authenticated session lives.
- *   2. Discovers the actual profile directory dynamically (Default, Profile 1,
- *      Profile 2 …) rather than hardcoding "Default".
- *   3. Checks multiple executable locations (system /Applications and
- *      user ~/Applications).
- *   4. Firefox is intentionally excluded from Playwright — headless Firefox
- *      on macOS has a known RenderCompositorSWGL rendering bug that causes
- *      30-second timeouts. Cookies from Firefox are still extracted separately
- *      by browser-cookies.ts for the plain-HTTP fallback.
- *
- * macOS only. Returns null on other platforms.
- */
-
+import * as crypto from 'crypto';
 import { execSync } from 'child_process';
+import { Browser, Page } from 'playwright-core';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import pw from 'playwright-core';
 import type { Logger } from 'winston';
+import { config } from '../config';
 
 // ─── Browser catalogue ────────────────────────────────────────────────────────
 
@@ -117,6 +80,61 @@ const BROWSER_CATALOGUE: BrowserCandidate[] = [
   },
 ];
 
+// ─── Windows browser catalogue ────────────────────────────────────────────────
+
+interface WindowsBrowserEntry {
+  name: string;
+  executablePaths: string[];
+  /** Root user-data directory (contains "Default" profile subfolder and "Local State") */
+  userDataDir: string;
+}
+
+const WINDOWS_BROWSER_CATALOGUE: WindowsBrowserEntry[] = [
+  {
+    name: 'Chrome',
+    executablePaths: [
+      'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+      'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+      path.join(home, 'AppData', 'Local', 'Google', 'Chrome', 'Application', 'chrome.exe'),
+    ],
+    userDataDir: path.join(home, 'AppData', 'Local', 'Google', 'Chrome', 'User Data'),
+  },
+  {
+    name: 'Edge',
+    executablePaths: [
+      'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+      'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
+      path.join(home, 'AppData', 'Local', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+    ],
+    userDataDir: path.join(home, 'AppData', 'Local', 'Microsoft', 'Edge', 'User Data'),
+  },
+  {
+    name: 'Brave',
+    executablePaths: [
+      'C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe',
+      path.join(
+        home,
+        'AppData',
+        'Local',
+        'BraveSoftware',
+        'Brave-Browser',
+        'Application',
+        'brave.exe',
+      ),
+    ],
+    userDataDir: path.join(home, 'AppData', 'Local', 'BraveSoftware', 'Brave-Browser', 'User Data'),
+  },
+];
+
+function resolveExistingExecutablePath(paths: string[]): string | null {
+  for (const p of paths) {
+    try {
+      if (fs.existsSync(p)) return p;
+    } catch {}
+  }
+  return null;
+}
+
 // ─── Running browser detection ────────────────────────────────────────────────
 
 /**
@@ -126,6 +144,32 @@ const BROWSER_CATALOGUE: BrowserCandidate[] = [
  */
 function getRunningBrowserNames(): Set<string> {
   const running = new Set<string>();
+
+  if (process.platform === 'win32') {
+    // tasklist /FO CSV /NH outputs one "ImageName","PID",... line per process.
+    const exeMap: Record<string, string> = {
+      'chrome.exe': 'Chrome',
+      'msedge.exe': 'Edge',
+      'brave.exe': 'Brave',
+      'opera.exe': 'Opera',
+      'vivaldi.exe': 'Vivaldi',
+    };
+    try {
+      const out = execSync('tasklist /FO CSV /NH 2>nul', {
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      for (const line of out.split('\n')) {
+        const exe = line.split(',')[0]?.replace(/"/g, '').trim().toLowerCase();
+        const name = exeMap[exe];
+        if (name) running.add(name);
+      }
+    } catch {
+      // tasklist failed — proceed without running-browser info
+    }
+    return running;
+  }
+
   try {
     // ps -axco command lists only the process name (no path, no args)
     const output = execSync('ps -axco command', {
@@ -147,12 +191,10 @@ function getRunningBrowserNames(): Set<string> {
 
     for (const [processName, browserName] of Object.entries(processMap)) {
       if (processName === 'safari') {
-        // Only match the main Safari process exactly (case-insensitive, trimmed)
         if (lines.some((l) => l.trim() === 'safari')) {
           running.add(browserName);
         }
       } else {
-        // For other browsers, allow exact match or substring match
         if (lines.some((l) => l.trim() === processName || l.includes(processName))) {
           running.add(browserName);
         }
@@ -182,22 +224,60 @@ async function fetchWithCDP(
   // Collect candidate ports:
   //   1. DevToolsActivePort file (written when Chrome was started with --remote-debugging-port)
   //   2. Well-known default ports developers commonly use
+  //   3. On Windows: all ports browser processes are currently listening on
   const candidatePorts: number[] = [];
 
-  for (const candidate of BROWSER_CATALOGUE) {
-    if (!browsersWithUrl.has(candidate.name)) continue;
-    if (candidate.name === 'Safari') continue; // CDP is Chromium-only
+  if (process.platform !== 'win32') {
+    // macOS: read DevToolsActivePort from confirmed-open browsers
+    for (const candidate of BROWSER_CATALOGUE) {
+      if (!browsersWithUrl.has(candidate.name)) continue;
+      if (candidate.name === 'Safari') continue;
+      const portFile = path.join(candidate.userDataDir, 'DevToolsActivePort');
+      if (fs.existsSync(portFile)) {
+        try {
+          const raw = fs.readFileSync(portFile, 'utf8');
+          const port = parseInt(raw.split('\n')[0].trim(), 10);
+          if (!isNaN(port) && port > 0 && !candidatePorts.includes(port)) {
+            candidatePorts.push(port);
+          }
+        } catch {}
+      }
+    }
+  }
 
-    const portFile = path.join(candidate.userDataDir, 'DevToolsActivePort');
-    if (fs.existsSync(portFile)) {
-      try {
-        const raw = fs.readFileSync(portFile, 'utf8');
-        const port = parseInt(raw.split('\n')[0].trim(), 10);
-        if (!isNaN(port) && port > 0 && !candidatePorts.includes(port)) {
+  // Windows: AppleScript is unavailable so browsersWithUrl is always empty.
+  // Read DevToolsActivePort from Windows browser paths directly, and also ask
+  // PowerShell for every TCP port the browser processes are listening on —
+  // this catches any --remote-debugging-port value, not just well-known ones.
+  if (process.platform === 'win32') {
+    for (const candidate of WINDOWS_BROWSER_CATALOGUE) {
+      const portFile = path.join(candidate.userDataDir, 'DevToolsActivePort');
+      if (fs.existsSync(portFile)) {
+        try {
+          const raw = fs.readFileSync(portFile, 'utf8');
+          const port = parseInt(raw.split('\n')[0].trim(), 10);
+          if (!isNaN(port) && port > 0 && !candidatePorts.includes(port)) {
+            candidatePorts.push(port);
+          }
+        } catch {}
+      }
+    }
+    // Enumerate all listening ports owned by browser processes via PowerShell.
+    try {
+      const psOut = execSync(
+        'powershell -NoProfile -NonInteractive -Command ' +
+          '"$p=Get-Process -Name chrome,msedge,brave,opera,vivaldi -EA SilentlyContinue;' +
+          'if($p){$p|%{$id=$_.Id;Get-NetTCPConnection -OwningProcess $id -State Listen -EA SilentlyContinue}}' +
+          '|Select-Object -ExpandProperty LocalPort|Sort-Object -Unique"',
+        { encoding: 'utf8', timeout: 5_000, stdio: ['pipe', 'pipe', 'pipe'] },
+      ).trim();
+      for (const line of psOut.split('\n')) {
+        const port = parseInt(line.trim(), 10);
+        if (!isNaN(port) && port > 1024 && !candidatePorts.includes(port)) {
           candidatePorts.push(port);
         }
-      } catch {}
-    }
+      }
+    } catch {}
   }
 
   // Always probe the most common debug ports — many developers run Chrome with
@@ -206,11 +286,22 @@ async function fetchWithCDP(
     if (!candidatePorts.includes(p)) candidatePorts.push(p);
   }
 
+  // User-configured port (set via `omnikey grant-browser-access`) gets tried first.
+  if (config.browserDebugPort && !candidatePorts.includes(config.browserDebugPort)) {
+    candidatePorts.unshift(config.browserDebugPort);
+  } else if (config.browserDebugPort) {
+    // Already in the list — move it to the front so it is tried before auto-detected ports.
+    candidatePorts.splice(candidatePorts.indexOf(config.browserDebugPort), 1);
+    candidatePorts.unshift(config.browserDebugPort);
+  }
+
   for (const port of candidatePorts) {
     // Quick HTTP probe: /json/version returns immediately if the debug endpoint is up.
     let endpointUp = false;
     try {
-      const probe = await axios.get(`http://localhost:${port}/json/version`, { timeout: 800 });
+      // Use 127.0.0.1 explicitly — on Windows, `localhost` may resolve to ::1
+      // while Chrome binds its debug endpoint to 127.0.0.1 only.
+      const probe = await axios.get(`http://127.0.0.1:${port}/json/version`, { timeout: 800 });
       endpointUp = probe.status === 200;
     } catch {
       // Port not listening — skip without logging noise
@@ -221,13 +312,13 @@ async function fetchWithCDP(
 
     log.info('browser-playwright: CDP — debug endpoint found, connecting', { port });
 
-    let cdpBrowser: import('playwright-core').Browser | null = null;
+    let cdpBrowser: Browser | null = null;
     try {
       cdpBrowser = await pw.chromium.connectOverCDP(`http://localhost:${port}`, {
         timeout: 5_000,
       });
 
-      let matchedPage: import('playwright-core').Page | null = null;
+      let matchedPage: Page | null = null;
       for (const context of cdpBrowser.contexts()) {
         for (const page of context.pages()) {
           if (page.url().startsWith(targetBase)) {
@@ -358,10 +449,10 @@ function getBrowsersWithUrlOpen(url: string, log: Logger): Set<string> {
           }
         });
 
-      log.debug('browser-playwright: tab check', { browser: browserName, targetHostname, found });
+      log.info('browser-playwright: tab check', { browser: browserName, targetHostname, found });
       if (found) confirmed.add(browserName);
     } catch {
-      log.debug('browser-playwright: AppleScript tab check failed — skipping browser', {
+      log.warn('browser-playwright: AppleScript tab check failed — skipping browser', {
         browser: browserName,
       });
     }
@@ -372,11 +463,60 @@ function getBrowsersWithUrlOpen(url: string, log: Logger): Set<string> {
 
 /**
  * Returns true if the given URL's hostname is confirmed open in any running
- * browser tab via AppleScript. Returns false if the check cannot be performed
- * or if no browser has the URL open.
+ * browser tab. On macOS this uses AppleScript; on Windows it queries the CDP
+ * debug endpoint's /json tab list (requires --remote-debugging-port).
  */
-export function isBrowserOpenWithUrl(url: string, log: Logger): boolean {
+export async function isBrowserOpenWithUrl(url: string, log: Logger): Promise<boolean> {
+  if (process.platform === 'win32') {
+    return isBrowserOpenWithUrlWindows(url, log);
+  }
   return getBrowsersWithUrlOpen(url, log).size > 0;
+}
+
+async function isBrowserOpenWithUrlWindows(url: string, log: Logger): Promise<boolean> {
+  let targetHostname: string;
+  try {
+    targetHostname = new URL(url).hostname;
+  } catch {
+    return false;
+  }
+
+  // If no browser processes are running at all, skip the port probes.
+  if (getRunningBrowserNames().size === 0) return false;
+
+  const candidatePorts: number[] = [];
+  if (config.browserDebugPort) candidatePorts.push(config.browserDebugPort);
+  for (const p of [9222, 9229, 9333]) {
+    if (!candidatePorts.includes(p)) candidatePorts.push(p);
+  }
+
+  for (const port of candidatePorts) {
+    try {
+      const resp = await axios.get<{ url?: string }[]>(
+        `http://127.0.0.1:${port}/json`,
+        { timeout: 800 },
+      );
+      if (!Array.isArray(resp.data)) continue;
+      const found = resp.data.some((tab) => {
+        try {
+          return new URL(tab.url ?? '').hostname === targetHostname;
+        } catch {
+          return false;
+        }
+      });
+      if (found) {
+        log.info('browser-playwright: Windows CDP tab check confirmed URL open', {
+          port,
+          hostname: targetHostname,
+        });
+        return true;
+      }
+    } catch {
+      // Port not listening — skip
+    }
+  }
+
+  return false;
 }
 
 // ─── Strategy 0: Live-tab AppleScript extraction ──────────────────────────────
@@ -461,7 +601,7 @@ async function fetchFromRunningBrowserTab(
   browsersWithUrl: Set<string>,
   log: Logger,
 ): Promise<string | null> {
-  if (process.platform !== 'darwin' || browsersWithUrl.size === 0) return null;
+  if (config.terminalPlatform !== 'macos' || browsersWithUrl.size === 0) return null;
 
   for (const browserName of browsersWithUrl) {
     const info = BROWSER_APPLESCRIPT[browserName];
@@ -610,21 +750,12 @@ async function fetchFromRunningBrowserTab(
 /**
  * Fetches a URL using the user's browser session.
  *
- * Only browsers that are confirmed (via AppleScript) to have the URL open are
- * tried — this avoids wasting time on browsers or profiles that don't hold the
- * active session.
- *
- * Strategies in order:
- *  0. Live-tab extraction — reads content directly from the open tab via
- *     AppleScript JS execution. No cookie decryption required.
- *  1. Cookie injection — decrypts cookies and injects into a fresh headless
- *     Chromium context (handles cookie-based auth when live tab unavailable).
- *  2. Profile copy — copies Local Storage + IndexedDB to a temp dir (handles
- *     localStorage/sessionStorage token auth flows).
- *  3. Safari Playwright — WebKit with injected Safari cookies (Safari only).
+ * Strategies:
+ *  -1. CDP via --remote-debugging-port — macOS + Windows; requires Chrome to be
+ *      started with --remote-debugging-port=9222.
+ *   0. Live-tab AppleScript extraction — macOS only.
  */
 export async function fetchWithPlaywright(url: string, log: Logger): Promise<string | null> {
-  // Determine which browsers have the URL open right now.
   const browsersWithUrl = getBrowsersWithUrlOpen(url, log);
 
   log.info('browser-playwright: browsers with URL open', {
@@ -632,22 +763,15 @@ export async function fetchWithPlaywright(url: string, log: Logger): Promise<str
     browsers: [...browsersWithUrl],
   });
 
-  // ── Strategy -1: CDP via DevToolsActivePort ──────────────────────────────
-  // Fastest path — connects directly to the live browser's JS-rendered tab.
-  // Only works when Chrome was launched with --remote-debugging-port.
-  if (browsersWithUrl.size > 0) {
-    const cdpResult = await fetchWithCDP(url, browsersWithUrl, log);
-    if (cdpResult) {
-      return cdpResult.content;
-    }
-  }
+  const cdpResult = await fetchWithCDP(url, browsersWithUrl, log);
+  if (cdpResult) return cdpResult.content;
 
-  // ── Strategy 0: extract from the live tab directly ────────────────────────
   const liveContent = await fetchFromRunningBrowserTab(url, browsersWithUrl, log);
-  if (liveContent) {
-    return liveContent;
-  }
+  if (liveContent) return liveContent;
 
-  log.warn('browser-playwright: all strategies exhausted', { url });
+  log.warn(
+    'browser-playwright: all strategies exhausted — on Windows, launch Chrome with --remote-debugging-port=9222',
+    { url },
+  );
   return null;
 }
