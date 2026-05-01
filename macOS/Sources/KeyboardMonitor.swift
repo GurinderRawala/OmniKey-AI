@@ -35,6 +35,10 @@ final class KeyboardMonitor {
 
     private var originalSelectedText = ""
 
+    private var persistentResultWindow: NSWindow?
+    private var agentCommandStartTime: Date?
+    private let agentAutoPassthroughThreshold: TimeInterval = 10.0
+
     private init() {}
 
     /// Call this once at app startup (e.g. AppDelegate applicationDidFinishLaunching)
@@ -413,6 +417,7 @@ final class KeyboardMonitor {
         // to stream updates from the agent.
         AgentThinkingModel.shared.reset(with: "Request:\n\(original)")
         AgentThinkingModel.shared.isRunning = true
+        agentCommandStartTime = Date()
 
         AgentRunner.shared.runAgentSession(
             originalText: original,
@@ -426,8 +431,19 @@ final class KeyboardMonitor {
 
                     switch result {
                     case let .success(finalText):
-                        self.showAlert(title: "Agent Complete", message: "Command finished.")
-                        self.replaceSelectedText(with: finalText)
+                        let elapsed = self.agentCommandStartTime.map { Date().timeIntervalSince($0) } ?? 0
+                        self.agentCommandStartTime = nil
+
+                        if elapsed >= self.agentAutoPassthroughThreshold {
+                            // Agent ran long enough that the user has likely moved on;
+                            // copy the result and show a persistent alert instead of
+                            // auto-pasting back into whatever is now focused.
+                            PasteboardManager.shared.setPasteboardText(finalText)
+                            self.showPersistentResultReadyAlert()
+                        } else {
+                            self.showAlert(title: "Agent Complete", message: "Command finished.")
+                            self.replaceSelectedText(with: finalText)
+                        }
 
                     case let .failure(error):
                         let nsError = error as NSError
@@ -712,10 +728,7 @@ final class KeyboardMonitor {
             // We don't know where the request originated from;
             // keep the text on the clipboard and instruct the
             // user to paste wherever they need it.
-            showAlert(
-                title: "Result Ready",
-                message: "Results copied. Press ⌘V where you want to paste it."
-            )
+            showPersistentResultReadyAlert()
             return
         }
 
@@ -773,6 +786,189 @@ final class KeyboardMonitor {
             // immediately without any delay.
             performPasteBack()
         }
+    }
+
+    /// Show a small persistent top-right notification that stays visible
+    /// until the user explicitly closes it.
+    private func showPersistentResultReadyAlert() {
+        if let window = persistentResultWindow {
+            window.orderFrontRegardless()
+            return
+        }
+
+        let mouseLocation = NSEvent.mouseLocation
+        let screen = NSScreen.screens.first { candidate in
+            NSMouseInRect(mouseLocation, candidate.frame, false)
+        } ?? NSScreen.main ?? NSScreen.screens.first
+
+        guard let screen else { return }
+
+        let isDarkMode = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let palette = persistentAlertPalette(isDarkMode: isDarkMode)
+
+        let width: CGFloat = 260
+        let height: CGFloat = 68
+        let radius: CGFloat = 14
+        let margin: CGFloat = 16
+        let x = screen.visibleFrame.maxX - width - margin
+        let y = screen.visibleFrame.maxY - height - margin
+
+        let window = NSWindow(
+            contentRect: NSRect(x: x, y: y, width: width, height: height),
+            styleMask: .borderless,
+            backing: .buffered,
+            defer: false
+        )
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.level = .statusBar
+        window.ignoresMouseEvents = false
+        window.hasShadow = true
+        window.animationBehavior = .alertPanel
+        window.collectionBehavior = [.canJoinAllSpaces, .transient]
+
+        // behindWindow blending composites with actual screen content — fixes the
+        // washed-out rendering in light mode that .withinWindow caused on a clear window.
+        let root = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: width, height: height))
+        root.material = isDarkMode ? .hudWindow : .menu
+        root.blendingMode = .behindWindow
+        root.state = .active
+        root.wantsLayer = true
+        root.layer?.cornerRadius = radius
+        root.layer?.masksToBounds = true
+        root.layer?.borderWidth = 1
+        root.layer?.borderColor = palette.border.cgColor
+
+        // Subtle accent gradient wash bleeding from the left edge
+        let gradientLayer = CAGradientLayer()
+        gradientLayer.frame = CGRect(x: 0, y: 0, width: width * 0.60, height: height)
+        gradientLayer.startPoint = CGPoint(x: 0, y: 0.5)
+        gradientLayer.endPoint = CGPoint(x: 1, y: 0.5)
+        gradientLayer.colors = [
+            palette.accent.withAlphaComponent(isDarkMode ? 0.13 : 0.08).cgColor,
+            palette.accent.withAlphaComponent(0).cgColor,
+        ]
+        root.layer?.addSublayer(gradientLayer)
+
+        // Circular icon badge
+        let iconSize: CGFloat = 34
+        let iconX: CGFloat = 14
+        let iconY: CGFloat = (height - iconSize) / 2
+        let iconBg = NSView(frame: NSRect(x: iconX, y: iconY, width: iconSize, height: iconSize))
+        iconBg.wantsLayer = true
+        iconBg.layer?.cornerRadius = iconSize / 2
+        iconBg.layer?.backgroundColor = palette.iconBackground.cgColor
+
+        let checkView = NSImageView(frame: NSRect(x: 0, y: 0, width: iconSize, height: iconSize))
+        if let img = NSImage(systemSymbolName: "checkmark", accessibilityDescription: nil) {
+            checkView.image = img.withSymbolConfiguration(
+                NSImage.SymbolConfiguration(pointSize: 13, weight: .semibold)
+            )
+        }
+        checkView.contentTintColor = palette.accent
+        checkView.imageScaling = .scaleNone
+        iconBg.addSubview(checkView)
+
+        // Labels — vertically centred as a block inside the toast.
+        // attributedStringValue forces the color at the attributed-string level,
+        // which is immune to NSVisualEffectView appearance overrides.
+        let textX: CGFloat = iconX + iconSize + 10
+        let textW: CGFloat = width - textX - 24
+
+        let titleLabel = NSTextField()
+        titleLabel.isEditable = false
+        titleLabel.isSelectable = false
+        titleLabel.isBezeled = false
+        titleLabel.drawsBackground = false
+        titleLabel.attributedStringValue = NSAttributedString(
+            string: "Result Ready",
+            attributes: [.font: NSFont.systemFont(ofSize: 12, weight: .semibold),
+                         .foregroundColor: palette.titleText]
+        )
+        titleLabel.frame = NSRect(x: textX, y: 34, width: textW, height: 15)
+
+        let subtitleLabel = NSTextField()
+        subtitleLabel.isEditable = false
+        subtitleLabel.isSelectable = false
+        subtitleLabel.isBezeled = false
+        subtitleLabel.drawsBackground = false
+        subtitleLabel.lineBreakMode = .byTruncatingTail
+        subtitleLabel.maximumNumberOfLines = 1
+        subtitleLabel.attributedStringValue = NSAttributedString(
+            string: "Task complete · paste with ⌘V",
+            attributes: [.font: NSFont.systemFont(ofSize: 10.5),
+                         .foregroundColor: palette.messageText]
+        )
+        subtitleLabel.frame = NSRect(x: textX, y: 19, width: textW, height: 13)
+
+        // Close button — xmark.circle.fill SF Symbol, no bezel, intentionally small
+        let closeBtn = NSButton(frame: NSRect(x: width - 21, y: height - 21, width: 13, height: 13))
+        closeBtn.title = ""
+        closeBtn.isBordered = false
+        if let xImg = NSImage(systemSymbolName: "xmark.circle.fill", accessibilityDescription: "Dismiss") {
+            closeBtn.image = xImg.withSymbolConfiguration(
+                NSImage.SymbolConfiguration(pointSize: 10, weight: .regular)
+            )
+        }
+        closeBtn.contentTintColor = palette.closeIcon
+        closeBtn.setButtonType(.momentaryPushIn)
+        closeBtn.action = #selector(dismissPersistentResultReadyAlert)
+        closeBtn.target = self
+
+        root.addSubview(iconBg)
+        root.addSubview(titleLabel)
+        root.addSubview(subtitleLabel)
+        root.addSubview(closeBtn)
+
+        window.contentView = root
+        window.alphaValue = 0
+        window.setFrameOrigin(NSPoint(x: x, y: y + 12))
+        window.orderFrontRegardless()
+
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.25
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            window.animator().alphaValue = 1
+            window.animator().setFrameOrigin(NSPoint(x: x, y: y))
+        }
+
+        persistentResultWindow = window
+    }
+
+    private func persistentAlertPalette(isDarkMode: Bool) -> (
+        border: NSColor,
+        titleText: NSColor,
+        messageText: NSColor,
+        accent: NSColor,
+        iconBackground: NSColor,
+        closeIcon: NSColor
+    ) {
+        if isDarkMode {
+            let accent = NSColor(calibratedRed: 34 / 255, green: 211 / 255, blue: 238 / 255, alpha: 1)
+            return (
+                border: NSColor.white.withAlphaComponent(0.10),
+                titleText: NSColor(white: 0.93, alpha: 1),
+                messageText: NSColor(white: 0.55, alpha: 1),
+                accent: accent,
+                iconBackground: accent.withAlphaComponent(0.16),
+                closeIcon: NSColor(white: 0.42, alpha: 1)
+            )
+        }
+
+        let accent = NSColor(calibratedRed: 79 / 255, green: 70 / 255, blue: 229 / 255, alpha: 1)
+        return (
+            border: NSColor.black.withAlphaComponent(0.09),
+            titleText: NSColor(calibratedRed: 15 / 255, green: 21 / 255, blue: 53 / 255, alpha: 1),
+            messageText: NSColor(calibratedRed: 74 / 255, green: 85 / 255, blue: 120 / 255, alpha: 0.80),
+            accent: accent,
+            iconBackground: accent.withAlphaComponent(0.10),
+            closeIcon: NSColor(calibratedRed: 15 / 255, green: 21 / 255, blue: 53 / 255, alpha: 0.28)
+        )
+    }
+
+    @objc private func dismissPersistentResultReadyAlert() {
+        persistentResultWindow?.orderOut(nil)
+        persistentResultWindow = nil
     }
 }
 
