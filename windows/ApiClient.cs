@@ -20,6 +20,27 @@ namespace OmniKey.Windows
         public bool IsDefault { get; set; }
     }
 
+    internal sealed class ScheduledJobDto
+    {
+        public string  Id            { get; set; } = "";
+        public string  Label         { get; set; } = "";
+        public string  Prompt        { get; set; } = "";
+        public string? CronExpression { get; set; }
+        public string? RunAt          { get; set; }
+        public bool    IsActive       { get; set; }
+        public string? LastRunAt      { get; set; }
+        public string? NextRunAt      { get; set; }
+        public string? SessionId      { get; set; }
+        public string? LastRunSessionId { get; set; }
+    }
+
+    internal sealed class SessionHistoryEntryDto
+    {
+        public string Id { get; set; } = "";
+        public string Role { get; set; } = "";
+        public string Text { get; set; } = "";
+    }
+
     internal sealed class ApiClient
     {
         private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(60) };
@@ -179,7 +200,117 @@ namespace OmniKey.Windows
                 await EnsureSuccessAsync(resp);
         }
 
+        // ─── Scheduled Jobs ───────────────────────────────────────────
+
+        public async Task<List<ScheduledJobDto>> FetchScheduledJobsAsync()
+        {
+            using var req  = BuildRequest(HttpMethod.Get, "/api/scheduled-jobs");
+            using var resp = await Http.SendAsync(req);
+            await EnsureSuccessAsync(resp);
+            using var doc  = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+            var jobs = new List<ScheduledJobDto>();
+            if (doc.RootElement.TryGetProperty("jobs", out var arr))
+            {
+                foreach (var el in arr.EnumerateArray())
+                    jobs.Add(ParseScheduledJob(el));
+            }
+            return jobs;
+        }
+
+        public async Task<ScheduledJobDto> CreateScheduledJobAsync(
+            string label, string prompt, string? cronExpression, DateTime? runAt)
+        {
+            using var req = BuildRequest(HttpMethod.Post, "/api/scheduled-jobs");
+            var body = new System.Collections.Generic.Dictionary<string, object?>
+            {
+                ["label"]  = label,
+                ["prompt"] = prompt,
+            };
+            if (cronExpression != null) body["cronExpression"] = cronExpression;
+            if (runAt.HasValue)         body["runAt"]          = runAt.Value.ToUniversalTime().ToString("o");
+            req.Content = JsonContent.Create(body);
+            using var resp = await Http.SendAsync(req);
+            await EnsureSuccessAsync(resp);
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+            return ParseScheduledJob(doc.RootElement);
+        }
+
+        public async Task<ScheduledJobDto> UpdateScheduledJobAsync(
+            string id, string label, string prompt, string? cronExpression, DateTime? runAt, bool? isActive = null)
+        {
+            using var req = BuildRequest(HttpMethod.Put, $"/api/scheduled-jobs/{id}");
+            var body = new System.Collections.Generic.Dictionary<string, object?>
+            {
+                ["label"]  = label,
+                ["prompt"] = prompt,
+            };
+            if (cronExpression != null) body["cronExpression"] = cronExpression;
+            if (runAt.HasValue)         body["runAt"]          = runAt.Value.ToUniversalTime().ToString("o");
+            if (isActive.HasValue)      body["isActive"]       = isActive.Value;
+            req.Content = JsonContent.Create(body);
+            using var resp = await Http.SendAsync(req);
+            await EnsureSuccessAsync(resp);
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+            return ParseScheduledJob(doc.RootElement);
+        }
+
+        public async Task DeleteScheduledJobAsync(string id)
+        {
+            using var req  = BuildRequest(HttpMethod.Delete, $"/api/scheduled-jobs/{id}");
+            using var resp = await Http.SendAsync(req);
+            if (resp.StatusCode != HttpStatusCode.NoContent)
+                await EnsureSuccessAsync(resp);
+        }
+
+        public async Task<ScheduledJobDto> RunScheduledJobNowAsync(string id)
+        {
+            using var req  = BuildRequest(HttpMethod.Post, $"/api/scheduled-jobs/{id}/run-now");
+            using var resp = await Http.SendAsync(req);
+            await EnsureSuccessAsync(resp);
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+            return ParseScheduledJob(doc.RootElement);
+        }
+
+        public async Task<List<SessionHistoryEntryDto>> FetchSessionMessagesAsync(string sessionId)
+        {
+            using var req = BuildRequest(HttpMethod.Get, $"/api/agent/sessions/{sessionId}/messages");
+            using var resp = await Http.SendAsync(req);
+            await EnsureSuccessAsync(resp);
+
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+            var messages = new List<SessionHistoryEntryDto>();
+
+            if (doc.RootElement.TryGetProperty("messages", out var arr) && arr.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var el in arr.EnumerateArray())
+                {
+                    messages.Add(new SessionHistoryEntryDto
+                    {
+                        Id = el.TryGetProperty("id", out var id) ? id.GetString() ?? "" : "",
+                        Role = el.TryGetProperty("role", out var role) ? role.GetString() ?? "" : "",
+                        Text = el.TryGetProperty("text", out var text) ? text.GetString() ?? "" : "",
+                    });
+                }
+            }
+
+            return messages;
+        }
+
         // ─── Helpers ──────────────────────────────────────────────────
+
+        private static ScheduledJobDto ParseScheduledJob(JsonElement el) => new()
+        {
+            Id             = el.TryGetProperty("id",             out var id)   ? id.GetString()  ?? "" : "",
+            Label          = el.TryGetProperty("label",          out var lbl)  ? lbl.GetString() ?? "" : "",
+            Prompt         = el.TryGetProperty("prompt",         out var prm)  ? prm.GetString() ?? "" : "",
+            CronExpression = el.TryGetProperty("cronExpression", out var cron) ? cron.GetString()     : null,
+            RunAt          = el.TryGetProperty("runAt",          out var rAt)  ? rAt.GetString()      : null,
+            IsActive       = el.TryGetProperty("isActive",       out var act) && act.GetBoolean(),
+            LastRunAt      = el.TryGetProperty("lastRunAt",      out var lRun) ? lRun.GetString()     : null,
+            NextRunAt      = el.TryGetProperty("nextRunAt",      out var nRun) ? nRun.GetString()     : null,
+            SessionId      = el.TryGetProperty("sessionId",      out var sid)  ? sid.GetString()      : null,
+            LastRunSessionId = el.TryGetProperty("lastRunSessionId", out var lrs) ? lrs.GetString()    : null,
+        };
 
         private static TaskTemplateDto ParseTemplate(JsonElement el) => new()
         {

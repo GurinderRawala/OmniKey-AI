@@ -147,6 +147,10 @@ namespace OmniKey.Windows
             agentSessionItem.Click += async (_, _) => await ShowAgentSessionPickerFromMenuAsync();
             menu.Items.Add(agentSessionItem);
 
+            var scheduledJobsItem = new ToolStripMenuItem("Scheduled Jobs");
+            scheduledJobsItem.Click += (_, _) => ShowScheduledJobs();
+            menu.Items.Add(scheduledJobsItem);
+
             var manualItem = new ToolStripMenuItem("Manual");
             manualItem.Click += (_, _) => ShowManual();
             menu.Items.Add(manualItem);
@@ -172,6 +176,12 @@ namespace OmniKey.Windows
         private void ShowTaskInstructions()
         {
             var form = new TaskInstructionsForm();
+            form.Show(this);
+        }
+
+        private void ShowScheduledJobs()
+        {
+            var form = new ScheduledJobsForm();
             form.Show(this);
         }
 

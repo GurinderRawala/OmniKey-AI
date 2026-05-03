@@ -8,11 +8,14 @@ import { createFeatureRouter } from './featureRoutes';
 import { initDatabase } from './db';
 import { logger } from './logger';
 import { taskInstructionRouter } from './taskInstructionRoutes';
+import { scheduledJobRouter } from './scheduledJobRoutes';
+import { startScheduledJobExecutor } from './scheduledJobExecutor';
 import { config } from './config';
 import { attachAgentWebSocketServer, createAgentRouter } from './agent/agentServer';
 import { AppDownload } from './models/appDownload';
-// Importing AgentSession ensures the model is registered with Sequelize before initDatabase().
+// Importing AgentSession and ScheduledJob ensures the models are registered with Sequelize before initDatabase().
 import './models/agentSession';
+import './models/scheduledJob';
 import { incrementDownloadCount, getDownloadCounts } from './bucket-adapter';
 
 const app = express();
@@ -30,6 +33,8 @@ app.use('/api/subscription', createSubscriptionRouter(logger));
 app.use('/api/feature', createFeatureRouter());
 
 app.use('/api/instructions', taskInstructionRouter());
+
+app.use('/api/scheduled-jobs', scheduledJobRouter());
 
 app.use('/api/agent', createAgentRouter());
 
@@ -195,6 +200,7 @@ async function start() {
     server = app.listen(PORT, () => {
       logger.info(`Enhancer API listening on http://localhost:${PORT}`, {
         isSelfHosted: config.isSelfHosted,
+        aiProvider: config.aiProvider,
       });
     });
 
@@ -203,6 +209,10 @@ async function start() {
     // by clients when running @omniAgent sessions.
     if (server) {
       attachAgentWebSocketServer(server as import('http').Server);
+    }
+
+    if (config.isSelfHosted) {
+      startScheduledJobExecutor();
     }
   } catch (err) {
     logger.error('Failed to start server due to DB error.', { error: err });

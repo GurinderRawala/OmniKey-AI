@@ -3,6 +3,7 @@ import { AIMessage, AITool, getMaxMessageContentLength, getMaxHistoryLength } fr
 import { AgentSendFn, SessionState } from './types';
 import { config } from '../config';
 import { Logger } from 'winston';
+import { IMAGE_GENERATE_TOOL } from './imageTool';
 
 /**
  * Returns the set of web tools available to the agent for every turn.
@@ -13,7 +14,7 @@ import { Logger } from 'winston';
  * @returns An array of `AITool` definitions ready to pass to the AI client.
  */
 export function buildAvailableTools(): AITool[] {
-  return [WEB_FETCH_TOOL, WEB_SEARCH_TOOL];
+  return [WEB_FETCH_TOOL, WEB_SEARCH_TOOL, IMAGE_GENERATE_TOOL];
 }
 
 /**
@@ -32,6 +33,17 @@ export function createUserContent(content: string, hasStoredPrompt: boolean): st
     return content.replace(/@omniagent/gi, '').trim();
   }
   return content;
+}
+
+/**
+ *
+ * If it is a cron job and the prompt does not contain an @omniAgent mention, we will add it, since we will not consider any base prompt.
+ */
+export function createUserContentForCronJob(content: string): string {
+  if (!/@omniagent/gi.test(content)) {
+    return `@omniAgent ${content}`;
+  }
+  return content.trim();
 }
 
 /**

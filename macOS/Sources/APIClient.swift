@@ -64,6 +64,7 @@ final class APIClient: @unchecked Sendable {
     private let enhanceGrammarURL = APIClient.baseURL.appendingPathComponent("api/feature/grammar")
     private let customTaskURL = APIClient.baseURL.appendingPathComponent("api/feature/custom-task")
     private let taskTemplatesBaseURL = APIClient.baseURL.appendingPathComponent("api/instructions/templates")
+    private let scheduledJobsBaseURL = APIClient.baseURL.appendingPathComponent("api/scheduled-jobs")
 
     // MARK: - Shared error helpers
 
@@ -528,6 +529,183 @@ final class APIClient: @unchecked Sendable {
             completion(.success(()))
         }
 
+        task.resume()
+    }
+
+    // MARK: - Scheduled Jobs
+
+    struct ScheduledJobDTO: Codable, Identifiable {
+        let id: String
+        let label: String
+        let prompt: String
+        let cronExpression: String?
+        let runAt: String?
+        let isActive: Bool
+        let lastRunAt: String?
+        let nextRunAt: String?
+        let sessionId: String?
+        let lastRunSessionId: String?
+    }
+
+    func fetchScheduledJobs(completion: @escaping @Sendable (Result<[ScheduledJobDTO], Error>) -> Void) {
+        var request = URLRequest(url: scheduledJobsBaseURL)
+        request.httpMethod = "GET"
+        if let token = SubscriptionManager.shared.jwtToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        let task = URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error = error { completion(.failure(error)); return }
+            guard let httpResponse = response as? HTTPURLResponse else {
+                completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response"])))
+                return
+            }
+            guard (200...299).contains(httpResponse.statusCode) else {
+                completion(.failure(APIClient.makeBackendError(statusCode: httpResponse.statusCode, data: data)))
+                return
+            }
+            guard let data = data, !data.isEmpty else { completion(.success([])); return }
+            do {
+                struct Envelope: Codable { let jobs: [ScheduledJobDTO] }
+                let decoded = try JSONDecoder().decode(Envelope.self, from: data)
+                completion(.success(decoded.jobs))
+            } catch { completion(.failure(error)) }
+        }
+        task.resume()
+    }
+
+    func createScheduledJob(
+        label: String,
+        prompt: String,
+        cronExpression: String?,
+        runAt: String?,
+        isActive: Bool = true,
+        completion: @escaping @Sendable (Result<ScheduledJobDTO, Error>) -> Void
+    ) {
+        var request = URLRequest(url: scheduledJobsBaseURL)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = SubscriptionManager.shared.jwtToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        var payload: [String: Any] = ["label": label, "prompt": prompt, "isActive": isActive]
+        if let cron = cronExpression { payload["cronExpression"] = cron }
+        if let runAt = runAt { payload["runAt"] = runAt }
+        guard let body = try? JSONSerialization.data(withJSONObject: payload) else {
+            completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Serialization error"])))
+            return
+        }
+        request.httpBody = body
+        let task = URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error = error { completion(.failure(error)); return }
+            guard let httpResponse = response as? HTTPURLResponse else {
+                completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response"])))
+                return
+            }
+            guard (200...299).contains(httpResponse.statusCode) else {
+                completion(.failure(APIClient.makeBackendError(statusCode: httpResponse.statusCode, data: data)))
+                return
+            }
+            guard let data = data, !data.isEmpty else {
+                completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No data"])))
+                return
+            }
+            do { completion(.success(try JSONDecoder().decode(ScheduledJobDTO.self, from: data))) }
+            catch { completion(.failure(error)) }
+        }
+        task.resume()
+    }
+
+    func updateScheduledJob(
+        id: String,
+        label: String,
+        prompt: String,
+        cronExpression: String?,
+        runAt: String?,
+        isActive: Bool? = nil,
+        completion: @escaping @Sendable (Result<ScheduledJobDTO, Error>) -> Void
+    ) {
+        let url = scheduledJobsBaseURL.appendingPathComponent(id)
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = SubscriptionManager.shared.jwtToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        var payload: [String: Any] = ["label": label, "prompt": prompt]
+        if let cron = cronExpression { payload["cronExpression"] = cron }
+        if let runAt = runAt { payload["runAt"] = runAt }
+        if let isActive = isActive { payload["isActive"] = isActive }
+        guard let body = try? JSONSerialization.data(withJSONObject: payload) else {
+            completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Serialization error"])))
+            return
+        }
+        request.httpBody = body
+        let task = URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error = error { completion(.failure(error)); return }
+            guard let httpResponse = response as? HTTPURLResponse else {
+                completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response"])))
+                return
+            }
+            guard (200...299).contains(httpResponse.statusCode) else {
+                completion(.failure(APIClient.makeBackendError(statusCode: httpResponse.statusCode, data: data)))
+                return
+            }
+            guard let data = data, !data.isEmpty else {
+                completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No data"])))
+                return
+            }
+            do { completion(.success(try JSONDecoder().decode(ScheduledJobDTO.self, from: data))) }
+            catch { completion(.failure(error)) }
+        }
+        task.resume()
+    }
+
+    func deleteScheduledJob(id: String, completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
+        let url = scheduledJobsBaseURL.appendingPathComponent(id)
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        if let token = SubscriptionManager.shared.jwtToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        let task = URLSession.shared.dataTask(with: request) { _, response, error in
+            if let error = error { completion(.failure(error)); return }
+            guard let httpResponse = response as? HTTPURLResponse else {
+                completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response"])))
+                return
+            }
+            if (200...299).contains(httpResponse.statusCode) || httpResponse.statusCode == 204 {
+                completion(.success(()))
+            } else {
+                completion(.failure(APIClient.makeBackendError(statusCode: httpResponse.statusCode, data: nil)))
+            }
+        }
+        task.resume()
+    }
+
+    func runScheduledJobNow(id: String, completion: @escaping @Sendable (Result<ScheduledJobDTO, Error>) -> Void) {
+        let url = scheduledJobsBaseURL.appendingPathComponent("\(id)/run-now")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        if let token = SubscriptionManager.shared.jwtToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        let task = URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error = error { completion(.failure(error)); return }
+            guard let httpResponse = response as? HTTPURLResponse else {
+                completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response"])))
+                return
+            }
+            guard (200...299).contains(httpResponse.statusCode) else {
+                completion(.failure(APIClient.makeBackendError(statusCode: httpResponse.statusCode, data: data)))
+                return
+            }
+            guard let data = data, !data.isEmpty else {
+                completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No data"])))
+                return
+            }
+            do { completion(.success(try JSONDecoder().decode(ScheduledJobDTO.self, from: data))) }
+            catch { completion(.failure(error)) }
+        }
         task.resume()
     }
 

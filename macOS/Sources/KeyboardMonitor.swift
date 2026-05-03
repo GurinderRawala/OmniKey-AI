@@ -830,7 +830,7 @@ final class KeyboardMonitor {
         // behindWindow blending composites with actual screen content — fixes the
         // washed-out rendering in light mode that .withinWindow caused on a clear window.
         let root = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: width, height: height))
-        root.material = isDarkMode ? .hudWindow : .menu
+        root.material = isDarkMode ? .hudWindow : .popover
         root.blendingMode = .behindWindow
         root.state = .active
         root.wantsLayer = true
@@ -838,6 +838,13 @@ final class KeyboardMonitor {
         root.layer?.masksToBounds = true
         root.layer?.borderWidth = 1
         root.layer?.borderColor = palette.border.cgColor
+
+        // Add an explicit base surface tint so text remains readable on bright
+        // wallpapers and translucent content in both appearance modes.
+        let surfaceLayer = CALayer()
+        surfaceLayer.frame = CGRect(x: 0, y: 0, width: width, height: height)
+        surfaceLayer.backgroundColor = palette.surface.cgColor
+        root.layer?.insertSublayer(surfaceLayer, at: 0)
 
         // Subtle accent gradient wash bleeding from the left edge
         let gradientLayer = CAGradientLayer()
@@ -936,6 +943,7 @@ final class KeyboardMonitor {
     }
 
     private func persistentAlertPalette(isDarkMode: Bool) -> (
+        surface: NSColor,
         border: NSColor,
         titleText: NSColor,
         messageText: NSColor,
@@ -946,23 +954,25 @@ final class KeyboardMonitor {
         if isDarkMode {
             let accent = NSColor(calibratedRed: 34 / 255, green: 211 / 255, blue: 238 / 255, alpha: 1)
             return (
-                border: NSColor.white.withAlphaComponent(0.10),
-                titleText: NSColor(white: 0.93, alpha: 1),
-                messageText: NSColor(white: 0.55, alpha: 1),
+                surface: NSColor(calibratedWhite: 0.10, alpha: 0.82),
+                border: NSColor.white.withAlphaComponent(0.14),
+                titleText: NSColor(white: 0.96, alpha: 1),
+                messageText: NSColor(white: 0.78, alpha: 1),
                 accent: accent,
-                iconBackground: accent.withAlphaComponent(0.16),
-                closeIcon: NSColor(white: 0.42, alpha: 1)
+                iconBackground: accent.withAlphaComponent(0.22),
+                closeIcon: NSColor(white: 0.70, alpha: 1)
             )
         }
 
-        let accent = NSColor(calibratedRed: 79 / 255, green: 70 / 255, blue: 229 / 255, alpha: 1)
+        let accent = NSColor(calibratedRed: 67 / 255, green: 56 / 255, blue: 202 / 255, alpha: 1)
         return (
-            border: NSColor.black.withAlphaComponent(0.09),
-            titleText: NSColor(calibratedRed: 15 / 255, green: 21 / 255, blue: 53 / 255, alpha: 1),
-            messageText: NSColor(calibratedRed: 74 / 255, green: 85 / 255, blue: 120 / 255, alpha: 0.80),
+            surface: NSColor(calibratedRed: 1.0, green: 1.0, blue: 1.0, alpha: 0.90),
+            border: NSColor.black.withAlphaComponent(0.12),
+            titleText: NSColor(calibratedRed: 10 / 255, green: 15 / 255, blue: 31 / 255, alpha: 1),
+            messageText: NSColor(calibratedRed: 30 / 255, green: 41 / 255, blue: 59 / 255, alpha: 0.96),
             accent: accent,
-            iconBackground: accent.withAlphaComponent(0.10),
-            closeIcon: NSColor(calibratedRed: 15 / 255, green: 21 / 255, blue: 53 / 255, alpha: 0.28)
+            iconBackground: accent.withAlphaComponent(0.14),
+            closeIcon: NSColor(calibratedRed: 30 / 255, green: 41 / 255, blue: 59 / 255, alpha: 0.72)
         )
     }
 
