@@ -10,6 +10,7 @@ import { showLogs } from './showLogs';
 import { showConfig } from './showConfig';
 import { setConfig } from './setConfig';
 import { grantBrowserAccess, reopenBrowserDebugProfile } from './grantBrowserAccess';
+import { scheduleAdd, scheduleList, scheduleRemove, scheduleRunNow } from './scheduleJob';
 
 const program = new Command();
 
@@ -108,5 +109,29 @@ program
   .action(async () => {
     await reopenBrowserDebugProfile();
   });
+
+const scheduleCmd = program
+  .command('schedule')
+  .description('Manage scheduled prompt jobs');
+
+scheduleCmd
+  .command('add')
+  .description('Add a new scheduled job')
+  .action(async () => { await scheduleAdd(); });
+
+scheduleCmd
+  .command('list')
+  .description('List all scheduled jobs')
+  .action(async () => { await scheduleList(); });
+
+scheduleCmd
+  .command('remove')
+  .description('Remove a scheduled job')
+  .action(async () => { await scheduleRemove(); });
+
+scheduleCmd
+  .command('run-now <id>')
+  .description('Immediately run a scheduled job by ID')
+  .action(async (id: string) => { await scheduleRunNow(id); });
 
 program.parseAsync(process.argv);

@@ -166,6 +166,11 @@ namespace OmniKey.Windows
             _newSessionRadio.CheckedChanged += (_, _) => UpdateUiState();
             _resumeRadio.CheckedChanged += (_, _) => UpdateUiState();
             _sessionList.SelectedIndexChanged += (_, _) => UpdateUiState();
+            _sessionList.MouseDown += (_, _) =>
+            {
+                if (!_resumeRadio.Checked)
+                    _resumeRadio.Checked = true;
+            };
             _sessionList.DoubleClick += (_, _) =>
             {
                 if (_resumeRadio.Checked && _sessionList.SelectedItems.Count > 0)
@@ -219,7 +224,9 @@ namespace OmniKey.Windows
 
         private void UpdateUiState()
         {
-            _sessionList.Enabled = _resumeRadio.Checked;
+            // Keep the list enabled so WinForms does not force system disabled colors in dark mode.
+            _sessionList.BackColor = _resumeRadio.Checked ? NordColors.EditorBackground : NordColors.PanelBackground;
+            _sessionList.ForeColor = _resumeRadio.Checked ? NordColors.PrimaryText : NordColors.SecondaryText;
             _okButton.Enabled = _newSessionRadio.Checked || _sessionList.SelectedItems.Count > 0;
         }
 

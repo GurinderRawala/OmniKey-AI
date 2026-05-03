@@ -3,7 +3,7 @@ document.getElementById('year').textContent = new Date().getFullYear();
 // Fetch total download count and display above download buttons
 (function () {
   fetch('https://omnikeyai.ca/downloads/stats')
-    .then((r) => r.ok ? r.json() : Promise.reject(r.status))
+    .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
     .then((data) => {
       const total = (data.macos || 0) + (data.windows || 0);
       if (total <= 0) return;
@@ -18,7 +18,9 @@ document.getElementById('year').textContent = new Date().getFullYear();
         }
       });
     })
-    .catch(() => { /* silently skip if unavailable */ });
+    .catch(() => {
+      /* silently skip if unavailable */
+    });
 })();
 
 // Detect platform and highlight the matching download button
@@ -26,30 +28,38 @@ document.getElementById('year').textContent = new Date().getFullYear();
   const ua = navigator.userAgent.toLowerCase();
   const isMac = /mac/.test(ua);
   const isWin = /win/.test(ua);
+  const canRenderLucide =
+    typeof window.lucide !== 'undefined' && typeof window.lucide.createIcons === 'function';
+
+  function renderIcons(nodes) {
+    if (!canRenderLucide) return;
+    window.lucide.createIcons({ nodes });
+  }
 
   if (isMac) {
-    document.querySelectorAll('.btn-mac').forEach(el => el.classList.add('btn-active'));
+    document.querySelectorAll('.btn-mac').forEach((el) => el.classList.add('btn-active'));
   } else if (isWin) {
-    document.querySelectorAll('.btn-win').forEach(el => el.classList.add('btn-active'));
+    document.querySelectorAll('.btn-win').forEach((el) => el.classList.add('btn-active'));
   }
 
   // Copy-to-clipboard for code blocks
   document.querySelectorAll('pre').forEach((pre) => {
     const btn = document.createElement('button');
     btn.className = 'copy-btn';
+    btn.type = 'button';
     btn.setAttribute('aria-label', 'Copy');
-    btn.innerHTML = '<i data-lucide="copy"></i>';
+    btn.innerHTML = canRenderLucide ? '<i data-lucide="copy"></i>' : 'Copy';
     pre.appendChild(btn);
-    lucide.createIcons({ nodes: [btn] });
+    renderIcons([btn]);
 
     btn.addEventListener('click', () => {
       const code = pre.querySelector('code');
       navigator.clipboard.writeText(code?.textContent?.trim() ?? '').then(() => {
-        btn.innerHTML = '<i data-lucide="check"></i>';
-        lucide.createIcons({ nodes: [btn] });
+        btn.innerHTML = canRenderLucide ? '<i data-lucide="check"></i>' : 'Copied';
+        renderIcons([btn]);
         setTimeout(() => {
-          btn.innerHTML = '<i data-lucide="copy"></i>';
-          lucide.createIcons({ nodes: [btn] });
+          btn.innerHTML = canRenderLucide ? '<i data-lucide="copy"></i>' : 'Copy';
+          renderIcons([btn]);
         }, 2000);
       });
     });
@@ -60,9 +70,9 @@ document.getElementById('year').textContent = new Date().getFullYear();
     tab.addEventListener('click', () => {
       const target = tab.dataset.codeTab;
       const block = tab.closest('.code-block');
-      block.querySelectorAll('.code-tab').forEach(t => t.classList.remove('active'));
+      block.querySelectorAll('.code-tab').forEach((t) => t.classList.remove('active'));
       tab.classList.add('active');
-      block.querySelectorAll('[data-code-content]').forEach(panel => {
+      block.querySelectorAll('[data-code-content]').forEach((panel) => {
         panel.hidden = panel.dataset.codeContent !== target;
       });
     });
@@ -72,20 +82,20 @@ document.getElementById('year').textContent = new Date().getFullYear();
   function activateAuthTab(tab) {
     const target = tab.dataset.authTab;
     const box = tab.closest('.auth-setup-box');
-    box.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('auth-tab-active'));
+    box.querySelectorAll('.auth-tab').forEach((t) => t.classList.remove('auth-tab-active'));
     tab.classList.add('auth-tab-active');
-    box.querySelectorAll('[data-auth-panel]').forEach(panel => {
+    box.querySelectorAll('[data-auth-panel]').forEach((panel) => {
       panel.hidden = panel.dataset.authPanel !== target;
     });
   }
 
-  document.querySelectorAll('.auth-tab').forEach(tab => {
+  document.querySelectorAll('.auth-tab').forEach((tab) => {
     tab.addEventListener('click', () => activateAuthTab(tab));
   });
 
   // Pre-select the tab matching the visitor's OS — AppleScript is default on macOS (easiest setup)
   const defaultAuthTab = isWin ? 'win' : 'mac-as';
-  document.querySelectorAll('.auth-tabs').forEach(tabList => {
+  document.querySelectorAll('.auth-tabs').forEach((tabList) => {
     const match = tabList.querySelector(`[data-auth-tab="${defaultAuthTab}"]`);
     if (match) activateAuthTab(match);
   });
@@ -100,7 +110,7 @@ document.getElementById('year').textContent = new Date().getFullYear();
         }
       });
     },
-    { threshold: 0.12 }
+    { threshold: 0.12 },
   );
 
   document.querySelectorAll('.scroll-reveal').forEach((el) => observer.observe(el));

@@ -13,6 +13,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     private var agentThinkingWindowController: AgentThinkingWindowController?
     private var licenseWindowController: LicenseWindowController?
     private var manualWindowController: ManualWindowController?
+    private var scheduledJobsWindowController: ScheduledJobsWindowController?
+    private var scheduledJobsMenuItem: NSMenuItem?
     private var monitoringStarted = false
     private var isAuthorized = false
 
@@ -128,6 +130,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         agentItem.isEnabled = true
         menu.addItem(agentItem)
         agentSessionMenuItem = agentItem
+        let scheduledJobsItem = NSMenuItem(title: "Scheduled Jobs", action: #selector(showScheduledJobsWindowFromMenu), keyEquivalent: "")
+        scheduledJobsItem.target = self
+        scheduledJobsItem.isEnabled = false
+        menu.addItem(scheduledJobsItem)
+        scheduledJobsMenuItem = scheduledJobsItem
         let manualItem = NSMenuItem(title: "Manual", action: #selector(showManualWindowFromMenu), keyEquivalent: "")
         manualItem.target = self
         menu.addItem(manualItem)
@@ -170,6 +177,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
 
         NSApp.activate(ignoringOtherApps: true)
         taskInstructionsWindowController?.showWindow(nil)
+    }
+
+    @objc private func showScheduledJobsWindowFromMenu() {
+        showScheduledJobsWindow()
+    }
+
+    func showScheduledJobsWindow() {
+        guard isAuthorized else { showLicenseWindow(); return }
+        if scheduledJobsWindowController == nil {
+            scheduledJobsWindowController = ScheduledJobsWindowController()
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        scheduledJobsWindowController?.showWindow(nil)
     }
 
     @objc private func showAgentThinkingWindowFromMenu() {
@@ -248,6 +268,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
 
         statusMenuItem?.title = title
         taskInstructionsMenuItem?.isEnabled = isAuthorized
+        scheduledJobsMenuItem?.isEnabled = isAuthorized
     }
 
     /// Called when an @omniAgent session starts — shows the thinking window.

@@ -158,13 +158,7 @@ namespace OmniKey.Windows
             AppendBody(rtb,
                 "OmniAgent can search the web while working on your task. The provider is configured " +
                 "via the OmniKey CLI during onboarding (run \"omnikey onboard\").\n\n" +
-                "Supported providers:\n" +
-                "- DuckDuckGo        — default fallback, no API key required.\n" +
-                "- Serper            — Google Search API, ~2,500 free requests/month.\n" +
-                "- Brave Search      — ~2,000 free requests/month.\n" +
-                "- Tavily            — optimized for AI agents, ~1,000 free requests/month.\n" +
-                "- SearXNG           — self-hosted, no key needed (provide your instance URL).\n\n" +
-                "If no provider is configured, OmniKey falls back to DuckDuckGo automatically.");
+                "Supported providers: DuckDuckGo, Serper, Brave Search, Tavily, SearXNG.");
 
             AppendDivider(rtb);
             AppendTitle(rtb, "LLM providers");

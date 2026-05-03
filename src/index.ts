@@ -8,11 +8,14 @@ import { createFeatureRouter } from './featureRoutes';
 import { initDatabase } from './db';
 import { logger } from './logger';
 import { taskInstructionRouter } from './taskInstructionRoutes';
+import { scheduledJobRouter } from './scheduledJobRoutes';
+import { startScheduledJobExecutor } from './scheduledJobExecutor';
 import { config } from './config';
 import { attachAgentWebSocketServer, createAgentRouter } from './agent/agentServer';
 import { AppDownload } from './models/appDownload';
-// Importing AgentSession ensures the model is registered with Sequelize before initDatabase().
+// Importing AgentSession and ScheduledJob ensures the models are registered with Sequelize before initDatabase().
 import './models/agentSession';
+import './models/scheduledJob';
 import { incrementDownloadCount, getDownloadCounts } from './bucket-adapter';
 
 const app = express();
@@ -30,6 +33,8 @@ app.use('/api/subscription', createSubscriptionRouter(logger));
 app.use('/api/feature', createFeatureRouter());
 
 app.use('/api/instructions', taskInstructionRouter());
+
+app.use('/api/scheduled-jobs', scheduledJobRouter());
 
 app.use('/api/agent', createAgentRouter());
 
@@ -83,8 +88,8 @@ app.get('/macos/appcast', (req, res) => {
 
   // These should match the values embedded into the macOS app
   // Info.plist in macOS/build_release_dmg.sh.
-  const bundleVersion = '22';
-  const shortVersion = '1.0.21';
+  const bundleVersion = '23';
+  const shortVersion = '1.0.22';
 
   const xml = `<?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0"
@@ -115,7 +120,7 @@ app.get('/macos/appcast', (req, res) => {
 // ── Windows distribution endpoints ───────────────────────────────────────────
 // These should match the values in windows/OmniKey.Windows.csproj
 // <Version> and windows/build_release_zip.ps1 $APP_VERSION.
-const WIN_VERSION = '1.8';
+const WIN_VERSION = '1.9';
 const WIN_ZIP_FILENAME = 'OmniKeyAI-windows-win-x64.zip';
 const WIN_ZIP_PATH = path.join(process.cwd(), 'windows', WIN_ZIP_FILENAME);
 
@@ -165,7 +170,7 @@ app.get('/windows/update', (req, res) => {
     version: WIN_VERSION,
     downloadUrl: `${baseUrl}/windows/download`,
     fileSize,
-    releaseNotes: `What's new in ${WIN_VERSION}\n\n• OmniAgent session management — choose to start a new session or resume an existing one each time you run @omniAgent. Save a default to skip the picker automatically on future runs.\n• History button in the OmniAgent window — change your default session at any time without re-running the agent.\n• OmniAgent Session tray menu item — open session settings directly from the system tray.\n• Left-clicking the tray icon now opens the menu (previously right-click only).`,
+    releaseNotes: `What's new in ${WIN_VERSION}\n\n• New cron job automation (Scheduled Jobs) — create recurring jobs with cron-style schedules or one-time jobs to run prompts automatically in the background.\n• Scheduled Jobs controls — add jobs, activate/deactivate them, run now on demand, refresh status, and view last-run history in the app.\n• OmniAgent session management — choose to start a new session or resume an existing one each time you run @omniAgent. Save a default to skip the picker automatically on future runs.\n• History button in the OmniAgent window — change your default session at any time without re-running the agent.\n• OmniAgent Session tray menu item — open session settings directly from the system tray.\n• Left-clicking the tray icon now opens the menu (previously right-click only).\n• Manual updated with detailed OmniAgent, session management, web search provider, and LLM provider documentation.`,
   });
 });
 
@@ -195,6 +200,7 @@ async function start() {
     server = app.listen(PORT, () => {
       logger.info(`Enhancer API listening on http://localhost:${PORT}`, {
         isSelfHosted: config.isSelfHosted,
+        aiProvider: config.aiProvider,
       });
     });
 
@@ -203,6 +209,10 @@ async function start() {
     // by clients when running @omniAgent sessions.
     if (server) {
       attachAgentWebSocketServer(server as import('http').Server);
+    }
+
+    if (config.isSelfHosted) {
+      startScheduledJobExecutor();
     }
   } catch (err) {
     logger.error('Failed to start server due to DB error.', { error: err });

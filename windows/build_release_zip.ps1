@@ -83,6 +83,10 @@ OmniKey AI $APP_VERSION – Windows ($Runtime)
 
 What's new in $APP_VERSION
 --------------------------
+- New cron job automation (Scheduled Jobs): create recurring jobs using cron-style
+  schedules or one-time jobs, then run them automatically in the background.
+- Scheduled Jobs controls: add, activate/deactivate, run now, refresh status, and
+  view last-run history directly in the app.
 - OmniAgent session management: when you trigger @omniAgent, a picker lets you
   start a new session or resume an existing one.  You can remember your choice
   as a default so the picker is skipped on future runs.

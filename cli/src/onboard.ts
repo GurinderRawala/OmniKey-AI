@@ -10,11 +10,12 @@ const AI_PROVIDERS = [
 ];
 
 const SEARCH_PROVIDERS = [
-  { name: 'Skip (DuckDuckGo will be used by default — no key required)', value: 'skip' },
-  { name: 'Serper (Google Search API — serper.dev, 2,500 free/mo)', value: 'serper' },
-  { name: 'Brave Search (brave.com/search/api, 2,000 free/mo)', value: 'brave' },
-  { name: 'Tavily (tavily.com, 1,000 free/mo, optimized for AI)', value: 'tavily' },
-  { name: 'SearXNG (self-hosted, no key needed — provide your instance URL)', value: 'searxng' },
+  { name: 'Skip', value: 'skip' },
+  { name: 'DuckDuckGo', value: 'duckduckgo' },
+  { name: 'Serper', value: 'serper' },
+  { name: 'Brave Search', value: 'brave' },
+  { name: 'Tavily', value: 'tavily' },
+  { name: 'SearXNG', value: 'searxng' },
 ];
 
 const AI_PROVIDER_KEY_ENV: Record<string, string> = {
@@ -61,7 +62,8 @@ export async function onboard() {
     {
       type: 'list',
       name: 'provider',
-      message: 'Select a web search provider for the AI agent (enhances research capabilities):',
+      message:
+        'Select a web search provider for the AI agent. Supported providers: DuckDuckGo, Serper, Brave Search, Tavily, SearXNG:',
       choices: SEARCH_PROVIDERS,
       default: 'skip',
     },

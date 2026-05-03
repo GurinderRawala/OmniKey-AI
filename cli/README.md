@@ -19,6 +19,7 @@ OmnikeyAI is a productivity tool that helps you quickly rewrite selected text us
 - Accepts CLI flags for non-interactive setup.
 - Configure and run the backend daemon — persisted across reboots on both macOS and Windows.
 - `omnikey grant-browser-access`: One-time setup to give Omnikey access to authenticated browser tabs for web fetch.
+- Scheduled Jobs commands to create, list, delete, and trigger jobs from the CLI.
 
 ## Usage
 
@@ -64,23 +65,71 @@ omnikey grant-browser-access
 
 # Reopen the browser with its saved Omnikey debug profile at any time
 omnikey browser open
+
+# Add a scheduled job (interactive)
+omnikey schedule add
+
+# List scheduled jobs
+omnikey schedule list
+
+# Remove a scheduled job (interactive select)
+omnikey schedule remove
+
+# Trigger a scheduled job immediately by ID
+omnikey schedule run-now <job-id>
 ```
 
 ### Command reference
 
-| Command | Description |
-|---|---|
-| `omnikey onboard` | Interactive setup for LLM provider and web search |
-| `omnikey daemon [--port]` | Start the backend daemon (default port: 7071) |
-| `omnikey kill-daemon` | Stop the running daemon |
-| `omnikey restart-daemon [--port]` | Kill and restart the daemon |
-| `omnikey config` | Display current config with masked API keys |
-| `omnikey set <key> <value>` | Update a single config value |
-| `omnikey remove-config [--db]` | Remove config files; add `--db` to also delete the database |
-| `omnikey status` | Show what process is using the daemon port |
-| `omnikey logs [--lines N] [--errors]` | Tail daemon logs |
-| `omnikey grant-browser-access` | Set up authenticated browser tab access for web fetch |
-| `omnikey browser open` | Reopen the browser with the saved Omnikey debug profile |
+| Command                               | Description                                                               |
+| ------------------------------------- | ------------------------------------------------------------------------- |
+| `omnikey onboard`                     | Interactive setup for LLM provider and web search                         |
+| `omnikey daemon [--port]`             | Start the backend daemon (default port: 7071)                             |
+| `omnikey kill-daemon`                 | Stop the running daemon                                                   |
+| `omnikey restart-daemon [--port]`     | Kill and restart the daemon                                               |
+| `omnikey config`                      | Display current config with masked API keys                               |
+| `omnikey set <key> <value>`           | Update a single config value                                              |
+| `omnikey remove-config [--db]`        | Remove config files; add `--db` to also delete the database               |
+| `omnikey status`                      | Show what process is using the daemon port                                |
+| `omnikey logs [--lines N] [--errors]` | Tail daemon logs                                                          |
+| `omnikey grant-browser-access`        | Set up authenticated browser tab access for web fetch                     |
+| `omnikey browser open`                | Reopen the browser with the saved Omnikey debug profile                   |
+| `omnikey schedule add`                | Create a scheduled job with interactive prompt, schedule type, and timing |
+| `omnikey schedule list`               | List all scheduled jobs with status and next run                          |
+| `omnikey schedule remove`             | Remove an existing scheduled job via interactive selection                |
+| `omnikey schedule run-now <id>`       | Trigger a scheduled job immediately                                       |
+
+## Scheduled Jobs
+
+The CLI includes a full `schedule` command group to manage recurring and one-time jobs.
+
+### `omnikey schedule add`
+
+Creates a new job interactively:
+
+- Prompts for a job label
+- Lets you enter a multiline prompt directly in terminal (type `END` on its own line when finished)
+- Supports:
+  - Recurring schedule with cron presets or custom cron
+  - One-time schedule by date/time
+
+### `omnikey schedule list`
+
+Displays all jobs in a table with:
+
+- ID
+- Label
+- Schedule
+- Next run
+- Status
+
+### `omnikey schedule remove`
+
+Lets you choose a job from a list and confirms deletion.
+
+### `omnikey schedule run-now <id>`
+
+Runs a job immediately using its job ID.
 
 ## Browser access (`grant-browser-access` / `browser open`)
 
@@ -133,12 +182,12 @@ The daemon is registered as a **launchd agent** (`~/Library/LaunchAgents/com.omn
 
 The daemon runs as a **Windows Service** managed by [NSSM (Non-Sucking Service Manager)](https://nssm.cc/). This gives it production-grade persistence:
 
-| Behaviour | Detail |
-|---|---|
-| Starts on boot | Runs as `SERVICE_AUTO_START` — no login required |
-| Auto-restarts on crash | Restarts after a 3-second delay on any unexpected exit |
-| Runs in the background | No console window, no logged-in user needed |
-| Log rotation | stdout/stderr written to `~/.omnikey/daemon.log` and `daemon-error.log` with rotation enabled |
+| Behaviour              | Detail                                                                                        |
+| ---------------------- | --------------------------------------------------------------------------------------------- |
+| Starts on boot         | Runs as `SERVICE_AUTO_START` — no login required                                              |
+| Auto-restarts on crash | Restarts after a 3-second delay on any unexpected exit                                        |
+| Runs in the background | No console window, no logged-in user needed                                                   |
+| Log rotation           | stdout/stderr written to `~/.omnikey/daemon.log` and `daemon-error.log` with rotation enabled |
 
 #### Prerequisites
 

@@ -2,7 +2,6 @@ import type http from 'http';
 import express, { Response } from 'express';
 import WebSocket, { WebSocketServer } from 'ws';
 import cuid from 'cuid';
-import { Op } from 'sequelize';
 import { config } from '../config';
 import { logger } from '../logger';
 import { Subscription } from '../models/subscription';
@@ -13,12 +12,14 @@ import { getPromptForCommand } from '../featureRoutes';
 import { executeTool } from '../web-search/web-search-provider';
 import { createLazyAuthContext } from './agentAuth';
 import { authMiddleware, AuthLocals } from '../authMiddleware';
+import { executeImageGenerationTool } from './imageTool';
 import {
   buildAvailableTools,
   createUserContent,
   sendFinalAnswer,
   pushToSessionHistory,
   MAX_HISTORY_TOTAL,
+  createUserContentForCronJob,
 } from './utils';
 import { aiClient, AITool, AICompletionResult, getDefaultModel } from '../ai-client';
 import type { AgentMessage, AgentSendFn, SessionState } from './types';
@@ -57,13 +58,33 @@ async function runToolLoop(
 
     const toolResults = await Promise.all(
       toolCalls.map(async (tc) => {
-        const args = tc.arguments as Record<string, string>;
+        const args = tc.arguments as Record<string, unknown>;
+
+        if (tc.name === 'generate_image') {
+          const prompt = typeof args.prompt === 'string' ? args.prompt : '';
+          send({
+            session_id: sessionId,
+            sender: 'agent',
+            content: `Generating image: "${prompt.slice(0, 100)}${prompt.length > 100 ? '...' : ''}"`,
+            is_terminal_output: false,
+            is_error: false,
+            is_web_call: false,
+          });
+
+          const toolResult = await executeImageGenerationTool(args, log);
+          log.info('Tool call completed', {
+            sessionId,
+            tool: tc.name,
+            resultLength: toolResult.length,
+          });
+          return { id: tc.id, name: tc.name, result: toolResult };
+        }
 
         // Notify the frontend that a web tool call is about to execute.
         const webCallContent =
           tc.name === 'web_search'
-            ? `Searching the web for: "${args.query ?? ''}"`
-            : `Fetching URL: ${args.url ?? ''}`;
+            ? `Searching the web for: "${String(args.query ?? '')}"`
+            : `Fetching URL: ${String(args.url ?? '')}`;
         send({
           session_id: sessionId,
           sender: 'agent',
@@ -73,7 +94,7 @@ async function runToolLoop(
           is_web_call: true,
         });
 
-        const toolResult = await executeTool(tc.name, args, log);
+        const toolResult = await executeTool(tc.name, args as Record<string, string>, log);
         log.info('Tool call completed', {
           sessionId,
           tool: tc.name,
@@ -198,6 +219,7 @@ async function getOrCreateSession(
   subscription: Subscription,
   platform: string | undefined,
   log: typeof logger,
+  isCronJob = false,
 ): Promise<{ sessionState: SessionState; hasStoredPrompt: boolean }> {
   // 1. Return the live in-memory entry if already loaded this process lifetime.
   const existing = sessionMessages.get(sessionId);
@@ -265,7 +287,7 @@ async function getOrCreateSession(
         role: 'system',
         content: systemPrompt,
       },
-      ...(prompt
+      ...(prompt && !isCronJob
         ? [
             {
               role: 'user' as const,
@@ -313,18 +335,20 @@ ${prompt}
   };
 }
 
-async function runAgentTurn(
+export async function runAgentTurn(
   sessionId: string,
   subscription: Subscription,
   clientMessage: AgentMessage,
   send: AgentSendFn,
   log: typeof logger,
+  options?: { maxTurns?: number; isCronJob?: boolean },
 ) {
   const { sessionState: session, hasStoredPrompt } = await getOrCreateSession(
     sessionId,
     subscription,
     clientMessage.platform,
     log,
+    options?.isCronJob,
   );
 
   // Count this call as one agent iteration.
@@ -336,9 +360,10 @@ async function runAgentTurn(
     turn: session.turns,
   });
 
-  // On the MAX_TURNS iteration, instruct the LLM to provide a final,
-  // consolidated answer based on the full conversation context.
-  if (session.turns === MAX_TURNS) {
+  const effectiveMaxTurns = options?.maxTurns ?? MAX_TURNS;
+
+  // On the final iteration, instruct the LLM to provide a consolidated answer.
+  if (session.turns === effectiveMaxTurns) {
     pushToSessionHistory(logger, session, {
       role: 'system',
       content:
@@ -379,7 +404,13 @@ async function runAgentTurn(
       role: 'user',
       content: isAssistance
         ? userContent
-        : `<user_input>${createUserContent(userContent, hasStoredPrompt)}</user_input>`,
+        : [
+            `<user_input>`,
+            !options?.isCronJob
+              ? createUserContent(userContent, hasStoredPrompt)
+              : createUserContentForCronJob(userContent),
+            `</user_input>`,
+          ].join('\n'),
     });
 
     // Use the first real user message (turn 1) as the session title.
@@ -396,7 +427,7 @@ async function runAgentTurn(
 
   // On the final turn we omit tools so the model is forced to emit a
   // plain text <final_answer> rather than issuing another tool call.
-  const isFinalTurn = session.turns >= MAX_TURNS;
+  const isFinalTurn = session.turns >= effectiveMaxTurns;
   const tools = isFinalTurn ? undefined : buildAvailableTools();
 
   const recordUsage = async (result: AICompletionResult) => {
@@ -493,7 +524,10 @@ async function runAgentTurn(
       const toolLoopHasFinal = toolLoopContent.includes('<final_answer>');
       const webToolFailed = session.history.some(
         (msg) =>
-          msg.role === 'tool' && typeof msg.content === 'string' && msg.content.startsWith('Error'),
+          msg.role === 'tool' &&
+          (msg.tool_name === 'web_search' || msg.tool_name === 'web_fetch') &&
+          typeof msg.content === 'string' &&
+          msg.content.startsWith('Error'),
       );
 
       if (toolLoopHasShell || (toolLoopHasFinal && !webToolFailed)) {
@@ -549,6 +583,7 @@ async function runAgentTurn(
           },
           send,
           logger,
+          options,
         );
 
         return;
@@ -595,13 +630,14 @@ async function runAgentTurn(
         hasFinalAnswerTag,
       });
 
+      pushToSessionHistory(logger, session, { role: 'assistant', content });
+      await persistSessionToDB(sessionId, session);
+      sessionMessages.delete(sessionId);
       send({
         session_id: sessionId,
         sender: 'agent',
         content: hasFinalAnswerTag ? content : `<final_answer>\n${content}\n</final_answer>`,
       });
-      await persistSessionToDB(sessionId, session);
-      sessionMessages.delete(sessionId);
     } else if (content) {
       // Fallback: the LLM returned content without any recognized tag and it
       // is not the final turn (e.g. plain-text conclusion after terminal
@@ -614,13 +650,13 @@ async function runAgentTurn(
       });
 
       pushToSessionHistory(log, session, { role: 'assistant', content });
+      await persistSessionToDB(sessionId, session);
+      sessionMessages.delete(sessionId);
       send({
         session_id: sessionId,
         sender: 'agent',
         content: `<final_answer>\n${content}\n</final_answer>`,
       });
-      await persistSessionToDB(sessionId, session);
-      sessionMessages.delete(sessionId);
     } else {
       log.warn('Agent returned empty content with no recognized tags; sending error', {
         sessionId,

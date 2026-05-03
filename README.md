@@ -15,12 +15,14 @@ Follow these steps to set up OmniKey:
 1. **Install OmniKey CLI:**
 
    **Via Homebrew (macOS recommended):**
+
    ```sh
    brew tap GurinderRawala/omnikey-ai https://github.com/GurinderRawala/OmniKey-AI.git
    brew install omnikey-cli
    ```
 
    **Via npm:**
+
    ```sh
    npm install -g omnikey-cli
    ```
@@ -31,7 +33,7 @@ Follow these steps to set up OmniKey:
    omnikey onboard
    ```
 
-   OmniKey supports **OpenAI**, **Anthropic**, and **Google Gemini** as LLM providers. You will be prompted to select a provider and enter your API key. You can also optionally configure a **web search provider** (Serper, Brave Search, Tavily, or SearXNG) — if none is configured, OmniKey falls back to **DuckDuckGo** by default, so web search works out of the box with no key required.
+   OmniKey supports **OpenAI**, **Anthropic**, and **Google Gemini** as LLM providers. You will be prompted to select a provider and enter your API key. You can also optionally configure a **web search provider**. Supported web search providers: **DuckDuckGo, Serper, Brave Search, Tavily, SearXNG**.
 
 3. **Start the OmniKey daemon:**
    This command will set up a persistence agent and keep the OmniKey backend running across system restarts. On macOS it registers a launchd agent; on Windows it registers a Task Scheduler task.
@@ -48,31 +50,33 @@ Follow these steps to set up OmniKey:
 
 ## Features
 
-- **Authenticated Browser Session Reading** *(macOS & Windows — New!)*: OmniKey can read content from your live browser tab — including pages that require login — so the `@omniAgent` can work with authenticated resources like internal dashboards, private docs, and paid tools without you having to copy-paste anything.
+- **Authenticated Browser Session Reading** _(macOS & Windows — New!)_: OmniKey can read content from your live browser tab — including pages that require login — so the `@omniAgent` can work with authenticated resources like internal dashboards, private docs, and paid tools without you having to copy-paste anything.
 
   Works with:
   - **Windows**: Chrome, Brave, Edge
   - **macOS**: Chrome, Brave, Edge, Arc, Vivaldi, Opera, Chromium, and Safari
 
   > **Recommended setup (macOS & Windows):** Run the following command and let the CLI do everything for you:
+  >
   > ```sh
   > omnikey grant-browser-access
   > ```
+  >
   > The CLI detects your installed browsers, creates a dedicated OmniKey debug profile stored at `~/.omnikey/browser-debug-profiles/`, finds a free debug port, registers a permanent login startup entry, and verifies the connection — all in one guided flow. Because a fresh profile is used, you sign in to your accounts once inside it. Your main browser profile is never touched, and the debug profile persists between sessions.
   >
   > After setup, reopen the browser with its OmniKey debug profile at any time using:
+  >
   > ```sh
   > omnikey browser open
   > ```
 
-  ---
+  ***
 
   ### Manual Setup
 
   #### Windows — Remote Debugging Port (CDP)
 
   Modern Chrome no longer allows `--remote-debugging-port` with your existing user profile. You must point `--user-data-dir` at a dedicated, separate directory.
-
   1. Create a folder for the OmniKey debug profile — e.g., paste into PowerShell:
      ```powershell
      mkdir "$env:USERPROFILE\.omnikey\browser-debug-profiles\chrome-default"
@@ -91,12 +95,11 @@ Follow these steps to set up OmniKey:
 
   > **Edge:** replace `chrome.exe` with `msedge.exe`. **Brave:** use `brave.exe`.
 
-  ---
+  ***
 
   #### macOS — Remote Debugging Port (CDP) (Chrome, Brave, Edge, Arc, Vivaldi, Opera, Chromium)
 
   Modern Chrome requires a separate `--user-data-dir` for remote debugging — using your existing profile is no longer supported.
-
   1. Create a folder for the OmniKey debug profile:
      ```sh
      mkdir -p ~/.omnikey/browser-debug-profiles/chrome-default
@@ -115,7 +118,7 @@ Follow these steps to set up OmniKey:
 
   > Replace the app path for Brave (`Brave Browser.app`), Edge (`Microsoft Edge.app`), etc. Use a different folder name per browser.
 
-  ---
+  ***
 
   #### macOS — AppleScript (Chrome, Brave, Edge, Arc, Vivaldi, Opera, Chromium)
 
@@ -129,17 +132,45 @@ Follow these steps to set up OmniKey:
   No separate profile or port needed — OmniKey reads your existing open tabs directly. This is a one-time setting per browser.
 
 - **Multiple LLM Providers**: Choose between OpenAI, Anthropic, or Google Gemini as your AI backend. Configure your preferred provider during onboarding or at any time via the CLI.
-- **Web Search**: Configure a web search provider during onboarding to allow `@omniAgent` to gather real-time context from the web alongside your terminal. Supported providers:
-  - **DuckDuckGo** — default fallback, no key required
-  - **Serper** (serper.dev) — Google Search API, 2,500 free requests/mo
-  - **Brave Search** (brave.com/search/api) — 2,000 free requests/mo
-  - **Tavily** (tavily.com) — optimized for AI, 1,000 free requests/mo
-  - **SearXNG** — self-hosted, no key needed (provide your instance URL)
+- **Web Search**: Configure a web search provider during onboarding to allow `@omniAgent` to gather real-time context from the web alongside your terminal. Supported providers: **DuckDuckGo, Serper, Brave Search, Tavily, SearXNG**.
+- **Scheduled Jobs (Automation)**: Automate prompt execution with recurring or one-time schedules from the desktop app or CLI. Use it for routine checks, summaries, and repetitive workflows without manual triggering.
 - **Prompt Enhancement (`⌘E` / `Ctrl+E`)**: Improves clarity, structure, and tone of your selected text to make it a better AI prompt.
 - **Grammar & Clarity Fix (`⌘G` / `Ctrl+G`)**: Focuses on grammar, spelling, and readability without changing the core meaning of your text.
 - **Custom Tasks (`⌘T` / `Ctrl+T`)**: Applies your saved task instructions to the selected text. Configure these in the "Task Instructions" window from the menu bar.
 - **@omnikeyai Questions**: Select a question starting with "@omnikeyai" and use a shortcut to get answers in the context of your current text or task.
 - **@omniAgent Tasks**: Select instructions starting with "@omniAgent" and press `⌘T` / `Ctrl+T` to have the agent perform tasks for you, combining your task instructions if configured. OmniKey gathers context from both your **terminal** (by running commands) and the **web** (using your configured search provider, falling back to DuckDuckGo if none is set).
+
+### Automation: Scheduled Jobs
+
+OmniKey includes a built-in automation system to run prompts on a schedule.
+
+- **Recurring jobs**: Run on selected days/times using cron-style scheduling.
+- **One-time jobs**: Run once at a specific date and time.
+- **Run now**: Trigger a saved job immediately.
+- **Last run history**: Review the most recent run output and session details.
+
+#### Use Scheduled Jobs in the app (macOS + Windows)
+
+Open **Scheduled Jobs** from the menu bar app (macOS) or system tray app (Windows), then:
+
+1. Create a new recurring or one-time job.
+2. Add your label and prompt.
+3. Activate or deactivate jobs as needed.
+4. Use **Run Now** for immediate execution.
+5. Use **Last Run** to inspect output/history.
+
+#### Use Scheduled Jobs in the CLI
+
+Manage jobs from terminal with:
+
+```sh
+omnikey schedule add
+omnikey schedule list
+omnikey schedule remove
+omnikey schedule run-now <job-id>
+```
+
+The add flow is interactive and supports multiline prompt input.
 
 #### How OmniKey Works
 

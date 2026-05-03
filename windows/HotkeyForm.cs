@@ -31,8 +31,11 @@ namespace OmniKey.Windows
             Opacity        = 0;
 
             var assembly = System.Reflection.Assembly.GetExecutingAssembly();
-            using var iconStream = assembly.GetManifestResourceStream("OmniKey.Windows.app.ico");
-            var appIcon = iconStream != null ? new Icon(iconStream) : SystemIcons.Information;
+            using var trayIconStream = assembly.GetManifestResourceStream("OmniKey.Windows.tray.ico");
+            using var appIconStream = assembly.GetManifestResourceStream("OmniKey.Windows.app.ico");
+            var appIcon = trayIconStream != null
+                ? new Icon(trayIconStream)
+                : (appIconStream != null ? new Icon(appIconStream) : SystemIcons.Information);
 
             var contextMenu = BuildContextMenu();
             _notifyIcon = new NotifyIcon
@@ -147,6 +150,10 @@ namespace OmniKey.Windows
             agentSessionItem.Click += async (_, _) => await ShowAgentSessionPickerFromMenuAsync();
             menu.Items.Add(agentSessionItem);
 
+            var scheduledJobsItem = new ToolStripMenuItem("Scheduled Jobs");
+            scheduledJobsItem.Click += (_, _) => ShowScheduledJobs();
+            menu.Items.Add(scheduledJobsItem);
+
             var manualItem = new ToolStripMenuItem("Manual");
             manualItem.Click += (_, _) => ShowManual();
             menu.Items.Add(manualItem);
@@ -172,6 +179,12 @@ namespace OmniKey.Windows
         private void ShowTaskInstructions()
         {
             var form = new TaskInstructionsForm();
+            form.Show(this);
+        }
+
+        private void ShowScheduledJobs()
+        {
+            var form = new ScheduledJobsForm();
             form.Show(this);
         }
 

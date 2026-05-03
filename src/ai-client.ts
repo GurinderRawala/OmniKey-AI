@@ -56,6 +56,30 @@ export interface CompletionOptions {
   maxTokens?: number;
 }
 
+/**
+ * Normalized options for image generation across supported providers.
+ */
+export interface AIImageGenerateOptions {
+  prompt: string;
+  format?: 'png' | 'webp' | 'jpeg';
+  size?: '1024x1024' | '1024x1536' | '1536x1024';
+  quality?: 'low' | 'medium' | 'high';
+  background?: 'transparent' | 'opaque' | 'auto';
+}
+
+/**
+ * Provider-agnostic image generation result.
+ *
+ * `imageBase64` contains raw image bytes encoded as base64 and is intended
+ * to be persisted by callers (e.g. agent tools) to a local file.
+ */
+export interface AIImageGenerateResult {
+  imageBase64: string;
+  mimeType: string;
+  provider: 'openai' | 'gemini';
+  note?: string;
+}
+
 // ---------------------------------------------------------------------------
 // Default model mapping
 // ---------------------------------------------------------------------------
@@ -215,6 +239,37 @@ class OpenAIAdapter {
     }
 
     return { usage, model };
+  }
+
+  /**
+   * Generates an image using OpenAI and returns base64 image bytes.
+   *
+   * @param options - Unified image-generation options.
+   * @returns Provider-normalized image payload.
+   */
+  async generateImage(options: AIImageGenerateOptions): Promise<AIImageGenerateResult> {
+    const format = options.format ?? 'png';
+    const size = options.size ?? '1024x1024';
+    const quality = options.quality ?? 'medium';
+    const background = options.background ?? 'auto';
+
+    const response: any = await this.client.images.generate({
+      model: 'gpt-image-1',
+      prompt: options.prompt,
+      size,
+      quality,
+      background,
+      output_format: format,
+    });
+
+    const b64 = response?.data?.[0]?.b64_json;
+    if (!b64 || typeof b64 !== 'string') {
+      throw new Error('OpenAI image generation returned no image data');
+    }
+
+    const mimeType =
+      format === 'jpeg' ? 'image/jpeg' : format === 'webp' ? 'image/webp' : 'image/png';
+    return { imageBase64: b64, mimeType, provider: 'openai' };
   }
 }
 
@@ -441,6 +496,49 @@ class GeminiAdapter {
 
     return { usage, model };
   }
+
+  /**
+   * Generates an image using Gemini Imagen and returns base64 image bytes.
+   *
+   * @param options - Unified image-generation options.
+   * @returns Provider-normalized image payload and optional compatibility note.
+   */
+  async generateImage(options: AIImageGenerateOptions): Promise<AIImageGenerateResult> {
+    const requestedFormat = options.format ?? 'png';
+    const size = options.size ?? '1024x1024';
+    const quality = options.quality ?? 'medium';
+
+    const aspectRatio = size === '1024x1536' ? '2:3' : size === '1536x1024' ? '3:2' : '1:1';
+
+    // Imagen in this SDK path supports png/jpeg output directly. WebP requests
+    // are downgraded to PNG and surfaced with a note.
+    const outputMimeType = requestedFormat === 'jpeg' ? 'image/jpeg' : 'image/png';
+
+    const response = await this.client.models.generateImages({
+      model: 'imagen-4.0-generate-001',
+      prompt: options.prompt,
+      config: {
+        numberOfImages: 1,
+        aspectRatio,
+        outputMimeType,
+        guidanceScale: quality === 'high' ? 8 : quality === 'low' ? 5 : 6.5,
+      },
+    });
+
+    const generated = response.generatedImages?.[0]?.image;
+    const imageBase64 = generated?.imageBytes;
+    if (!imageBase64) {
+      throw new Error('Gemini image generation returned no image data');
+    }
+
+    const mimeType = generated?.mimeType || outputMimeType;
+    const note =
+      requestedFormat === 'webp'
+        ? 'Gemini does not currently return WebP in this path; image was generated as PNG.'
+        : undefined;
+
+    return { imageBase64, mimeType, provider: 'gemini', note };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -501,6 +599,25 @@ export class AIClient {
       return this.gemini.streamComplete(model, messages, options, onDelta);
     }
     throw new Error(`AI provider "${this.provider}" is not configured.`);
+  }
+
+  /**
+   * Generates an image with the currently configured provider.
+   *
+   * Supported providers are OpenAI and Gemini. Anthropic does not currently
+   * expose a text-to-image generation endpoint in this project.
+   *
+   * @param options - Unified image-generation options.
+   * @returns Provider-normalized image payload.
+   */
+  async generateImage(options: AIImageGenerateOptions): Promise<AIImageGenerateResult> {
+    if (this.provider === 'openai' && this.openai) {
+      return this.openai.generateImage(options);
+    }
+    if (this.provider === 'gemini' && this.gemini) {
+      return this.gemini.generateImage(options);
+    }
+    throw new Error(`Image generation is not supported for provider "${this.provider}".`);
   }
 }
 
