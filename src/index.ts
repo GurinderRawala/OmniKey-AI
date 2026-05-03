@@ -88,8 +88,8 @@ app.get('/macos/appcast', (req, res) => {
 
   // These should match the values embedded into the macOS app
   // Info.plist in macOS/build_release_dmg.sh.
-  const bundleVersion = '22';
-  const shortVersion = '1.0.21';
+  const bundleVersion = '23';
+  const shortVersion = '1.0.22';
 
   const xml = `<?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0"
@@ -120,7 +120,7 @@ app.get('/macos/appcast', (req, res) => {
 // ── Windows distribution endpoints ───────────────────────────────────────────
 // These should match the values in windows/OmniKey.Windows.csproj
 // <Version> and windows/build_release_zip.ps1 $APP_VERSION.
-const WIN_VERSION = '1.8';
+const WIN_VERSION = '1.9';
 const WIN_ZIP_FILENAME = 'OmniKeyAI-windows-win-x64.zip';
 const WIN_ZIP_PATH = path.join(process.cwd(), 'windows', WIN_ZIP_FILENAME);
 
@@ -170,7 +170,7 @@ app.get('/windows/update', (req, res) => {
     version: WIN_VERSION,
     downloadUrl: `${baseUrl}/windows/download`,
     fileSize,
-    releaseNotes: `What's new in ${WIN_VERSION}\n\n• OmniAgent session management — choose to start a new session or resume an existing one each time you run @omniAgent. Save a default to skip the picker automatically on future runs.\n• History button in the OmniAgent window — change your default session at any time without re-running the agent.\n• OmniAgent Session tray menu item — open session settings directly from the system tray.\n• Left-clicking the tray icon now opens the menu (previously right-click only).`,
+    releaseNotes: `What's new in ${WIN_VERSION}\n\n• New cron job automation (Scheduled Jobs) — create recurring jobs with cron-style schedules or one-time jobs to run prompts automatically in the background.\n• Scheduled Jobs controls — add jobs, activate/deactivate them, run now on demand, refresh status, and view last-run history in the app.\n• OmniAgent session management — choose to start a new session or resume an existing one each time you run @omniAgent. Save a default to skip the picker automatically on future runs.\n• History button in the OmniAgent window — change your default session at any time without re-running the agent.\n• OmniAgent Session tray menu item — open session settings directly from the system tray.\n• Left-clicking the tray icon now opens the menu (previously right-click only).\n• Manual updated with detailed OmniAgent, session management, web search provider, and LLM provider documentation.`,
   });
 });
 
