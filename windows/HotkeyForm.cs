@@ -31,8 +31,11 @@ namespace OmniKey.Windows
             Opacity        = 0;
 
             var assembly = System.Reflection.Assembly.GetExecutingAssembly();
-            using var iconStream = assembly.GetManifestResourceStream("OmniKey.Windows.app.ico");
-            var appIcon = iconStream != null ? new Icon(iconStream) : SystemIcons.Information;
+            using var trayIconStream = assembly.GetManifestResourceStream("OmniKey.Windows.tray.ico");
+            using var appIconStream = assembly.GetManifestResourceStream("OmniKey.Windows.app.ico");
+            var appIcon = trayIconStream != null
+                ? new Icon(trayIconStream)
+                : (appIconStream != null ? new Icon(appIconStream) : SystemIcons.Information);
 
             var contextMenu = BuildContextMenu();
             _notifyIcon = new NotifyIcon

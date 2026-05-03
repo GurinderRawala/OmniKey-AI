@@ -19,12 +19,14 @@ namespace OmniKey.Windows
         private readonly Button    _addButton;
         private readonly Button    _editButton;
         private readonly Button    _runNowButton;
-        private readonly Button    _toggleActiveButton;
-        private readonly Button    _lastRunButton;
         private readonly Button    _refreshButton;
-        private readonly Button    _deleteButton;
+        private readonly Button    _moreButton;
         private readonly Button    _closeButton;
         private readonly Label     _statusLabel;
+        private readonly ContextMenuStrip _moreMenu;
+        private readonly ToolStripMenuItem _toggleActiveMenuItem;
+        private readonly ToolStripMenuItem _lastRunMenuItem;
+        private readonly ToolStripMenuItem _deleteMenuItem;
 
         // Running-status tracking
         private readonly HashSet<string> _runningJobIds = new();
@@ -82,14 +84,23 @@ namespace OmniKey.Windows
                 Location  = new Point(16, 46),
             });
 
+            Controls.Add(new Panel
+            {
+                BackColor = NordColors.Border,
+                Location  = new Point(0, 68),
+                Size      = new Size(860, 1),
+                Anchor    = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+            });
+
             // ─── Job list ─────────────────────────────────────────────────────
             _jobList = new ListView
             {
-                Location      = new Point(16, 74),
-                Size          = new Size(820, 400),
+                Location      = new Point(16, 84),
+                Size          = new Size(820, 420),
                 View          = View.Details,
                 FullRowSelect = true,
-                GridLines     = true,
+                GridLines     = false,
+                HideSelection = false,
                 BackColor     = NordColors.PanelBackground,
                 ForeColor     = NordColors.PrimaryText,
                 Font          = new Font("Segoe UI", 9),
@@ -100,53 +111,83 @@ namespace OmniKey.Windows
             _jobList.Columns.Add("Next Run",  160);
             _jobList.Columns.Add("Status",    130);
             _jobList.SelectedIndexChanged += (_, _) => UpdateButtonStates();
+            _jobList.DoubleClick += (_, _) => EditSelected();
             Controls.Add(_jobList);
 
-            // ─── Buttons ──────────────────────────────────────────────────────
-            const int btnY = 484;
-            _addButton    = MakeButton("Add Job",  new Point(16,  btnY), NordColors.Accent);
-            _editButton   = MakeButton("Edit",     new Point(110, btnY), NordColors.AccentBlue);
-            _runNowButton = MakeButton("Run Now",  new Point(204, btnY), NordColors.AccentGreen);
-            _toggleActiveButton = MakeButton("Activate", new Point(298, btnY), NordColors.AccentBlue);
-            _lastRunButton = MakeButton("Last Run", new Point(392, btnY), NordColors.AccentBlue);
-            _refreshButton = MakeButton("Refresh",  new Point(486, btnY), NordColors.AccentBlue);
-            _deleteButton = MakeButton("Delete",   new Point(580, btnY), NordColors.ErrorRed);
-            _closeButton  = MakeButton("Close",    new Point(750, btnY), NordColors.SecondaryText);
+            // ─── Bottom action bar ────────────────────────────────────────────
+            var bottomPanel = new Panel
+            {
+                Dock      = DockStyle.Bottom,
+                Height    = 56,
+                BackColor = NordColors.WindowBackground,
+            };
+            bottomPanel.Paint += (_, e) =>
+            {
+                using var pen = new Pen(NordColors.Border, 1);
+                e.Graphics.DrawLine(pen, 0, 0, bottomPanel.Width, 0);
+            };
+
+            _addButton    = MakeButton("Add Job",  new Point(12, 14), NordColors.Accent);
+            _editButton   = MakeButton("Edit",     new Point(112, 14), NordColors.AccentBlue);
+            _runNowButton = MakeButton("Run Now",  new Point(200, 14), NordColors.AccentGreen);
+            _refreshButton = MakeButton("Refresh", new Point(300, 14), NordColors.AccentBlue);
+            _moreButton = MakeButton("More ▾", new Point(400, 14), NordColors.BadgeBackground, NordColors.PrimaryText);
+            _closeButton  = MakeButton("Close",    new Point(742, 14), NordColors.SecondaryText);
+            _closeButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+
+            _moreMenu = new ContextMenuStrip
+            {
+                ShowImageMargin = false,
+                BackColor = NordColors.PanelBackground,
+                ForeColor = NordColors.PrimaryText,
+            };
+
+            _toggleActiveMenuItem = new ToolStripMenuItem("Activate");
+            _lastRunMenuItem = new ToolStripMenuItem("Last Run");
+            _deleteMenuItem = new ToolStripMenuItem("Delete") { ForeColor = NordColors.ErrorRed };
+            _moreMenu.Items.AddRange(new ToolStripItem[]
+            {
+                _toggleActiveMenuItem,
+                _lastRunMenuItem,
+                new ToolStripSeparator(),
+                _deleteMenuItem,
+            });
 
             _addButton.Click    += (_, _) => ShowEditPanel(null);
             _editButton.Click   += (_, _) => EditSelected();
             _runNowButton.Click += async (_, _) => await RunNowAsync();
-            _toggleActiveButton.Click += async (_, _) => await ToggleActiveAsync();
-            _lastRunButton.Click += async (_, _) => await ShowLastRunAsync();
+            _toggleActiveMenuItem.Click += async (_, _) => await ToggleActiveAsync();
+            _lastRunMenuItem.Click += async (_, _) => await ShowLastRunAsync();
             _refreshButton.Click += async (_, _) => await RefreshJobsAsync();
-            _deleteButton.Click += async (_, _) => await DeleteSelectedAsync();
+            _deleteMenuItem.Click += async (_, _) => await DeleteSelectedAsync();
+            _moreButton.Click += (_, _) => _moreMenu.Show(_moreButton, new Point(0, _moreButton.Height));
             _closeButton.Click  += (_, _) => Close();
 
-            Controls.Add(_addButton);
-            Controls.Add(_editButton);
-            Controls.Add(_runNowButton);
-            Controls.Add(_toggleActiveButton);
-            Controls.Add(_lastRunButton);
-            Controls.Add(_refreshButton);
-            Controls.Add(_deleteButton);
-            Controls.Add(_closeButton);
+            bottomPanel.Controls.Add(_addButton);
+            bottomPanel.Controls.Add(_editButton);
+            bottomPanel.Controls.Add(_runNowButton);
+            bottomPanel.Controls.Add(_refreshButton);
+            bottomPanel.Controls.Add(_moreButton);
+            bottomPanel.Controls.Add(_closeButton);
 
             _statusLabel = new Label
             {
-                Location  = new Point(16, 520),
-                Size      = new Size(820, 20),
+                Location  = new Point(500, 18),
+                Size      = new Size(232, 20),
                 ForeColor = NordColors.SecondaryText,
                 BackColor = NordColors.WindowBackground,
                 Font      = new Font("Segoe UI", 9),
-                Anchor    = AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right,
+                Anchor    = AnchorStyles.Top | AnchorStyles.Right,
+                TextAlign = ContentAlignment.MiddleRight,
             };
-            Controls.Add(_statusLabel);
+            bottomPanel.Controls.Add(_statusLabel);
+            Controls.Add(bottomPanel);
 
             // ─── Edit panel (hidden by default) ───────────────────────────────
             _editPanel = new Panel
             {
-                Location  = new Point(16, 74),
-                Size      = new Size(820, 450),
+                Location  = new Point(16, 84),
+                Size      = new Size(820, 420),
                 BackColor = NordColors.PanelBackground,
                 Visible   = false,
                 Anchor    = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom,
@@ -243,30 +284,12 @@ namespace OmniKey.Windows
                 Visible  = false,
             };
 
-            _saveButton = new Button
-            {
-                Text      = "Save Job",
-                Location  = new Point(12, 390),
-                Size      = new Size(100, 30),
-                BackColor = NordColors.Accent,
-                ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat,
-                Font      = new Font("Segoe UI", 10, FontStyle.Bold),
-            };
-            _saveButton.FlatAppearance.BorderSize = 0;
+            _saveButton = MakeButton("Save Job", new Point(12, 370), NordColors.Accent);
+            _saveButton.Size = new Size(100, 30);
             _saveButton.Click += async (_, _) => await SaveJobAsync();
 
-            _cancelEditButton = new Button
-            {
-                Text      = "Cancel",
-                Location  = new Point(120, 390),
-                Size      = new Size(80, 30),
-                BackColor = NordColors.PanelBackground,
-                ForeColor = NordColors.PrimaryText,
-                FlatStyle = FlatStyle.Flat,
-                Font      = new Font("Segoe UI", 10),
-            };
-            _cancelEditButton.FlatAppearance.BorderColor = NordColors.Border;
+            _cancelEditButton = MakeButton("Cancel", new Point(120, 370), NordColors.BadgeBackground, NordColors.PrimaryText);
+            _cancelEditButton.Size = new Size(88, 30);
             _cancelEditButton.Click += (_, _) => HideEditPanel();
 
             _editPanel.Controls.AddRange(new Control[]
@@ -289,19 +312,21 @@ namespace OmniKey.Windows
 
         // ─── Helpers ──────────────────────────────────────────────────────────
 
-        private static Button MakeButton(string text, Point location, Color backColor)
+        private static Button MakeButton(string text, Point location, Color backColor, Color? foreColor = null)
         {
             var btn = new Button
             {
                 Text      = text,
                 Location  = location,
-                Size      = new Size(86, 28),
+                Size      = new Size(88, 28),
                 BackColor = backColor,
-                ForeColor = Color.White,
+                ForeColor = foreColor ?? Color.White,
                 FlatStyle = FlatStyle.Flat,
                 Font      = new Font("Segoe UI", 9, FontStyle.Bold),
             };
             btn.FlatAppearance.BorderSize = 0;
+            if (backColor == NordColors.BadgeBackground)
+                btn.FlatAppearance.BorderColor = NordColors.Border;
             return btn;
         }
 
@@ -323,15 +348,16 @@ namespace OmniKey.Windows
             bool hasSelection = _jobList.SelectedItems.Count > 0;
             _editButton.Enabled   = hasSelection;
             _runNowButton.Enabled = hasSelection;
-            _deleteButton.Enabled = hasSelection;
-            _refreshButton.Enabled = !isDisposed;
+            _refreshButton.Enabled = !IsDisposed;
+            _moreButton.Enabled = hasSelection;
 
             var selected = GetSelectedJob();
-            _toggleActiveButton.Enabled = selected != null;
-            _toggleActiveButton.Text = selected?.IsActive == true ? "Deactivate" : "Activate";
-            _lastRunButton.Enabled = selected != null &&
+            _toggleActiveMenuItem.Enabled = selected != null;
+            _toggleActiveMenuItem.Text = selected?.IsActive == true ? "Deactivate" : "Activate";
+            _lastRunMenuItem.Enabled = selected != null &&
                 (!string.IsNullOrWhiteSpace(selected.LastRunAt) ||
                  !string.IsNullOrWhiteSpace(selected.LastRunSessionId));
+            _deleteMenuItem.Enabled = hasSelection;
         }
 
         private void UpdateScheduleVisibility()
