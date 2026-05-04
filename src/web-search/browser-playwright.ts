@@ -206,21 +206,89 @@ function getRunningBrowserNames(): Set<string> {
   return running;
 }
 
-// ─── Strategy -1: CDP via DevToolsActivePort ─────────────────────────────────
-//
-// When Chrome is launched with --remote-debugging-port (or --remote-debugging-port=0
-// to let it pick a free port), it writes a DevToolsActivePort file to the user data
-// directory containing the actual port. Connecting via CDP gives us direct access
-// to the live, JS-rendered tab content without AppleScript permissions or cookie
-// decryption. This is the fastest and most reliable path when available.
-
+/**
+ * ─── Strategy -1: CDP via DevToolsActivePort ─────────────────────────────────
+ * When Chrome is launched with --remote-debugging-port (or --remote-debugging-port=0
+ * to let it pick a free port), it writes a DevToolsActivePort file to the user data
+ * directory containing the actual port. Connecting via CDP gives us direct access
+ * to the live, JS-rendered tab content without AppleScript permissions or cookie
+ * decryption. This is the fastest and most reliable path when available.
+ */
 async function fetchWithCDP(
   url: string,
-  browsersWithUrl: Set<string>,
+  workingPorts: number[],
   log: Logger,
 ): Promise<{ content: string; finalUrl: string } | null> {
   const targetBase = url.split('?')[0]; // strip query for prefix match
 
+  for (const port of workingPorts) {
+    log.info('browser-playwright: CDP — debug endpoint found, connecting', { port });
+
+    let cdpBrowser: Browser | null = null;
+    try {
+      cdpBrowser = await pw.chromium.connectOverCDP(`http://localhost:${port}`, {
+        timeout: 5_000,
+      });
+
+      let matchedPage: Page | null = null;
+      for (const context of cdpBrowser.contexts()) {
+        for (const page of context.pages()) {
+          if (page.url().startsWith(targetBase)) {
+            matchedPage = page;
+            break;
+          }
+        }
+        if (matchedPage) break;
+      }
+
+      if (!matchedPage) {
+        log.debug('browser-playwright: CDP — no tab found matching URL', { port, url });
+        continue;
+      }
+
+      log.info('browser-playwright: CDP — tab found, extracting content', {
+        port,
+        tabUrl: matchedPage.url(),
+      });
+
+      try {
+        await matchedPage.waitForFunction(
+          () => (document.body?.innerText ?? '').trim().length > 200,
+          { timeout: 5_000 },
+        );
+      } catch {
+        // Best-effort — extract whatever is rendered so far
+      }
+
+      const content: string = await matchedPage.evaluate(
+        () => (document.body as HTMLBodyElement).innerText ?? document.body.textContent ?? '',
+      );
+
+      log.info('browser-playwright: CDP — content extracted', {
+        port,
+        contentLength: content.trim().length,
+      });
+
+      const trimmed = content.trim();
+      return trimmed ? { content: trimmed, finalUrl: matchedPage.url() } : null;
+    } catch (err) {
+      log.warn('browser-playwright: CDP — connection failed', {
+        port,
+        error: err instanceof Error ? err.message.split('\n')[0] : String(err),
+      });
+    } finally {
+      if (cdpBrowser) {
+        try {
+          await cdpBrowser.close();
+        } catch {}
+      }
+    }
+  }
+
+  return null;
+}
+
+async function getWorkingCdpPorts(browsersWithUrl: Set<string>, log: Logger): Promise<number[]> {
   // Collect candidate ports:
   //   1. DevToolsActivePort file (written when Chrome was started with --remote-debugging-port)
   //   2. Well-known default ports developers commonly use
@@ -295,85 +363,27 @@ async function fetchWithCDP(
     candidatePorts.unshift(config.browserDebugPort);
   }
 
+  const workingPorts: number[] = [];
   for (const port of candidatePorts) {
-    // Quick HTTP probe: /json/version returns immediately if the debug endpoint is up.
-    let endpointUp = false;
     try {
       // Use 127.0.0.1 explicitly — on Windows, `localhost` may resolve to ::1
       // while Chrome binds its debug endpoint to 127.0.0.1 only.
       const probe = await axios.get(`http://127.0.0.1:${port}/json/version`, { timeout: 800 });
-      endpointUp = probe.status === 200;
+      if (probe.status === 200) {
+        workingPorts.push(port);
+      }
     } catch {
       // Port not listening — skip without logging noise
-      continue;
-    }
-
-    if (!endpointUp) continue;
-
-    log.info('browser-playwright: CDP — debug endpoint found, connecting', { port });
-
-    let cdpBrowser: Browser | null = null;
-    try {
-      cdpBrowser = await pw.chromium.connectOverCDP(`http://localhost:${port}`, {
-        timeout: 5_000,
-      });
-
-      let matchedPage: Page | null = null;
-      for (const context of cdpBrowser.contexts()) {
-        for (const page of context.pages()) {
-          if (page.url().startsWith(targetBase)) {
-            matchedPage = page;
-            break;
-          }
-        }
-        if (matchedPage) break;
-      }
-
-      if (!matchedPage) {
-        log.debug('browser-playwright: CDP — no tab found matching URL', { port, url });
-        continue;
-      }
-
-      log.info('browser-playwright: CDP — tab found, extracting content', {
-        port,
-        tabUrl: matchedPage.url(),
-      });
-
-      try {
-        await matchedPage.waitForFunction(
-          () => (document.body?.innerText ?? '').trim().length > 200,
-          { timeout: 5_000 },
-        );
-      } catch {
-        // Best-effort — extract whatever is rendered so far
-      }
-
-      const content: string = await matchedPage.evaluate(
-        () => (document.body as HTMLBodyElement).innerText ?? document.body.textContent ?? '',
-      );
-
-      log.info('browser-playwright: CDP — content extracted', {
-        port,
-        contentLength: content.trim().length,
-      });
-
-      const trimmed = content.trim();
-      return trimmed ? { content: trimmed, finalUrl: matchedPage.url() } : null;
-    } catch (err) {
-      log.warn('browser-playwright: CDP — connection failed', {
-        port,
-        error: err instanceof Error ? err.message.split('\n')[0] : String(err),
-      });
-    } finally {
-      if (cdpBrowser) {
-        try {
-          await cdpBrowser.close();
-        } catch {}
-      }
     }
   }
 
-  return null;
+  log.debug('browser-playwright: CDP — candidate port probe complete', {
+    candidateCount: candidatePorts.length,
+    workingCount: workingPorts.length,
+    workingPorts,
+  });
+
+  return workingPorts;
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -762,7 +772,8 @@ export async function fetchWithPlaywright(url: string, log: Logger): Promise<str
     browsers: [...browsersWithUrl],
   });
 
-  const cdpResult = await fetchWithCDP(url, browsersWithUrl, log);
+  const workingPorts = await getWorkingCdpPorts(browsersWithUrl, log);
+  const cdpResult = await fetchWithCDP(url, workingPorts, log);
   if (cdpResult) return cdpResult.content;
 
   const liveContent = await fetchFromRunningBrowserTab(url, browsersWithUrl, log);

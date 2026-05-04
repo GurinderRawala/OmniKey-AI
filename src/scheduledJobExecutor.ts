@@ -22,7 +22,7 @@ const JOB_TIMEOUT_MS = 10 * 60 * 1_000;
 
 // Cron jobs get more turns than interactive sessions so multi-step tasks
 // (web research → shell commands → final answer) can complete unattended.
-const MAX_CRON_TURNS = 20;
+const MAX_CRON_TURNS = 30;
 
 export function computeNextRunAt(cronExpression: string | null, runAt: Date | null): Date | null {
   if (cronExpression) {

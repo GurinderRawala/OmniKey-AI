@@ -104,6 +104,9 @@ export const config = {
     const n = parseInt(raw, 10);
     return Number.isNaN(n) ? undefined : n;
   })(),
+  browserDebugBrowserName: getEnv('BROWSER_DEBUG_BROWSER_NAME', false),
+  browserDebugExecutable: getEnv('BROWSER_DEBUG_EXECUTABLE', false),
+  browserDebugUserDataDir: getEnv('BROWSER_DEBUG_USER_DATA_DIR', false),
 
   // GCS download-count tracking (both must be set to enable counting)
   gcsBucketName: getEnv('GCS_BUCKET_NAME', false),

@@ -68,7 +68,7 @@ async function runToolLoop(
             content: `Generating image: "${prompt.slice(0, 100)}${prompt.length > 100 ? '...' : ''}"`,
             is_terminal_output: false,
             is_error: false,
-            is_web_call: false,
+            is_web_call: true,
           });
 
           const toolResult = await executeImageGenerationTool(args, log);
@@ -166,7 +166,8 @@ const aiModel = getDefaultModel(config.aiProvider, 'smart');
 // access and written back after each turn so restarts resume correctly.
 const sessionMessages = new Map<string, SessionState>();
 
-const MAX_TURNS = 10;
+const MAX_TURNS = 20;
+
 
 // ─── DB helpers ───────────────────────────────────────────────────────────────
 
