@@ -505,11 +505,9 @@ export async function runAgentTurn(
 
       const errorMessage = 'The agent returned an empty response. Please try again.';
 
-      sendFinalAnswer(send, sessionId, errorMessage, true);
-
-      // Evict from the in-memory cache; the DB record is kept so the session
-      // appears in the list and can be retried or deleted by the user.
+      await persistSessionToDB(sessionId, session);
       sessionMessages.delete(sessionId);
+      sendFinalAnswer(send, sessionId, errorMessage, true);
       return;
     }
 
@@ -674,23 +672,21 @@ export async function runAgentTurn(
       log.warn('Agent returned empty content with no recognized tags; sending error', {
         sessionId,
       });
+      await persistSessionToDB(sessionId, session);
+      sessionMessages.delete(sessionId);
       sendFinalAnswer(
         send,
         sessionId,
         'The agent returned an empty response. Please try again.',
         true,
       );
-      // Evict from in-memory cache; DB record is preserved.
-      sessionMessages.delete(sessionId);
     }
   } catch (err) {
     log.error('Agent LLM call failed', { error: err });
     const errorMessage = 'Agent failed to call language model. Please try again later.';
-    sendFinalAnswer(send, sessionId, errorMessage, true);
-
-    // Evict from in-memory cache; DB record is preserved so the user can
-    // review or delete the session from the client.
+    await persistSessionToDB(sessionId, session);
     sessionMessages.delete(sessionId);
+    sendFinalAnswer(send, sessionId, errorMessage, true);
   }
 }
 

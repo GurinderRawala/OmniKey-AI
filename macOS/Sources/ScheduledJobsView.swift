@@ -722,7 +722,7 @@ struct ScheduledJobsView: View {
                 switch result {
                 case .success:
                     self.runningJobIds.insert(job.id)
-                    self.preRunLastRunAt[job.id] = job.lastRunAt
+                    self.preRunLastRunAt.updateValue(job.lastRunAt, forKey: job.id)
                     self.statusMessage = "\"\(job.label)\" triggered."
                     self.startPolling()
                 case .failure(let err):

@@ -165,7 +165,7 @@ function runCronJob(
             },
             send,
             logger,
-            { maxTurns: MAX_CRON_TURNS },
+            { maxTurns: MAX_CRON_TURNS, isCronJob: true },
           ).catch((err) => settle(err instanceof Error ? err : new Error(String(err))));
           return;
         }
