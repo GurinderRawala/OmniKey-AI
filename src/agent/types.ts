@@ -16,6 +16,7 @@ export interface AgentMessage {
   is_terminal_output?: boolean;
   is_error?: boolean;
   is_web_call?: boolean;
+  is_image_rendering?: boolean;
   platform?: string;
 }
 

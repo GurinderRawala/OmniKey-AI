@@ -480,6 +480,7 @@ final class AgentRunner {
             let isTerminalOutput: Bool?
             let isError: Bool?
             let isWebCall: Bool?
+            let isImageRendering: Bool?
             let platform: String?
 
             init(
@@ -489,6 +490,7 @@ final class AgentRunner {
                 isTerminalOutput: Bool? = nil,
                 isError: Bool? = nil,
                 isWebCall: Bool? = nil,
+                isImageRendering: Bool? = nil,
                 platform: String? = nil
             ) {
                 self.sessionID = sessionID
@@ -497,6 +499,7 @@ final class AgentRunner {
                 self.isTerminalOutput = isTerminalOutput
                 self.isError = isError
                 self.isWebCall = isWebCall
+                self.isImageRendering = isImageRendering
                 self.platform = platform
             }
 
@@ -507,6 +510,7 @@ final class AgentRunner {
                 case isTerminalOutput = "is_terminal_output"
                 case isError = "is_error"
                 case isWebCall = "is_web_call"
+                case isImageRendering = "is_image_rendering"
                 case platform
             }
         }
@@ -556,6 +560,16 @@ final class AgentRunner {
                     if response.isWebCall == true {
                         DispatchQueue.main.async {
                             AgentThinkingModel.shared.appendWebCall(content)
+                        }
+                        receiveNext()
+                        return
+                    }
+
+                    // Image rendering notification: show it in the thinking view and
+                    // keep listening — this is not a final answer.
+                    if response.isImageRendering == true {
+                        DispatchQueue.main.async {
+                            AgentThinkingModel.shared.appendImageRendering(content)
                         }
                         receiveNext()
                         return
@@ -646,6 +660,7 @@ final class AgentRunner {
                         print("[AgentRunner] Detected <final_answer> block in agent response. Length: \(final.count)")
                         finalAnswerDelivered.value = true
                         DispatchQueue.main.async {
+                            AgentThinkingModel.shared.appendFinalResult(final)
                             completion(.success(final))
                         }
                         task.cancel(with: .goingAway, reason: nil)
@@ -664,6 +679,7 @@ final class AgentRunner {
                     print("[AgentRunner] Treating agent message as implicit final answer. Length: \(answerText.count)")
                     finalAnswerDelivered.value = true
                     DispatchQueue.main.async {
+                        AgentThinkingModel.shared.appendFinalResult(answerText)
                         completion(.success(answerText))
                     }
                     task.cancel(with: .goingAway, reason: nil)

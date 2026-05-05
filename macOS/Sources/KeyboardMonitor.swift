@@ -14,6 +14,7 @@ final class KeyboardMonitor {
     private let apiClient = APIClient()
     private var inProgressAlertTimer: Timer?
     private let inProgressAlertInterval: TimeInterval = 10.0
+    private var elapsedTimer: Timer?
     private let logPrefix = "[omnikeyai]"
 
     // Remember the original app and selection so we can paste
@@ -404,7 +405,7 @@ final class KeyboardMonitor {
         }
     }
 
-    /// Route an @agent request through the gRPC AgentService.
+    /// Route an @agent request through the websocket AgentService.
     private func sendToAgent(text: String) {
         let original = normalizeOriginalText(text)
         print("\(logPrefix) Normalized @agent text to send (length: \(original.count)).")
@@ -419,12 +420,21 @@ final class KeyboardMonitor {
         AgentThinkingModel.shared.isRunning = true
         agentCommandStartTime = Date()
 
+        elapsedTimer?.invalidate()
+        elapsedTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+            DispatchQueue.main.async {
+                AgentThinkingModel.shared.elapsedSeconds += 1
+            }
+        }
+
         AgentRunner.shared.runAgentSession(
             originalText: original,
             completion: { [weak self] result in
                 DispatchQueue.main.async {
                     guard let self else { return }
 
+                    self.elapsedTimer?.invalidate()
+                    self.elapsedTimer = nil
                     AgentThinkingModel.shared.isRunning = false
                     AppDelegate.shared?.agentSessionDidEnd()
                     self.stopInProgressAlerts()

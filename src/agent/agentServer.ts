@@ -68,7 +68,8 @@ async function runToolLoop(
             content: `Generating image: "${prompt.slice(0, 100)}${prompt.length > 100 ? '...' : ''}"`,
             is_terminal_output: false,
             is_error: false,
-            is_web_call: true,
+            is_web_call: false,
+            is_image_rendering: true,
           });
 
           const toolResult = await executeImageGenerationTool(args, log);
@@ -77,6 +78,17 @@ async function runToolLoop(
             tool: tc.name,
             resultLength: toolResult.length,
           });
+
+          send({
+            session_id: sessionId,
+            sender: 'agent',
+            content: `Image saved to: ${toolResult}`,
+            is_terminal_output: false,
+            is_error: false,
+            is_web_call: false,
+            is_image_rendering: true,
+          });
+
           return { id: tc.id, name: tc.name, result: toolResult };
         }
 
@@ -944,20 +956,15 @@ export function createAgentRouter(): express.Router {
           .replace(/@omniagent/gi, '')
           .trim();
 
-      const MAX_CHARS = 5000;
       const messages = raw
         .filter((m) => m.role === 'user' || m.role === 'assistant')
         .map((m, index) => {
           const rawText = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
           const cleaned = stripInternals(rawText);
-          const truncated =
-            cleaned.length > MAX_CHARS
-              ? cleaned.slice(0, MAX_CHARS) + '… [message truncated]'
-              : cleaned;
           return {
             id: `${index}-${m.role}`,
             role: m.role as 'user' | 'assistant',
-            text: truncated,
+            text: cleaned,
           };
         })
         .filter((m) => m.text.length > 0);

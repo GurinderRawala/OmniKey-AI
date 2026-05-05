@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct AgentThinkingView: View {
@@ -294,6 +295,67 @@ struct AgentThinkingView: View {
                                 }
                             }
 
+                            // Final Result
+                            if !model.finalResult.isEmpty {
+                                let green = NordTheme.accentGreen(colorScheme)
+                                sectionCard(
+                                    icon: "star.fill",
+                                    title: "Final Result",
+                                    accentColor: green
+                                ) {
+                                    ZStack(alignment: .topTrailing) {
+                                        CollapsibleText(
+                                            text: model.finalResult,
+                                            font: .system(size: 13),
+                                            foregroundColor: NordTheme.primaryText(colorScheme),
+                                            accentColor: green
+                                        )
+                                        .padding(10)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 6)
+                                                .fill(NordTheme.sectionFill(accent: green, scheme: colorScheme))
+                                        )
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 6)
+                                                .strokeBorder(NordTheme.sectionBorder(accent: green, scheme: colorScheme), lineWidth: 1)
+                                        )
+
+                                        CopyButton(text: model.finalResult)
+                                            .padding(6)
+                                    }
+                                }
+                            }
+
+                            // Image Rendering
+                            if !model.imageRenderingMessages.isEmpty {
+                                let purple = NordTheme.accentPurple(colorScheme)
+                                sectionCard(
+                                    icon: "photo",
+                                    title: "Image Rendering",
+                                    accentColor: purple
+                                ) {
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        ForEach(Array(model.imageRenderingMessages.enumerated()), id: \.offset) { _, entry in
+                                            CollapsibleText(
+                                                text: entry,
+                                                font: .system(size: 12),
+                                                foregroundColor: NordTheme.primaryText(colorScheme),
+                                                accentColor: purple
+                                            )
+                                            .padding(8)
+                                            .background(
+                                                RoundedRectangle(cornerRadius: 6)
+                                                    .fill(NordTheme.sectionFill(accent: purple, scheme: colorScheme))
+                                            )
+                                            .overlay(
+                                                RoundedRectangle(cornerRadius: 6)
+                                                    .strokeBorder(NordTheme.sectionBorder(accent: purple, scheme: colorScheme), lineWidth: 1)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
                             // Scroll anchor
                             Color.clear
                                 .frame(height: 1)
@@ -321,6 +383,12 @@ struct AgentThinkingView: View {
                         withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
                     }
                     .onChange(of: model.terminalOutputs.count) { _ in
+                        withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+                    }
+                    .onChange(of: model.finalResult) { _ in
+                        withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+                    }
+                    .onChange(of: model.imageRenderingMessages.count) { _ in
                         withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
                     }
                 }
@@ -555,36 +623,49 @@ private struct PreviousConversationView: View {
 
     @State private var isExpanded = false
 
+    private var lastAssistantMessage: String? {
+        history.last(where: { $0.role == "assistant" })?.text
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // Header row — always visible
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) { isExpanded.toggle() }
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "clock")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(NordTheme.accentPurple(colorScheme))
+            HStack(spacing: 0) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { isExpanded.toggle() }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "clock")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(NordTheme.accentPurple(colorScheme))
 
-                    Text("Previous Conversation")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(NordTheme.secondaryText(colorScheme))
+                        Text("Previous Conversation")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(NordTheme.secondaryText(colorScheme))
 
-                    Text("·  \(history.count) message\(history.count == 1 ? "" : "s")")
-                        .font(.system(size: 10))
-                        .foregroundColor(NordTheme.secondaryText(colorScheme))
+                        Text("·  \(history.count) message\(history.count == 1 ? "" : "s")")
+                            .font(.system(size: 10))
+                            .foregroundColor(NordTheme.secondaryText(colorScheme))
 
-                    Spacer()
+                        Spacer()
 
-                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundColor(NordTheme.secondaryText(colorScheme))
+                        Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundColor(NordTheme.secondaryText(colorScheme))
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .contentShape(Rectangle())
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+
+                if let answer = lastAssistantMessage {
+                    CopyButton(text: answer)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .help("Copy previous final answer")
+                }
             }
-            .buttonStyle(.plain)
 
             if isExpanded {
                 Divider()
@@ -624,6 +705,45 @@ private struct PreviousConversationView: View {
                     }
                 }
                 .padding(.vertical, 6)
+
+                // Previous Final Answer block
+                if let answer = lastAssistantMessage {
+                    Divider()
+                        .padding(.horizontal, 8)
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "star.fill")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundColor(NordTheme.accentGreen(colorScheme))
+                            Text("Previous Final Answer")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundColor(NordTheme.secondaryText(colorScheme))
+                        }
+
+                        ZStack(alignment: .topTrailing) {
+                            Text(answer)
+                                .font(.system(size: 12))
+                                .foregroundColor(NordTheme.primaryText(colorScheme))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(10)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .fill(NordTheme.sectionFill(accent: NordTheme.accentGreen(colorScheme), scheme: colorScheme))
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .strokeBorder(NordTheme.sectionBorder(accent: NordTheme.accentGreen(colorScheme), scheme: colorScheme), lineWidth: 1)
+                                )
+
+                            CopyButton(text: answer)
+                                .padding(6)
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 10)
+                    .padding(.top, 6)
+                }
             }
         }
         .background(
@@ -800,6 +920,32 @@ private struct ModelSettingsPopover: View {
                 ? NordTheme.sectionFill(accent: NordTheme.accentBlue(colorScheme), scheme: colorScheme)
                 : Color.clear
         )
+    }
+}
+
+// MARK: - Copy Button
+
+private struct CopyButton: View {
+    let text: String
+    var font: Font = .system(size: 11)
+
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var copied = false
+
+    var body: some View {
+        Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+            withAnimation(.easeInOut(duration: 0.15)) { copied = true }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                withAnimation(.easeInOut(duration: 0.15)) { copied = false }
+            }
+        } label: {
+            Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                .font(font)
+                .foregroundColor(copied ? NordTheme.accentGreen(colorScheme) : NordTheme.secondaryText(colorScheme))
+        }
+        .buttonStyle(.plain)
     }
 }
 

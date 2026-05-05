@@ -40,6 +40,9 @@ final class AgentThinkingModel: ObservableObject {
     @Published var agentMessages: [String] = []
     @Published var terminalOutputs: [String] = []
     @Published var webCalls: [String] = []
+    @Published var finalResult: String = ""
+    @Published var imageRenderingMessages: [String] = []
+    @Published var elapsedSeconds: Int = 0
 
     // ── Session picker state ──────────────────────────────────────────────────
     /// Sessions fetched from the backend before the run starts.
@@ -84,6 +87,9 @@ final class AgentThinkingModel: ObservableObject {
         agentMessages = []
         terminalOutputs = []
         webCalls = []
+        finalResult = ""
+        imageRenderingMessages = []
+        elapsedSeconds = 0
         availableSessions = []
         selectedSessionId = nil
         isShowingSessionPicker = false
@@ -128,6 +134,17 @@ final class AgentThinkingModel: ObservableObject {
         } else {
             log += "\n\n" + logEntry
         }
+    }
+
+    func appendFinalResult(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        finalResult = trimmed
+    }
+
+    func appendImageRendering(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        imageRenderingMessages.append(trimmed)
     }
 
     // MARK: - Session picker helpers
