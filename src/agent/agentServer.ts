@@ -291,7 +291,7 @@ async function getOrCreateSession(
     return '';
   });
 
-  const systemPrompt = getAgentPrompt(platform, !!prompt);
+  const systemPrompt = getAgentPrompt(platform, !isCronJob && !!prompt);
 
   const entry: SessionState = {
     subscription,
