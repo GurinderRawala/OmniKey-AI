@@ -7,6 +7,8 @@ import { config } from './config';
 import { SubscriptionJwtPayload } from './subscriptionRoutes';
 import { Subscription } from './models/subscription';
 
+const SELF_HOSTED_SUBSCRIPTION_ID = 'self-hosted-local-subscription';
+
 export interface AuthLocals {
   logger: Logger;
   subscription: Subscription;
@@ -14,16 +16,33 @@ export interface AuthLocals {
 
 export async function selfHostedSubscription(): Promise<Subscription> {
   try {
-    let subscription = await Subscription.findOne({ where: { isSelfHosted: true } });
-    if (!subscription) {
-      subscription = await Subscription.create({
+    // Reuse any existing self-hosted record (including legacy IDs) first.
+    const existing = await Subscription.findOne({ where: { isSelfHosted: true } });
+    if (existing) return existing;
+
+    // Use a deterministic primary key so concurrent first-time requests do not
+    // create duplicate rows.
+    const [subscription, created] = await Subscription.findOrCreate({
+      where: { id: SELF_HOSTED_SUBSCRIPTION_ID },
+      defaults: {
+        id: SELF_HOSTED_SUBSCRIPTION_ID,
         email: 'local-user@omnikey.ai',
         licenseKey: 'self-hosted',
         subscriptionStatus: 'active',
         isSelfHosted: true,
-      });
+      },
+    });
+
+    if (created) {
       logger.info('Created self-hosted subscription record in database.');
     }
+
+    // Ensure deterministic row remains flagged for self-hosted mode.
+    if (!subscription.isSelfHosted) {
+      subscription.isSelfHosted = true;
+      await subscription.save();
+    }
+
     return subscription;
   } catch (err) {
     logger.error('Error ensuring self-hosted subscription record exists.', { error: err });
@@ -37,30 +56,30 @@ export async function authMiddleware(
   next: NextFunction,
 ) {
   const authHeader = req.headers.authorization;
-  logger.defaultMeta = { traceId: randomUUID() };
+  const requestLogger = logger.child({ traceId: randomUUID() });
+  res.locals.logger = requestLogger;
 
   if (config.blockSaas) {
-    logger.warn('Blocking SaaS access: rejecting request due to BLOCK_SAAS=true');
+    requestLogger.warn('Blocking SaaS access: rejecting request due to BLOCK_SAAS=true');
     return res.status(403).json({ error: 'SaaS access is blocked.' });
   }
 
   if (config.isSelfHosted || !config.jwtSecret) {
-    logger.info('Self-hosted mode: skipping auth middleware.');
+    requestLogger.info('Self-hosted mode: skipping auth middleware.');
     if (config.isSelfHosted) {
       res.locals.subscription = await selfHostedSubscription();
-      res.locals.logger = logger;
     }
     return next();
   }
 
   if (!authHeader) {
-    logger.warn('Missing Authorization header on feature route.');
+    requestLogger.warn('Missing Authorization header on feature route.');
     return res.status(401).json({ error: 'Missing bearer token.' });
   }
 
   const [scheme, token] = authHeader.split(' ');
   if (scheme !== 'Bearer' || !token) {
-    logger.warn('Malformed Authorization header on feature route.');
+    requestLogger.warn('Malformed Authorization header on feature route.');
     return res.status(401).json({ error: 'Invalid authorization header.' });
   }
 
@@ -69,12 +88,12 @@ export async function authMiddleware(
 
     const subscription = await Subscription.findByPk(decoded.sid);
     if (!subscription) {
-      logger.warn('Subscription not found for JWT.', { sid: decoded.sid });
+      requestLogger.warn('Subscription not found for JWT.', { sid: decoded.sid });
       return res.status(403).json({ error: 'Invalid or expired token.' });
     }
 
     if (subscription.subscriptionStatus == 'expired') {
-      logger.warn('Inactive subscription for JWT.', {
+      requestLogger.warn('Inactive subscription for JWT.', {
         sid: decoded.sid,
         status: subscription.subscriptionStatus,
       });
@@ -86,7 +105,7 @@ export async function authMiddleware(
       subscription.subscriptionStatus = 'expired';
       await subscription.save();
 
-      logger.info('Subscription key has expired during activation.', {
+      requestLogger.info('Subscription key has expired during activation.', {
         subscriptionId: subscription.id,
       });
 
@@ -95,11 +114,10 @@ export async function authMiddleware(
         .json({ error: 'Subscription has expired.', subscriptionStatus: 'expired' });
     }
 
-    res.locals.logger = logger;
     res.locals.subscription = subscription;
     next();
   } catch (err) {
-    logger.warn('Invalid or expired JWT on feature route.', { error: err });
+    requestLogger.warn('Invalid or expired JWT on feature route.', { error: err });
     return res.status(403).json({ error: 'Invalid or expired token.' });
   }
 }

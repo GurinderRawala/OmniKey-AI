@@ -3,6 +3,7 @@ import cors from 'cors';
 import path from 'path';
 import fs from 'fs';
 import zlib from 'zlib';
+import { fork, ChildProcess } from 'child_process';
 import { createSubscriptionRouter } from './subscriptionRoutes';
 import { createFeatureRouter } from './featureRoutes';
 import { initDatabase } from './db';
@@ -20,6 +21,7 @@ import { incrementDownloadCount, getDownloadCounts } from './bucket-adapter';
 
 const app = express();
 const PORT = Number(config.port);
+const IS_CRON_CHILD = process.env.OMNIKEY_CRON_CHILD === '1';
 
 app.set('trust proxy', 1);
 app.use(cors());
@@ -193,10 +195,45 @@ app.get('*', (_req, res) => {
 });
 
 let server: import('http').Server | null = null;
+let cronChildProcess: ChildProcess | null = null;
+
+function startCronChildProcess() {
+  if (IS_CRON_CHILD || cronChildProcess) return;
+
+  const childPort = PORT + 1;
+  const entry = process.argv[1] || __filename;
+
+  cronChildProcess = fork(entry, [], {
+    env: {
+      ...process.env,
+      OMNIKEY_CRON_CHILD: '1',
+      OMNIKEY_PORT: String(childPort),
+    },
+    execArgv: process.execArgv,
+    stdio: 'inherit',
+  });
+
+  logger.info('Spawned cron child process.', {
+    pid: cronChildProcess.pid,
+    port: childPort,
+  });
+
+  cronChildProcess.on('exit', (code, signal) => {
+    logger.warn('Cron child process exited.', { code, signal });
+    cronChildProcess = null;
+  });
+}
 
 async function start() {
   try {
     await initDatabase(logger);
+
+    if (IS_CRON_CHILD) {
+      logger.info('Starting cron child process mode.', { port: PORT });
+      startScheduledJobExecutor();
+      return;
+    }
+
     server = app.listen(PORT, () => {
       logger.info(`Enhancer API listening on http://localhost:${PORT}`, {
         isSelfHosted: config.isSelfHosted,
@@ -212,7 +249,7 @@ async function start() {
     }
 
     if (config.isSelfHosted) {
-      startScheduledJobExecutor();
+      startCronChildProcess();
     }
   } catch (err) {
     logger.error('Failed to start server due to DB error.', { error: err });
@@ -224,6 +261,17 @@ start();
 
 function gracefulShutdown(signal: NodeJS.Signals) {
   logger.info(`Received ${signal}. Starting graceful shutdown...`);
+
+  if (cronChildProcess) {
+    cronChildProcess.kill('SIGTERM');
+    cronChildProcess = null;
+  }
+
+  if (IS_CRON_CHILD) {
+    logger.info('Cron child process exiting.');
+    process.exit(0);
+    return;
+  }
 
   if (!server) {
     logger.info('Server was not started or already closed. Exiting process.');

@@ -1,4 +1,5 @@
 import { Storage } from '@google-cloud/storage';
+import { z } from 'zod';
 import { logger } from '../logger';
 import { config } from '../config';
 
@@ -8,6 +9,24 @@ interface DownloadCounts {
 }
 
 const DEFAULT_COUNTS: DownloadCounts = { macos: 0, windows: 0 };
+
+const downloadCountsSchema = z.object({
+  macos: z.number().nonnegative().optional(),
+  windows: z.number().nonnegative().optional(),
+});
+
+function parseDownloadCounts(raw: string): DownloadCounts {
+  const json: unknown = JSON.parse(raw);
+  const parsed = downloadCountsSchema.safeParse(json);
+  if (!parsed.success) {
+    return { ...DEFAULT_COUNTS };
+  }
+
+  return {
+    macos: parsed.data.macos ?? 0,
+    windows: parsed.data.windows ?? 0,
+  };
+}
 
 // Initialised once at module load — uses Application Default Credentials when
 // running on Cloud Run (or any GCP environment), and falls back to ADC from
@@ -36,35 +55,73 @@ async function readCounts(bucketName: string, objectPath: string): Promise<Downl
   }
 
   const [contents] = await file.download();
-  const parsed = JSON.parse(contents.toString('utf8')) as Partial<DownloadCounts>;
+  return parseDownloadCounts(contents.toString('utf8'));
+}
 
+async function readCountsWithGeneration(
+  bucketName: string,
+  objectPath: string,
+): Promise<{ counts: DownloadCounts; generation: string | number | null; exists: boolean }> {
+  const file = storage.bucket(bucketName).file(objectPath);
+  const [exists] = await file.exists();
+  if (!exists) {
+    return { counts: { ...DEFAULT_COUNTS }, generation: null, exists: false };
+  }
+
+  const [[metadata], [contents]] = await Promise.all([file.getMetadata(), file.download()]);
+  const counts = parseDownloadCounts(contents.toString('utf8'));
   return {
-    macos: typeof parsed.macos === 'number' ? parsed.macos : 0,
-    windows: typeof parsed.windows === 'number' ? parsed.windows : 0,
+    counts,
+    generation: metadata.generation ?? null,
+    exists: true,
   };
 }
 
-async function writeCounts(
-  bucketName: string,
-  objectPath: string,
-  counts: DownloadCounts,
-): Promise<void> {
-  const file = storage.bucket(bucketName).file(objectPath);
-  await file.save(JSON.stringify(counts), {
-    contentType: 'application/json',
-    resumable: false,
-  });
+function isGcsPreconditionError(err: unknown): boolean {
+  const maybe = err as { code?: number; message?: string };
+  return (
+    maybe?.code === 412 ||
+    maybe?.message?.includes('conditionNotMet') === true ||
+    maybe?.message?.includes('Precondition Failed') === true
+  );
 }
 
 export async function incrementDownloadCount(platform: 'macos' | 'windows'): Promise<void> {
   const gcs = getGcsConfig();
   if (!gcs) return;
 
+  const file = storage.bucket(gcs.bucketName).file(gcs.objectPath);
+  const MAX_RETRIES = 6;
+
   try {
-    const counts = await readCounts(gcs.bucketName, gcs.objectPath);
-    counts[platform] += 1;
-    await writeCounts(gcs.bucketName, gcs.objectPath, counts);
-    logger.info(`Download count incremented for ${platform}.`, { counts });
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      const { counts, generation, exists } = await readCountsWithGeneration(
+        gcs.bucketName,
+        gcs.objectPath,
+      );
+
+      counts[platform] += 1;
+
+      try {
+        await file.save(JSON.stringify(counts), {
+          contentType: 'application/json',
+          resumable: false,
+          preconditionOpts: exists
+            ? { ifGenerationMatch: Number(generation) }
+            : { ifGenerationMatch: 0 },
+        });
+
+        logger.info(`Download count incremented for ${platform}.`, { counts, attempt });
+        return;
+      } catch (err) {
+        if (isGcsPreconditionError(err) && attempt < MAX_RETRIES) {
+          continue;
+        }
+        throw err;
+      }
+    }
+
+    logger.warn(`Download count increment exhausted retries for ${platform}.`);
   } catch (err) {
     logger.error(`Failed to increment download count for ${platform}.`, { error: err });
   }

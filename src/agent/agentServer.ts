@@ -174,12 +174,7 @@ async function runToolLoop(
 
 const aiModel = getDefaultModel(config.aiProvider, 'smart');
 
-// In-memory cache: sessionId -> live SessionState. Hydrated from DB on first
-// access and written back after each turn so restarts resume correctly.
-const sessionMessages = new Map<string, SessionState>();
-
 const MAX_TURNS = 20;
-
 
 // ─── DB helpers ───────────────────────────────────────────────────────────────
 
@@ -234,23 +229,7 @@ async function getOrCreateSession(
   log: typeof logger,
   isCronJob = false,
 ): Promise<{ sessionState: SessionState; hasStoredPrompt: boolean }> {
-  // 1. Return the live in-memory entry if already loaded this process lifetime.
-  const existing = sessionMessages.get(sessionId);
-  if (existing) {
-    log.debug('Reusing existing agent session (in-memory)', {
-      sessionId,
-      subscriptionId: existing.subscription.id,
-      turns: existing.turns,
-    });
-    return {
-      sessionState: existing,
-      hasStoredPrompt: existing.history
-        .filter((h) => h.role === 'user')
-        .some((h) => typeof h.content === 'string' && h.content.includes('<stored_instructions>')),
-    };
-  }
-
-  // 2. Try to resume from a persisted DB record.
+  // 1. Try to resume from a persisted DB record.
   try {
     const dbSession = await AgentSession.findOne({
       where: { id: sessionId, subscriptionId: subscription.id },
@@ -263,7 +242,6 @@ async function getOrCreateSession(
         history,
         turns: dbSession.turns,
       };
-      sessionMessages.set(sessionId, entry);
       log.info('Resumed agent session from DB', {
         sessionId,
         subscriptionId: subscription.id,
@@ -285,7 +263,7 @@ async function getOrCreateSession(
     });
   }
 
-  // 3. Create a brand-new session in-memory and persist it to the DB.
+  // 2. Create a brand-new session and persist it to the DB.
   const prompt = await getPromptForCommand(log, 'task', subscription).catch((err) => {
     log.error('Failed to get system prompt for new agent session', { error: err });
     return '';
@@ -318,18 +296,19 @@ ${prompt}
     turns: 0,
   };
 
-  sessionMessages.set(sessionId, entry);
-
   // Persist immediately so that GET /sessions picks it up right away.
   try {
-    await AgentSession.create({
-      id: sessionId,
-      subscriptionId: subscription.id,
-      title: 'New Session',
-      platform: platform ?? null,
-      historyJson: JSON.stringify(entry.history),
-      turns: 0,
-      lastActiveAt: new Date(),
+    await AgentSession.findOrCreate({
+      where: { id: sessionId, subscriptionId: subscription.id },
+      defaults: {
+        id: sessionId,
+        subscriptionId: subscription.id,
+        title: 'New Session',
+        platform: platform ?? null,
+        historyJson: JSON.stringify(entry.history),
+        turns: 0,
+        lastActiveAt: new Date(),
+      },
     });
     // Prune oldest sessions after each creation so the cap is always respected.
     void enforceSessionCap(subscription.id, log);
@@ -348,7 +327,7 @@ ${prompt}
   };
 }
 
-export async function runAgentTurn(
+async function runAgentTurnInternal(
   sessionId: string,
   subscription: Subscription,
   clientMessage: AgentMessage,
@@ -506,7 +485,6 @@ export async function runAgentTurn(
       const errorMessage = 'The agent returned an empty response. Please try again.';
 
       await persistSessionToDB(sessionId, session);
-      sessionMessages.delete(sessionId);
       sendFinalAnswer(send, sessionId, errorMessage, true);
       return;
     }
@@ -583,7 +561,7 @@ export async function runAgentTurn(
               ].join('\n'),
         });
 
-        await runAgentTurn(
+        await runAgentTurnInternal(
           sessionId,
           subscription,
           {
@@ -643,7 +621,6 @@ export async function runAgentTurn(
 
       pushToSessionHistory(logger, session, { role: 'assistant', content });
       await persistSessionToDB(sessionId, session);
-      sessionMessages.delete(sessionId);
       send({
         session_id: sessionId,
         sender: 'agent',
@@ -662,7 +639,6 @@ export async function runAgentTurn(
 
       pushToSessionHistory(log, session, { role: 'assistant', content });
       await persistSessionToDB(sessionId, session);
-      sessionMessages.delete(sessionId);
       send({
         session_id: sessionId,
         sender: 'agent',
@@ -673,7 +649,6 @@ export async function runAgentTurn(
         sessionId,
       });
       await persistSessionToDB(sessionId, session);
-      sessionMessages.delete(sessionId);
       sendFinalAnswer(
         send,
         sessionId,
@@ -685,9 +660,19 @@ export async function runAgentTurn(
     log.error('Agent LLM call failed', { error: err });
     const errorMessage = 'Agent failed to call language model. Please try again later.';
     await persistSessionToDB(sessionId, session);
-    sessionMessages.delete(sessionId);
     sendFinalAnswer(send, sessionId, errorMessage, true);
   }
+}
+
+export async function runAgentTurn(
+  sessionId: string,
+  subscription: Subscription,
+  clientMessage: AgentMessage,
+  send: AgentSendFn,
+  log: typeof logger,
+  options?: { maxTurns?: number; isCronJob?: boolean },
+) {
+  await runAgentTurnInternal(sessionId, subscription, clientMessage, send, log, options);
 }
 
 export function attachAgentWebSocketServer(server: http.Server): WebSocketServer {
@@ -850,9 +835,6 @@ export function createAgentRouter(): express.Router {
         res.status(404).json({ error: 'Session not found' });
         return;
       }
-
-      // Also remove from the in-memory cache if it was loaded.
-      sessionMessages.delete(sessionId);
 
       res.status(200).json({ deleted: true });
     } catch (err) {
