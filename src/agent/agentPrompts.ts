@@ -19,28 +19,18 @@ ${
 - Default to a \`<shell_script>\` for anything involving the machine, network, files, processes, env vars, or system state — never answer from training data alone.
 - **Read vs write:** For open-ended/ambiguous requests run safe read-only commands first to understand the current state. When the user **explicitly** asks to create, update, delete, configure, or run something — do it directly; no need to ask for confirmation unless the scope is genuinely unclear.
 - **Package installation:** Install any package required to complete the task. Include the install step as its own phase so you can confirm it succeeded before building on it. Prefer project-local or user scope; avoid \`sudo\`/admin unless the user explicitly asks.
-${config.browserDebugPort !== undefined ? `- **Browser automation:** When the user explicitly asks to interact with a browser (click a button, fill a form, check a page, take a screenshot, etc.), generate \`<shell_script>\` blocks that use Node.js and \`playwright-core\` — one phase at a time (phasing rules below apply).
+${
+  config.browserDebugPort !== undefined
+    ? `- **Browser automation:** Use browser automation proactively when needed to complete the task.
+  - Do NOT wait for explicit user wording like "use browser" if interaction is obviously required to get the final result.
+  - If \`web_search\` / \`web_fetch\` do not provide enough usable context (blocked pages, incomplete data, client-rendered content, auth walls, dynamic tables, hidden details, repeated low-value fetch results), immediately switch to Playwright-based browser interaction.
+  - Generate \`<shell_script>\` blocks that use Node.js and \`playwright-core\` — one phase at a time (phasing rules below apply).
   - **Phase 1 — ensure deps:** Check and install \`playwright-core\` if missing:
     \`node -e "require('/tmp/playwright-runner/node_modules/playwright-core')" 2>/dev/null || npm install --prefix /tmp/playwright-runner playwright-core --silent\`
-  - **Phase 2 — connect & navigate:** Try CDP first; fall back to the existing debug profile. Reuse an open tab if the URL already matches — never open a duplicate.
-    \`\`\`js
-    const { chromium } = require('/tmp/playwright-runner/node_modules/playwright-core');
-    let browser, page;
-    try {
-      browser = await chromium.connectOverCDP('http://localhost:${config.browserDebugPort}');
-      const pages = browser.contexts().flatMap(c => c.pages());
-      page = pages.find(p => p.url().startsWith(TARGET_URL)) ?? null;
-      if (page) { await page.bringToFront(); }
-      else { page = await browser.contexts()[0].newPage(); await page.goto(TARGET_URL, { waitUntil: 'domcontentloaded', timeout: 15000 }); }
-    } catch {
-      const ctx = await chromium.launchPersistentContext('${config.browserDebugUserDataDir}', { executablePath: '${config.browserDebugExecutable}', headless: false });
-      browser = ctx;
-      page = ctx.pages().find(p => p.url().startsWith(TARGET_URL)) ?? await ctx.newPage();
-      if (!page.url().startsWith(TARGET_URL)) await page.goto(TARGET_URL, { waitUntil: 'domcontentloaded', timeout: 15000 });
-    }
-    \`\`\`
-  - **Phase 3+ — one action per script:** Each subsequent script reconnects the same way, finds the already-open tab, performs exactly one action (click / type / select / screenshot / read text), prints the result, then calls \`browser.disconnect()\` (CDP) or just exits (profile launch — leaves the window open).
-  - Always inline Node.js via a bash heredoc so the script is self-contained. Print structured output to stdout so it returns as \`TERMINAL OUTPUT:\`.` : ''
+  - **Phase 2 — connect & navigate:** Connect to the running browser via CDP at \`http://localhost:${config.browserDebugPort}\`. If CDP fails, fall back to launching a persistent context using the debug profile at \`${config.browserDebugUserDataDir}\` with the executable at \`${config.browserDebugExecutable}\` (headless: false). Once connected, navigate to any URL required by the task — open any page needed, reusing an existing tab if the URL already matches or creating a new one if not. There is no restriction on which sites or pages you can visit; open whatever is necessary to complete the task.
+  - **Phase 3+ — one action per script:** Each subsequent script reconnects via the same CDP endpoint (\`http://localhost:${config.browserDebugPort}\`) or profile fallback, finds the already-open tab (or reopens it), performs exactly one action (click, type, select, scroll, screenshot, read text, extract data, fill forms, etc.), prints the result to stdout, then calls \`browser.disconnect()\` (CDP) or exits (profile launch). You may perform any interaction the task requires — reading content, extracting structured data, submitting forms, navigating between pages, or capturing screenshots.
+  - Always inline Node.js via a bash heredoc so the script is self-contained. Print structured output to stdout so it returns as \`TERMINAL OUTPUT:\`.`
+    : ''
 }
 - Use ${!isWindows ? 'bash (macOS/Linux)' : 'PowerShell'}. Every script must be self-contained and ready to run as-is.
 - Skip the script only for purely factual/conversational requests with no live data dependency (e.g. "what is 2+2").

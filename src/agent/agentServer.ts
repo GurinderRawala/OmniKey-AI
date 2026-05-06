@@ -174,8 +174,6 @@ async function runToolLoop(
 
 const aiModel = getDefaultModel(config.aiProvider, 'smart');
 
-const MAX_TURNS = 20;
-
 // ─── DB helpers ───────────────────────────────────────────────────────────────
 
 async function persistSessionToDB(sessionId: string, state: SessionState): Promise<void> {
@@ -298,7 +296,7 @@ ${prompt}
 
   // Persist immediately so that GET /sessions picks it up right away.
   try {
-    await AgentSession.findOrCreate({
+    const [dbSession, created] = await AgentSession.findOrCreate({
       where: { id: sessionId, subscriptionId: subscription.id },
       defaults: {
         id: sessionId,
@@ -310,6 +308,31 @@ ${prompt}
         lastActiveAt: new Date(),
       },
     });
+
+    if (!created) {
+      const history = JSON.parse(dbSession.historyJson || '[]') as SessionState['history'];
+      const existingEntry: SessionState = {
+        subscription,
+        history,
+        turns: dbSession.turns,
+      };
+
+      log.info('Reused existing agent session row from DB during create path', {
+        sessionId,
+        subscriptionId: subscription.id,
+        turns: existingEntry.turns,
+      });
+
+      return {
+        sessionState: existingEntry,
+        hasStoredPrompt: history
+          .filter((h) => h.role === 'user')
+          .some(
+            (h) => typeof h.content === 'string' && h.content.includes('<stored_instructions>'),
+          ),
+      };
+    }
+
     // Prune oldest sessions after each creation so the cap is always respected.
     void enforceSessionCap(subscription.id, log);
   } catch (err) {
@@ -333,7 +356,7 @@ async function runAgentTurnInternal(
   clientMessage: AgentMessage,
   send: AgentSendFn,
   log: typeof logger,
-  options?: { maxTurns?: number; isCronJob?: boolean },
+  options?: { isCronJob?: boolean },
 ) {
   const { sessionState: session, hasStoredPrompt } = await getOrCreateSession(
     sessionId,
@@ -351,17 +374,6 @@ async function runAgentTurnInternal(
     subscriptionId: subscription.id,
     turn: session.turns,
   });
-
-  const effectiveMaxTurns = options?.maxTurns ?? MAX_TURNS;
-
-  // On the final iteration, instruct the LLM to provide a consolidated answer.
-  if (session.turns === effectiveMaxTurns) {
-    pushToSessionHistory(logger, session, {
-      role: 'system',
-      content:
-        'Provide a single, final, concise answer based on the entire conversation so far. Wrap the answer in a <final_answer>...</final_answer> block and do not ask for further input or mention additional shell scripts to run. Do not include any <shell_script> block in this response.',
-    });
-  }
 
   // Append the client message as user content, marking terminal
   // output and errors in the text so the agent can reason about them.
@@ -417,10 +429,7 @@ async function runAgentTurnInternal(
     }
   }
 
-  // On the final turn we omit tools so the model is forced to emit a
-  // plain text <final_answer> rather than issuing another tool call.
-  const isFinalTurn = session.turns >= effectiveMaxTurns;
-  const tools = isFinalTurn ? undefined : buildAvailableTools();
+  const tools = buildAvailableTools();
 
   const recordUsage = async (result: AICompletionResult) => {
     const usage = result.usage;
@@ -491,7 +500,7 @@ async function runAgentTurnInternal(
 
     // If the model requested web tool calls, execute them and get a follow-up
     // response before deciding what to send to the client.
-    if (!isFinalTurn && result.finish_reason === 'tool_calls') {
+    if (result.finish_reason === 'tool_calls') {
       log.info('Running web tool calls to gather information', {
         sessionId,
         subscriptionId: subscription.id,
@@ -561,6 +570,10 @@ async function runAgentTurnInternal(
               ].join('\n'),
         });
 
+        // DB-only session state: persist before recursive handoff so the
+        // follow-up turn reads the latest history and turn count.
+        await persistSessionToDB(sessionId, session);
+
         await runAgentTurnInternal(
           sessionId,
           subscription,
@@ -579,16 +592,10 @@ async function runAgentTurnInternal(
       }
     }
 
-    // Ensure that a proper <final_answer> block is produced for the
-    // desktop clients once we reach the final turn. If the model did
-    // not emit either a <shell_script> or <final_answer> tag on the
-    // MAX_TURNS turn, we treat this as the final natural-language answer
-    // and wrap it in <final_answer> tags so the client can stop
-    // waiting and paste the result.
     const hasShellScriptTag = content.includes('<shell_script>');
     const hasFinalAnswerTag = content.includes('<final_answer>');
 
-    if (hasShellScriptTag && !isFinalTurn) {
+    if (hasShellScriptTag) {
       log.info('Completed agent turn. Sending back scripts, waiting for results.', {
         sessionId,
         subscriptionId: subscription.id,
@@ -601,6 +608,11 @@ async function runAgentTurnInternal(
         content,
       });
 
+      // Persist before sending so that if the send callback triggers a new
+      // runAgentTurn immediately (e.g. cron shell-script loop), the DB already
+      // has the updated turn count and history.
+      await persistSessionToDB(sessionId, session);
+
       send({
         session_id: sessionId,
         sender: 'agent',
@@ -611,8 +623,8 @@ async function runAgentTurnInternal(
       return;
     }
 
-    if (isFinalTurn || hasFinalAnswerTag) {
-      log.info('Finalizing agent session after max turns or final answer tag', {
+    if (hasFinalAnswerTag) {
+      log.info('Finalizing agent session after final answer tag', {
         sessionId,
         subscriptionId: subscription.id,
         turns: session.turns,
@@ -670,7 +682,7 @@ export async function runAgentTurn(
   clientMessage: AgentMessage,
   send: AgentSendFn,
   log: typeof logger,
-  options?: { maxTurns?: number; isCronJob?: boolean },
+  options?: { isCronJob?: boolean },
 ) {
   await runAgentTurnInternal(sessionId, subscription, clientMessage, send, log, options);
 }
