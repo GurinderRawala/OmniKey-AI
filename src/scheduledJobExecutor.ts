@@ -19,10 +19,10 @@ const FINAL_ANSWER_RE = /<final_answer>/;
 
 // Maximum time a single job may run before it is forcibly cancelled.
 const JOB_TIMEOUT_MS = 10 * 60 * 1_000;
+const MAX_AGENT_ERROR_RECOVERY_ATTEMPTS = 4;
 
-// Cron jobs get more turns than interactive sessions so multi-step tasks
-// (web research → shell commands → final answer) can complete unattended.
-const MAX_CRON_TURNS = 30;
+// Single-process guard to avoid running the same job concurrently.
+const RUNNING_JOB_IDS = new Set<string>();
 
 export function computeNextRunAt(cronExpression: string | null, runAt: Date | null): Date | null {
   if (cronExpression) {
@@ -111,6 +111,7 @@ function runCronJob(
   sessionId: string,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
+    let agentErrorRecoveryAttempts = 0;
     let settled = false;
     const settle = (err?: Error) => {
       if (settled) return;
@@ -132,11 +133,39 @@ function runCronJob(
         const content = msg.content ?? '';
 
         if (msg.is_error) {
-          logger.error('Cron job: agent returned error.', {
+          agentErrorRecoveryAttempts += 1;
+          logger.warn('Cron job: agent returned error; attempting recovery.', {
             jobId: job.id,
+            attempt: agentErrorRecoveryAttempts,
             content: content.slice(0, 300),
           });
-          settle(new Error(`Agent error: ${content.slice(0, 200)}`));
+
+          const shouldFailNow =
+            FINAL_ANSWER_RE.test(content) ||
+            agentErrorRecoveryAttempts > MAX_AGENT_ERROR_RECOVERY_ATTEMPTS;
+
+          if (shouldFailNow) {
+            settle(new Error(`Agent error: ${content.slice(0, 200)}`));
+            return;
+          }
+
+          runAgentTurn(
+            sessionId,
+            subscription,
+            {
+              session_id: sessionId,
+              sender: 'user',
+              content:
+                `Agent turn failed while processing this cron job. ` +
+                `Recover from the latest state and return the next ` +
+                `<shell_script> or a <final_answer>.\n\n` +
+                `Error details:\n${content}`,
+              is_error: true,
+            },
+            send,
+            logger,
+            { isCronJob: true },
+          ).catch((err) => settle(err instanceof Error ? err : new Error(String(err))));
           return;
         }
 
@@ -170,10 +199,31 @@ function runCronJob(
           return;
         }
 
+        if (msg.is_web_call || msg.is_image_rendering) {
+          logger.debug('Cron job: received progress notification; waiting for next message.', {
+            jobId: job.id,
+            isWebCall: !!msg.is_web_call,
+            isImageRendering: !!msg.is_image_rendering,
+          });
+          return;
+        }
+
         if (FINAL_ANSWER_RE.test(content)) {
           logger.info('Cron job: received final answer.', { jobId: job.id });
           settle();
+          return;
         }
+
+        if (content.trim()) {
+          logger.warn('Cron job: received untagged agent content; treating as final answer.', {
+            jobId: job.id,
+            content: content.slice(0, 300),
+          });
+          settle();
+          return;
+        }
+
+        settle(new Error('Agent returned empty response with no shell script or final answer.'));
       })();
     };
 
@@ -194,40 +244,54 @@ function runCronJob(
 }
 
 export async function executeJob(job: ScheduledJob): Promise<void> {
-  logger.info('Executing scheduled job.', { jobId: job.id, label: job.label });
-
-  const subscription = await Subscription.findByPk(job.subscriptionId);
-  if (!subscription) {
-    logger.error('Subscription not found for scheduled job; skipping.', {
+  if (RUNNING_JOB_IDS.has(job.id)) {
+    logger.warn('Scheduled job is already running; skipping duplicate execution.', {
       jobId: job.id,
-      subscriptionId: job.subscriptionId,
+      label: job.label,
     });
     return;
   }
 
-  const sessionId = cuid();
+  RUNNING_JOB_IDS.add(job.id);
+
+  logger.info('Executing scheduled job.', { jobId: job.id, label: job.label });
 
   try {
-    await runCronJob(job, subscription, sessionId);
-    logger.info('Scheduled job completed.', { jobId: job.id, label: job.label });
-  } catch (err) {
-    logger.error('Scheduled job failed.', { jobId: job.id, label: job.label, error: err });
-    // Fall through — always update lastRunAt so the next poll does not re-run immediately.
-  }
+    const subscription = await Subscription.findByPk(job.subscriptionId);
+    if (!subscription) {
+      logger.error('Subscription not found for scheduled job; skipping.', {
+        jobId: job.id,
+        subscriptionId: job.subscriptionId,
+      });
+      return;
+    }
 
-  const now = new Date();
-  if (job.cronExpression) {
-    await job.update({
-      lastRunAt: now,
-      nextRunAt: computeNextRunAt(job.cronExpression, null),
-      lastRunSessionId: sessionId,
-    });
-  } else {
-    await job.update({
-      lastRunAt: now,
-      isActive: false,
-      nextRunAt: null,
-      lastRunSessionId: sessionId,
-    });
+    const sessionId = cuid();
+
+    try {
+      await runCronJob(job, subscription, sessionId);
+      logger.info('Scheduled job completed.', { jobId: job.id, label: job.label });
+    } catch (err) {
+      logger.error('Scheduled job failed.', { jobId: job.id, label: job.label, error: err });
+      // Fall through — always update lastRunAt so the next poll does not re-run immediately.
+    }
+
+    const now = new Date();
+    if (job.cronExpression) {
+      await job.update({
+        lastRunAt: now,
+        nextRunAt: computeNextRunAt(job.cronExpression, null),
+        lastRunSessionId: sessionId,
+      });
+    } else {
+      await job.update({
+        lastRunAt: now,
+        isActive: false,
+        nextRunAt: null,
+        lastRunSessionId: sessionId,
+      });
+    }
+  } finally {
+    RUNNING_JOB_IDS.delete(job.id);
   }
 }
