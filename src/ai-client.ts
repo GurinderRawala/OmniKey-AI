@@ -85,9 +85,9 @@ export interface AIImageGenerateResult {
 // ---------------------------------------------------------------------------
 
 const DEFAULT_MODELS: Record<AIProvider, { fast: string; smart: string }> = {
-  openai: { fast: 'gpt-4o-mini', smart: 'gpt-5.1' },
+  openai: { fast: 'gpt-4o-mini', smart: 'gpt-5.5' },
   gemini: { fast: 'gemini-2.5-flash', smart: 'gemini-2.5-pro' },
-  anthropic: { fast: 'claude-haiku-4-5-20251001', smart: 'claude-sonnet-4-6' },
+  anthropic: { fast: 'claude-haiku-4-5-20251001', smart: 'claude-opus-4-7' },
 };
 
 export function getDefaultModel(provider: AIProvider, tier: 'fast' | 'smart'): string {
@@ -100,7 +100,7 @@ export function getDefaultModel(provider: AIProvider, tier: 'fast' | 'smart'): s
  * - anthropic: hard API-enforced string limit of 10,485,760 chars; we stay
  *              just below it with a small safety buffer.
  * - openai:    no documented per-string limit; bounded by the context window
- *              (~272K tokens for GPT-5.1 ≈ ~1M chars). Use the history cap.
+ *              (~272K tokens for GPT-5.5 ≈ ~1M chars). Use the history cap.
  * - gemini:    no documented per-string limit; bounded by the 1M-token
  *              context window (~4M chars). Use the history cap.
  */
@@ -115,9 +115,9 @@ const MAX_MESSAGE_CONTENT_LENGTH_BY_PROVIDER: Record<AIProvider, number> = {
  * history, derived from each provider's context-window size minus headroom
  * for the system prompt and max output tokens.
  *
- * - anthropic: Claude Sonnet 4.6 — 1M token ctx, 64K max output
+ * - anthropic: Claude Opus 4.7 — 1M token ctx, 64K max output
  *              ≈ (1,000,000 - 64,000 - 10,000) tokens × 4 chars ≈ 3.7M chars
- * - openai:    GPT-5.1 — ~272K token ctx, ~32K max output
+ * - openai:    GPT-5.5 — ~272K token ctx, ~32K max output
  *              ≈ (272,000 - 32,000 - 5,000) tokens × 4 chars ≈ 940K chars
  * - gemini:    Gemini 2.5 Pro — 1M token ctx, ~32K max output
  *              ≈ (1,000,000 - 32,000 - 10,000) tokens × 4 chars ≈ 3.8M chars
@@ -159,7 +159,7 @@ class OpenAIAdapter {
       model,
       messages: oaiMessages,
       tools: tools?.length ? tools : undefined,
-      temperature: options.temperature ?? 0.2,
+      temperature: model === 'gpt-5.5' ? 1 : (options.temperature ?? 0.2),
       max_tokens: options.maxTokens,
     });
 
@@ -298,7 +298,7 @@ class AnthropicAdapter {
       ...(system ? { system } : {}),
       messages: anthropicMessages,
       ...(tools?.length ? { tools } : {}),
-      temperature: options.temperature ?? 0.2,
+      ...(model === 'claude-opus-4-7' ? {} : { temperature: options.temperature ?? 0.2 }),
     });
 
     const textContent = response.content

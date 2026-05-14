@@ -174,124 +174,9 @@ struct AgentThinkingView: View {
                                     }
                                 }
 
-                                // Agent Reasoning
-                                if !model.agentMessages.isEmpty {
-                                    let purple = NordTheme.accentPurple(colorScheme)
-                                    sectionCard(
-                                        icon: "brain",
-                                        title: "Agent Reasoning",
-                                        accentColor: purple
-                                    ) {
-                                        VStack(alignment: .leading, spacing: 8) {
-                                            ForEach(Array(model.agentMessages.enumerated()), id: \.offset) { index, message in
-                                                HStack(alignment: .top, spacing: 8) {
-                                                    // Step badge
-                                                    Text("\(index + 1)")
-                                                        .font(.system(size: 10, weight: .semibold, design: .rounded))
-                                                        .foregroundColor(purple)
-                                                        .frame(width: 20, height: 20)
-                                                        .background(
-                                                            RoundedRectangle(cornerRadius: 5)
-                                                                .fill(NordTheme.sectionFill(accent: purple, scheme: colorScheme))
-                                                        )
-                                                        .overlay(
-                                                            RoundedRectangle(cornerRadius: 5)
-                                                                .strokeBorder(NordTheme.sectionBorder(accent: purple, scheme: colorScheme), lineWidth: 1)
-                                                        )
-
-                                                    CollapsibleText(
-                                                        text: message,
-                                                        font: .system(size: 12),
-                                                        foregroundColor: NordTheme.primaryText(colorScheme),
-                                                        accentColor: purple
-                                                    )
-                                                    .padding(8)
-                                                    .background(
-                                                        RoundedRectangle(cornerRadius: 6)
-                                                            .fill(NordTheme.sectionFill(accent: purple, scheme: colorScheme))
-                                                    )
-                                                    .overlay(
-                                                        RoundedRectangle(cornerRadius: 6)
-                                                            .strokeBorder(NordTheme.sectionBorder(accent: purple, scheme: colorScheme), lineWidth: 1)
-                                                    )
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-
-                                // Web Searches
-                                if !model.webCalls.isEmpty {
-                                    let cyan = NordTheme.accent(colorScheme)
-                                    sectionCard(
-                                        icon: "globe",
-                                        title: "Web Searches",
-                                        accentColor: cyan
-                                    ) {
-                                        VStack(alignment: .leading, spacing: 6) {
-                                            ForEach(Array(model.webCalls.enumerated()), id: \.offset) { _, entry in
-                                                CollapsibleText(
-                                                    text: entry,
-                                                    font: .system(size: 12, design: .monospaced),
-                                                    foregroundColor: NordTheme.primaryText(colorScheme),
-                                                    accentColor: cyan
-                                                )
-                                                .padding(8)
-                                                .background(
-                                                    RoundedRectangle(cornerRadius: 6)
-                                                        .fill(NordTheme.sectionFill(accent: cyan, scheme: colorScheme))
-                                                )
-                                                .overlay(
-                                                    RoundedRectangle(cornerRadius: 6)
-                                                        .strokeBorder(NordTheme.sectionBorder(accent: cyan, scheme: colorScheme), lineWidth: 1)
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-
-                                // Terminal Output
-                                if !model.terminalOutputs.isEmpty {
-                                    let amber = NordTheme.accentAmber(colorScheme)
-                                    sectionCard(
-                                        icon: "terminal",
-                                        title: "Terminal Output",
-                                        accentColor: amber
-                                    ) {
-                                        VStack(alignment: .leading, spacing: 8) {
-                                            ForEach(Array(model.terminalOutputs.enumerated()), id: \.offset) { _, entry in
-                                                let lines = entry.components(separatedBy: "\n")
-                                                let header = lines.first ?? ""
-                                                let body = lines.dropFirst().joined(separator: "\n")
-
-                                                VStack(alignment: .leading, spacing: 4) {
-                                                    if !header.isEmpty {
-                                                        Text(header)
-                                                            .font(.system(size: 11, weight: .medium))
-                                                            .foregroundColor(amber)
-                                                    }
-
-                                                    if !body.isEmpty {
-                                                        CollapsibleText(
-                                                            text: body,
-                                                            font: .system(size: 12, design: .monospaced),
-                                                            foregroundColor: NordTheme.primaryText(colorScheme),
-                                                            accentColor: amber
-                                                        )
-                                                        .padding(8)
-                                                        .background(
-                                                            RoundedRectangle(cornerRadius: 6)
-                                                                .fill(NordTheme.sectionFill(accent: amber, scheme: colorScheme))
-                                                        )
-                                                        .overlay(
-                                                            RoundedRectangle(cornerRadius: 6)
-                                                                .strokeBorder(NordTheme.sectionBorder(accent: amber, scheme: colorScheme), lineWidth: 1)
-                                                        )
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
+                                // Sequential timeline — events in the order they occurred
+                                ForEach(model.timeline) { entry in
+                                    timelineEntryView(entry)
                                 }
                             }
 
@@ -326,36 +211,6 @@ struct AgentThinkingView: View {
                                 }
                             }
 
-                            // Image Rendering
-                            if !model.imageRenderingMessages.isEmpty {
-                                let purple = NordTheme.accentPurple(colorScheme)
-                                sectionCard(
-                                    icon: "photo",
-                                    title: "Image Rendering",
-                                    accentColor: purple
-                                ) {
-                                    VStack(alignment: .leading, spacing: 6) {
-                                        ForEach(Array(model.imageRenderingMessages.enumerated()), id: \.offset) { _, entry in
-                                            CollapsibleText(
-                                                text: entry,
-                                                font: .system(size: 12),
-                                                foregroundColor: NordTheme.primaryText(colorScheme),
-                                                accentColor: purple
-                                            )
-                                            .padding(8)
-                                            .background(
-                                                RoundedRectangle(cornerRadius: 6)
-                                                    .fill(NordTheme.sectionFill(accent: purple, scheme: colorScheme))
-                                            )
-                                            .overlay(
-                                                RoundedRectangle(cornerRadius: 6)
-                                                    .strokeBorder(NordTheme.sectionBorder(accent: purple, scheme: colorScheme), lineWidth: 1)
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-
                             // Scroll anchor
                             Color.clear
                                 .frame(height: 1)
@@ -373,22 +228,10 @@ struct AgentThinkingView: View {
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
                             .strokeBorder(NordTheme.border(colorScheme), lineWidth: 1)
                     )
-                    .onChange(of: model.log) { _ in
-                        withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
-                    }
-                    .onChange(of: model.agentMessages.count) { _ in
-                        withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
-                    }
-                    .onChange(of: model.webCalls.count) { _ in
-                        withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
-                    }
-                    .onChange(of: model.terminalOutputs.count) { _ in
+                    .onChange(of: model.timeline.count) { _ in
                         withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
                     }
                     .onChange(of: model.finalResult) { _ in
-                        withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
-                    }
-                    .onChange(of: model.imageRenderingMessages.count) { _ in
                         withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
                     }
                 }
@@ -434,6 +277,81 @@ struct AgentThinkingView: View {
         // ── Session picker sheet ──────────────────────────────────────────────
         .sheet(isPresented: $model.isShowingSessionPicker) {
             SessionPickerView(model: model)
+        }
+    }
+
+    // MARK: - Timeline Entry View
+
+    @ViewBuilder
+    private func timelineEntryView(_ entry: TimelineEntry) -> some View {
+        switch entry.kind {
+        case .agentMessage:
+            let purple = NordTheme.accentPurple(colorScheme)
+            sectionCard(icon: "brain", title: "Agent Reasoning", accentColor: purple) {
+                CollapsibleText(
+                    text: entry.text,
+                    font: .system(size: 12),
+                    foregroundColor: NordTheme.primaryText(colorScheme),
+                    accentColor: purple
+                )
+                .padding(8)
+                .background(RoundedRectangle(cornerRadius: 6).fill(NordTheme.sectionFill(accent: purple, scheme: colorScheme)))
+                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(NordTheme.sectionBorder(accent: purple, scheme: colorScheme), lineWidth: 1))
+            }
+
+        case .terminalOutput:
+            let amber = NordTheme.accentAmber(colorScheme)
+            let lines = entry.text.components(separatedBy: "\n")
+            let header = lines.first ?? ""
+            let body = lines.dropFirst().joined(separator: "\n")
+            sectionCard(icon: "terminal", title: "Terminal", accentColor: amber) {
+                VStack(alignment: .leading, spacing: 4) {
+                    if !header.isEmpty {
+                        Text(header)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(amber)
+                    }
+                    if !body.isEmpty {
+                        CollapsibleText(
+                            text: body,
+                            font: .system(size: 12, design: .monospaced),
+                            foregroundColor: NordTheme.primaryText(colorScheme),
+                            accentColor: amber
+                        )
+                        .padding(8)
+                        .background(RoundedRectangle(cornerRadius: 6).fill(NordTheme.sectionFill(accent: amber, scheme: colorScheme)))
+                        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(NordTheme.sectionBorder(accent: amber, scheme: colorScheme), lineWidth: 1))
+                    }
+                }
+            }
+
+        case .webCall:
+            let cyan = NordTheme.accent(colorScheme)
+            sectionCard(icon: "globe", title: "Web Search", accentColor: cyan) {
+                CollapsibleText(
+                    text: entry.text,
+                    font: .system(size: 12, design: .monospaced),
+                    foregroundColor: NordTheme.primaryText(colorScheme),
+                    accentColor: cyan
+                )
+                .padding(8)
+                .background(RoundedRectangle(cornerRadius: 6).fill(NordTheme.sectionFill(accent: cyan, scheme: colorScheme)))
+                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(NordTheme.sectionBorder(accent: cyan, scheme: colorScheme), lineWidth: 1))
+            }
+
+        case .imageRendering:
+            let purple = NordTheme.accentPurple(colorScheme)
+            sectionCard(icon: "photo", title: "Image Rendering", accentColor: purple) {
+                CollapsibleText(
+                    text: entry.text,
+                    font: .system(size: 12),
+                    foregroundColor: NordTheme.primaryText(colorScheme),
+                    accentColor: purple
+                )
+                .padding(8)
+                .background(RoundedRectangle(cornerRadius: 6).fill(NordTheme.sectionFill(accent: purple, scheme: colorScheme)))
+                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(NordTheme.sectionBorder(accent: purple, scheme: colorScheme), lineWidth: 1))
+            }
         }
     }
 

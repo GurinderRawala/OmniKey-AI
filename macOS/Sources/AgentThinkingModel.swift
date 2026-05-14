@@ -1,6 +1,21 @@
 import Combine
 import Foundation
 
+// MARK: - Timeline entry for sequential rendering
+
+enum TimelineEntryKind {
+    case agentMessage
+    case terminalOutput
+    case webCall
+    case imageRendering
+}
+
+struct TimelineEntry: Identifiable {
+    let id = UUID()
+    let kind: TimelineEntryKind
+    let text: String
+}
+
 // MARK: - Compact history entry returned by GET /api/agent/sessions/:id/messages
 
 struct SessionHistoryEntry: Decodable, Identifiable {
@@ -43,6 +58,7 @@ final class AgentThinkingModel: ObservableObject {
     @Published var finalResult: String = ""
     @Published var imageRenderingMessages: [String] = []
     @Published var elapsedSeconds: Int = 0
+    @Published var timeline: [TimelineEntry] = []
 
     // ── Session picker state ──────────────────────────────────────────────────
     /// Sessions fetched from the backend before the run starts.
@@ -90,6 +106,7 @@ final class AgentThinkingModel: ObservableObject {
         finalResult = ""
         imageRenderingMessages = []
         elapsedSeconds = 0
+        timeline = []
         availableSessions = []
         selectedSessionId = nil
         isShowingSessionPicker = false
@@ -116,10 +133,13 @@ final class AgentThinkingModel: ObservableObject {
 
         if trimmed.hasPrefix("[terminal ") {
             terminalOutputs.append(trimmed)
+            timeline.append(TimelineEntry(kind: .terminalOutput, text: trimmed))
         } else if trimmed.hasPrefix("[web_call") {
             webCalls.append(trimmed)
+            timeline.append(TimelineEntry(kind: .webCall, text: trimmed))
         } else {
             agentMessages.append(trimmed)
+            timeline.append(TimelineEntry(kind: .agentMessage, text: trimmed))
         }
     }
 
@@ -127,6 +147,7 @@ final class AgentThinkingModel: ObservableObject {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         webCalls.append(trimmed)
+        timeline.append(TimelineEntry(kind: .webCall, text: trimmed))
 
         let logEntry = "[web_call] \(trimmed)"
         if log.isEmpty {
@@ -145,6 +166,7 @@ final class AgentThinkingModel: ObservableObject {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         imageRenderingMessages.append(trimmed)
+        timeline.append(TimelineEntry(kind: .imageRendering, text: trimmed))
     }
 
     // MARK: - Session picker helpers

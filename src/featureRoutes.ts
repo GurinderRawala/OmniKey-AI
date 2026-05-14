@@ -76,9 +76,9 @@ type CompletionUsage = {
 function getModelForCommand(cmd: EnhanceCommand): string {
   const tier = cmd === 'task' ? 'smart' : 'fast';
   const models: Record<string, { fast: string; smart: string }> = {
-    openai: { fast: 'gpt-4o-mini', smart: 'gpt-5.1' },
+    openai: { fast: 'gpt-4o-mini', smart: 'gpt-5.5' },
     gemini: { fast: 'gemini-2.5-flash', smart: 'gemini-2.5-pro' },
-    anthropic: { fast: 'claude-haiku-4-5-20251001', smart: 'claude-sonnet-4-6' },
+    anthropic: { fast: 'claude-haiku-4-5-20251001', smart: 'claude-opus-4-7' },
   };
   return models[config.aiProvider]?.[tier] ?? 'gpt-4o-mini';
 }

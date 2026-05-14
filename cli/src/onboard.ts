@@ -4,8 +4,8 @@ import path from 'path';
 import { getConfigDir, getConfigPath } from './utils';
 
 const AI_PROVIDERS = [
-  { name: 'OpenAI (gpt-4o-mini / gpt-5.1)', value: 'openai' },
-  { name: 'Anthropic — Claude (claude-haiku / claude-sonnet)', value: 'anthropic' },
+  { name: 'OpenAI (gpt-4o-mini / gpt-5.5)', value: 'openai' },
+  { name: 'Anthropic — Claude (claude-haiku / claude-opus)', value: 'anthropic' },
   { name: 'Google Gemini (gemini-2.5-flash / gemini-2.5-pro)', value: 'gemini' },
 ];
 
