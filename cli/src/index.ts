@@ -11,6 +11,7 @@ import { showConfig } from './showConfig';
 import { setConfig } from './setConfig';
 import { grantBrowserAccess, reopenBrowserDebugProfile } from './grantBrowserAccess';
 import { scheduleAdd, scheduleList, scheduleRemove, scheduleRunNow } from './scheduleJob';
+import { mcpAdd, mcpList, mcpRemove, mcpToggle, mcpUpdate } from './mcpServer';
 
 const program = new Command();
 
@@ -110,28 +111,73 @@ program
     await reopenBrowserDebugProfile();
   });
 
-const scheduleCmd = program
-  .command('schedule')
-  .description('Manage scheduled prompt jobs');
+const scheduleCmd = program.command('schedule').description('Manage scheduled prompt jobs');
 
 scheduleCmd
   .command('add')
   .description('Add a new scheduled job')
-  .action(async () => { await scheduleAdd(); });
+  .action(async () => {
+    await scheduleAdd();
+  });
 
 scheduleCmd
   .command('list')
   .description('List all scheduled jobs')
-  .action(async () => { await scheduleList(); });
+  .action(async () => {
+    await scheduleList();
+  });
 
 scheduleCmd
   .command('remove')
   .description('Remove a scheduled job')
-  .action(async () => { await scheduleRemove(); });
+  .action(async () => {
+    await scheduleRemove();
+  });
 
 scheduleCmd
   .command('run-now <id>')
   .description('Immediately run a scheduled job by ID')
-  .action(async (id: string) => { await scheduleRunNow(id); });
+  .action(async (id: string) => {
+    await scheduleRunNow(id);
+  });
+
+const mcpCmd = program
+  .command('mcp')
+  .description('Manage MCP (Model Context Protocol) servers available to the agent');
+
+mcpCmd
+  .command('add')
+  .description('Install a new MCP server')
+  .action(async () => {
+    await mcpAdd();
+  });
+
+mcpCmd
+  .command('list')
+  .description('List installed MCP servers')
+  .action(async () => {
+    await mcpList();
+  });
+
+mcpCmd
+  .command('remove')
+  .description('Remove an installed MCP server')
+  .action(async () => {
+    await mcpRemove();
+  });
+
+mcpCmd
+  .command('toggle <id>')
+  .description('Toggle an MCP server enabled/disabled by ID')
+  .action(async (id: string) => {
+    await mcpToggle(id);
+  });
+
+mcpCmd
+  .command('update <id>')
+  .description('Update an existing MCP server by ID')
+  .action(async (id: string) => {
+    await mcpUpdate(id);
+  });
 
 program.parseAsync(process.argv);

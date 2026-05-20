@@ -15,6 +15,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     private var manualWindowController: ManualWindowController?
     private var scheduledJobsWindowController: ScheduledJobsWindowController?
     private var scheduledJobsMenuItem: NSMenuItem?
+    private var mcpServersWindowController: MCPServersWindowController?
+    private var mcpServersMenuItem: NSMenuItem?
     private var monitoringStarted = false
     private var isAuthorized = false
 
@@ -135,6 +137,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         scheduledJobsItem.isEnabled = false
         menu.addItem(scheduledJobsItem)
         scheduledJobsMenuItem = scheduledJobsItem
+        let mcpServersItem = NSMenuItem(title: "MCP Servers", action: #selector(showMCPServersWindowFromMenu), keyEquivalent: "")
+        mcpServersItem.target = self
+        mcpServersItem.isEnabled = false
+        menu.addItem(mcpServersItem)
+        mcpServersMenuItem = mcpServersItem
         let manualItem = NSMenuItem(title: "Manual", action: #selector(showManualWindowFromMenu), keyEquivalent: "")
         manualItem.target = self
         menu.addItem(manualItem)
@@ -190,6 +197,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         }
         NSApp.activate(ignoringOtherApps: true)
         scheduledJobsWindowController?.showWindow(nil)
+    }
+
+    @objc private func showMCPServersWindowFromMenu() {
+        showMCPServersWindow()
+    }
+
+    func showMCPServersWindow() {
+        guard isAuthorized else { showLicenseWindow(); return }
+        if mcpServersWindowController == nil {
+            mcpServersWindowController = MCPServersWindowController()
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        mcpServersWindowController?.showWindow(nil)
     }
 
     @objc private func showAgentThinkingWindowFromMenu() {
@@ -269,6 +289,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         statusMenuItem?.title = title
         taskInstructionsMenuItem?.isEnabled = isAuthorized
         scheduledJobsMenuItem?.isEnabled = isAuthorized
+        mcpServersMenuItem?.isEnabled = isAuthorized
     }
 
     /// Called when an @omniAgent session starts — shows the thinking window.

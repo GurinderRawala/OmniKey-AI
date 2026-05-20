@@ -9,6 +9,7 @@ import { initDatabase } from './db';
 import { logger } from './logger';
 import { taskInstructionRouter } from './taskInstructionRoutes';
 import { scheduledJobRouter } from './scheduledJobRoutes';
+import { mcpServerRouter } from './mcpServerRoutes';
 import { startScheduledJobExecutor } from './scheduledJobExecutor';
 import { config } from './config';
 import { attachAgentWebSocketServer, createAgentRouter } from './agent/agentServer';
@@ -16,6 +17,7 @@ import { AppDownload } from './models/appDownload';
 // Importing AgentSession and ScheduledJob ensures the models are registered with Sequelize before initDatabase().
 import './models/agentSession';
 import './models/scheduledJob';
+import './models/mcpServer';
 import { incrementDownloadCount, getDownloadCounts } from './bucket-adapter';
 
 const app = express();
@@ -35,6 +37,8 @@ app.use('/api/feature', createFeatureRouter());
 app.use('/api/instructions', taskInstructionRouter());
 
 app.use('/api/scheduled-jobs', scheduledJobRouter());
+
+app.use('/api/mcp-servers', mcpServerRouter());
 
 app.use('/api/agent', createAgentRouter());
 

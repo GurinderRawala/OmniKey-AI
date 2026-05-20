@@ -154,6 +154,10 @@ namespace OmniKey.Windows
             scheduledJobsItem.Click += (_, _) => ShowScheduledJobs();
             menu.Items.Add(scheduledJobsItem);
 
+            var mcpServersItem = new ToolStripMenuItem("MCP Servers");
+            mcpServersItem.Click += (_, _) => ShowMCPServers();
+            menu.Items.Add(mcpServersItem);
+
             var manualItem = new ToolStripMenuItem("Manual");
             manualItem.Click += (_, _) => ShowManual();
             menu.Items.Add(manualItem);
@@ -185,6 +189,12 @@ namespace OmniKey.Windows
         private void ShowScheduledJobs()
         {
             var form = new ScheduledJobsForm();
+            form.Show(this);
+        }
+
+        private void ShowMCPServers()
+        {
+            var form = new MCPServersForm();
             form.Show(this);
         }
 

@@ -7,6 +7,7 @@ import { logger } from '../logger';
 import { Subscription } from '../models/subscription';
 import { SubscriptionUsage } from '../models/subscriptionUsage';
 import { AgentSession } from '../models/agentSession';
+import { MCPServer } from '../models/mcpServer';
 import { getAgentPrompt } from './agentPrompts';
 import { getPromptForCommand } from '../featureRoutes';
 import { executeTool } from '../web-search/web-search-provider';
@@ -267,7 +268,14 @@ async function getOrCreateSession(
     return '';
   });
 
-  const systemPrompt = getAgentPrompt(platform, !isCronJob && !!prompt);
+  const installedMcps = await MCPServer.findAll({
+    where: { subscriptionId: subscription.id, isEnabled: true },
+  }).catch((err) => {
+    log.error('Failed to load installed MCP servers for agent prompt', { error: err });
+    return [] as MCPServer[];
+  });
+
+  const systemPrompt = getAgentPrompt(platform, !isCronJob && !!prompt, installedMcps);
 
   const entry: SessionState = {
     subscription,
