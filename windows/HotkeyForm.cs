@@ -451,7 +451,7 @@ namespace OmniKey.Windows
                 return;
             }
 
-            _agentThinkingForm?.SetFinalAnswer(result, elapsed.TotalSeconds > 20);
+            _agentThinkingForm?.SetFinalAnswer(result);
 
             if (elapsed.TotalSeconds <= 20)
             {

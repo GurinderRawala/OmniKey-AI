@@ -16,7 +16,6 @@ namespace OmniKey.Windows
         private readonly Button          _cancelButton;
         private readonly Button          _historyButton;
         private readonly Panel           _bottomPanel;
-        private readonly Panel           _readyBanner;      // bottom strip, h=0 → 40 when >20s
 
         // Pulsing animation
         private readonly System.Windows.Forms.Timer _pulseTimer;
@@ -75,30 +74,6 @@ namespace OmniKey.Windows
             _logPanel.Controls.Add(_logFlow);
             _logPanel.SizeChanged += (_, _) => UpdateFlowWidth();
             logSurround.Controls.Add(_logPanel);
-
-            // ── Ready-to-paste banner (above bottom panel, h=0 until >20s) ─
-            _readyBanner = new Panel
-            {
-                Dock      = DockStyle.Bottom,
-                Height    = 0,
-                BackColor = NordColors.GreenSectionFill,
-            };
-            _readyBanner.Paint += (_, e) =>
-            {
-                if (_readyBanner.Height == 0) return;
-                using var pen = new Pen(NordColors.GreenSectionBorder, 1);
-                e.Graphics.DrawLine(pen, 0, 0, _readyBanner.Width, 0);
-
-                var icon = WinIcons.ClipboardIcon(14, NordColors.AccentGreen);
-                int iy   = (_readyBanner.Height - 14) / 2;
-                e.Graphics.DrawImage(icon, 12, iy, 14, 14);
-                TextRenderer.DrawText(e.Graphics,
-                    "OmniAgent response is ready to paste — use the Copy button on the result to copy it.",
-                    new Font("Segoe UI", 9),
-                    new Rectangle(34, 0, _readyBanner.Width - 40, _readyBanner.Height),
-                    NordColors.AccentGreen,
-                    TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
-            };
 
             // ── Bottom panel ──────────────────────────────────────────────
             _bottomPanel = new Panel
@@ -175,11 +150,8 @@ namespace OmniKey.Windows
             _bottomPanel.Controls.Add(_statusLabel);
             _bottomPanel.SizeChanged += (_, _) => PositionStatusLabel();
 
-            // Dock order: Bottom controls added first sit at the actual bottom edge;
-            // each subsequent Bottom control stacks above the previous one.
-            Controls.Add(_bottomPanel);   // actual bottom
-            Controls.Add(_readyBanner);   // sits above _bottomPanel
-            Controls.Add(logSurround);    // fill takes remaining space
+            Controls.Add(_bottomPanel);
+            Controls.Add(logSurround);
 
             // ── Pulse animation ───────────────────────────────────────────
             _pulseTimer = new System.Windows.Forms.Timer { Interval = 50 };
@@ -230,10 +202,12 @@ namespace OmniKey.Windows
         {
             // Directly sum children rather than using GetPreferredSize, which can
             // return a stale value when ContentsResized fires during layout.
+            // The trailing slack guarantees the last item stays fully scrollable
+            // even when async RTB content resizing lags behind the height calc.
             int h = _logFlow.Padding.Top;
             foreach (Control c in _logFlow.Controls)
                 h += c.Height + c.Margin.Vertical;
-            h += _logFlow.Padding.Bottom + 32;
+            h += _logFlow.Padding.Bottom + 140;
             if (_logFlow.Height != h)
                 _logFlow.Height = h;
         }
@@ -375,10 +349,8 @@ namespace OmniKey.Windows
         /// <summary>
         /// Called by HotkeyForm once the final answer is known.
         /// Shows the response in the log with a copy button in the section header.
-        /// Pass showReadyBanner=true when the session took > 20 s
-        /// (the user may have switched focus, so auto-paste was skipped).
         /// </summary>
-        internal void SetFinalAnswer(string text, bool showReadyBanner)
+        internal void SetFinalAnswer(string text)
         {
             InvokeIfNeeded(() =>
             {
@@ -404,10 +376,6 @@ namespace OmniKey.Windows
                     NordColors.GreenSectionBorder,
                     section.ItemWidth,
                     maxTextH: 4000));
-
-                // Show the ready-to-paste banner only when auto-paste was skipped
-                if (showReadyBanner)
-                    _readyBanner.Height = 40;
 
                 RefreshFlowHeight();
                 ScrollToBottom();
