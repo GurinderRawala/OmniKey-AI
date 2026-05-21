@@ -190,10 +190,13 @@ namespace OmniKey.Windows
             float y2 = y1 + h + gap;
             // Top rack unit
             g.DrawRectangle(pen, m, y1, w, h);
-            g.FillEllipse(new SolidBrush(color), size * 0.74f, y1 + h * 0.28f, h * 0.42f, h * 0.42f);
             // Bottom rack unit
             g.DrawRectangle(pen, m, y2, w, h);
-            g.FillEllipse(new SolidBrush(color), size * 0.74f, y2 + h * 0.28f, h * 0.42f, h * 0.42f);
+            using (var dot = new SolidBrush(color))
+            {
+                g.FillEllipse(dot, size * 0.74f, y1 + h * 0.28f, h * 0.42f, h * 0.42f);
+                g.FillEllipse(dot, size * 0.74f, y2 + h * 0.28f, h * 0.42f, h * 0.42f);
+            }
             return bmp;
         }
 
