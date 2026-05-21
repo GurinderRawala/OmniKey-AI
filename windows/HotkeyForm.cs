@@ -398,6 +398,20 @@ namespace OmniKey.Windows
             _agentThinkingForm.Text = $"OmniAgent Session - {sessionSelection.SessionTitle} - OmniKey AI";
 
             _agentThinkingForm.Show(this);
+
+            // Load the previous session's final answer so the user can see and
+            // copy it while the new run is in progress (mirrors macOS behaviour).
+            if (!string.IsNullOrWhiteSpace(sessionSelection.SessionId))
+            {
+                try
+                {
+                    var history = await _apiClient.FetchSessionMessagesAsync(sessionSelection.SessionId);
+                    if (history.Count > 0)
+                        _agentThinkingForm.SetSessionHistory(history);
+                }
+                catch { } // best-effort; not critical to the session
+            }
+
             _agentThinkingForm.SetInitialRequest(originalText);
             _agentThinkingForm.SetRunning(true);
 

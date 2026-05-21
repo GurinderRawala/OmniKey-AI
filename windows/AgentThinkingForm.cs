@@ -16,10 +16,7 @@ namespace OmniKey.Windows
         private readonly Button          _cancelButton;
         private readonly Button          _historyButton;
         private readonly Panel           _bottomPanel;
-        private readonly Panel           _finalAnswerBar;   // top strip, h=0 → 36 when ready
         private readonly Panel           _readyBanner;      // bottom strip, h=0 → 40 when >20s
-        private readonly Button          _copyButton;
-        private string?                  _finalAnswer;
 
         // Pulsing animation
         private readonly System.Windows.Forms.Timer _pulseTimer;
@@ -45,67 +42,6 @@ namespace OmniKey.Windows
             StartPosition   = FormStartPosition.CenterScreen;
             BackColor       = NordColors.WindowBackground;
             FormBorderStyle = FormBorderStyle.Sizable;
-
-            // ── Final-answer top strip (h=0 until response arrives) ────────
-            _finalAnswerBar = new Panel
-            {
-                Dock      = DockStyle.Top,
-                Height    = 0,
-                BackColor = NordColors.GreenSectionFill,
-            };
-            _finalAnswerBar.Paint += (_, e) =>
-            {
-                using var pen = new Pen(NordColors.GreenSectionBorder, 1);
-                e.Graphics.DrawLine(pen, 0, _finalAnswerBar.Height - 1,
-                                    _finalAnswerBar.Width, _finalAnswerBar.Height - 1);
-
-                var icon = WinIcons.Checkmark(14, NordColors.AccentGreen);
-                int iy   = (_finalAnswerBar.Height - 14) / 2;
-                e.Graphics.DrawImage(icon, 12, iy, 14, 14);
-                TextRenderer.DrawText(e.Graphics,
-                    "Final response ready",
-                    new Font("Segoe UI", 9, FontStyle.Bold),
-                    new Rectangle(32, 0, _finalAnswerBar.Width - 160, _finalAnswerBar.Height),
-                    NordColors.AccentGreen,
-                    TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
-            };
-
-            _copyButton = new Button
-            {
-                Text      = "  Copy Result",
-                Image     = WinIcons.ClipboardIcon(12, NordColors.AccentGreen),
-                ImageAlign = ContentAlignment.MiddleLeft,
-                TextImageRelation = TextImageRelation.ImageBeforeText,
-                Size      = new Size(110, 26),
-                Anchor    = AnchorStyles.Right | AnchorStyles.Top,
-                FlatStyle = FlatStyle.Flat,
-                BackColor = NordColors.GreenSectionFill,
-                ForeColor = NordColors.AccentGreen,
-                Font      = new Font("Segoe UI", 8.5f, FontStyle.Bold),
-                Cursor    = Cursors.Hand,
-            };
-            _copyButton.FlatAppearance.BorderColor = NordColors.GreenSectionBorder;
-            _copyButton.Location = new Point(780 - 110 - 8, 5);
-            _copyButton.Click += async (_, _) =>
-            {
-                if (string.IsNullOrEmpty(_finalAnswer)) return;
-
-                // Show visual feedback immediately regardless of clipboard success.
-                _copyButton.Text  = "  Copied!";
-                _copyButton.Image = WinIcons.Checkmark(12, NordColors.AccentGreen);
-
-                try { Clipboard.SetText(_finalAnswer); }
-                catch { }
-
-                await System.Threading.Tasks.Task.Delay(2000);
-                if (!IsDisposed && IsHandleCreated)
-                {
-                    _copyButton.Text  = "  Copy Result";
-                    _copyButton.Image = WinIcons.ClipboardIcon(12, NordColors.AccentGreen);
-                }
-            };
-            _finalAnswerBar.Controls.Add(_copyButton);
-            Controls.Add(_finalAnswerBar);
 
             // ── Log area ──────────────────────────────────────────────────
             var logSurround = new Panel
@@ -157,7 +93,7 @@ namespace OmniKey.Windows
                 int iy   = (_readyBanner.Height - 14) / 2;
                 e.Graphics.DrawImage(icon, 12, iy, 14, 14);
                 TextRenderer.DrawText(e.Graphics,
-                    "OmniAgent response is ready to paste — use Copy Result to copy it.",
+                    "OmniAgent response is ready to paste — use the Copy button on the result to copy it.",
                     new Font("Segoe UI", 9),
                     new Rectangle(34, 0, _readyBanner.Width - 40, _readyBanner.Height),
                     NordColors.AccentGreen,
@@ -438,7 +374,7 @@ namespace OmniKey.Windows
 
         /// <summary>
         /// Called by HotkeyForm once the final answer is known.
-        /// Shows the response in the log and reveals the Copy button.
+        /// Shows the response in the log with a copy button in the section header.
         /// Pass showReadyBanner=true when the session took > 20 s
         /// (the user may have switched focus, so auto-paste was skipped).
         /// </summary>
@@ -446,18 +382,18 @@ namespace OmniKey.Windows
         {
             InvokeIfNeeded(() =>
             {
-                _finalAnswer = text;
                 // Break any open sequential section so the final response card
                 // always appears as a fresh block at the bottom.
                 _currentSection     = null;
                 _currentSectionType = "";
 
-                // Final response section
+                // Final response section — copy button lives in the header (top-right)
                 var section = new SectionCard(
                     "Final Response", NordColors.AccentGreen,
                     WinIcons.Checkmark(12, NordColors.AccentGreen),
                     EffectiveFlowWidth());
-                WireSection(section);
+                section.AddHeaderButton(CreateCopyButton(text));
+                WireFinalSection(section);
                 _logFlow.Controls.Add(section);
 
                 section.AddItem(new EntryCard(
@@ -469,9 +405,6 @@ namespace OmniKey.Windows
                     section.ItemWidth,
                     maxTextH: 4000));
 
-                // Show the top strip with the copy button
-                _finalAnswerBar.Height = 36;
-
                 // Show the ready-to-paste banner only when auto-paste was skipped
                 if (showReadyBanner)
                     _readyBanner.Height = 40;
@@ -480,8 +413,8 @@ namespace OmniKey.Windows
                 ScrollToBottom();
 
                 // Deferred scroll: ContentsResized can fire after the initial layout,
-                // so force a second scroll 200 ms later to reach the true bottom.
-                var t = new System.Windows.Forms.Timer { Interval = 200 };
+                // so force a second scroll 400 ms later to reach the true bottom.
+                var t = new System.Windows.Forms.Timer { Interval = 400 };
                 t.Tick += (_, _) =>
                 {
                     t.Stop(); t.Dispose();
@@ -492,6 +425,50 @@ namespace OmniKey.Windows
                     }
                 };
                 t.Start();
+            });
+        }
+
+        /// <summary>
+        /// Called by HotkeyForm when resuming an existing session.
+        /// Displays the last assistant reply from that session so the user
+        /// can see (and copy) what the agent answered previously.
+        /// </summary>
+        internal void SetSessionHistory(IList<SessionHistoryEntryDto> history)
+        {
+            InvokeIfNeeded(() =>
+            {
+                string? lastAnswer = null;
+                for (int i = history.Count - 1; i >= 0; i--)
+                {
+                    if (string.Equals(history[i].Role, "assistant", StringComparison.OrdinalIgnoreCase) &&
+                        !string.IsNullOrWhiteSpace(history[i].Text))
+                    {
+                        lastAnswer = history[i].Text.Trim();
+                        break;
+                    }
+                }
+
+                if (lastAnswer == null) return;
+
+                var section = new SectionCard(
+                    "Previous Session",
+                    NordColors.AccentPurple,
+                    WinIcons.ClockIcon(12, NordColors.AccentPurple),
+                    EffectiveFlowWidth());
+                section.AddHeaderButton(CreateCopyButton(lastAnswer));
+                WireSection(section);
+                _logFlow.Controls.Add(section);
+
+                section.AddItem(new EntryCard(
+                    lastAnswer, NordColors.PrimaryText,
+                    new Font("Segoe UI", 10),
+                    NordColors.AccentPurple,
+                    NordColors.PurpleSectionFill,
+                    NordColors.PurpleSectionBorder,
+                    section.ItemWidth,
+                    maxTextH: 4000));
+
+                RefreshFlowHeight();
             });
         }
 
@@ -532,6 +509,34 @@ namespace OmniKey.Windows
             return section;
         }
 
+        private Button CreateCopyButton(string textToCopy)
+        {
+            var btn = new Button
+            {
+                Size      = new Size(26, 20),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.Transparent,
+                ForeColor = NordColors.SecondaryText,
+                Cursor    = Cursors.Hand,
+                Image     = WinIcons.ClipboardIcon(12, NordColors.SecondaryText),
+            };
+            btn.FlatAppearance.BorderSize          = 0;
+            btn.FlatAppearance.MouseOverBackColor  = Color.FromArgb(30, NordColors.AccentGreen);
+            btn.Click += async (_, _) =>
+            {
+                btn.Image    = WinIcons.Checkmark(12, NordColors.AccentGreen);
+                btn.ForeColor = NordColors.AccentGreen;
+                try { Clipboard.SetText(textToCopy); } catch { }
+                await System.Threading.Tasks.Task.Delay(2000);
+                if (!btn.IsDisposed && btn.IsHandleCreated)
+                {
+                    btn.Image    = WinIcons.ClipboardIcon(12, NordColors.SecondaryText);
+                    btn.ForeColor = NordColors.SecondaryText;
+                }
+            };
+            return btn;
+        }
+
         private void WireSection(SectionCard section)
         {
             section.SizeChanged += (_, _) =>
@@ -548,6 +553,22 @@ namespace OmniKey.Windows
                         RefreshFlowHeight();
                         _logPanel.AutoScrollPosition = new Point(0, _logFlow.Height);
                     }
+                }));
+            };
+        }
+
+        // Like WireSection but always scrolls to bottom — used for the final response
+        // section so it's always fully visible regardless of current scroll position.
+        private void WireFinalSection(SectionCard section)
+        {
+            section.SizeChanged += (_, _) =>
+            {
+                RefreshFlowHeight();
+                if (!IsHandleCreated) return;
+                BeginInvoke(new Action(() =>
+                {
+                    RefreshFlowHeight();
+                    _logPanel.AutoScrollPosition = new Point(0, _logFlow.Height);
                 }));
             };
         }
@@ -635,6 +656,7 @@ namespace OmniKey.Windows
             private readonly Color       _accent;
             private readonly Bitmap      _icon;
             private readonly List<Panel> _items = new();
+            private Button?              _headerButton;
             private int _nextY;
 
             internal int ItemWidth => Width;
@@ -657,6 +679,15 @@ namespace OmniKey.Windows
                          ControlStyles.ResizeRedraw, true);
             }
 
+            // Places a small icon button in the top-right corner of the section header.
+            internal void AddHeaderButton(Button btn)
+            {
+                _headerButton = btn;
+                btn.Location = new Point(Width - btn.Width - 4, (HeaderH - btn.Height) / 2);
+                btn.Anchor   = AnchorStyles.Top | AnchorStyles.Right;
+                Controls.Add(btn);
+            }
+
             protected override void OnPaint(PaintEventArgs e)
             {
                 base.OnPaint(e);
@@ -669,9 +700,12 @@ namespace OmniKey.Windows
                     g.DrawImage(_icon, 0, iy, 12, 12);
                 }
 
+                int titleWidth = _headerButton != null
+                    ? Width - (_headerButton.Width + 12) - 17
+                    : Width - 20;
                 TextRenderer.DrawText(g, _title,
                     new Font("Segoe UI", 10f, FontStyle.Bold),
-                    new Rectangle(17, 0, Width - 20, HeaderH),
+                    new Rectangle(17, 0, titleWidth, HeaderH),
                     NordColors.SecondaryText,
                     TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
             }
@@ -691,6 +725,8 @@ namespace OmniKey.Windows
             {
                 if (Width == width) return;
                 Width = width;
+                if (_headerButton != null)
+                    _headerButton.Location = new Point(width - _headerButton.Width - 4, _headerButton.Location.Y);
                 foreach (var item in _items)
                     item.Width = width;
                 Invalidate();
