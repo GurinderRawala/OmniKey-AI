@@ -147,7 +147,7 @@ namespace OmniKey.Windows
             menu.Items.Add(taskInstructionsItem);
 
             var agentSessionItem = new ToolStripMenuItem("OmniAgent Session");
-            agentSessionItem.Click += async (_, _) => await ShowAgentSessionPickerFromMenuAsync();
+            agentSessionItem.Click += (_, _) => ShowAgentSessionPickerFromMenuAsync();
             menu.Items.Add(agentSessionItem);
 
             var scheduledJobsItem = new ToolStripMenuItem("Scheduled Jobs");
@@ -204,16 +204,24 @@ namespace OmniKey.Windows
             form.Show(this);
         }
 
-        private async Task ShowAgentSessionPickerFromMenuAsync()
+        private void ShowAgentSessionPickerFromMenuAsync()
         {
-            try
+            // If a session window from a previous run is still open, just bring it to the front.
+            if (_agentThinkingForm != null && !_agentThinkingForm.IsDisposed)
             {
-                await AgentSessionService.ShowSessionSettingsAsync(this);
+                if (_agentThinkingForm.WindowState == FormWindowState.Minimized)
+                    _agentThinkingForm.WindowState = FormWindowState.Normal;
+                _agentThinkingForm.Show(this);
+                _agentThinkingForm.BringToFront();
+                _agentThinkingForm.Activate();
+                return;
             }
-            catch (Exception ex)
-            {
-                ShowBalloon("OmniKey AI", "Session settings error: " + ex.Message);
-            }
+
+            // No prior session — open a blank thinking window.
+            _agentThinkingForm = new AgentThinkingForm();
+            _agentThinkingForm.Show(this);
+            _agentThinkingForm.BringToFront();
+            _agentThinkingForm.Activate();
         }
 
         // ─── Update checking ──────────────────────────────────────────
@@ -384,8 +392,8 @@ namespace OmniKey.Windows
                 return;
             }
 
-            // Close any existing agent window
-            _agentThinkingForm?.Close();
+            // Close any existing agent window (ForceClose bypasses the hide-on-user-close guard)
+            _agentThinkingForm?.ForceClose();
             _agentThinkingForm = new AgentThinkingForm();
             _agentThinkingForm.Text = $"OmniAgent Session - {sessionSelection.SessionTitle} - OmniKey AI";
 
@@ -397,6 +405,7 @@ namespace OmniKey.Windows
 
             ShowBalloon("OmniKey AI", "OmniAgent session started\u2026");
 
+            var startTime = DateTime.UtcNow;
             string result;
             try
             {
@@ -419,6 +428,7 @@ namespace OmniKey.Windows
                 return;
             }
 
+            var elapsed = DateTime.UtcNow - startTime;
             _agentThinkingForm?.SetRunning(false);
 
             if (string.IsNullOrWhiteSpace(result))
@@ -427,8 +437,17 @@ namespace OmniKey.Windows
                 return;
             }
 
-            await RestoreFocusAndPasteAsync(originalWindow, result);
-            ShowBalloon("OmniKey AI", "Agent finished. Text updated.");
+            _agentThinkingForm?.SetFinalAnswer(result, elapsed.TotalSeconds > 20);
+
+            if (elapsed.TotalSeconds <= 20)
+            {
+                await RestoreFocusAndPasteAsync(originalWindow, result);
+                ShowBalloon("OmniKey AI", "Agent finished. Text updated.");
+            }
+            else
+            {
+                ShowBalloon("OmniKey AI", "OmniAgent response is ready. Switch to the session window to copy it.");
+            }
         }
 
         // Brings the original window back to the foreground (mirroring macOS behavior),

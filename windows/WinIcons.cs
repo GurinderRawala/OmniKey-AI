@@ -161,6 +161,18 @@ namespace OmniKey.Windows
             return bmp;
         }
 
+        public static Bitmap ClipboardIcon(int size, Color color)
+        {
+            var bmp = Blank(size);
+            using var g = AA(bmp);
+            using var pen = RoundPen(color, size * 0.09f);
+            float m = size * 0.12f;
+            g.DrawRectangle(pen, m, size * 0.22f, size - 2 * m, size * 0.68f);
+            float tw = size * 0.30f, th = size * 0.20f;
+            g.DrawRectangle(pen, (size - tw) / 2f, size * 0.06f, tw, th);
+            return bmp;
+        }
+
         public static Bitmap ClockIcon(int size, Color color)
         {
             var bmp = Blank(size);

@@ -10,6 +10,7 @@ namespace OmniKey.Windows
         void SetRunning(bool running);
         void AppendAgentMessage(string text);
         void AppendWebCall(string text);
+        void AppendMcpCall(string text);
         void AppendTerminalOutput(string text);
     }
 }
