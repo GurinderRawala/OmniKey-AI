@@ -894,6 +894,17 @@ final class APIClient: @unchecked Sendable {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         guard let body = try? JSONSerialization.data(withJSONObject: mcpInputPayload(input, includeNulls: true)) else {
+            completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Serialization error"])))
+            return
+        }
+        request.httpBody = body
+        let task = URLSession.shared.dataTask(with: request) { data, response, error in
+            self.handleMCPResponse(data: data, response: response, error: error, completion: completion)
+        }
+        task.resume()
+    }
+
+    func patchMCPServer(
         id: String,
         patch: MCPServerPatch,
         completion: @escaping @Sendable (Result<MCPServerDTO, Error>) -> Void
