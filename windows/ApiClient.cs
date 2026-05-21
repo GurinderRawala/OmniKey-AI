@@ -34,6 +34,22 @@ namespace OmniKey.Windows
         public string? LastRunSessionId { get; set; }
     }
 
+    internal sealed class MCPServerDto
+    {
+        public string Id { get; set; } = "";
+        public string Name { get; set; } = "";
+        public string? Description { get; set; }
+        public string Transport { get; set; } = "stdio";
+        public string? Command { get; set; }
+        public List<string> Args { get; set; } = new();
+        public Dictionary<string, string> Env { get; set; } = new();
+        public string? Url { get; set; }
+        public Dictionary<string, string> Headers { get; set; } = new();
+        public bool IsEnabled { get; set; } = true;
+        public string? LastConnectedAt { get; set; }
+        public string? LastError { get; set; }
+    }
+
     internal sealed class SessionHistoryEntryDto
     {
         public string Id { get; set; } = "";
@@ -269,6 +285,122 @@ namespace OmniKey.Windows
             await EnsureSuccessAsync(resp);
             using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
             return ParseScheduledJob(doc.RootElement);
+        }
+
+        // ─── MCP Servers ──────────────────────────────────────────────
+
+        public async Task<List<MCPServerDto>> FetchMCPServersAsync()
+        {
+            using var req  = BuildRequest(HttpMethod.Get, "/api/mcp-servers");
+            using var resp = await Http.SendAsync(req);
+            await EnsureSuccessAsync(resp);
+            using var doc  = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+            var list = new List<MCPServerDto>();
+            if (doc.RootElement.TryGetProperty("servers", out var arr))
+            {
+                foreach (var el in arr.EnumerateArray())
+                    list.Add(ParseMCPServer(el));
+            }
+            return list;
+        }
+
+        public async Task<MCPServerDto> CreateMCPServerAsync(MCPServerDto dto)
+        {
+            using var req = BuildRequest(HttpMethod.Post, "/api/mcp-servers");
+            req.Content = JsonContent.Create(BuildMCPPayload(dto));
+            using var resp = await Http.SendAsync(req);
+            await EnsureSuccessAsync(resp);
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+            return ParseMCPServer(doc.RootElement);
+        }
+
+        public async Task<MCPServerDto> UpdateMCPServerAsync(string id, MCPServerDto dto)
+        {
+            using var req = BuildRequest(HttpMethod.Patch, $"/api/mcp-servers/{id}");
+            req.Content = JsonContent.Create(BuildMCPPayload(dto));
+            using var resp = await Http.SendAsync(req);
+            await EnsureSuccessAsync(resp);
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+            return ParseMCPServer(doc.RootElement);
+        }
+
+        public async Task<MCPServerDto> ToggleMCPServerAsync(string id, bool isEnabled)
+        {
+            using var req = BuildRequest(HttpMethod.Patch, $"/api/mcp-servers/{id}");
+            req.Content = JsonContent.Create(new Dictionary<string, object?> { ["isEnabled"] = isEnabled });
+            using var resp = await Http.SendAsync(req);
+            await EnsureSuccessAsync(resp);
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+            return ParseMCPServer(doc.RootElement);
+        }
+
+        public async Task DeleteMCPServerAsync(string id)
+        {
+            using var req = BuildRequest(HttpMethod.Delete, $"/api/mcp-servers/{id}");
+            using var resp = await Http.SendAsync(req);
+            if (resp.StatusCode != HttpStatusCode.NoContent)
+                await EnsureSuccessAsync(resp);
+        }
+
+        private static Dictionary<string, object?> BuildMCPPayload(MCPServerDto dto)
+        {
+            return new Dictionary<string, object?>
+            {
+                ["name"]        = dto.Name,
+                ["description"] = string.IsNullOrWhiteSpace(dto.Description) ? null : dto.Description,
+                ["transport"]   = dto.Transport,
+                ["command"]     = string.IsNullOrWhiteSpace(dto.Command) ? null : dto.Command,
+                ["args"]        = dto.Args ?? new List<string>(),
+                ["env"]         = dto.Env ?? new Dictionary<string, string>(),
+                ["url"]         = string.IsNullOrWhiteSpace(dto.Url) ? null : dto.Url,
+                ["headers"]     = dto.Headers ?? new Dictionary<string, string>(),
+                ["isEnabled"]   = dto.IsEnabled,
+            };
+        }
+
+        private static MCPServerDto ParseMCPServer(JsonElement el)
+        {
+            var dto = new MCPServerDto
+            {
+                Id          = el.TryGetProperty("id",          out var id)   ? id.GetString()   ?? "" : "",
+                Name        = el.TryGetProperty("name",        out var name) ? name.GetString() ?? "" : "",
+                Description = el.TryGetProperty("description", out var d)    ? d.GetString()         : null,
+                Transport   = el.TryGetProperty("transport",   out var t)    ? t.GetString() ?? "stdio" : "stdio",
+                Command     = el.TryGetProperty("command",     out var c)    ? c.GetString()         : null,
+                Url         = el.TryGetProperty("url",         out var u)    ? u.GetString()         : null,
+                IsEnabled   = el.TryGetProperty("isEnabled",   out var en)   ? en.GetBoolean() : true,
+                LastConnectedAt = el.TryGetProperty("lastConnectedAt", out var lc) ? lc.GetString() : null,
+                LastError   = el.TryGetProperty("lastError",   out var le)   ? le.GetString()        : null,
+            };
+
+            if (el.TryGetProperty("args", out var argsEl) && argsEl.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var a in argsEl.EnumerateArray())
+                {
+                    if (a.ValueKind == JsonValueKind.String)
+                        dto.Args.Add(a.GetString() ?? "");
+                }
+            }
+
+            if (el.TryGetProperty("env", out var envEl) && envEl.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var p in envEl.EnumerateObject())
+                {
+                    if (p.Value.ValueKind == JsonValueKind.String)
+                        dto.Env[p.Name] = p.Value.GetString() ?? "";
+                }
+            }
+
+            if (el.TryGetProperty("headers", out var hEl) && hEl.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var p in hEl.EnumerateObject())
+                {
+                    if (p.Value.ValueKind == JsonValueKind.String)
+                        dto.Headers[p.Name] = p.Value.GetString() ?? "";
+                }
+            }
+
+            return dto;
         }
 
         public async Task<List<SessionHistoryEntryDto>> FetchSessionMessagesAsync(string sessionId)

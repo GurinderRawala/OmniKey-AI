@@ -8,6 +8,7 @@ enum TimelineEntryKind {
     case terminalOutput
     case webCall
     case imageRendering
+    case mcpCall
 }
 
 struct TimelineEntry: Identifiable {
@@ -57,6 +58,7 @@ final class AgentThinkingModel: ObservableObject {
     @Published var webCalls: [String] = []
     @Published var finalResult: String = ""
     @Published var imageRenderingMessages: [String] = []
+    @Published var mcpCallMessages: [String] = []
     @Published var elapsedSeconds: Int = 0
     @Published var timeline: [TimelineEntry] = []
 
@@ -105,6 +107,7 @@ final class AgentThinkingModel: ObservableObject {
         webCalls = []
         finalResult = ""
         imageRenderingMessages = []
+        mcpCallMessages = []
         elapsedSeconds = 0
         timeline = []
         availableSessions = []
@@ -167,6 +170,13 @@ final class AgentThinkingModel: ObservableObject {
         guard !trimmed.isEmpty else { return }
         imageRenderingMessages.append(trimmed)
         timeline.append(TimelineEntry(kind: .imageRendering, text: trimmed))
+    }
+
+    func appendMcpCall(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        mcpCallMessages.append(trimmed)
+        timeline.append(TimelineEntry(kind: .mcpCall, text: trimmed))
     }
 
     // MARK: - Session picker helpers

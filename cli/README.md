@@ -20,6 +20,7 @@ OmnikeyAI is a productivity tool that helps you quickly rewrite selected text us
 - Configure and run the backend daemon — persisted across reboots on both macOS and Windows.
 - `omnikey grant-browser-access`: One-time setup to give Omnikey access to authenticated browser tabs for web fetch.
 - Scheduled Jobs commands to create, list, delete, and trigger jobs from the CLI.
+- `omnikey mcp`: manage MCP (Model Context Protocol) servers available to the agent (stdio, HTTP, SSE transports).
 
 ## Usage
 
@@ -77,6 +78,21 @@ omnikey schedule remove
 
 # Trigger a scheduled job immediately by ID
 omnikey schedule run-now <job-id>
+
+# Install a new MCP server (interactive)
+omnikey mcp add
+
+# List installed MCP servers
+omnikey mcp list
+
+# Remove an MCP server (interactive select + confirm)
+omnikey mcp remove
+
+# Enable or disable an MCP server by ID
+omnikey mcp toggle <id>
+
+# Edit an MCP server by ID (interactive, current values as defaults)
+omnikey mcp update <id>
 ```
 
 ### Command reference
@@ -98,6 +114,11 @@ omnikey schedule run-now <job-id>
 | `omnikey schedule list`               | List all scheduled jobs with status and next run                          |
 | `omnikey schedule remove`             | Remove an existing scheduled job via interactive selection                |
 | `omnikey schedule run-now <id>`       | Trigger a scheduled job immediately                                       |
+| `omnikey mcp add`                     | Install a new MCP server interactively                                    |
+| `omnikey mcp list`                    | List all installed MCP servers                                            |
+| `omnikey mcp remove`                  | Remove an MCP server via interactive selection and confirmation            |
+| `omnikey mcp toggle <id>`             | Enable or disable an MCP server by ID                                     |
+| `omnikey mcp update <id>`             | Edit an MCP server by ID (interactive, current values as defaults)        |
 
 ## Scheduled Jobs
 
@@ -130,6 +151,44 @@ Lets you choose a job from a list and confirms deletion.
 ### `omnikey schedule run-now <id>`
 
 Runs a job immediately using its job ID.
+
+## MCP Servers
+
+MCP (Model Context Protocol) servers extend the OmniKey agent with external tools — file systems, databases, APIs, or any custom capability. Once a server is registered and enabled, the agent automatically discovers and calls its tools during task execution. The same servers can also be managed from the **macOS** and **Windows** desktop apps via the MCP Servers window in the menu bar / system tray.
+
+All `mcp` commands require the daemon to be running. They authenticate against the local backend at `http://localhost:<OMNIKEY_PORT>/api/mcp-servers`.
+
+### `omnikey mcp add`
+
+Installs a new MCP server interactively:
+
+- Prompts for a **name** and **description**
+- Asks you to choose a **transport**: `stdio`, `http`, or `sse`
+- Asks whether the server should be **enabled** immediately
+- For **stdio**: prompts for the executable **command**, arguments (one per line, blank line to finish), and environment variables (one `KEY=VALUE` per line, blank line to finish)
+- For **http** / **sse**: prompts for the endpoint **URL** and headers (one `KEY=VALUE` per line, blank line to finish)
+
+### `omnikey mcp list`
+
+Prints a table of all registered MCP servers with columns:
+
+- ID
+- Name
+- Transport
+- Enabled
+- Endpoint (URL for http/sse, or command for stdio)
+
+### `omnikey mcp remove`
+
+Shows an interactive picker of registered servers, asks for confirmation, then deletes the selected server.
+
+### `omnikey mcp toggle <id>`
+
+Flips the enabled/disabled state of the server identified by `<id>` (as shown in `mcp list`).
+
+### `omnikey mcp update <id>`
+
+Opens the same interactive flow as `mcp add` for the server identified by `<id>`, pre-filling every prompt with the current values so you only need to change what matters.
 
 ## Browser access (`grant-browser-access` / `browser open`)
 

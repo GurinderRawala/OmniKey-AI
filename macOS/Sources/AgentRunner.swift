@@ -481,6 +481,7 @@ final class AgentRunner {
             let isError: Bool?
             let isWebCall: Bool?
             let isImageRendering: Bool?
+            let isMcpCall: Bool?
             let platform: String?
 
             init(
@@ -491,6 +492,7 @@ final class AgentRunner {
                 isError: Bool? = nil,
                 isWebCall: Bool? = nil,
                 isImageRendering: Bool? = nil,
+                isMcpCall: Bool? = nil,
                 platform: String? = nil
             ) {
                 self.sessionID = sessionID
@@ -500,6 +502,7 @@ final class AgentRunner {
                 self.isError = isError
                 self.isWebCall = isWebCall
                 self.isImageRendering = isImageRendering
+                self.isMcpCall = isMcpCall
                 self.platform = platform
             }
 
@@ -511,6 +514,7 @@ final class AgentRunner {
                 case isError = "is_error"
                 case isWebCall = "is_web_call"
                 case isImageRendering = "is_image_rendering"
+                case isMcpCall = "is_mcp_call"
                 case platform
             }
         }
@@ -570,6 +574,16 @@ final class AgentRunner {
                     if response.isImageRendering == true {
                         DispatchQueue.main.async {
                             AgentThinkingModel.shared.appendImageRendering(content)
+                        }
+                        receiveNext()
+                        return
+                    }
+
+                    // MCP call notification: show it in the thinking view and
+                    // keep listening — this is not a final answer.
+                    if response.isMcpCall == true {
+                        DispatchQueue.main.async {
+                            AgentThinkingModel.shared.appendMcpCall(content)
                         }
                         receiveNext()
                         return

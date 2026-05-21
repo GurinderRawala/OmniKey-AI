@@ -65,6 +65,7 @@ final class APIClient: @unchecked Sendable {
     private let customTaskURL = APIClient.baseURL.appendingPathComponent("api/feature/custom-task")
     private let taskTemplatesBaseURL = APIClient.baseURL.appendingPathComponent("api/instructions/templates")
     private let scheduledJobsBaseURL = APIClient.baseURL.appendingPathComponent("api/scheduled-jobs")
+    private let mcpServersBaseURL = APIClient.baseURL.appendingPathComponent("api/mcp-servers")
 
     // MARK: - Shared error helpers
 
@@ -749,5 +750,225 @@ final class APIClient: @unchecked Sendable {
         }
 
         task.resume()
+    }
+
+    // MARK: - MCP Servers
+
+    struct MCPServerDTO: Codable, Identifiable {
+        let id: String
+        let name: String
+        let description: String?
+        let transport: String
+        let command: String?
+        let args: [String]
+        let env: [String: String]
+        let url: String?
+        let headers: [String: String]
+        let isEnabled: Bool
+        let lastConnectedAt: String?
+        let lastError: String?
+    }
+
+    struct MCPServerInput {
+        let name: String
+        let description: String?
+        let transport: String
+        let command: String?
+        let args: [String]
+        let env: [String: String]
+        let url: String?
+        let headers: [String: String]
+        let isEnabled: Bool
+    }
+
+    struct MCPServerPatch {
+        var name: String? = nil
+        var description: String? = nil
+        var transport: String? = nil
+        var command: String? = nil
+        var args: [String]? = nil
+        var env: [String: String]? = nil
+        var url: String? = nil
+        var headers: [String: String]? = nil
+        var isEnabled: Bool? = nil
+    }
+
+    private func mcpInputPayload(_ input: MCPServerInput, includeNulls: Bool = false) -> [String: Any] {
+        var payload: [String: Any] = [
+            "name": input.name,
+            "transport": input.transport,
+            "isEnabled": input.isEnabled,
+            "args": input.args,
+            "env": input.env,
+            "headers": input.headers,
+        ]
+        if let desc = input.description {
+            payload["description"] = desc
+        } else if includeNulls {
+            payload["description"] = NSNull()
+        }
+        if let cmd = input.command {
+            payload["command"] = cmd
+        } else if includeNulls {
+            payload["command"] = NSNull()
+        }
+        if let url = input.url {
+            payload["url"] = url
+        } else if includeNulls {
+            payload["url"] = NSNull()
+        }
+        return payload
+    }
+
+    private func mcpPatchPayload(_ patch: MCPServerPatch) -> [String: Any] {
+        var payload: [String: Any] = [:]
+        if let v = patch.name { payload["name"] = v }
+        if let v = patch.description { payload["description"] = v }
+        if let v = patch.transport { payload["transport"] = v }
+        if let v = patch.command { payload["command"] = v }
+        if let v = patch.args { payload["args"] = v }
+        if let v = patch.env { payload["env"] = v }
+        if let v = patch.url { payload["url"] = v }
+        if let v = patch.headers { payload["headers"] = v }
+        if let v = patch.isEnabled { payload["isEnabled"] = v }
+        return payload
+    }
+
+    func fetchMCPServers(completion: @escaping @Sendable (Result<[MCPServerDTO], Error>) -> Void) {
+        var request = URLRequest(url: mcpServersBaseURL)
+        request.httpMethod = "GET"
+        if let token = SubscriptionManager.shared.jwtToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        let task = URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error = error { completion(.failure(error)); return }
+            guard let httpResponse = response as? HTTPURLResponse else {
+                completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response"])))
+                return
+            }
+            guard (200...299).contains(httpResponse.statusCode) else {
+                completion(.failure(APIClient.makeBackendError(statusCode: httpResponse.statusCode, data: data)))
+                return
+            }
+            guard let data = data, !data.isEmpty else { completion(.success([])); return }
+            do {
+                struct Envelope: Codable { let servers: [MCPServerDTO] }
+                let decoded = try JSONDecoder().decode(Envelope.self, from: data)
+                completion(.success(decoded.servers))
+            } catch { completion(.failure(error)) }
+        }
+        task.resume()
+    }
+
+    func createMCPServer(
+        input: MCPServerInput,
+        completion: @escaping @Sendable (Result<MCPServerDTO, Error>) -> Void
+    ) {
+        var request = URLRequest(url: mcpServersBaseURL)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = SubscriptionManager.shared.jwtToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        guard let body = try? JSONSerialization.data(withJSONObject: mcpInputPayload(input)) else {
+            completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Serialization error"])))
+            return
+        }
+        request.httpBody = body
+        let task = URLSession.shared.dataTask(with: request) { data, response, error in
+            self.handleMCPResponse(data: data, response: response, error: error, completion: completion)
+        }
+        task.resume()
+    }
+
+    func updateMCPServer(
+        id: String,
+        input: MCPServerInput,
+        completion: @escaping @Sendable (Result<MCPServerDTO, Error>) -> Void
+    ) {
+        let url = mcpServersBaseURL.appendingPathComponent(id)
+        var request = URLRequest(url: url)
+        request.httpMethod = "PATCH"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = SubscriptionManager.shared.jwtToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        guard let body = try? JSONSerialization.data(withJSONObject: mcpInputPayload(input, includeNulls: true)) else {
+            completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Serialization error"])))
+            return
+        }
+        request.httpBody = body
+        let task = URLSession.shared.dataTask(with: request) { data, response, error in
+            self.handleMCPResponse(data: data, response: response, error: error, completion: completion)
+        }
+        task.resume()
+    }
+
+    func patchMCPServer(
+        id: String,
+        patch: MCPServerPatch,
+        completion: @escaping @Sendable (Result<MCPServerDTO, Error>) -> Void
+    ) {
+        let url = mcpServersBaseURL.appendingPathComponent(id)
+        var request = URLRequest(url: url)
+        request.httpMethod = "PATCH"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = SubscriptionManager.shared.jwtToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        guard let body = try? JSONSerialization.data(withJSONObject: mcpPatchPayload(patch)) else {
+            completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Serialization error"])))
+            return
+        }
+        request.httpBody = body
+        let task = URLSession.shared.dataTask(with: request) { data, response, error in
+            self.handleMCPResponse(data: data, response: response, error: error, completion: completion)
+        }
+        task.resume()
+    }
+
+    func deleteMCPServer(id: String, completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
+        let url = mcpServersBaseURL.appendingPathComponent(id)
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        if let token = SubscriptionManager.shared.jwtToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        let task = URLSession.shared.dataTask(with: request) { _, response, error in
+            if let error = error { completion(.failure(error)); return }
+            guard let httpResponse = response as? HTTPURLResponse else {
+                completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response"])))
+                return
+            }
+            if (200...299).contains(httpResponse.statusCode) || httpResponse.statusCode == 204 {
+                completion(.success(()))
+            } else {
+                completion(.failure(APIClient.makeBackendError(statusCode: httpResponse.statusCode, data: nil)))
+            }
+        }
+        task.resume()
+    }
+
+    private func handleMCPResponse(
+        data: Data?,
+        response: URLResponse?,
+        error: Error?,
+        completion: @escaping @Sendable (Result<MCPServerDTO, Error>) -> Void
+    ) {
+        if let error = error { completion(.failure(error)); return }
+        guard let httpResponse = response as? HTTPURLResponse else {
+            completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response"])))
+            return
+        }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            completion(.failure(APIClient.makeBackendError(statusCode: httpResponse.statusCode, data: data)))
+            return
+        }
+        guard let data = data, !data.isEmpty else {
+            completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No data"])))
+            return
+        }
+        do { completion(.success(try JSONDecoder().decode(MCPServerDTO.self, from: data))) }
+        catch { completion(.failure(error)) }
     }
 }

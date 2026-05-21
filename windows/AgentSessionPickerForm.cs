@@ -108,7 +108,7 @@ namespace OmniKey.Windows
                 ForeColor = NordColors.PrimaryText,
                 AutoSize = true,
                 Location = new Point(18, 364),
-                Checked = settingsMode,
+                Checked = true,          // default on so first-run choice is remembered
                 Visible = !settingsMode
             };
 

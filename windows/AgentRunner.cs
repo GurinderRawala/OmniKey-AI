@@ -138,6 +138,13 @@ namespace OmniKey.Windows
                     continue;
                 }
 
+                // MCP tool call notification: show in thinking window and keep listening.
+                if (msg.is_mcp_call == true)
+                {
+                    thinkingForm.AppendMcpCall(content);
+                    continue;
+                }
+
                 string displayText = CleanDisplayText(content);
 
                 // Show the message in the thinking window (not terminal output)
@@ -442,6 +449,7 @@ namespace OmniKey.Windows
             public bool is_terminal_output { get; set; }
             public bool is_error { get; set; }
             public bool? is_web_call { get; set; }
+            public bool? is_mcp_call { get; set; }
             public string platform { get; set; } = "windows";
         }
     }

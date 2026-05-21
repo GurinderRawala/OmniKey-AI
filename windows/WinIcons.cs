@@ -161,6 +161,18 @@ namespace OmniKey.Windows
             return bmp;
         }
 
+        public static Bitmap ClipboardIcon(int size, Color color)
+        {
+            var bmp = Blank(size);
+            using var g = AA(bmp);
+            using var pen = RoundPen(color, size * 0.09f);
+            float m = size * 0.12f;
+            g.DrawRectangle(pen, m, size * 0.22f, size - 2 * m, size * 0.68f);
+            float tw = size * 0.30f, th = size * 0.20f;
+            g.DrawRectangle(pen, (size - tw) / 2f, size * 0.06f, tw, th);
+            return bmp;
+        }
+
         public static Bitmap ClockIcon(int size, Color color)
         {
             var bmp = Blank(size);
@@ -170,6 +182,33 @@ namespace OmniKey.Windows
             g.DrawEllipse(pen, cx - r, cy - r, r * 2, r * 2);
             g.DrawLine(pen, cx, cy, cx, cy - r * 0.58f);         // hour hand (12)
             g.DrawLine(pen, cx, cy, cx + r * 0.52f, cy);         // minute hand (3)
+            return bmp;
+        }
+
+        /// <summary>
+        /// Draws a simple server/rack icon (two stacked rectangles with a circle indicator).
+        /// Used in the MCP Tool Calls section.
+        /// </summary>
+        public static Bitmap ServerIcon(int size, Color color)
+        {
+            var bmp = Blank(size);
+            using var g = AA(bmp);
+            using var pen = RoundPen(color, size * 0.09f);
+            float m = size * 0.08f;
+            float w = size - 2 * m;
+            float h = size * 0.28f;
+            float gap = size * 0.08f;
+            float y1 = m;
+            float y2 = y1 + h + gap;
+            // Top rack unit
+            g.DrawRectangle(pen, m, y1, w, h);
+            // Bottom rack unit
+            g.DrawRectangle(pen, m, y2, w, h);
+            using (var dot = new SolidBrush(color))
+            {
+                g.FillEllipse(dot, size * 0.74f, y1 + h * 0.28f, h * 0.42f, h * 0.42f);
+                g.FillEllipse(dot, size * 0.74f, y2 + h * 0.28f, h * 0.42f, h * 0.42f);
+            }
             return bmp;
         }
 

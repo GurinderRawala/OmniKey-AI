@@ -77,6 +77,7 @@
         <div class="nav-links">
           <a href="#how-it-works">How it works</a>
           <a href="#features">Features</a>
+          <a href="#mcp-servers">MCP Servers</a>
           <a href="#getting-started">Get started</a>
         </div>
         <div class="nav-actions">
@@ -437,6 +438,15 @@
             </p>
           </div>
           <div class="feature-item scroll-reveal delay-1">
+            <h3>MCP Servers</h3>
+            <p>
+              Plug in any <strong>MCP (Model Context Protocol)</strong> server — via
+              <strong>stdio</strong>, <strong>HTTP</strong>, or <strong>SSE</strong> transport —
+              from the macOS app, Windows app, or CLI. The agent automatically discovers and calls
+              those tools during task execution.
+            </p>
+          </div>
+          <div class="feature-item scroll-reveal delay-1">
             <h3>Web Search</h3>
             <p>
               Give the agent real-time web context. Supported providers:
@@ -464,15 +474,6 @@
               saved task instructions to the selected text. Configure them in the
               <strong>Task Instructions</strong> window from the menu bar.
             </p>
-          </div>
-          <div class="feature-item scroll-reveal delay-1">
-            <h3>How It Works</h3>
-            <ol class="how-list">
-              <li>Select text in any app.</li>
-              <li>Press an OmniKey shortcut.</li>
-              <li>OmniKey sends it securely to the AI service.</li>
-              <li>The result is pasted back in place.</li>
-            </ol>
           </div>
           <div class="feature-item feature-item-new scroll-reveal" id="authenticated-browsing">
             <div class="feature-new-badge">macOS &amp; Windows</div>
@@ -711,6 +712,68 @@ omnikey schedule run-now &lt;job-id&gt;</code></pre>
               <p class="hint">
                 The add flow is interactive and supports multiline prompt input, recurring cron
                 schedules, and one-time jobs.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── MCP Servers ── -->
+      <section class="usage-section" id="mcp-servers">
+        <div class="section-header">
+          <div class="section-label">Extensibility</div>
+          <h2>MCP Servers</h2>
+          <p class="section-desc">
+            Extend the OmniKey agent with any external tool by connecting MCP servers over stdio,
+            HTTP, or SSE.
+          </p>
+        </div>
+
+        <div class="usage-cards">
+          <div class="usage-card">
+            <div class="usage-icon">App</div>
+            <div class="usage-body">
+              <h3>Manage MCP Servers in the Desktop App</h3>
+              <p>
+                Open <strong>MCP Servers</strong> from the OmniKey menu bar (macOS) or system tray
+                (Windows). From there you can:
+              </p>
+              <ul class="provider-list">
+                <li>
+                  Create a new server — enter a name, description, and choose a transport:
+                  <strong>stdio</strong>, <strong>http</strong>, or <strong>sse</strong>
+                </li>
+                <li>
+                  For <strong>stdio</strong>: supply the command, arguments, and optional
+                  <code>KEY=VALUE</code> environment variables
+                </li>
+                <li>
+                  For <strong>http</strong> / <strong>sse</strong>: supply the endpoint URL and
+                  optional <code>KEY=VALUE</code> headers
+                </li>
+                <li>Toggle a server on or off with <strong>Enable / Disable</strong></li>
+                <li>Refresh a server connection with <strong>Refresh</strong></li>
+                <li>Edit server details or delete a server at any time</li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="usage-card highlight">
+            <div class="usage-icon">CLI</div>
+            <div class="usage-body">
+              <h3>Manage MCP Servers from the CLI</h3>
+              <p>
+                Use the <code>mcp</code> command group to register, inspect, and control servers:
+              </p>
+              <pre><code>omnikey mcp add
+omnikey mcp list
+omnikey mcp remove
+omnikey mcp toggle &lt;id&gt;
+omnikey mcp update &lt;id&gt;</code></pre>
+              <p class="hint">
+                <code>add</code> and <code>update</code> are interactive prompts that ask for name,
+                description, transport (<strong>stdio</strong>, <strong>http</strong>,
+                <strong>sse</strong>), enabled flag, and the transport-specific fields.
               </p>
             </div>
           </div>

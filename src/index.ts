@@ -9,6 +9,7 @@ import { initDatabase } from './db';
 import { logger } from './logger';
 import { taskInstructionRouter } from './taskInstructionRoutes';
 import { scheduledJobRouter } from './scheduledJobRoutes';
+import { mcpServerRouter } from './mcpServerRoutes';
 import { startScheduledJobExecutor } from './scheduledJobExecutor';
 import { config } from './config';
 import { attachAgentWebSocketServer, createAgentRouter } from './agent/agentServer';
@@ -16,6 +17,7 @@ import { AppDownload } from './models/appDownload';
 // Importing AgentSession and ScheduledJob ensures the models are registered with Sequelize before initDatabase().
 import './models/agentSession';
 import './models/scheduledJob';
+import './models/mcpServer';
 import { incrementDownloadCount, getDownloadCounts } from './bucket-adapter';
 
 const app = express();
@@ -35,6 +37,8 @@ app.use('/api/feature', createFeatureRouter());
 app.use('/api/instructions', taskInstructionRouter());
 
 app.use('/api/scheduled-jobs', scheduledJobRouter());
+
+app.use('/api/mcp-servers', mcpServerRouter());
 
 app.use('/api/agent', createAgentRouter());
 
@@ -88,8 +92,8 @@ app.get('/macos/appcast', (req, res) => {
 
   // These should match the values embedded into the macOS app
   // Info.plist in macOS/build_release_dmg.sh.
-  const bundleVersion = '26';
-  const shortVersion = '1.0.25';
+  const bundleVersion = '27';
+  const shortVersion = '1.0.26';
 
   const xml = `<?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0"
@@ -120,7 +124,7 @@ app.get('/macos/appcast', (req, res) => {
 // ── Windows distribution endpoints ───────────────────────────────────────────
 // These should match the values in windows/OmniKey.Windows.csproj
 // <Version> and windows/build_release_zip.ps1 $APP_VERSION.
-const WIN_VERSION = '1.9';
+const WIN_VERSION = '1.10';
 const WIN_ZIP_FILENAME = 'OmniKeyAI-windows-win-x64.zip';
 const WIN_ZIP_PATH = path.join(process.cwd(), 'windows', WIN_ZIP_FILENAME);
 
