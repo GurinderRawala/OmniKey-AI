@@ -13,8 +13,8 @@ import { IMAGE_GENERATE_TOOL } from './imageTool';
  *
  * @returns An array of `AITool` definitions ready to pass to the AI client.
  */
-export function buildAvailableTools(): AITool[] {
-  return [WEB_FETCH_TOOL, WEB_SEARCH_TOOL, IMAGE_GENERATE_TOOL];
+export function buildAvailableTools(extraTools: AITool[] = []): AITool[] {
+  return [WEB_FETCH_TOOL, WEB_SEARCH_TOOL, IMAGE_GENERATE_TOOL, ...extraTools];
 }
 
 /**

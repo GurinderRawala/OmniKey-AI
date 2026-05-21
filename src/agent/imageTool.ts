@@ -84,7 +84,8 @@ function resolveOutputPath(filePathArg: string | undefined, format: ImageFormat)
   if (filePathArg) {
     return path.isAbsolute(filePathArg) ? filePathArg : path.resolve(process.cwd(), filePathArg);
   }
-  return path.join(os.tmpdir(), `omnikey-generated-${cuid()}.${format}`);
+  const garbageDir = path.join(os.homedir(), '.omniAgent', 'garbage');
+  return path.join(garbageDir, `omnikey-generated-${cuid()}.${format}`);
 }
 
 /**

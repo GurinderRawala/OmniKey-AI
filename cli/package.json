@@ -30,6 +30,7 @@
     "@anthropic-ai/sdk": "^0.96.0",
     "@google-cloud/storage": "^7.19.0",
     "@google/genai": "^1.46.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "axios": "^1.13.5",
     "commander": "^11.0.0",
     "cors": "^2.8.5",

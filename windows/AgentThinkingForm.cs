@@ -29,6 +29,7 @@ namespace OmniKey.Windows
         private SectionCard? _requestSection;
         private SectionCard? _reasoningSection;
         private SectionCard? _webSection;
+        private SectionCard? _mcpSection;
         private SectionCard? _terminalSection;
 
         public CancellationTokenSource CancellationSource { get; } = new();
@@ -275,6 +276,27 @@ namespace OmniKey.Windows
                     NordColors.Accent,
                     NordColors.BlueSectionFill,
                     NordColors.BlueSectionBorder,
+                    section.ItemWidth));
+
+                ScrollToBottom();
+            });
+        }
+
+        public void AppendMcpCall(string text)
+        {
+            InvokeIfNeeded(() =>
+            {
+                var section = EnsureSection(ref _mcpSection,
+                    "MCP Tool Calls", NordColors.AccentGreen,
+                    WinIcons.ServerIcon(12, NordColors.AccentGreen));
+
+                section.AddItem(new EntryCard(
+                    text,
+                    NordColors.PrimaryText,
+                    new Font("Consolas", 10),
+                    NordColors.AccentGreen,
+                    NordColors.GreenSectionFill,
+                    NordColors.GreenSectionBorder,
                     section.ItemWidth));
 
                 ScrollToBottom();

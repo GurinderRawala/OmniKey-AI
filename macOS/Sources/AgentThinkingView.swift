@@ -352,6 +352,20 @@ struct AgentThinkingView: View {
                 .background(RoundedRectangle(cornerRadius: 6).fill(NordTheme.sectionFill(accent: purple, scheme: colorScheme)))
                 .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(NordTheme.sectionBorder(accent: purple, scheme: colorScheme), lineWidth: 1))
             }
+
+        case .mcpCall:
+            let green = NordTheme.accentGreen(colorScheme)
+            sectionCard(icon: "server.rack", title: "MCP Tool Call", accentColor: green) {
+                CollapsibleText(
+                    text: entry.text,
+                    font: .system(size: 12, design: .monospaced),
+                    foregroundColor: NordTheme.primaryText(colorScheme),
+                    accentColor: green
+                )
+                .padding(8)
+                .background(RoundedRectangle(cornerRadius: 6).fill(NordTheme.sectionFill(accent: green, scheme: colorScheme)))
+                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(NordTheme.sectionBorder(accent: green, scheme: colorScheme), lineWidth: 1))
+            }
         }
     }
 

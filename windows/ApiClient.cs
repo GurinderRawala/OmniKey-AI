@@ -368,7 +368,7 @@ namespace OmniKey.Windows
                 Transport   = el.TryGetProperty("transport",   out var t)    ? t.GetString() ?? "stdio" : "stdio",
                 Command     = el.TryGetProperty("command",     out var c)    ? c.GetString()         : null,
                 Url         = el.TryGetProperty("url",         out var u)    ? u.GetString()         : null,
-                IsEnabled   = el.TryGetProperty("isEnabled",   out var en)   && en.GetBoolean(),
+                IsEnabled   = el.TryGetProperty("isEnabled",   out var en)   ? en.GetBoolean() : true,
                 LastConnectedAt = el.TryGetProperty("lastConnectedAt", out var lc) ? lc.GetString() : null,
                 LastError   = el.TryGetProperty("lastError",   out var le)   ? le.GetString()        : null,
             };

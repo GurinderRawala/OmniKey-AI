@@ -17,6 +17,7 @@ export interface AgentMessage {
   is_error?: boolean;
   is_web_call?: boolean;
   is_image_rendering?: boolean;
+  is_mcp_call?: boolean;
   platform?: string;
 }
 

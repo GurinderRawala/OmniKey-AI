@@ -7,8 +7,13 @@ import { logger } from '../logger';
 import { Subscription } from '../models/subscription';
 import { SubscriptionUsage } from '../models/subscriptionUsage';
 import { AgentSession } from '../models/agentSession';
-import { MCPServer } from '../models/mcpServer';
 import { getAgentPrompt } from './agentPrompts';
+import { getPromptMcpsForSubscription } from './mcpPromptCache';
+import {
+  getMcpToolsForSubscription,
+  executeMcpTool,
+  MCP_TOOL_PREFIX,
+} from './mcpRuntime';
 import { getPromptForCommand } from '../featureRoutes';
 import { executeTool } from '../web-search/web-search-provider';
 import { createLazyAuthContext } from './agentAuth';
@@ -33,6 +38,7 @@ async function runToolLoop(
   send: AgentSendFn,
   log: typeof logger,
   tools: AITool[],
+  mcpDispatch: Map<string, { serverId: string; mcpToolName: string }>,
   onUsage: (result: AICompletionResult) => Promise<void>,
 ): Promise<AICompletionResult> {
   const MAX_TOOL_ITERATIONS = 10;
@@ -60,6 +66,25 @@ async function runToolLoop(
     const toolResults = await Promise.all(
       toolCalls.map(async (tc) => {
         const args = tc.arguments as Record<string, unknown>;
+
+        if (tc.name.startsWith(MCP_TOOL_PREFIX)) {
+          send({
+            session_id: sessionId,
+            sender: 'agent',
+            content: `Calling MCP tool: ${tc.name}`,
+            is_terminal_output: false,
+            is_error: false,
+            is_web_call: false,
+            is_mcp_call: true,
+          });
+          const toolResult = await executeMcpTool(tc.name, args, mcpDispatch, log);
+          log.info('Tool call completed', {
+            sessionId,
+            tool: tc.name,
+            resultLength: toolResult.length,
+          });
+          return { id: tc.id, name: tc.name, result: toolResult };
+        }
 
         if (tc.name === 'generate_image') {
           const prompt = typeof args.prompt === 'string' ? args.prompt : '';
@@ -268,12 +293,7 @@ async function getOrCreateSession(
     return '';
   });
 
-  const installedMcps = await MCPServer.findAll({
-    where: { subscriptionId: subscription.id, isEnabled: true },
-  }).catch((err) => {
-    log.error('Failed to load installed MCP servers for agent prompt', { error: err });
-    return [] as MCPServer[];
-  });
+  const installedMcps = await getPromptMcpsForSubscription(subscription.id, log);
 
   const systemPrompt = getAgentPrompt(platform, !isCronJob && !!prompt, installedMcps);
 
@@ -437,7 +457,8 @@ async function runAgentTurnInternal(
     }
   }
 
-  const tools = buildAvailableTools();
+  const mcpBundle = await getMcpToolsForSubscription(subscription.id, log);
+  const tools = buildAvailableTools(mcpBundle.aiTools);
 
   const recordUsage = async (result: AICompletionResult) => {
     const usage = result.usage;
@@ -521,7 +542,8 @@ async function runAgentTurnInternal(
         sessionId,
         send,
         log,
-        buildAvailableTools(),
+        tools,
+        mcpBundle.dispatch,
         recordUsage,
       );
       const toolLoopContent = toolLoopResult.content.trim();

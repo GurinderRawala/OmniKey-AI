@@ -9,3 +9,4 @@ omnikey-selfhosted.sqlite
 backend-dist/
 .DS_Store
 OmniKey-AI.sln
+.playwright-mcp/

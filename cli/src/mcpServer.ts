@@ -84,33 +84,25 @@ async function promptTransportFields(
         validate: (v: string) => v.trim().length > 0 || 'Command is required for stdio transport',
       },
       {
-        type: 'input',
+        type: 'editor',
         name: 'args',
-        message: 'Args (one per line, blank to finish; use \\n separator here):',
-        default: (defaults?.args ?? []).join('\\n'),
+        message: 'Args (one per line):',
+        default: (defaults?.args ?? []).join('\n'),
       },
       {
-        type: 'input',
+        type: 'editor',
         name: 'env',
-        message: 'Environment variables (KEY=VALUE, comma-separated):',
-        default: Object.entries(defaults?.env ?? {})
-          .map(([k, v]) => `${k}=${v}`)
-          .join(','),
+        message: 'Environment variables (one KEY=VALUE per line):',
+        default: formatKVForEditor(defaults?.env),
       },
     ]);
-    const args = (ans.args as string)
-      .split('\\n')
-      .map((s) => s.trim())
-      .filter(Boolean);
-    const env: Record<string, string> = {};
-    for (const part of (ans.env as string)
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean)) {
-      const idx = part.indexOf('=');
-      if (idx > 0) env[part.slice(0, idx).trim()] = part.slice(idx + 1).trim();
-    }
-    return { command: (ans.command as string).trim(), args, env, url: null, headers: {} };
+    return {
+      command: (ans.command as string).trim(),
+      args: parseLines(ans.args as string),
+      env: parseKeyValueLines(ans.env as string),
+      url: null,
+      headers: {},
+    };
   }
 
   const ans = await inquirer.prompt([
@@ -122,23 +114,26 @@ async function promptTransportFields(
       validate: (v: string) => v.trim().length > 0 || 'URL is required',
     },
     {
-      type: 'input',
+      type: 'editor',
       name: 'headers',
-      message: 'Headers (KEY=VALUE, comma-separated):',
-      default: Object.entries(defaults?.headers ?? {})
-        .map(([k, v]) => `${k}=${v}`)
-        .join(','),
+      message: 'Headers (one KEY=VALUE per line):',
+      default: formatKVForEditor(defaults?.headers),
     },
   ]);
-  const headers: Record<string, string> = {};
-  for (const part of (ans.headers as string)
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean)) {
-    const idx = part.indexOf('=');
-    if (idx > 0) headers[part.slice(0, idx).trim()] = part.slice(idx + 1).trim();
-  }
-  return { url: (ans.url as string).trim(), headers, command: null, args: [], env: {} };
+  return {
+    url: (ans.url as string).trim(),
+    headers: parseKeyValueLines(ans.headers as string),
+    command: null,
+    args: [],
+    env: {},
+  };
+}
+
+function formatKVForEditor(dict: Record<string, string> | undefined): string {
+  if (!dict) return '';
+  return Object.entries(dict)
+    .map(([k, v]) => `${k}=${v}`)
+    .join('\n');
 }
 
 export async function mcpAdd(): Promise<void> {
@@ -390,7 +385,3 @@ function printServer(s: MCPServerDto): void {
 function padRight(str: string, width: number): string {
   return str.length >= width ? str.slice(0, width) : str + ' '.repeat(width - str.length);
 }
-
-// Silence unused-helper warnings; kept for potential future multi-line inputs.
-void parseLines;
-void parseKeyValueLines;

@@ -337,15 +337,16 @@ struct MCPServersView: View {
                 .buttonStyle(.borderless)
             }
 
-            ForEach(rows.wrappedValue.indices, id: \.self) { idx in
+            ForEach(rows) { $row in
                 HStack(spacing: 6) {
-                    TextField("KEY", text: rows[idx].key)
+                    TextField("KEY", text: $row.key)
                         .textFieldStyle(.roundedBorder)
                         .frame(maxWidth: 180)
-                    TextField("VALUE", text: rows[idx].value)
+                    TextField("VALUE", text: $row.value)
                         .textFieldStyle(.roundedBorder)
                     Button {
-                        rows.wrappedValue.remove(at: idx)
+                        let rowID = row.id
+                        rows.wrappedValue.removeAll { $0.id == rowID }
                     } label: {
                         Image(systemName: "minus.circle.fill")
                             .foregroundColor(.red)

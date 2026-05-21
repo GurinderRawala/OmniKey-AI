@@ -171,6 +171,11 @@ namespace OmniKey.Windows
             ? Color.FromArgb(27,  18,  32)
             : Color.FromArgb(239, 235, 247);
 
+        /// <summary>Green section fill (MCP tool calls).</summary>
+        public static Color GreenSectionFill  => IsDarkMode
+            ? Color.FromArgb(14,  27,  25)
+            : Color.FromArgb(222, 245, 238);
+
         // ── Section border tints ───────────────────────────────────────────────
         // Dark:  accent @25% pre-blended over WindowBackground (10,12,26).
         // Light: accent @20% pre-blended over WindowBackground (238,242,255).
@@ -199,6 +204,11 @@ namespace OmniKey.Windows
         public static Color RedSectionBorder    => IsDarkMode
             ? Color.FromArgb(71,  35,  49)
             : Color.FromArgb(241, 214, 224);
+
+        /// <summary>Green section border (MCP tool calls).</summary>
+        public static Color GreenSectionBorder  => IsDarkMode
+            ? Color.FromArgb(27,  77,  65)
+            : Color.FromArgb(167, 222, 202);
 
         // ── Badge background ───────────────────────────────────────────────────
         /// <summary>
