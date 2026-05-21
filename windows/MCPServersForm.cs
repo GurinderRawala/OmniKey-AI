@@ -42,6 +42,7 @@ namespace OmniKey.Windows
         private readonly Label        _headersLabel;
         private readonly Button       _saveButton;
         private readonly Button       _cancelEditButton;
+        private bool                  _isSaving = false;
 
         public MCPServersForm()
         {
@@ -448,12 +449,26 @@ namespace OmniKey.Windows
 
         private void ShowEditPanel(bool visible)
         {
-            _editPanel.Visible = visible;
-            _listView.Visible = !visible;
+            _editPanel.Visible  = visible;
+            _listView.Visible   = !visible;
+            _addButton.Enabled     = !visible;
+            _refreshButton.Enabled = !visible;
+            if (visible)
+            {
+                _editButton.Enabled   = false;
+                _toggleButton.Enabled = false;
+                _deleteButton.Enabled = false;
+            }
+            else
+            {
+                UpdateButtonStates();
+            }
         }
 
         private async Task SaveAsync()
         {
+            if (_isSaving) return;
+
             string transport = (_transportCombo.SelectedItem as string) ?? "stdio";
             string name = _nameBox.Text.Trim();
             if (string.IsNullOrEmpty(name))
@@ -488,6 +503,9 @@ namespace OmniKey.Windows
                 IsEnabled   = _enabledCheck.Checked,
             };
 
+            _isSaving = true;
+            _saveButton.Enabled = false;
+            _statusLabel.Text = "Saving…";
             try
             {
                 if (_editingId == null)
@@ -502,6 +520,11 @@ namespace OmniKey.Windows
             catch (Exception ex)
             {
                 _statusLabel.Text = "Error: " + ex.Message;
+            }
+            finally
+            {
+                _isSaving = false;
+                _saveButton.Enabled = true;
             }
         }
 

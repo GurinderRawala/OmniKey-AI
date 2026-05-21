@@ -26,6 +26,7 @@ struct MCPServersView: View {
     @State private var statusMessage: String = ""
     @State private var isEditing: Bool = false
     @State private var editingServerId: String? = nil
+    @State private var pendingDelete: APIClient.MCPServerDTO? = nil
 
     // Form fields
     @State private var nameInput: String = ""
@@ -78,6 +79,22 @@ struct MCPServersView: View {
             }
         }
         .onAppear { loadServers() }
+        .confirmationDialog(
+            "Delete \"\(pendingDelete?.name ?? "")\"?",
+            isPresented: Binding(
+                get: { pendingDelete != nil },
+                set: { if !$0 { pendingDelete = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                if let server = pendingDelete {
+                    pendingDelete = nil
+                    deleteServer(server)
+                }
+            }
+            Button("Cancel", role: .cancel) { pendingDelete = nil }
+        }
     }
 
     // MARK: - Header
@@ -211,7 +228,7 @@ struct MCPServersView: View {
 
                 Spacer()
 
-                Button("Delete") { deleteServer(server) }
+                Button("Delete") { pendingDelete = server }
                     .buttonStyle(.bordered).font(.system(size: 12))
                     .foregroundColor(.red)
                     .disabled(isLoading)

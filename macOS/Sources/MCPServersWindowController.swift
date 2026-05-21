@@ -4,55 +4,27 @@ import SwiftUI
 /// Custom window that forwards common Command-key shortcuts to the
 /// first responder so that SwiftUI text inputs (backed by NSTextView)
 /// correctly handle paste/undo/select-all even without a full menubar.
+/// Shortcuts are only forwarded when an NSTextView is the active first
+/// responder — no fallback scan is performed to avoid accidentally
+/// routing to unrelated fields.
 final class MCPServersWindow: NSWindow {
-    private func firstTextView(in view: NSView) -> NSTextView? {
-        if let tv = view as? NSTextView { return tv }
-        for sub in view.subviews {
-            if let tv = firstTextView(in: sub) { return tv }
-        }
-        return nil
-    }
-
     override func sendEvent(_ event: NSEvent) {
         if event.type == .keyDown {
             let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-            if flags.contains(.command), let chars = event.charactersIgnoringModifiers {
-                let targetTextView: NSTextView?
-                if let tv = firstResponder as? NSTextView {
-                    targetTextView = tv
-                } else if let contentView = contentView {
-                    targetTextView = firstTextView(in: contentView)
-                } else {
-                    targetTextView = nil
-                }
-
-                if let textView = targetTextView {
-                    switch chars {
-                    case "v":
-                        textView.paste(nil)
-                        return
-                    case "c":
-                        textView.copy(nil)
-                        return
-                    case "x":
-                        textView.cut(nil)
-                        return
-                    case "a":
-                        textView.selectAll(nil)
-                        return
-                    case "z":
-                        textView.undoManager?.undo()
-                        return
-                    case "Z":
-                        textView.undoManager?.redo()
-                        return
-                    default:
-                        break
-                    }
+            if flags.contains(.command),
+               let chars = event.charactersIgnoringModifiers,
+               let textView = firstResponder as? NSTextView {
+                switch chars {
+                case "v": textView.paste(nil);      return
+                case "c": textView.copy(nil);       return
+                case "x": textView.cut(nil);        return
+                case "a": textView.selectAll(nil);  return
+                case "z": textView.undoManager?.undo(); return
+                case "Z": textView.undoManager?.redo(); return
+                default: break
                 }
             }
         }
-
         super.sendEvent(event)
     }
 }

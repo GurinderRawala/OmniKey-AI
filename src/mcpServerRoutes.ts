@@ -164,8 +164,19 @@ export function mcpServerRouter(): express.Router {
       }
 
       const transport = parsed.transport ?? server.transport;
-      const command = parsed.command !== undefined ? parsed.command : server.command;
-      const url = parsed.url !== undefined ? parsed.url : server.url;
+      const transportChanged = parsed.transport !== undefined && parsed.transport !== server.transport;
+
+      // When transport changes, clear fields incompatible with the new transport so
+      // stale credentials/config never persist across a transport switch.
+      const command = transportChanged
+        ? (transport === 'stdio' ? (parsed.command !== undefined ? parsed.command : server.command) : null)
+        : (parsed.command !== undefined ? parsed.command : server.command);
+      const url = transportChanged
+        ? (transport !== 'stdio' ? (parsed.url !== undefined ? parsed.url : server.url) : null)
+        : (parsed.url !== undefined ? parsed.url : server.url);
+      const args = transportChanged && transport !== 'stdio' ? [] : (parsed.args ?? server.args);
+      const env = transportChanged && transport !== 'stdio' ? {} : (parsed.env ?? server.env);
+      const headers = transportChanged && transport === 'stdio' ? {} : (parsed.headers ?? server.headers);
 
       const validationError = validateTransportFields(transport, command, url);
       if (validationError) {
@@ -177,10 +188,10 @@ export function mcpServerRouter(): express.Router {
         description: parsed.description !== undefined ? parsed.description : server.description,
         transport,
         command,
-        args: parsed.args ?? server.args,
-        env: parsed.env ?? server.env,
+        args,
+        env,
         url,
-        headers: parsed.headers ?? server.headers,
+        headers,
         isEnabled: parsed.isEnabled ?? server.isEnabled,
       });
 

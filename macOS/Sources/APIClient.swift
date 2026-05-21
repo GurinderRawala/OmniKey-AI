@@ -793,7 +793,7 @@ final class APIClient: @unchecked Sendable {
         var isEnabled: Bool? = nil
     }
 
-    private func mcpInputPayload(_ input: MCPServerInput) -> [String: Any] {
+    private func mcpInputPayload(_ input: MCPServerInput, includeNulls: Bool = false) -> [String: Any] {
         var payload: [String: Any] = [
             "name": input.name,
             "transport": input.transport,
@@ -802,9 +802,21 @@ final class APIClient: @unchecked Sendable {
             "env": input.env,
             "headers": input.headers,
         ]
-        if let desc = input.description { payload["description"] = desc }
-        if let cmd = input.command { payload["command"] = cmd }
-        if let url = input.url { payload["url"] = url }
+        if let desc = input.description {
+            payload["description"] = desc
+        } else if includeNulls {
+            payload["description"] = NSNull()
+        }
+        if let cmd = input.command {
+            payload["command"] = cmd
+        } else if includeNulls {
+            payload["command"] = NSNull()
+        }
+        if let url = input.url {
+            payload["url"] = url
+        } else if includeNulls {
+            payload["url"] = NSNull()
+        }
         return payload
     }
 
@@ -881,18 +893,7 @@ final class APIClient: @unchecked Sendable {
         if let token = SubscriptionManager.shared.jwtToken {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
-        guard let body = try? JSONSerialization.data(withJSONObject: mcpInputPayload(input)) else {
-            completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Serialization error"])))
-            return
-        }
-        request.httpBody = body
-        let task = URLSession.shared.dataTask(with: request) { data, response, error in
-            self.handleMCPResponse(data: data, response: response, error: error, completion: completion)
-        }
-        task.resume()
-    }
-
-    func patchMCPServer(
+        guard let body = try? JSONSerialization.data(withJSONObject: mcpInputPayload(input, includeNulls: true)) else {
         id: String,
         patch: MCPServerPatch,
         completion: @escaping @Sendable (Result<MCPServerDTO, Error>) -> Void

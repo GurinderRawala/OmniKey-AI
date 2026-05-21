@@ -37,12 +37,15 @@ function getBaseUrl(): string {
 }
 
 async function authHeaders(): Promise<Record<string, string>> {
+  let token: string;
   try {
-    const token = await getJwt();
-    return { Authorization: `Bearer ${token}` };
-  } catch {
-    return {};
+    token = await getJwt();
+  } catch (err: any) {
+    throw new Error(
+      `Authentication failed — make sure the OmniKey backend is running and your license key is configured.\nCause: ${err?.message ?? String(err)}`,
+    );
   }
+  return { Authorization: `Bearer ${token}` };
 }
 
 function parseLines(input: string): string[] {

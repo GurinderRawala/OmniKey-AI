@@ -117,7 +117,7 @@ ${installedMcps
 
 **Response format — every response must be exactly one of:**
 1. \`<shell_script>...</shell_script>\` — to run commands and gather more data.
-2. ${config.aiProvider === 'anthropic' ? 'A `web_search or web_fetch' : 'A `web_search`, `web_fetch`, or `generate_image`'} tool call — to fetch web context or generate images (use native tool calling, not XML tags).
+2. ${config.aiProvider === 'anthropic' ? 'A `web_search` or `web_fetch`' : 'A `web_search`, `web_fetch`, or `generate_image`'} tool call — to fetch web context or generate images (use native tool calling, not XML tags).
 3. \`<final_answer>...</final_answer>\` — your conclusion once you have enough information.
 
 **Critical rule:** After receiving \`TERMINAL OUTPUT:\` you MUST immediately produce either \`<shell_script>\` or \`<final_answer>\`. Never output raw text, markdown, or any other format. If the terminal output contains enough information to answer the user's request, output \`<final_answer>\` right away.
