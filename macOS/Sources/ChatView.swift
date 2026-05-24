@@ -528,9 +528,8 @@ struct AssistantMessageView: View {
             }
 
             VStack(alignment: .leading, spacing: 8) {
-                // Collapsible thinking blocks
-                ForEach(thinkingBlocks) { block in
-                    ThinkingBlockView(block: block)
+                if !thinkingBlocks.isEmpty {
+                    ThinkingSectionView(blocks: thinkingBlocks)
                 }
 
                 // Final answer — rendered as markdown
@@ -550,80 +549,116 @@ struct AssistantMessageView: View {
     }
 }
 
-// MARK: - Thinking Block (collapsible)
+// MARK: - Thinking Section
 
-struct ThinkingBlockView: View {
-    let block: ChatBlock
+private struct ThinkingSectionView: View {
+    let blocks: [ChatBlock]
     @Environment(\.colorScheme) private var colorScheme
     @State private var expanded = false
 
-    private var meta: (icon: String, label: String, accent: (ColorScheme) -> Color) {
+    private var stepCountText: String {
+        "\(blocks.count) step\(blocks.count == 1 ? "" : "s")"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
+            } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                    Image(systemName: "brain")
+                        .font(.system(size: 10, weight: .semibold))
+                    Text("Thinking")
+                        .font(.system(size: 11, weight: .medium))
+                    Text(stepCountText)
+                        .font(.system(size: 10))
+                        .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.72))
+                    Spacer()
+                }
+                .foregroundColor(NordTheme.secondaryText(colorScheme))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(NordTheme.badgeFill(colorScheme).opacity(colorScheme == .dark ? 0.62 : 0.55))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .strokeBorder(NordTheme.border(colorScheme).opacity(0.85), lineWidth: 1)
+                )
+            }
+            .buttonStyle(.plain)
+            .help(expanded ? "Hide thinking" : "Show thinking")
+
+            if expanded {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(blocks.indices, id: \.self) { index in
+                        ThinkingStepView(block: blocks[index])
+                        if index < blocks.count - 1 {
+                            Rectangle()
+                                .fill(NordTheme.border(colorScheme).opacity(0.65))
+                                .frame(height: 1)
+                        }
+                    }
+                }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(NordTheme.badgeFill(colorScheme).opacity(colorScheme == .dark ? 0.45 : 0.35))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .strokeBorder(NordTheme.border(colorScheme).opacity(0.65), lineWidth: 1)
+                    )
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct ThinkingStepView: View {
+    let block: ChatBlock
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var meta: (icon: String, label: String) {
         switch block.kind {
         case .agentReasoning:
-            return ("brain", "Agent Reasoning", NordTheme.accentPurple)
+            return ("brain", "Reasoning")
         case .shellCommand:
-            return ("terminal", "Command", NordTheme.accentAmber)
+            return ("terminal", "Command")
         case .terminalOutput:
-            return ("terminal", "Terminal Output", NordTheme.accentAmber)
+            return ("terminal", "Terminal")
         case .webCall:
-            return ("globe", "Web Search", NordTheme.accentBlue)
+            return ("globe", "Web Search")
         case .mcpCall:
-            return ("server.rack", "MCP Call", NordTheme.accentGreen)
+            return ("server.rack", "MCP Call")
         case .imageRendering:
-            return ("photo", "Image Rendering", NordTheme.accent)
+            return ("photo", "Image")
         case .finalAnswer:
-            return ("checkmark.circle", "Final Answer", NordTheme.accentGreen)
+            return ("checkmark.circle", "Answer")
         }
     }
 
     var body: some View {
-        let (icon, label, accentFn) = meta
-        let accent = accentFn(colorScheme)
+        let (icon, label) = meta
 
-        VStack(alignment: .leading, spacing: 0) {
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: icon)
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundColor(accent)
-                    Text(label)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(accent)
-                    Spacer()
-                    Image(systemName: expanded ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundColor(NordTheme.secondaryText(colorScheme))
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 7)
-                .background(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(accent.opacity(0.08))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .strokeBorder(accent.opacity(0.20), lineWidth: 1)
-                )
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.system(size: 10, weight: .semibold))
+                Text(label)
+                    .font(.system(size: 10, weight: .medium))
+                Spacer()
             }
-            .buttonStyle(.plain)
+            .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.86))
 
-            if expanded {
-                expandedContent
-                    .padding(10)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .fill(accent.opacity(0.04))
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .strokeBorder(accent.opacity(0.15), lineWidth: 1)
-                    )
-                    .padding(.top, 4)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-            }
+            expandedContent
+                .opacity(0.72)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -635,7 +670,7 @@ struct ThinkingBlockView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 Text(block.text)
                     .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(NordTheme.primaryText(colorScheme).opacity(0.86))
+                    .foregroundColor(NordTheme.secondaryText(colorScheme))
                     .textSelection(.enabled)
                     .fixedSize(horizontal: true, vertical: true)
             }

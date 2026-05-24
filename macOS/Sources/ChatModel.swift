@@ -12,8 +12,8 @@ enum ChatMessageRole: String {
 /// Kind of an assistant content block. The agent stream can interleave
 /// "thinking" content (agent reasoning, terminal output, web calls, MCP
 /// calls, image rendering) with a single final answer. Each block becomes
-/// one `ChatBlock` so the view can render thinking blocks collapsibly and
-/// the final block as markdown.
+/// one `ChatBlock` so the view can group the thinking blocks into one
+/// collapsible section and render the final block as markdown.
 enum ChatBlockKind {
     case agentReasoning
     case shellCommand

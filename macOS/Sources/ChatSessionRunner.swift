@@ -239,7 +239,7 @@ final class ChatSessionRunner {
                     let content = response.content
 
                     // Side-channel notifications (web/image/MCP). Surface them
-                    // as their own collapsible blocks and keep listening.
+                    // as thinking blocks and keep listening.
                     if response.isWebCall == true {
                         DispatchQueue.main.async {
                             onBlock(ChatBlock(kind: .webCall, text: content))
