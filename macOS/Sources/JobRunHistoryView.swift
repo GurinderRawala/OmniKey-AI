@@ -54,8 +54,36 @@ struct JobRunHistoryView: View {
         model.messages.filter { $0.role == "user" }.map(\.text).filter { !$0.isEmpty }
     }
 
-    private var agentMessages: [String] {
+    private var assistantMessages: [String] {
         model.messages.filter { $0.role == "assistant" }.map(\.text).filter { !$0.isEmpty }
+    }
+
+    /// The final answer the agent produced for this run, if any. We prefer the
+    /// last assistant message that contains an explicit `<final_answer>` block
+    /// (mirroring `AgentRunner.extractFinalAnswer`), and fall back to the last
+    /// assistant message overall when no tags are present — matching the
+    /// "Previous Final Answer" behavior in `AgentThinkingView`.
+    private var finalAnswer: String? {
+        for text in assistantMessages.reversed() {
+            if let extracted = extractFinalAnswer(from: text), !extracted.isEmpty {
+                return extracted
+            }
+        }
+        return assistantMessages.last?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Reasoning steps to display: every assistant message except the one we
+    /// surface as the final answer, so the same text isn't shown twice.
+    private var reasoningMessages: [String] {
+        guard let finalIndex = assistantMessages.lastIndex(where: {
+            let stripped = extractFinalAnswer(from: $0) ?? $0.trimmingCharacters(in: .whitespacesAndNewlines)
+            return stripped == finalAnswer
+        }) else {
+            return assistantMessages
+        }
+        var copy = assistantMessages
+        copy.remove(at: finalIndex)
+        return copy
     }
 
     var body: some View {
@@ -150,6 +178,11 @@ struct JobRunHistoryView: View {
         } else {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
+                    // Final answer (surfaced first so it's easy to copy).
+                    if let answer = finalAnswer, !answer.isEmpty {
+                        finalAnswerCard(answer)
+                    }
+
                     // Job prompt (first user message)
                     if let prompt = userMessages.first {
                         sectionCard(icon: "text.quote", title: "Job Prompt",
@@ -159,11 +192,11 @@ struct JobRunHistoryView: View {
                     }
 
                     // Agent reasoning steps
-                    if !agentMessages.isEmpty {
+                    if !reasoningMessages.isEmpty {
                         let purple = NordTheme.accentPurple(colorScheme)
                         sectionCard(icon: "brain", title: "Agent Reasoning", accentColor: purple) {
                             VStack(alignment: .leading, spacing: 8) {
-                                ForEach(Array(agentMessages.enumerated()), id: \.offset) { index, msg in
+                                ForEach(Array(reasoningMessages.enumerated()), id: \.offset) { index, msg in
                                     HStack(alignment: .top, spacing: 8) {
                                         Text("\(index + 1)")
                                             .font(.system(size: 10, weight: .semibold, design: .rounded))
@@ -239,6 +272,43 @@ struct JobRunHistoryView: View {
         }
     }
 
+    /// Highlighted "Final Answer" card with an inline copy button — mirrors the
+    /// "Final Result" and "Previous Final Answer" styling in `AgentThinkingView`.
+    @ViewBuilder
+    private func finalAnswerCard(_ answer: String) -> some View {
+        let green = NordTheme.accentGreen(colorScheme)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "star.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(green)
+                Text("Final Answer")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(NordTheme.secondaryText(colorScheme))
+                Spacer()
+                JobHistoryCopyButton(text: answer)
+                    .help("Copy final answer")
+            }
+
+            ExpandableHistoryText(
+                text: answer,
+                font: .system(size: 13),
+                foregroundColor: NordTheme.primaryText(colorScheme),
+                accentColor: green
+            )
+            .padding(10)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(NordTheme.sectionFill(accent: green, scheme: colorScheme))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(NordTheme.sectionBorder(accent: green, scheme: colorScheme), lineWidth: 1)
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
     @ViewBuilder
     private func historyText(
         _ text: String,
@@ -261,6 +331,48 @@ struct JobRunHistoryView: View {
                 .strokeBorder(NordTheme.sectionBorder(accent: accent, scheme: colorScheme), lineWidth: 1)
         )
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // MARK: - Parsing helpers
+
+    /// Extracts the content of a `<final_answer>…</final_answer>` block, if
+    /// present. Kept in sync with `AgentRunner.extractFinalAnswer` so the
+    /// scheduled-job view surfaces the same final answer the live runner does.
+    private func extractFinalAnswer(from text: String) -> String? {
+        guard let startRange = text.range(of: "<final_answer>") else { return nil }
+        guard let endRange = text.range(of: "</final_answer>", range: startRange.upperBound..<text.endIndex) else {
+            return nil
+        }
+        let inner = text[startRange.upperBound..<endRange.lowerBound]
+        return String(inner).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+// MARK: - Copy button
+
+/// Local copy button mirroring the `CopyButton` used in `AgentThinkingView`
+/// (which is `private` to that file).
+private struct JobHistoryCopyButton: View {
+    let text: String
+    var font: Font = .system(size: 11)
+
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var copied = false
+
+    var body: some View {
+        Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+            withAnimation(.easeInOut(duration: 0.15)) { copied = true }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                withAnimation(.easeInOut(duration: 0.15)) { copied = false }
+            }
+        } label: {
+            Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                .font(font)
+                .foregroundColor(copied ? NordTheme.accentGreen(colorScheme) : NordTheme.secondaryText(colorScheme))
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -287,6 +399,7 @@ private struct ExpandableHistoryText: View {
             Text(isExpanded ? text : preview)
                 .font(font)
                 .foregroundColor(foregroundColor)
+                .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             if isLong {

@@ -17,6 +17,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     private var scheduledJobsMenuItem: NSMenuItem?
     private var mcpServersWindowController: MCPServersWindowController?
     private var mcpServersMenuItem: NSMenuItem?
+    private var chatWindowController: ChatWindowController?
+    private var chatMenuItem: NSMenuItem?
     private var monitoringStarted = false
     private var isAuthorized = false
 
@@ -121,6 +123,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         statusMenuItem.isEnabled = false
         menu.addItem(statusMenuItem)
         menu.addItem(NSMenuItem.separator())
+
+        let chatItem = NSMenuItem(title: "Agent Chat", action: #selector(showChatWindowFromMenu), keyEquivalent: "")
+        chatItem.target = self
+        chatItem.isEnabled = true
+        menu.addItem(chatItem)
+        chatMenuItem = chatItem
+
         self.statusMenuItem = statusMenuItem
         let instructionsItem = NSMenuItem(title: "Task Instructions", action: #selector(showTaskInstructionsWindowFromMenu), keyEquivalent: "")
         instructionsItem.target = self
@@ -166,6 +175,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
 
     @objc private func checkForUpdatesFromMenu() {
         updaterController?.checkForUpdates(nil)
+    }
+
+    @objc private func showChatWindowFromMenu() {
+        showChatWindow()
+    }
+
+    func showChatWindow() {
+        if chatWindowController == nil {
+            chatWindowController = ChatWindowController()
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        chatWindowController?.showWindow(nil)
     }
 
     @objc private func showTaskInstructionsWindowFromMenu() {

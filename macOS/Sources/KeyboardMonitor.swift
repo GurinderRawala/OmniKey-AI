@@ -23,6 +23,8 @@ final class KeyboardMonitor {
     private var originalApp: NSRunningApplication?
     private var originalAXElement: AXUIElement?
     private var originalSelectedTextRange: CFTypeRef?
+    private weak var originalLocalTextView: NSTextView?
+    private var originalLocalSelectedRange: NSRange?
 
     // "HERK"
     private let hotKeySignature: OSType = .init(UInt32(bigEndian: 0x4845_524B))
@@ -329,6 +331,8 @@ final class KeyboardMonitor {
         if NSApp.isActive, let textView = NSApp.keyWindow?.firstResponder as? NSTextView {
             let range = textView.selectedRange()
             if range.length > 0 {
+                originalLocalTextView = textView
+                originalLocalSelectedRange = range
                 let full = textView.string as NSString
                 let selectedText = full.substring(with: range)
                 print("\(logPrefix) Local NSTextView selected text (length: \(selectedText.count))")
@@ -475,27 +479,18 @@ final class KeyboardMonitor {
     }
 
     private func replaceSelectedText(with text: String) {
-        // If OmniKey's own window (e.g. Task Instructions) is active and
-        // the first responder is a text view, replace the selection
-        // directly instead of going through the pasteboard.
+        if let textView = originalLocalTextView {
+            let replacementRange = originalLocalSelectedRange ?? textView.selectedRange()
+            replaceSelection(in: textView, range: replacementRange, with: text)
+            clearOriginalLocalTextContext()
+            return
+        }
+
+        // If OmniKey's own window (e.g. Task Instructions, Chat) is
+        // active and the first responder is a text view, replace the
+        // selection directly instead of going through the pasteboard.
         if NSApp.isActive, let textView = NSApp.keyWindow?.firstResponder as? NSTextView {
-            let range = textView.selectedRange()
-            let full = textView.string as NSString
-            let replacement = text
-
-            if let undoManager = textView.undoManager {
-                let oldString = textView.string
-                undoManager.registerUndo(withTarget: textView) { target in
-                    target.string = oldString
-                }
-                undoManager.setActionName("OmniKey Enhancement")
-            }
-
-            let newString = full.replacingCharacters(in: range, with: replacement)
-            textView.string = newString
-            // Move the insertion point to the end of the inserted text.
-            let insertionLocation = range.location + (replacement as NSString).length
-            textView.setSelectedRange(NSRange(location: insertionLocation, length: 0))
+            replaceSelection(in: textView, range: textView.selectedRange(), with: text)
             return
         }
 
@@ -505,6 +500,55 @@ final class KeyboardMonitor {
         // copying the text to the clipboard and asking the user
         // to paste manually.
         pasteResultBackToOriginalContext(text)
+    }
+
+    /// Replace the current selection (or insert at the caret) inside
+    /// `textView` and route the change through the standard text
+    /// editing API so that the view's delegate's `textDidChange`
+    /// notification fires. This is essential for SwiftUI-bound
+    /// NSTextViews — e.g. the chat input's `ChatNSTextInput` —
+    /// because the binding (`ChatModel.inputText`) is only refreshed
+    /// from `textDidChange`. A direct `textView.string = ...`
+    /// assignment bypasses the delegate and the binding overwrites
+    /// the new value on the next SwiftUI update cycle, which is what
+    /// made enhanced prompts appear to silently fail in the chat box.
+    private func replaceSelection(in textView: NSTextView, range requestedRange: NSRange, with replacement: String) {
+        let range = clampedRange(requestedRange, in: textView.string)
+        let nsReplacement = replacement as NSString
+        textView.window?.makeFirstResponder(textView)
+        textView.setSelectedRange(range)
+
+        // Ask the text view if the change is allowed (this also sets
+        // up undo grouping correctly and notifies the layout manager).
+        if textView.shouldChangeText(in: range, replacementString: replacement) {
+            textView.textStorage?.replaceCharacters(in: range, with: replacement)
+            textView.didChangeText()
+        } else {
+            // Fallback: mutate directly and fire the change notification
+            // manually so SwiftUI bindings still observe the update.
+            let full = textView.string as NSString
+            let newString = full.replacingCharacters(in: range, with: replacement)
+            textView.string = newString
+            NotificationCenter.default.post(name: NSText.didChangeNotification, object: textView)
+        }
+
+        textView.undoManager?.setActionName("OmniKey Enhancement")
+
+        // Move the insertion point to the end of the inserted text.
+        let insertionLocation = range.location + nsReplacement.length
+        textView.setSelectedRange(NSRange(location: insertionLocation, length: 0))
+    }
+
+    private func clampedRange(_ range: NSRange, in text: String) -> NSRange {
+        let length = (text as NSString).length
+        let location = min(max(0, range.location), length)
+        let available = max(0, length - location)
+        return NSRange(location: location, length: min(max(0, range.length), available))
+    }
+
+    private func clearOriginalLocalTextContext() {
+        originalLocalTextView = nil
+        originalLocalSelectedRange = nil
     }
 
     // MARK: - Streaming helpers
@@ -676,11 +720,16 @@ final class KeyboardMonitor {
         originalApp = nil
         originalAXElement = nil
         originalSelectedTextRange = nil
+        clearOriginalLocalTextContext()
 
         // If OmniKey itself is active (e.g. user is in our Task
         // Instructions window), we handle replacement directly in
         // the NSTextView and do not need AX-based paste-back.
         if NSApp.isActive {
+            if let textView = NSApp.keyWindow?.firstResponder as? NSTextView {
+                originalLocalTextView = textView
+                originalLocalSelectedRange = textView.selectedRange()
+            }
             return
         }
 

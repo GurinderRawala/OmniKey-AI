@@ -23,6 +23,13 @@ struct SessionHistoryEntry: Decodable, Identifiable {
     let id: String
     let role: String   // "user" or "assistant"
     let text: String
+    let blocks: [SessionHistoryBlock]?
+}
+
+struct SessionHistoryBlock: Decodable, Identifiable {
+    let id: String
+    let kind: String
+    let text: String
 }
 
 // MARK: - Session metadata returned by GET /api/agent/sessions
@@ -284,4 +291,3 @@ final class AgentThinkingModel: ObservableObject {
         }.resume()
     }
 }
-

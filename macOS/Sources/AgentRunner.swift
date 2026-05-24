@@ -10,6 +10,14 @@ actor AgentSessionState {
     private var webSocketTask: URLSessionWebSocketTask?
     private var wasCancelledByUser: Bool = false
 
+    // Fast synchronous flag readable from DispatchQueue closures without await.
+    // Written only under actor isolation; reads are intentionally unsynchronised
+    // (single-writer, multiple-reader boolean — safe in practice).
+    private let _cancelFlag = BoolBox()
+
+    /// Non-async check for DispatchQueue.global closures that cannot await.
+    nonisolated var isCancelledByUser: Bool { _cancelFlag.value }
+
     func registerShellProcess(_ process: Process?) {
         shellProcess = process
     }
@@ -20,6 +28,7 @@ actor AgentSessionState {
 
     func markCancelledByUser() {
         wasCancelledByUser = true
+        _cancelFlag.value = true
     }
 
     /// Returns and clears the cancellation flag so each
@@ -27,6 +36,7 @@ actor AgentSessionState {
     func takeWasCancelledByUser() -> Bool {
         let flag = wasCancelledByUser
         wasCancelledByUser = false
+        _cancelFlag.value = false
         return flag
     }
 
@@ -34,10 +44,15 @@ actor AgentSessionState {
     /// WebSocket connection.
     func cancelCurrentSession() {
         wasCancelledByUser = true
+        _cancelFlag.value = true
 
         if let process = shellProcess, process.isRunning {
-            print("[AgentRunner] Cancelling running shell process…")
+            let pid = process.processIdentifier
+            // Kill the entire process group so child processes spawned by the
+            // script also receive SIGTERM and don't linger after cancellation.
+            kill(-pid, SIGTERM)
             process.terminate()
+            print("[AgentRunner] Sent SIGTERM to process group \(pid) and process.")
         }
         shellProcess = nil
 
@@ -607,6 +622,25 @@ final class AgentRunner {
                         print("[AgentRunner] Detected <shell_script> block in agent response. Script length: \(script.count)")
                         DispatchQueue.global(qos: .userInitiated).async {
                             let (output, status) = runShellCommandWithStatus(script)
+
+                            // If the user cancelled while the command was running, discard
+                            // the output instead of sending stale terminal results back to
+                            // the agent. The WebSocket is already closed at this point, so
+                            // we just surface a clean cancellation and stop.
+                            if AgentSessionState.shared.isCancelledByUser {
+                                print("[AgentRunner] Shell execution completed but session was cancelled; discarding output.")
+                                if !finalAnswerDelivered.value {
+                                    finalAnswerDelivered.value = true
+                                    DispatchQueue.main.async {
+                                        completion(.failure(NSError(
+                                            domain: "AgentRunner",
+                                            code: -9999,
+                                            userInfo: [NSLocalizedDescriptionKey: "Agent run cancelled by user."]
+                                        )))
+                                    }
+                                }
+                                return
+                            }
 
                             // Surface the terminal output in the thinking window so
                             // the user can see exactly what the command produced.

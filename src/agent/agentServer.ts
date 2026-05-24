@@ -800,6 +800,211 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
   return wss;
 }
 
+// ─── Session transcript helpers ──────────────────────────────────────────────
+
+type HistoryBlockKind =
+  | 'agentReasoning'
+  | 'shellCommand'
+  | 'terminalOutput'
+  | 'webCall'
+  | 'mcpCall'
+  | 'imageRendering'
+  | 'finalAnswer';
+
+type RawHistoryMessage = {
+  role: string;
+  content: unknown;
+  tool_name?: string;
+  tool_calls?: unknown[];
+};
+
+type TranscriptBlock = {
+  id: string;
+  kind: HistoryBlockKind;
+  text: string;
+};
+
+type TranscriptMessage = {
+  id: string;
+  role: 'user' | 'assistant';
+  text: string;
+  blocks?: TranscriptBlock[];
+};
+
+function contentToString(content: unknown): string {
+  return typeof content === 'string' ? content : JSON.stringify(content ?? '');
+}
+
+function extractTaggedBlock(text: string, tag: string): string | null {
+  const pattern = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, 'i');
+  const match = text.match(pattern);
+  return match?.[1]?.trim() || null;
+}
+
+function removeTaggedBlock(text: string, tag: string): string {
+  const pattern = new RegExp(`<${tag}[^>]*>[\\s\\S]*?<\\/${tag}>`, 'gi');
+  return text.replace(pattern, '');
+}
+
+function cleanUserTranscriptText(text: string): string {
+  return text
+    .replace(/<user_input>([\s\S]*?)<\/user_input>/gi, '$1')
+    .replace(/<stored_instructions>[\s\S]*?<\/stored_instructions>/gi, '')
+    .replace(/@omniagent/gi, '')
+    .trim();
+}
+
+function cleanAssistantTranscriptText(text: string): string {
+  return text
+    .replace(/<final_answer>([\s\S]*?)<\/final_answer>/gi, '$1')
+    .replace(/<user_input>([\s\S]*?)<\/user_input>/gi, '$1')
+    .replace(/<stored_instructions>[\s\S]*?<\/stored_instructions>/gi, '')
+    .replace(/@omniagent/gi, '')
+    .trim();
+}
+
+function terminalFeedbackText(text: string): string | null {
+  let cleaned = text.trim();
+  let isError = false;
+
+  if (/^COMMAND ERROR:/i.test(cleaned)) {
+    isError = true;
+    cleaned = cleaned.replace(/^COMMAND ERROR:\s*/i, '').trim();
+  }
+
+  if (/^TERMINAL OUTPUT:/i.test(cleaned)) {
+    cleaned = cleaned.replace(/^TERMINAL OUTPUT:\s*/i, '').trim();
+  }
+
+  if (!isError && cleaned === text.trim()) return null;
+
+  return isError
+    ? `Command error\n\n${cleaned || 'The command failed without output.'}`
+    : cleaned || 'The command finished without output.';
+}
+
+function toolBlockKind(toolName?: string): HistoryBlockKind {
+  if (!toolName) return 'agentReasoning';
+  if (toolName.startsWith(MCP_TOOL_PREFIX)) return 'mcpCall';
+  if (toolName === 'generate_image') return 'imageRendering';
+  if (toolName === 'web_search' || toolName === 'web_fetch') return 'webCall';
+  return 'agentReasoning';
+}
+
+function toolBlockText(toolName: string | undefined, content: string): string {
+  const label = toolName ? `Tool: ${toolName}` : 'Tool result';
+  return `${label}\n\n${content.trim() || 'No result text.'}`;
+}
+
+function buildTranscript(raw: RawHistoryMessage[]): TranscriptMessage[] {
+  const messages: TranscriptMessage[] = [];
+  let currentAssistant: TranscriptMessage | null = null;
+  let blockCount = 0;
+  let assistantCount = 0;
+
+  const makeBlock = (kind: HistoryBlockKind, text: string): TranscriptBlock => ({
+    id: `block-${blockCount++}`,
+    kind,
+    text,
+  });
+
+  const ensureAssistant = (): TranscriptMessage => {
+    if (!currentAssistant) {
+      currentAssistant = {
+        id: `assistant-${assistantCount++}`,
+        role: 'assistant',
+        text: '',
+        blocks: [],
+      };
+    }
+    return currentAssistant;
+  };
+
+  const flushAssistant = () => {
+    const blocks = currentAssistant?.blocks ?? [];
+    if (!currentAssistant || !blocks.length) {
+      currentAssistant = null;
+      return;
+    }
+
+    let finalText = '';
+    for (let i = blocks.length - 1; i >= 0; i--) {
+      if (blocks[i].kind === 'finalAnswer') {
+        finalText = blocks[i].text;
+        break;
+      }
+    }
+
+    currentAssistant.text = finalText || blocks.map((b) => b.text).join('\n\n').trim();
+    messages.push(currentAssistant);
+    currentAssistant = null;
+  };
+
+  const appendAssistantBlock = (kind: HistoryBlockKind, text: string) => {
+    const cleaned = text.trim();
+    if (!cleaned) return;
+    ensureAssistant().blocks?.push(makeBlock(kind, cleaned));
+  };
+
+  raw.forEach((entry, index) => {
+    const content = contentToString(entry.content);
+
+    if (entry.role === 'system') return;
+
+    if (entry.role === 'user') {
+      const terminalText = terminalFeedbackText(content);
+      if (terminalText) {
+        appendAssistantBlock('terminalOutput', terminalText);
+        return;
+      }
+
+      const userText = cleanUserTranscriptText(content);
+      if (!userText) return;
+
+      flushAssistant();
+      messages.push({
+        id: `${index}-user`,
+        role: 'user',
+        text: userText,
+      });
+      return;
+    }
+
+    if (entry.role === 'tool') {
+      appendAssistantBlock(
+        toolBlockKind(entry.tool_name),
+        toolBlockText(entry.tool_name, content),
+      );
+      return;
+    }
+
+    if (entry.role !== 'assistant') return;
+
+    const finalAnswer = extractTaggedBlock(content, 'final_answer');
+    if (finalAnswer) {
+      appendAssistantBlock('finalAnswer', finalAnswer);
+      return;
+    }
+
+    const shellScript = extractTaggedBlock(content, 'shell_script');
+    if (shellScript) {
+      const reasoning = cleanAssistantTranscriptText(removeTaggedBlock(content, 'shell_script'));
+      appendAssistantBlock('agentReasoning', reasoning);
+      appendAssistantBlock('shellCommand', shellScript);
+      return;
+    }
+
+    const visible = cleanAssistantTranscriptText(content);
+    if (!visible) return;
+
+    const hasToolCalls = Array.isArray(entry.tool_calls) && entry.tool_calls.length > 0;
+    appendAssistantBlock(hasToolCalls ? 'agentReasoning' : 'finalAnswer', visible);
+  });
+
+  flushAssistant();
+  return messages;
+}
+
 // ─── REST router ─────────────────────────────────────────────────────────────
 // Exposes agent session management endpoints that the macOS (and Windows)
 // clients can call over plain HTTP before/during a session.
@@ -934,8 +1139,10 @@ export function createAgentRouter(): express.Router {
   });
 
   // GET /api/agent/sessions/:sessionId/messages
-  // Returns a compact, human-readable transcript of the session history
-  // (user + assistant turns only, internal XML tags stripped).
+  // Returns a typed, human-readable transcript of the session history.
+  // Assistant messages include renderable blocks so resumed chat sessions can
+  // show final answers, commands, terminal output, web/MCP calls, and images
+  // with the same UX as live streaming.
   router.get('/sessions/:sessionId/messages', async (req, res: Response<any, AuthLocals>) => {
     const { subscription, logger: log } = res.locals;
 
@@ -956,38 +1163,8 @@ export function createAgentRouter(): express.Router {
         return;
       }
 
-      type RawMessage = { role: string; content: unknown };
-      const raw: RawMessage[] = JSON.parse(session.historyJson || '[]');
-
-      // Strip / unwrap all internal XML-like tags used by the agent protocol.
-      const stripInternals = (text: string): string =>
-        text
-          // Unwrap user input — keep the inner text, drop the tag.
-          .replace(/<user_input>([\s\S]*?)<\/user_input>/gi, '$1')
-          // Unwrap final answer — keep the inner text, drop the tag.
-          .replace(/<final_answer>([\s\S]*?)<\/final_answer>/gi, '$1')
-          // Replace shell script blocks with a placeholder.
-          .replace(/<shell_script[\s\S]*?<\/shell_script>/gi, '[shell command]')
-          // Drop stored instructions entirely — not meaningful to the user.
-          .replace(/<stored_instructions>[\s\S]*?<\/stored_instructions>/gi, '')
-          // Drop terminal output blocks — shown separately on the client.
-          .replace(/<terminal[\s\S]*?<\/terminal>/gi, '')
-          // Drop the @omniAgent mention that triggers the agent.
-          .replace(/@omniagent/gi, '')
-          .trim();
-
-      const messages = raw
-        .filter((m) => m.role === 'user' || m.role === 'assistant')
-        .map((m, index) => {
-          const rawText = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
-          const cleaned = stripInternals(rawText);
-          return {
-            id: `${index}-${m.role}`,
-            role: m.role as 'user' | 'assistant',
-            text: cleaned,
-          };
-        })
-        .filter((m) => m.text.length > 0);
+      const raw: RawHistoryMessage[] = JSON.parse(session.historyJson || '[]');
+      const messages = buildTranscript(raw);
 
       res.json({ messages });
     } catch (err) {
