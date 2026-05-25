@@ -770,6 +770,67 @@ struct ChatNewChatLandingView: View {
     }
 }
 
+// MARK: - Context Window Indicator
+
+/// Compact circular gauge shown next to the send button. Mirrors the
+/// "tokens left" badge from the Omni Agent thinking view, but in a
+/// minimal ring form so it fits inline with the composer's footer
+/// row. Visible whenever the active session exposes a non-zero
+/// `contextBudget`. The arc represents the *used* portion of the
+/// budget; hover for the exact remaining / total figures.
+private struct ContextWindowIndicator: View {
+    let remaining: Int
+    let budget: Int
+    let colorScheme: ColorScheme
+
+    /// Fraction of the context window that has already been consumed,
+    /// clamped to `0...1` so a backend mismatch (e.g. `remaining` ever
+    /// briefly exceeding `budget`) can't draw an oversized arc.
+    private var usedFraction: Double {
+        guard budget > 0 else { return 0 }
+        let used = Double(max(0, budget - remaining))
+        return min(1, max(0, used / Double(budget)))
+    }
+
+    /// Tint follows how *close to full* the context window is, so the
+    /// ring nudges the user toward starting a new chat before the
+    /// backend forcibly truncates older turns.
+    private var tint: Color {
+        switch usedFraction {
+        case ..<0.6: return NordTheme.accentGreen(colorScheme)
+        case ..<0.85: return NordTheme.accentAmber(colorScheme)
+        default: return Color.red
+        }
+    }
+
+    private var tooltip: String {
+        "\(remaining.formatted()) of \(budget.formatted()) context tokens left"
+    }
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(
+                    NordTheme.border(colorScheme).opacity(0.9),
+                    lineWidth: 1.8
+                )
+            Circle()
+                .trim(from: 0, to: CGFloat(usedFraction))
+                .stroke(
+                    tint,
+                    style: StrokeStyle(lineWidth: 1.8, lineCap: .round)
+                )
+                .rotationEffect(.degrees(-90))
+                .animation(.easeInOut(duration: 0.25), value: usedFraction)
+        }
+        .frame(width: 14, height: 14)
+        .help(tooltip)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Context window")
+        .accessibilityValue(tooltip)
+    }
+}
+
 // MARK: - Landing Input Composer
 
 /// Two-part input: text area on top, a thin divider, then a footer row
@@ -887,6 +948,19 @@ private struct LandingInputComposer: View {
                 }
 
                 Spacer()
+
+                // Context window indicator (shown when the active
+                // session has a known token budget). Sits to the left
+                // of Send so the spinner mirrors the "tokens left"
+                // badge from the Omni Agent session view.
+                if let session = model.activeSession, session.contextBudget > 0 {
+                    ContextWindowIndicator(
+                        remaining: session.remainingContextTokens,
+                        budget: session.contextBudget,
+                        colorScheme: colorScheme
+                    )
+                    .transition(.opacity)
+                }
 
                 // Send / Stop
                 Button {
