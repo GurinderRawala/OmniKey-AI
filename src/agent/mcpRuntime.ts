@@ -5,6 +5,8 @@
 // dispatcher routes any tool call whose name starts with `MCP_TOOL_PREFIX`
 // back here so it is forwarded to the originating MCP server.
 
+import { accessSync, constants as fsConstants, existsSync } from 'fs';
+import path from 'path';
 import { Logger } from 'winston';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -17,6 +19,140 @@ import { AITool } from '../ai-client';
 export const MCP_TOOL_PREFIX = 'mcp_';
 const MAX_TOOL_NAME_LEN = 64;
 const CONNECT_TIMEOUT_MS = 15_000;
+const STDIO_STDERR_MAX_BYTES = 16 * 1024;
+const STDIO_STDERR_DRAIN_MS = 2_000;
+
+// Ordered candidate list for resolving the user's login shell on Unix/macOS,
+// mirroring the resolvedLoginShell() logic in the macOS terminal launch path.
+// The SHELL environment variable is checked first at call-time (not here).
+const UNIX_SHELL_CANDIDATES = [
+  // zsh — default on macOS Catalina+
+  '/bin/zsh',
+  '/usr/bin/zsh',
+  '/usr/local/bin/zsh',     // Homebrew (Intel)
+  '/opt/homebrew/bin/zsh',  // Homebrew (Apple Silicon)
+  // bash — default on older macOS / most Linux distros
+  '/bin/bash',
+  '/usr/bin/bash',
+  '/usr/local/bin/bash',
+  '/opt/homebrew/bin/bash',
+  // fish — popular third-party shell
+  '/usr/local/bin/fish',
+  '/opt/homebrew/bin/fish',
+  '/usr/bin/fish',
+  // ksh — KornShell, common on Linux
+  '/bin/ksh',
+  '/usr/bin/ksh',
+  '/usr/local/bin/ksh',
+  // tcsh — legacy, still present on some macOS/BSD systems
+  '/bin/tcsh',
+  '/usr/bin/tcsh',
+  // sh — POSIX fallback, always present
+  '/bin/sh',
+  '/usr/bin/sh',
+] as const;
+
+// Ordered candidate list for Windows shells. COMSPEC is checked first at call-time.
+const WINDOWS_SHELL_CANDIDATES = [
+  // PowerShell Core (7+) — preferred for modern Windows
+  'C:\\Program Files\\PowerShell\\7\\pwsh.exe',
+  'C:\\Program Files\\PowerShell\\6\\pwsh.exe',
+  // Windows PowerShell — built-in on all Windows versions
+  'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+  // cmd.exe — last resort
+  'C:\\Windows\\System32\\cmd.exe',
+  'C:\\Windows\\cmd.exe',
+] as const;
+
+// Homebrew / system binary directories to prepend on Unix when the daemon's
+// inherited PATH is bare (e.g. launched by launchctl). This is a belt-and-
+// suspenders fallback; running through a login shell already handles this.
+const UNIX_EXTRA_PATH_ENTRIES = [
+  '/opt/homebrew/bin',
+  '/opt/homebrew/sbin',
+  '/usr/local/bin',
+  '/usr/local/sbin',
+];
+
+// Common Windows binary directories to prepend when PATHEXT / system dirs are
+// missing from the inherited PATH.
+const WINDOWS_EXTRA_PATH_ENTRIES = [
+  'C:\\Windows\\System32',
+  'C:\\Windows',
+  'C:\\Windows\\System32\\Wbem',
+  'C:\\Windows\\System32\\WindowsPowerShell\\v1.0',
+  // Scoop (user-level package manager)
+  `${process.env.USERPROFILE ?? 'C:\\Users\\Default'}\\scoop\\shims`,
+  // Node.js user-level installer
+  `${process.env.APPDATA ?? 'C:\\Users\\Default\\AppData\\Roaming'}\\npm`,
+];
+
+function isExecutable(filePath: string): boolean {
+  try {
+    accessSync(filePath, fsConstants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Resolve the login shell to use when wrapping stdio MCP child processes.
+ * On Unix/macOS mirrors the resolvedLoginShell() logic from the macOS terminal
+ * launch path: check $SHELL first, then walk a fixed candidate list.
+ * On Windows: check %COMSPEC%, then prefer PowerShell Core > Windows PowerShell > cmd.
+ */
+export function resolveLoginShell(): string {
+  if (process.platform === 'win32') {
+    const comspec = process.env.COMSPEC ?? '';
+    if (comspec && existsSync(comspec)) return comspec;
+    for (const candidate of WINDOWS_SHELL_CANDIDATES) {
+      if (existsSync(candidate)) return candidate;
+    }
+    return 'cmd.exe';
+  }
+
+  const envShell = process.env.SHELL ?? '';
+  const candidates = envShell ? [envShell, ...UNIX_SHELL_CANDIDATES] : [...UNIX_SHELL_CANDIDATES];
+  for (const candidate of candidates) {
+    if (candidate && existsSync(candidate) && isExecutable(candidate)) return candidate;
+  }
+  return '/bin/sh';
+}
+
+/** Single-quote a Unix shell argument, safely escaping embedded single quotes. */
+function shellEscapeUnix(arg: string): string {
+  return `'${arg.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * Wrap `command args` so it is executed through the resolved login shell.
+ *
+ * On Unix: `shell -l -c 'command args...'`
+ *   `-l` sources the login profile (.zprofile, .bash_profile, etc.) so the
+ *   child inherits the same PATH as an interactive terminal session.
+ *
+ * On Windows (powershell / pwsh): `shell -NoProfile -Command "command args..."`
+ * On Windows (cmd):               `shell /c "command args..."`
+ */
+export function wrapWithLoginShell(
+  shell: string,
+  command: string,
+  args: string[],
+): { command: string; args: string[] } {
+  if (process.platform === 'win32') {
+    const shellName = path.basename(shell).toLowerCase();
+    const cmdStr = [command, ...args].join(' ');
+    if (shellName === 'pwsh.exe' || shellName === 'powershell.exe') {
+      return { command: shell, args: ['-NoProfile', '-Command', cmdStr] };
+    }
+    // cmd.exe — /c runs the rest of the line as a command
+    return { command: shell, args: ['/c', cmdStr] };
+  }
+
+  const fullCmd = [command, ...args].map(shellEscapeUnix).join(' ');
+  return { command: shell, args: ['-l', '-c', fullCmd] };
+}
 
 interface ConnectedClient {
   serverId: string;
@@ -57,7 +193,60 @@ function isStdioAllowed(): boolean {
   return config.isSelfHosted === true || config.isLocal === true;
 }
 
+/**
+ * Build the environment for a spawned stdio MCP child process.
+ *
+ * Starts from the parent `process.env`, then prepends the standard
+ * Homebrew / `/usr/local` binary directories (Unix) or common Windows system
+ * directories to PATH, preserving the existing PATH after them and never
+ * duplicating entries already present. This is a belt-and-suspenders measure
+ * on top of the login-shell wrapping: the shell's `-l` flag sources the login
+ * profile, but augmenting PATH here also helps when the shell is not found.
+ * User-supplied `serverEnv` is overlaid last so an explicit PATH wins.
+ * The result is a strict `Record<string, string>` with any `undefined`
+ * values stripped out (process.env can legally contain those).
+ */
+export function buildStdioChildEnv(
+  serverEnv: Record<string, string> | undefined,
+): Record<string, string> {
+  const base: Record<string, string> = {};
+  for (const [k, v] of Object.entries(process.env)) {
+    if (typeof v === 'string') base[k] = v;
+  }
+
+  if (process.platform === 'win32') {
+    // On Windows, PATH lookup is case-insensitive; normalize to the 'Path' key
+    // that Node uses, then prepend common system directories.
+    const pathKey = Object.keys(base).find((k) => k.toLowerCase() === 'path') ?? 'Path';
+    const currentPath = base[pathKey] ?? '';
+    const existing = currentPath.split(';').filter((p: string) => p.length > 0);
+    const existingSet = new Set(existing.map((p: string) => p.toLowerCase()));
+    const toPrepend = WINDOWS_EXTRA_PATH_ENTRIES.filter(
+      (p) => !existingSet.has(p.toLowerCase()),
+    );
+    base[pathKey] = [...toPrepend, ...existing].join(';');
+  } else {
+    const currentPath = base.PATH ?? '';
+    const existing = currentPath.split(':').filter((p: string) => p.length > 0);
+    const existingSet = new Set(existing);
+    const toPrepend = UNIX_EXTRA_PATH_ENTRIES.filter((p) => !existingSet.has(p));
+    base.PATH = [...toPrepend, ...existing].join(':');
+  }
+
+  if (serverEnv) {
+    for (const [k, v] of Object.entries(serverEnv)) {
+      if (typeof v === 'string') base[k] = v;
+    }
+  }
+
+  return base;
+}
+
 async function connectOne(server: MCPServer, log: Logger): Promise<ConnectedClient | null> {
+  // Hoisted so the catch block can drain transport.stderr for diagnostics.
+  let stdioTransport: StdioClientTransport | undefined;
+  let stderrBuffer = '';
+
   try {
     if (server.transport === 'stdio' && !isStdioAllowed()) {
       throw new Error('stdio MCP transport is disabled in this deployment.');
@@ -67,14 +256,47 @@ async function connectOne(server: MCPServer, log: Logger): Promise<ConnectedClie
 
     if (server.transport === 'stdio') {
       if (!server.command) throw new Error('command is required for stdio transport');
-      const transport = new StdioClientTransport({
+      const childEnv = buildStdioChildEnv(server.env);
+
+      // Wrap through the login shell so the child process inherits the same
+      // PATH as an interactive terminal session (sources .zprofile, .bash_profile,
+      // etc.). This is equivalent to how macOS Terminal launches a new window.
+      const loginShell = resolveLoginShell();
+      const { command: wrappedCmd, args: wrappedArgs } = wrapWithLoginShell(
+        loginShell,
+        server.command,
+        server.args ?? [],
+      );
+
+      log.info('Spawning stdio MCP server', {
+        mcpServerId: server.id,
+        mcpServerName: server.name,
         command: server.command,
         args: server.args ?? [],
-        // Pass-through the user-provided env in addition to a safe default set.
-        env: { ...process.env, ...(server.env ?? {}) } as Record<string, string>,
+        loginShell,
+        wrappedCommand: wrappedCmd,
+        wrappedArgs,
+        path: childEnv.PATH,
+      });
+
+      stdioTransport = new StdioClientTransport({
+        command: wrappedCmd,
+        args: wrappedArgs,
+        env: childEnv,
         stderr: 'pipe',
       });
-      await withTimeout(client.connect(transport), CONNECT_TIMEOUT_MS, 'MCP stdio connect');
+
+      // Attach the stderr listener eagerly: the child can fail (e.g. `env: node:
+      // No such file or directory`) and close the stream before our catch block
+      // runs, so we have to start buffering before we await client.connect().
+      stdioTransport.stderr?.on('data', (chunk: Buffer | string) => {
+        if (stderrBuffer.length >= STDIO_STDERR_MAX_BYTES) return;
+        const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+        const remaining = STDIO_STDERR_MAX_BYTES - stderrBuffer.length;
+        stderrBuffer += text.length > remaining ? text.slice(0, remaining) : text;
+      });
+
+      await withTimeout(client.connect(stdioTransport), CONNECT_TIMEOUT_MS, 'MCP stdio connect');
     } else if (server.transport === 'http') {
       if (!server.url) throw new Error('url is required for http transport');
       const transport = new StreamableHTTPClientTransport(new URL(server.url), {
@@ -111,17 +333,54 @@ async function connectOne(server: MCPServer, log: Logger): Promise<ConnectedClie
     return { serverId: server.id, serverName: server.name, client, tools };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+
+    let childStderr: string | undefined;
+    if (server.transport === 'stdio' && stdioTransport) {
+      childStderr = await drainStdioStderr(stdioTransport, () => stderrBuffer);
+    }
+
     log.warn('Failed to connect to MCP server', {
       mcpServerId: server.id,
       mcpServerName: server.name,
       transport: server.transport,
       error: message,
+      ...(childStderr !== undefined ? { childStderr } : {}),
     });
     await MCPServer.update({ lastError: message }, { where: { id: server.id } }).catch(
       () => undefined,
     );
     return null;
   }
+}
+
+/**
+ * Return the buffered stderr from a failed stdio transport. Waits up to
+ * STDIO_STDERR_DRAIN_MS for the stream to emit any final chunks (the child
+ * process may still be flushing its stderr when we land in the catch block).
+ */
+async function drainStdioStderr(
+  transport: StdioClientTransport,
+  read: () => string,
+): Promise<string> {
+  const stderr = transport.stderr;
+  if (!stderr) return read().trim();
+
+  await new Promise<void>((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      stderr.removeListener('end', finish);
+      stderr.removeListener('close', finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, STDIO_STDERR_DRAIN_MS);
+    stderr.once('end', finish);
+    stderr.once('close', finish);
+  });
+
+  return read().trim();
 }
 
 async function getOrConnect(server: MCPServer, log: Logger): Promise<ConnectedClient | null> {
