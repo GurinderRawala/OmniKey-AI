@@ -59,6 +59,20 @@ struct ChatMessage: Identifiable, Equatable {
     }
 }
 
+// MARK: - Per-session streaming state
+
+/// Holds the mutable state for one chat session. Reference type so in-flight
+/// WebSocket callbacks capture a stable reference — switching the active session
+/// in `ChatModel` does not redirect streamed blocks into the wrong bubble.
+final class ChatSessionState: @unchecked Sendable {
+    var messages: [ChatMessage] = []
+    var trimmedOlderMessageCount: Int = 0
+    var isRunning: Bool = false
+    var runHandle: ChatSessionRunHandle? = nil
+    /// Index of the assistant `ChatMessage` currently receiving streamed blocks.
+    var streamingAssistantIndex: Int? = nil
+}
+
 // MARK: - Chat model
 
 @MainActor
@@ -169,6 +183,51 @@ final class ChatModel: ObservableObject {
 
     private init() {}
 
+    // MARK: - Per-session state store
+
+    /// Sentinel key for the "new chat" landing state before the backend assigns an ID.
+    private let pendingNewChatKey = "__pending_new__"
+
+    /// Per-session state, keyed by session ID (or `pendingNewChatKey`).
+    private var states: [String: ChatSessionState] = [:]
+
+    /// The key into `states` that corresponds to the currently active view.
+    private var activeStateKey: String { activeSessionId ?? pendingNewChatKey }
+
+    /// Return the existing state for `key`, or create and store a fresh one.
+    private func sessionState(for key: String) -> ChatSessionState {
+        if let existing = states[key] { return existing }
+        let s = ChatSessionState()
+        states[key] = s
+        return s
+    }
+
+    /// Push changes back from published properties into the current session's state
+    /// before switching away. This preserves the visible message list so switching
+    /// back restores it exactly.
+    private func savePublishedToActiveState() {
+        let s = sessionState(for: activeStateKey)
+        s.messages = messages
+        s.trimmedOlderMessageCount = trimmedOlderMessageCount
+    }
+
+    /// Load a session state into the published properties (driving the SwiftUI view).
+    private func loadState(_ s: ChatSessionState) {
+        messages = s.messages
+        trimmedOlderMessageCount = s.trimmedOlderMessageCount
+        isRunning = s.isRunning
+    }
+
+    /// Trim `state.messages` to `maxVisibleMessages`, updating the state's own
+    /// trimmed-count. The caller is responsible for syncing published properties
+    /// afterwards if needed.
+    private func enforceMessageCap(on s: ChatSessionState) {
+        let overflow = s.messages.count - Self.maxVisibleMessages
+        guard overflow > 0 else { return }
+        s.messages.removeFirst(overflow)
+        s.trimmedOlderMessageCount += overflow
+    }
+
     /// Maximum number of messages kept in `messages` at any time.
     /// Older messages are trimmed off the front of the array to keep
     /// the SwiftUI view from rebuilding an arbitrarily large tree on
@@ -182,15 +241,6 @@ final class ChatModel: ObservableObject {
     /// so it can render a "Showing last N messages" hint at the top
     /// of the feed.
     @Published var trimmedOlderMessageCount: Int = 0
-
-    /// Trim `messages` down to `maxVisibleMessages` by dropping the
-    /// oldest entries. No-op when already within the cap.
-    private func enforceMessageCap() {
-        let overflow = messages.count - Self.maxVisibleMessages
-        guard overflow > 0 else { return }
-        messages.removeFirst(overflow)
-        trimmedOlderMessageCount += overflow
-    }
 
     // MARK: - Session list
 
@@ -221,47 +271,46 @@ final class ChatModel: ObservableObject {
         }.resume()
     }
 
-    /// Start a brand-new chat (clears the messages area, doesn't touch the backend).
+    /// Start a brand-new chat. The currently running turn (if any) is **not**
+    /// cancelled — it keeps streaming into its own `ChatSessionState` in the
+    /// background. The user can switch back to it by tapping its session row.
     func startNewChat() {
-        // Cancel any in-flight turn so its socket doesn't bleed into the new chat.
-        if isRunning {
-            AgentRunner.shared.cancelCurrentSession()
-        }
+        savePublishedToActiveState()
+
         activeSessionId = nil
         activeSessionTitle = "New Chat"
-        messages = []
-        trimmedOlderMessageCount = 0
         lastErrorMessage = nil
         isLoadingSessionHistory = false
-        isRunning = false
-        // The default task instruction can have been re-assigned between
-        // chats, so refresh the footer chip every time the user lands on
-        // a fresh chat. Clear it synchronously first to avoid a stale
-        // value flashing while the network round-trip is in flight.
+
+        // Replace the pending-new-chat state with a fresh, empty one.
+        let fresh = ChatSessionState()
+        states[pendingNewChatKey] = fresh
+        loadState(fresh)
+
         defaultTaskTemplate = nil
         fetchDefaultTaskTemplate()
     }
 
-    /// Switch to an existing session and load its prior turns from the backend.
+    /// Switch to an existing session. The previously active turn (if any) keeps
+    /// streaming into its own state; switching does **not** cancel it.
     func openSession(_ session: AgentSessionInfo) {
-        if isRunning {
-            AgentRunner.shared.cancelCurrentSession()
-        }
+        savePublishedToActiveState()
+
         activeSessionId = session.id
         activeSessionTitle = session.title
-        messages = []
-        trimmedOlderMessageCount = 0
         lastErrorMessage = nil
         isLoadingSessionHistory = true
-        isRunning = false
-        // Refresh the default-task-instruction chip when switching chats.
-        // The backend bakes the default template into the session's
-        // system prompt at creation time and there is no per-session
-        // endpoint to recover which template was used, so we surface the
-        // user's *current* configured default — i.e. what would be used
-        // for any further turns the user submits — which is the most
-        // useful forward-looking indicator. Clear synchronously so a
-        // stale value doesn't briefly flash for the other session.
+
+        // If we already have live state for this session (e.g. it was streaming
+        // in the background), restore it immediately; otherwise start fresh.
+        if let existing = states[session.id] {
+            loadState(existing)
+        } else {
+            let fresh = ChatSessionState()
+            states[session.id] = fresh
+            loadState(fresh)
+        }
+
         defaultTaskTemplate = nil
         fetchDefaultTaskTemplate()
         loadSessionHistory(sessionId: session.id)
@@ -300,13 +349,17 @@ final class ChatModel: ObservableObject {
                 return
             }
             DispatchQueue.main.async {
-                guard self.activeSessionId == sessionId else {
-                    return
-                }
+                guard self.activeSessionId == sessionId else { return }
                 let hydrated = ChatModel.hydrateTranscript(from: body.messages)
                 let overflow = max(0, hydrated.count - ChatModel.maxVisibleMessages)
+                let visible = overflow > 0 ? Array(hydrated.suffix(ChatModel.maxVisibleMessages)) : hydrated
+
+                let s = self.sessionState(for: sessionId)
+                s.messages = visible
+                s.trimmedOlderMessageCount = overflow
+
+                self.messages = visible
                 self.trimmedOlderMessageCount = overflow
-                self.messages = overflow > 0 ? Array(hydrated.suffix(ChatModel.maxVisibleMessages)) : hydrated
                 self.isLoadingSessionHistory = false
             }
         }.resume()
@@ -393,8 +446,12 @@ final class ChatModel: ObservableObject {
         }
     }
 
-    /// Delete a session from the backend.
+    /// Delete a session from the backend. Cancels any in-flight turn for that
+    /// session so its WebSocket closes cleanly.
     func deleteSession(_ session: AgentSessionInfo) {
+        // Optimistically cancel any running turn for this session.
+        states[session.id]?.runHandle?.cancel()
+
         guard let token = SubscriptionManager.shared.jwtToken, !token.isEmpty else { return }
         let url = APIClient.baseURL
             .appendingPathComponent("api/agent/sessions")
@@ -408,6 +465,7 @@ final class ChatModel: ObservableObject {
             DispatchQueue.main.async {
                 guard let self else { return }
                 if success {
+                    self.states.removeValue(forKey: session.id)
                     self.sessions.removeAll { $0.id == session.id }
                     if self.activeSessionId == session.id {
                         self.startNewChat()
@@ -421,38 +479,47 @@ final class ChatModel: ObservableObject {
 
     /// Send the current `inputText` as a new user turn. Opens the
     /// WebSocket via `ChatSessionRunner` and streams the assistant
-    /// response into the active assistant message.
+    /// response into the session's own `ChatSessionState`. Switching to
+    /// another chat while this turn runs does **not** cancel it.
     func sendCurrentInput() {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !isRunning else { return }
+        guard !text.isEmpty else { return }
+
+        // Guard against double-sends on the active session.
+        let currentState = sessionState(for: activeStateKey)
+        guard !currentState.isRunning else { return }
 
         inputText = ""
-
-        let userMessage = ChatMessage.user(text)
-        messages.append(userMessage)
-
-        // Allocate the assistant message ahead of time so streamed
-        // blocks have a stable container to append into.
-        let assistantMessage = ChatMessage.assistant()
-        messages.append(assistantMessage)
-        enforceMessageCap()
-        let assistantIndex = messages.count - 1
-
-        isRunning = true
         lastErrorMessage = nil
 
-        // Use whatever the user has selected, or let the backend assign a new ID.
+        // Determine (or create) the session ID for this turn.
         let sessionId = activeSessionId ?? UUID().uuidString
 
-        // Optimistically surface a brand-new chat in the sidebar so the
-        // user sees and can navigate to it immediately — even while the
-        // assistant is still streaming. Without this the sidebar only
-        // updates after `onFinal` triggers `refreshSessions()`, which
-        // means leaving the chat screen during a long-running turn
-        // loses the in-flight conversation. The placeholder uses the
-        // same `sessionId` we'll send to the backend, so the entry is
-        // seamlessly replaced once `refreshSessions()` returns the
-        // canonical record from the server.
+        // For brand-new chats, migrate from the pending-key state to a
+        // real-session-keyed state before we start writing messages.
+        let sessionSt: ChatSessionState
+        if activeSessionId == nil {
+            // Move state from pendingNewChatKey → sessionId.
+            sessionSt = currentState
+            states[sessionId] = sessionSt
+            states.removeValue(forKey: pendingNewChatKey)
+        } else {
+            sessionSt = currentState
+        }
+
+        // Append the user and (empty) assistant messages into the session state.
+        sessionSt.messages.append(ChatMessage.user(text))
+        sessionSt.messages.append(ChatMessage.assistant())
+        enforceMessageCap(on: sessionSt)
+        sessionSt.streamingAssistantIndex = sessionSt.messages.count - 1
+        sessionSt.isRunning = true
+
+        // Sync published properties so the view reflects the new messages.
+        messages = sessionSt.messages
+        trimmedOlderMessageCount = sessionSt.trimmedOlderMessageCount
+        isRunning = true
+
+        // Optimistically surface the session in the sidebar.
         if activeSessionId == nil {
             let placeholderTitle = String(text.prefix(60))
             let placeholder = AgentSessionInfo(
@@ -471,44 +538,60 @@ final class ChatModel: ObservableObject {
             activeSessionTitle = placeholder.title
         }
 
-        ChatSessionRunner.shared.run(
+        let handle = ChatSessionRunner.shared.run(
             sessionId: sessionId,
             userText: text,
             onBlock: { [weak self] block in
                 guard let self else { return }
-                self.appendBlock(block, toAssistantAt: assistantIndex)
+                self.appendBlock(block, toSession: sessionSt)
             },
             onFinal: { [weak self] finalText in
                 guard let self else { return }
-                self.appendBlock(ChatBlock(kind: .finalAnswer, text: finalText), toAssistantAt: assistantIndex)
-                self.isRunning = false
-                // Adopt the session ID so subsequent turns reuse it.
-                if self.activeSessionId == nil {
-                    self.activeSessionId = sessionId
+                self.appendBlock(
+                    ChatBlock(kind: .finalAnswer, text: finalText),
+                    toSession: sessionSt
+                )
+                sessionSt.isRunning = false
+                sessionSt.runHandle = nil
+                sessionSt.streamingAssistantIndex = nil
+                // Only clear the published flag when this is still the active session.
+                if self.states[self.activeStateKey] === sessionSt {
+                    self.isRunning = false
                 }
-                // Refresh after every completed turn so the sidebar and
-                // the context-window indicator under the input bar both
-                // reflect the latest backend metadata.
                 self.refreshSessions()
             },
             onError: { [weak self] error in
                 guard let self else { return }
-                let block = ChatBlock(
-                    kind: .finalAnswer,
-                    text: "**Error:** \(error.localizedDescription)"
+                self.appendBlock(
+                    ChatBlock(kind: .finalAnswer, text: "**Error:** \(error.localizedDescription)"),
+                    toSession: sessionSt
                 )
-                self.appendBlock(block, toAssistantAt: assistantIndex)
-                self.isRunning = false
+                sessionSt.isRunning = false
+                sessionSt.runHandle = nil
+                sessionSt.streamingAssistantIndex = nil
+                if self.states[self.activeStateKey] === sessionSt {
+                    self.isRunning = false
+                }
             }
         )
+
+        sessionSt.runHandle = handle
     }
 
-    private func appendBlock(_ block: ChatBlock, toAssistantAt index: Int) {
-        guard index >= 0, index < messages.count else { return }
-        var message = messages[index]
+    /// Append `block` to the assistant message being streamed in `sessionSt`.
+    /// If `sessionSt` is the currently active session, also syncs the published
+    /// `messages` array so the view updates.
+    private func appendBlock(_ block: ChatBlock, toSession sessionSt: ChatSessionState) {
+        guard let index = sessionSt.streamingAssistantIndex,
+              index >= 0, index < sessionSt.messages.count else { return }
+        var message = sessionSt.messages[index]
         guard message.role == .assistant else { return }
         message.blocks.append(block)
-        messages[index] = message
+        sessionSt.messages[index] = message
+
+        if states[activeStateKey] === sessionSt {
+            messages = sessionSt.messages
+        }
     }
 
     /// Recall the most recent user message into `inputText`.
@@ -532,9 +615,13 @@ final class ChatModel: ObservableObject {
         return true
     }
 
-    /// Cancel the currently running turn.
+    /// Cancel the active session's running turn. Other background turns are unaffected.
     func cancelCurrentTurn() {
-        AgentRunner.shared.cancelCurrentSession()
+        let s = states[activeStateKey]
+        s?.runHandle?.cancel()
+        s?.isRunning = false
+        s?.runHandle = nil
+        s?.streamingAssistantIndex = nil
         isRunning = false
     }
     // MARK: - Default task instruction template

@@ -1,5 +1,88 @@
 import Foundation
 
+// MARK: - Per-turn cancellation handle
+
+/// Owns one `URLSessionWebSocketTask` and one cancellation flag for exactly one
+/// chat turn. Multiple handles can coexist in parallel — cancelling one does not
+/// affect any other in-flight chat.
+final class ChatSessionRunHandle: @unchecked Sendable {
+    private var _task: URLSessionWebSocketTask?
+    private var _process: Process?
+    private let cancelFlag = BoolBox()
+    private let lock = NSLock()
+
+    /// `true` once `cancel()` has been called on this handle.
+    var isCancelledByUser: Bool { cancelFlag.value }
+
+    func attach(task: URLSessionWebSocketTask) {
+        lock.lock()
+        defer { lock.unlock() }
+        _task = task
+    }
+
+    func detach() {
+        lock.lock()
+        defer { lock.unlock() }
+        _task = nil
+    }
+
+    /// Register the shell `Process` currently running for this turn. Replaces
+    /// any previously registered process (a single turn only ever runs one
+    /// `<shell_script>` at a time — the next script is requested only after
+    /// the previous one has finished and its output has been sent back).
+    func attach(process: Process) {
+        lock.lock()
+        defer { lock.unlock() }
+        _process = process
+    }
+
+    /// Clear the registered process. Safe to call after the process has exited
+    /// naturally.
+    func detachProcess() {
+        lock.lock()
+        defer { lock.unlock() }
+        _process = nil
+    }
+
+    /// Cancel the WebSocket **and** terminate the currently running shell
+    /// process (if any) for this turn. Other parallel turns are unaffected
+    /// because each owns its own `ChatSessionRunHandle`.
+    func cancel() {
+        cancelFlag.value = true
+
+        lock.lock()
+        let t = _task
+        let p = _process
+        _task = nil
+        _process = nil
+        lock.unlock()
+
+        // Close this turn's socket so the receive loop unwinds.
+        t?.cancel(with: .goingAway, reason: nil)
+
+        // Terminate the running shell script for this turn — but only this
+        // turn's process. The entire process group is killed (negative PID)
+        // so any children spawned by the script also receive SIGTERM and do
+        // not linger past cancellation.
+        if let process = p, process.isRunning {
+            let pid = process.processIdentifier
+            kill(-pid, SIGTERM)
+            process.terminate()
+            print("[ChatSessionRunner] Cancelled turn — sent SIGTERM to process group \(pid).")
+        }
+    }
+
+    /// Returns and clears the cancelled flag. Synchronous — safe to call from
+    /// `DispatchQueue` closures that cannot `await`.
+    func takeWasCancelledByUser() -> Bool {
+        let was = cancelFlag.value
+        cancelFlag.value = false
+        return was
+    }
+}
+
+// MARK: - Runner
+
 /// Drives a single chat turn over the OmniAgent WebSocket. Mirrors the
 /// connection pattern used by `AgentRunner` (same endpoint, same
 /// `AgentMessage` JSON wire format, same JWT/re-auth flow, same
@@ -9,12 +92,23 @@ import Foundation
 ///
 /// Reuses the static parsing helpers and the shell executor from
 /// `AgentRunner` rather than duplicating them.
+///
+/// Unlike `AgentRunner`, this runner is designed for **parallel
+/// execution**. Each call to `run(...)` produces an independent
+/// `ChatSessionRunHandle` that owns its own WebSocket task and
+/// per-run cancellation flag. This lets the user switch between
+/// chats — or even kick off multiple chats at once — without one
+/// turn cancelling another. The shared `AgentSessionState` is
+/// deliberately not touched here so the keyboard-driven `@omniAgent`
+/// flow remains independent of the chat UI.
 @MainActor
 final class ChatSessionRunner {
     static let shared = ChatSessionRunner()
     private init() {}
 
-    /// Start a turn. Callbacks fire on the main thread.
+    /// Start a turn. Callbacks fire on the main thread. The returned
+    /// handle can be used to cancel **only this turn** without affecting
+    /// any other in-flight chat.
     ///
     /// - Parameters:
     ///   - sessionId: Existing session ID to continue, or a fresh UUID for a new chat.
@@ -23,13 +117,16 @@ final class ChatSessionRunner {
     ///   - onFinal: Called exactly once with the final answer text. After this the
     ///              underlying WebSocket has been closed.
     ///   - onError: Called if the connection fails or auth cannot be obtained.
+    @discardableResult
     func run(
         sessionId: String,
         userText: String,
         onBlock: @escaping @MainActor @Sendable (ChatBlock) -> Void,
         onFinal: @escaping @MainActor @Sendable (String) -> Void,
         onError: @escaping @MainActor @Sendable (Error) -> Void
-    ) {
+    ) -> ChatSessionRunHandle {
+        let handle = ChatSessionRunHandle()
+
         // Acquire a JWT first (same flow as `AgentRunner.startSession`).
         if let token = SubscriptionManager.shared.jwtToken, !token.isEmpty {
             connect(
@@ -37,11 +134,12 @@ final class ChatSessionRunner {
                 jwt: token,
                 userText: userText,
                 allowReauth: true,
+                handle: handle,
                 onBlock: onBlock,
                 onFinal: onFinal,
                 onError: onError
             )
-            return
+            return handle
         }
 
         SubscriptionManager.shared.reactivateStoredKeyIfNeeded { outcome in
@@ -54,6 +152,7 @@ final class ChatSessionRunner {
                         jwt: jwt,
                         userText: userText,
                         allowReauth: false,
+                        handle: handle,
                         onBlock: onBlock,
                         onFinal: onFinal,
                         onError: onError
@@ -72,6 +171,8 @@ final class ChatSessionRunner {
                 DispatchQueue.main.async { onError(error) }
             }
         }
+
+        return handle
     }
 
     // MARK: - WebSocket session
@@ -81,6 +182,7 @@ final class ChatSessionRunner {
         jwt: String,
         userText: String,
         allowReauth: Bool,
+        handle: ChatSessionRunHandle,
         onBlock: @escaping @MainActor @Sendable (ChatBlock) -> Void,
         onFinal: @escaping @MainActor @Sendable (String) -> Void,
         onError: @escaping @MainActor @Sendable (Error) -> Void
@@ -103,6 +205,7 @@ final class ChatSessionRunner {
             jwt: jwt,
             originalText: userText,
             allowReauth: allowReauth,
+            handle: handle,
             onBlock: onBlock,
             onFinal: onFinal,
             onError: onError
@@ -163,6 +266,7 @@ final class ChatSessionRunner {
         jwt: String,
         originalText: String,
         allowReauth: Bool,
+        handle: ChatSessionRunHandle,
         onBlock: @escaping @MainActor @Sendable (ChatBlock) -> Void,
         onFinal: @escaping @MainActor @Sendable (String) -> Void,
         onError: @escaping @MainActor @Sendable (Error) -> Void
@@ -173,11 +277,12 @@ final class ChatSessionRunner {
         let session = URLSession(configuration: .default)
         let task = session.webSocketTask(with: request)
 
-        // Register with the shared session state so the user's Cancel
-        // button (in AgentRunner.cancelCurrentSession) closes our socket too.
-        Task {
-            await AgentSessionState.shared.registerWebSocketTask(task)
-        }
+        // Bind this socket to the per-turn handle so the chat view's
+        // Stop button (or session deletion) closes only this turn's
+        // connection — not any other parallel chat that happens to be
+        // running. The global `AgentSessionState` is intentionally
+        // *not* used here.
+        handle.attach(task: task)
 
         let encoder = JSONEncoder()
         let decoder = JSONDecoder()
@@ -189,7 +294,7 @@ final class ChatSessionRunner {
                 DispatchQueue.main.async { onError(error) }
             }
             task.cancel(with: .goingAway, reason: nil)
-            Task { await AgentSessionState.shared.registerWebSocketTask(nil) }
+            handle.detach()
         }
 
         func finishWithFinal(_ text: String) {
@@ -198,7 +303,7 @@ final class ChatSessionRunner {
                 DispatchQueue.main.async { onFinal(text) }
             }
             task.cancel(with: .goingAway, reason: nil)
-            Task { await AgentSessionState.shared.registerWebSocketTask(nil) }
+            handle.detach()
         }
 
         func receiveNext() {
@@ -208,18 +313,15 @@ final class ChatSessionRunner {
                     // Check whether this was a user-initiated cancel — if so,
                     // surface a clean cancellation error instead of the raw
                     // socket failure.
-                    Task { @MainActor in
-                        let wasCancelled = await AgentSessionState.shared.takeWasCancelledByUser()
-                        if wasCancelled {
-                            let cancelError = NSError(
-                                domain: "ChatSessionRunner",
-                                code: -9999,
-                                userInfo: [NSLocalizedDescriptionKey: "Chat turn cancelled."]
-                            )
-                            finishWithError(cancelError)
-                        } else {
-                            finishWithError(error)
-                        }
+                    if handle.takeWasCancelledByUser() {
+                        let cancelError = NSError(
+                            domain: "ChatSessionRunner",
+                            code: -9999,
+                            userInfo: [NSLocalizedDescriptionKey: "Chat turn cancelled."]
+                        )
+                        finishWithError(cancelError)
+                    } else {
+                        finishWithError(error)
                     }
 
                 case let .success(message):
@@ -283,14 +385,30 @@ final class ChatSessionRunner {
                         }
 
                         DispatchQueue.global(qos: .userInitiated).async {
-                            let (output, status) = runShellCommandWithStatus(script)
+                            // Bind the shell `Process` to *this* turn's handle so
+                            // a Stop press only kills this script — never another
+                            // chat's running script. The global
+                            // `AgentSessionState.shared.shellProcess` slot is
+                            // intentionally untouched here.
+                            let (output, status) = runShellCommandWithStatus(
+                                script,
+                                processRegistrar: { [weak handle] process in
+                                    guard let handle else { return }
+                                    if let process {
+                                        handle.attach(process: process)
+                                    } else {
+                                        handle.detachProcess()
+                                    }
+                                }
+                            )
 
-                            // If the user cancelled while the command was running, discard
-                            // the output and surface a clean cancellation error. The WebSocket
-                            // is already closed, so attempting to send would only produce a
+                            // If the user cancelled this specific turn while the
+                            // command was running, discard the output and surface a
+                            // clean cancellation error. The WebSocket is already
+                            // closed, so attempting to send would only produce a
                             // confusing network error in the chat view.
-                            if AgentSessionState.shared.isCancelledByUser {
-                                print("[ChatSessionRunner] Shell execution completed but session was cancelled; discarding output.")
+                            if handle.isCancelledByUser {
+                                print("[ChatSessionRunner] Shell execution completed but turn was cancelled; discarding output.")
                                 let cancelError = NSError(
                                     domain: "ChatSessionRunner",
                                     code: -9999,
@@ -409,11 +527,10 @@ final class ChatSessionRunner {
         if let startRange = cleaned.range(of: "<shell_script>"),
            let endRange = cleaned.range(
             of: "</shell_script>",
-            range: startRange.upperBound ..< cleaned.endIndex
-           )
-        {
-            cleaned.removeSubrange(startRange.lowerBound ..< endRange.upperBound)
+            range: startRange.upperBound..<cleaned.endIndex
+        ) {
+            cleaned.removeSubrange(startRange.lowerBound..<endRange.upperBound)
         }
-        return AgentRunner.cleanedDisplayText(from: cleaned)
+        return cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

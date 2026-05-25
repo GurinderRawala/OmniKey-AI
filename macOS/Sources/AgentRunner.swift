@@ -114,7 +114,20 @@ final class ClosureBox<T>: @unchecked Sendable { var call: T? }
 
 /// Simple shell execution helper that captures both the
 /// output and the exit status of the command.
-func runShellCommandWithStatus(_ command: String) -> (output: String, status: Int32) {
+///
+/// - Parameters:
+///   - command: Shell script body to run via the user's login shell.
+///   - processRegistrar: Optional sink invoked with the live `Process` once it
+///     has launched, and again with `nil` after it has exited. Callers that
+///     need per-turn cancellation (e.g. `ChatSessionRunner`) pass a closure
+///     that attaches the process to their own handle, so cancellation only
+///     touches their own running script. When `nil`, the helper falls back to
+///     registering with the shared `AgentSessionState` so the legacy
+///     `@omniAgent` keyboard flow keeps working unchanged.
+func runShellCommandWithStatus(
+    _ command: String,
+    processRegistrar: (@Sendable (Process?) -> Void)? = nil
+) -> (output: String, status: Int32) {
     let trimmedCommandForLog: String
     if command.count > 2000 {
         let prefix = command.prefix(2000)
@@ -132,10 +145,16 @@ func runShellCommandWithStatus(_ command: String) -> (output: String, status: In
     process.launchPath = shellPath
     process.arguments = ["-l", "-c", command]
 
-    // Remember this process so it can be cancelled if the user
-    // presses the Cancel button in the thinking window.
-    Task {
-        await AgentSessionState.shared.registerShellProcess(process)
+    // Track the live process so it can be cancelled. Caller-provided
+    // registrars own the lifecycle for parallel-safe per-turn cancellation;
+    // when none is supplied we fall back to the shared global slot used by
+    // the legacy `@omniAgent` flow.
+    if let registrar = processRegistrar {
+        registrar(process)
+    } else {
+        Task {
+            await AgentSessionState.shared.registerShellProcess(process)
+        }
     }
 
     let pipe = Pipe()
@@ -155,9 +174,15 @@ func runShellCommandWithStatus(_ command: String) -> (output: String, status: In
 
     process.waitUntilExit()
 
-    // Clear the tracked process once it has finished.
-    Task {
-        await AgentSessionState.shared.registerShellProcess(nil)
+    // Clear the tracked process once it has finished, on whichever sink the
+    // caller chose. Cancellation that ran concurrently with the script is
+    // still observable to the caller via its own cancel flag.
+    if let registrar = processRegistrar {
+        registrar(nil)
+    } else {
+        Task {
+            await AgentSessionState.shared.registerShellProcess(nil)
+        }
     }
     let output = String(data: data, encoding: .utf8) ?? ""
 

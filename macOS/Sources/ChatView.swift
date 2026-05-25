@@ -1276,6 +1276,38 @@ struct UserBubbleView: View {
     }
 }
 
+// MARK: - Typing Dots
+
+/// Animated three-dot indicator shown while the assistant hasn't yet produced
+/// any content block. Disappears the moment the first thinking block arrives.
+private struct TypingDotsView: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var animating = false
+
+    var body: some View {
+        HStack(spacing: 5) {
+            dotView(delay: 0.00)
+            dotView(delay: 0.18)
+            dotView(delay: 0.36)
+        }
+        .onAppear { animating = true }
+    }
+
+    private func dotView(delay: Double) -> some View {
+        Circle()
+            .fill(NordTheme.secondaryText(colorScheme).opacity(0.55))
+            .frame(width: 5, height: 5)
+            .scaleEffect(animating ? 1.0 : 0.55)
+            .opacity(animating ? 1.0 : 0.30)
+            .animation(
+                .easeInOut(duration: 0.5)
+                    .repeatForever(autoreverses: true)
+                    .delay(delay),
+                value: animating
+            )
+    }
+}
+
 // MARK: - Assistant Message
 
 struct AssistantMessageView: View {
@@ -1292,7 +1324,7 @@ struct AssistantMessageView: View {
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: message.blocks.isEmpty ? .center : .top, spacing: 10) {
             // Avatar
             ZStack {
                 Circle()
@@ -1304,17 +1336,16 @@ struct AssistantMessageView: View {
             }
 
             VStack(alignment: .leading, spacing: 8) {
-                if !thinkingBlocks.isEmpty {
-                    ThinkingSectionView(blocks: thinkingBlocks, isStreaming: isStreaming)
-                }
-
-                // Final answer — rendered as markdown
-                if let final = finalBlock {
-                    FinalAnswerView(text: final.text)
-                } else if message.blocks.isEmpty {
-                    Text("…")
-                        .font(.system(size: 13))
-                        .foregroundColor(NordTheme.secondaryText(colorScheme))
+                if message.blocks.isEmpty {
+                    // No blocks yet — show animated dots until the first block arrives.
+                    TypingDotsView()
+                } else {
+                    if !thinkingBlocks.isEmpty {
+                        ThinkingSectionView(blocks: thinkingBlocks, isStreaming: isStreaming)
+                    }
+                    if let final = finalBlock {
+                        FinalAnswerView(text: final.text)
+                    }
                 }
             }
             .frame(maxWidth: 760, alignment: .leading)
@@ -1412,7 +1443,6 @@ private struct ThinkingSectionView: View {
                     isLast: i == blocks.count - 1,
                     isActive: isStreaming && i == blocks.count - 1,
                     isExpanded: expandedSteps.contains(i),
-                    glowPulse: glowPulse,
                     onToggle: {
                         withAnimation(.easeInOut(duration: 0.18)) {
                             if expandedSteps.contains(i) { expandedSteps.remove(i) }
@@ -1440,11 +1470,11 @@ private struct ThinkingTimelineRow: View {
     let isLast: Bool
     let isActive: Bool
     let isExpanded: Bool
-    let glowPulse: Bool
     let onToggle: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
     @State private var hovered = false
+    @State private var haloPulse = false
 
     // Per-kind visual metadata
     private var meta: (icon: String, label: String, accent: Color) {
@@ -1476,17 +1506,18 @@ private struct ThinkingTimelineRow: View {
             // ── Left: dot + vertical connector ──────────────────────
             VStack(spacing: 0) {
                 ZStack {
-                    // Pulsing halo for the active step
                     if isActive {
                         Circle()
-                            .fill(accent.opacity(glowPulse ? 0.22 : 0.06))
+                            .fill(accent.opacity(haloPulse ? 0.42 : 0.10))
                             .frame(width: 14, height: 14)
+                            .scaleEffect(haloPulse ? 1.0 : 0.82)
                     }
                     Circle()
                         .fill(isActive ? accent : NordTheme.secondaryText(colorScheme).opacity(0.22))
                         .frame(width: isActive ? 7 : 5, height: isActive ? 7 : 5)
                 }
-                .frame(width: 20, height: 22) // fixed height keeps dot aligned with label
+                // Square frame ensures the halo circle is round and centred.
+                .frame(width: 20, height: 20)
 
                 if !isLast {
                     Rectangle()
@@ -1496,6 +1527,16 @@ private struct ThinkingTimelineRow: View {
                 }
             }
             .frame(width: 20)
+            .onAppear {
+                if isActive { startHaloPulse() }
+            }
+            .onChange(of: isActive) { _, active in
+                if active {
+                    startHaloPulse()
+                } else {
+                    withAnimation(.easeOut(duration: 0.3)) { haloPulse = false }
+                }
+            }
 
             // ── Right: label row + optional expanded detail ──────────
             VStack(alignment: .leading, spacing: 0) {
@@ -1553,6 +1594,12 @@ private struct ThinkingTimelineRow: View {
         }
         // Bottom gap between rows (the connector fills this space)
         .padding(.bottom, isLast ? 4 : 0)
+    }
+
+    private func startHaloPulse() {
+        withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
+            haloPulse = true
+        }
     }
 
     @ViewBuilder
