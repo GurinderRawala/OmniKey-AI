@@ -69,6 +69,15 @@ final class ChatModel: ObservableObject {
     /// endpoint as `AgentThinkingModel`).
     @Published var sessions: [AgentSessionInfo] = []
 
+    /// Free-text query used to filter the sidebar session list. The
+    /// backend stores each session's `title` as the first ~60 characters
+    /// of the very first user message in the thread, so filtering on
+    /// `title` is equivalent to searching by "first user message" —
+    /// without any extra network round-trips. Whitespace-trimmed,
+    /// case- and diacritic-insensitive matching is applied in
+    /// `filteredSessions`.
+    @Published var sessionSearchQuery: String = ""
+
     /// The session the user is currently chatting in.
     /// `nil` means a brand-new session that has not been persisted yet —
     /// the backend will assign an ID on first turn.
@@ -92,12 +101,23 @@ final class ChatModel: ObservableObject {
     @Published var inputText: String = ""
 
     /// The user's default task instruction template, if any. Surfaced
-    /// as an informational chip beneath the chat input so the user can
-    /// see which base prompt the agent is being primed with.
+    /// in the dropdown beneath the chat input so the user can see which
+    /// base prompt the agent is being primed with — and switch to a
+    /// different saved instruction without leaving the chat page.
     @Published var defaultTaskTemplate: APIClient.TaskTemplateDTO? = nil
 
-    /// Shared APIClient used for ancillary chat-page fetches (currently
-    /// only the default task template lookup).
+    /// All saved task instruction templates for the current user. Drives
+    /// the dropdown below the chat input. Empty until
+    /// `fetchDefaultTaskTemplate` resolves.
+    @Published var availableTaskTemplates: [APIClient.TaskTemplateDTO] = []
+
+    /// True while a default-template change is being persisted to the
+    /// backend. The dropdown is disabled while this is in flight to
+    /// avoid stacked POSTs from impatient clicks.
+    @Published var isUpdatingDefaultTaskTemplate: Bool = false
+
+    /// Shared APIClient used for ancillary chat-page fetches (task
+    /// instruction template list + default-template mutations).
     private let apiClient = APIClient()
 
     /// The session metadata for the currently-active chat, if it has
@@ -106,6 +126,45 @@ final class ChatModel: ObservableObject {
     var activeSession: AgentSessionInfo? {
         guard let id = activeSessionId else { return nil }
         return sessions.first { $0.id == id }
+    }
+
+    /// Sessions filtered by `sessionSearchQuery`. When the query is
+    /// empty (or only whitespace) the full session list is returned
+    /// unchanged. Otherwise each space-separated token in the query
+    /// must appear (case- and diacritic-insensitive) somewhere in the
+    /// session's `title` for the session to be included — this matches
+    /// the user expectation of a "find as you type" filter where typing
+    /// additional words narrows the result set.
+    var filteredSessions: [AgentSessionInfo] {
+        let query = sessionSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return sessions }
+
+        let tokens = query
+            .lowercased()
+            .folding(options: .diacriticInsensitive, locale: .current)
+            .split(whereSeparator: { $0.isWhitespace })
+            .map(String.init)
+        guard !tokens.isEmpty else { return sessions }
+
+        return sessions.filter { session in
+            let haystack = session.title
+                .lowercased()
+                .folding(options: .diacriticInsensitive, locale: .current)
+            return tokens.allSatisfy { haystack.contains($0) }
+        }
+    }
+
+    /// True when the user has typed something into the sidebar search
+    /// field. Used by the view to switch between the "No chats yet"
+    /// empty state and the "No matches" empty state.
+    var isSessionSearchActive: Bool {
+        !sessionSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Clears the sidebar search query. Exposed so the view can wire
+    /// this to the clear button and the Escape key.
+    func clearSessionSearch() {
+        sessionSearchQuery = ""
     }
 
     private init() {}
@@ -385,6 +444,33 @@ final class ChatModel: ObservableObject {
         // Use whatever the user has selected, or let the backend assign a new ID.
         let sessionId = activeSessionId ?? UUID().uuidString
 
+        // Optimistically surface a brand-new chat in the sidebar so the
+        // user sees and can navigate to it immediately — even while the
+        // assistant is still streaming. Without this the sidebar only
+        // updates after `onFinal` triggers `refreshSessions()`, which
+        // means leaving the chat screen during a long-running turn
+        // loses the in-flight conversation. The placeholder uses the
+        // same `sessionId` we'll send to the backend, so the entry is
+        // seamlessly replaced once `refreshSessions()` returns the
+        // canonical record from the server.
+        if activeSessionId == nil {
+            let placeholderTitle = String(text.prefix(60))
+            let placeholder = AgentSessionInfo(
+                id: sessionId,
+                title: placeholderTitle.isEmpty ? "New Chat" : placeholderTitle,
+                platform: "macos",
+                turns: 0,
+                totalTokensUsed: 0,
+                remainingContextTokens: 0,
+                contextBudget: 0,
+                lastActiveAt: ISO8601DateFormatter().string(from: Date())
+            )
+            sessions.removeAll { $0.id == sessionId }
+            sessions.insert(placeholder, at: 0)
+            activeSessionId = sessionId
+            activeSessionTitle = placeholder.title
+        }
+
         ChatSessionRunner.shared.run(
             sessionId: sessionId,
             userText: text,
@@ -453,13 +539,14 @@ final class ChatModel: ObservableObject {
     }
     // MARK: - Default task instruction template
 
-    /// Fetch the user's task instruction templates and store the one
-    /// flagged as default, if any. This drives the informational chip
-    /// rendered beneath the chat input. Failures are silent — the chip
-    /// simply doesn't appear if we can't determine a default.
+    /// Fetch the user's task instruction templates and store both the
+    /// full list and the one flagged as default. Drives the dropdown
+    /// rendered beneath the chat input. Failures are silent — the
+    /// dropdown simply shows "None" if we can't load templates.
     func fetchDefaultTaskTemplate() {
         guard let token = SubscriptionManager.shared.jwtToken, !token.isEmpty else {
             self.defaultTaskTemplate = nil
+            self.availableTaskTemplates = []
             return
         }
         apiClient.fetchTaskTemplates { [weak self] result in
@@ -467,9 +554,108 @@ final class ChatModel: ObservableObject {
                 guard let self else { return }
                 switch result {
                 case .success(let templates):
+                    self.availableTaskTemplates = templates
                     self.defaultTaskTemplate = templates.first(where: { $0.isDefault })
                 case .failure:
+                    self.availableTaskTemplates = []
                     self.defaultTaskTemplate = nil
+                }
+            }
+        }
+    }
+
+    /// Persist a new default task instruction template selection from
+    /// the chat-input dropdown. Pass `nil` to clear the default. Updates
+    /// the local cache optimistically so the dropdown UI reflects the
+    /// change immediately, and rolls back on failure.
+    func setDefaultTaskTemplate(id: String?) {
+        guard !isUpdatingDefaultTaskTemplate else { return }
+        // Skip no-op selections so we don't fire a request when the
+        // user re-picks the already-default template.
+        if id == defaultTaskTemplate?.id { return }
+
+        let previousDefault = defaultTaskTemplate
+        let previousTemplates = availableTaskTemplates
+
+        // Optimistic local update.
+        if let id = id, let target = availableTaskTemplates.first(where: { $0.id == id }) {
+            availableTaskTemplates = availableTaskTemplates.map { tpl in
+                APIClient.TaskTemplateDTO(
+                    id: tpl.id,
+                    heading: tpl.heading,
+                    instructions: tpl.instructions,
+                    isDefault: tpl.id == id
+                )
+            }
+            defaultTaskTemplate = APIClient.TaskTemplateDTO(
+                id: target.id,
+                heading: target.heading,
+                instructions: target.instructions,
+                isDefault: true
+            )
+        } else {
+            availableTaskTemplates = availableTaskTemplates.map { tpl in
+                APIClient.TaskTemplateDTO(
+                    id: tpl.id,
+                    heading: tpl.heading,
+                    instructions: tpl.instructions,
+                    isDefault: false
+                )
+            }
+            defaultTaskTemplate = nil
+        }
+
+        isUpdatingDefaultTaskTemplate = true
+
+        let rollback: @MainActor () -> Void = { [weak self] in
+            guard let self else { return }
+            self.availableTaskTemplates = previousTemplates
+            self.defaultTaskTemplate = previousDefault
+        }
+
+        if let id = id {
+            apiClient.setDefaultTaskTemplate(id: id) { [weak self] result in
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.isUpdatingDefaultTaskTemplate = false
+                    switch result {
+                    case .success(let updated):
+                        self.availableTaskTemplates = self.availableTaskTemplates.map { tpl in
+                            if tpl.id == updated.id { return updated }
+                            return APIClient.TaskTemplateDTO(
+                                id: tpl.id,
+                                heading: tpl.heading,
+                                instructions: tpl.instructions,
+                                isDefault: false
+                            )
+                        }
+                        self.defaultTaskTemplate = updated
+                    case .failure(let error):
+                        rollback()
+                        self.lastErrorMessage = "Failed to change task instruction: \(error.localizedDescription)"
+                    }
+                }
+            }
+        } else {
+            apiClient.clearDefaultTaskTemplate { [weak self] result in
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.isUpdatingDefaultTaskTemplate = false
+                    switch result {
+                    case .success:
+                        self.availableTaskTemplates = self.availableTaskTemplates.map { tpl in
+                            APIClient.TaskTemplateDTO(
+                                id: tpl.id,
+                                heading: tpl.heading,
+                                instructions: tpl.instructions,
+                                isDefault: false
+                            )
+                        }
+                        self.defaultTaskTemplate = nil
+                    case .failure(let error):
+                        rollback()
+                        self.lastErrorMessage = "Failed to clear task instruction: \(error.localizedDescription)"
+                    }
                 }
             }
         }

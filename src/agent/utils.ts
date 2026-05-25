@@ -11,10 +11,20 @@ import { IMAGE_GENERATE_TOOL } from './imageTool';
  * `web_search` is always included because DuckDuckGo is used as a free
  * fallback when no third-party search key is configured.
  *
+ * `generate_image` is omitted for the Anthropic provider because the
+ * underlying `aiClient.generateImage()` only supports OpenAI and Gemini —
+ * registering an unsupported tool would invite the model to call it and
+ * fail at execution time. The system prompt for Anthropic is built without
+ * the image-tool section to match this tool set.
+ *
  * @returns An array of `AITool` definitions ready to pass to the AI client.
  */
 export function buildAvailableTools(extraTools: AITool[] = []): AITool[] {
-  return [WEB_FETCH_TOOL, WEB_SEARCH_TOOL, IMAGE_GENERATE_TOOL, ...extraTools];
+  const baseTools: AITool[] = [WEB_FETCH_TOOL, WEB_SEARCH_TOOL];
+  if (config.aiProvider !== 'anthropic') {
+    baseTools.push(IMAGE_GENERATE_TOOL);
+  }
+  return [...baseTools, ...extraTools];
 }
 
 /**

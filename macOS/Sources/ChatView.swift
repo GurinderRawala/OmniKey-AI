@@ -7,16 +7,41 @@ struct ChatView: View {
     @ObservedObject var model: ChatModel
     @Environment(\.colorScheme) private var colorScheme
 
+    /// Persisted collapse state. The sidebar collapses to a narrow rail
+    /// of icons (new chat + recent sessions) so the conversation area
+    /// gets more room without losing one-click access to chat history.
+    @AppStorage("chatSidebarCollapsed") private var sidebarCollapsed: Bool = false
+
+    private static let sidebarExpandedWidth: CGFloat = 240
+    private static let sidebarCollapsedWidth: CGFloat = 52
+
+    private var sidebarWidth: CGFloat {
+        sidebarCollapsed ? Self.sidebarCollapsedWidth : Self.sidebarExpandedWidth
+    }
+
+    private func toggleSidebar() {
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+            sidebarCollapsed.toggle()
+        }
+    }
+
     var body: some View {
         ZStack {
             NordTheme.windowBackground(colorScheme).ignoresSafeArea()
             HStack(spacing: 0) {
-                ChatSidebarView(model: model)
-                    .frame(width: 260)
+                Group {
+                    if sidebarCollapsed {
+                        ChatSidebarRailView(model: model, onExpand: toggleSidebar)
+                    } else {
+                        ChatSidebarView(model: model, onCollapse: toggleSidebar)
+                    }
+                }
+                .frame(width: sidebarWidth)
+
                 Rectangle()
                     .fill(NordTheme.border(colorScheme))
                     .frame(width: 1)
-                ChatConversationView(model: model)
+                ChatConversationView(model: model, onToggleSidebar: toggleSidebar)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
@@ -32,69 +57,59 @@ struct ChatView: View {
 
 struct ChatSidebarView: View {
     @ObservedObject var model: ChatModel
+    var onCollapse: () -> Void
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Title
-            HStack(spacing: 8) {
-                Image(systemName: "bubble.left.and.bubble.right.fill")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(NordTheme.accent(colorScheme))
-                Text("Chats")
-                    .font(.system(size: 15, weight: .semibold))
+            // Header row: app name + compose + collapse
+            HStack(spacing: 4) {
+                Text("OmniAgent")
+                    .font(.system(size: 13, weight: .semibold))
                     .foregroundColor(NordTheme.primaryText(colorScheme))
-            }
-            .padding(.horizontal, 16)
-            .padding(.top, 20)
-            .padding(.bottom, 14)
-
-            // New Chat button
-            Button(action: model.startNewChat) {
-                HStack(spacing: 7) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 11, weight: .bold))
-                    Text("New Chat")
-                        .font(.system(size: 13, weight: .medium))
-                    Spacer()
+                Spacer()
+                SidebarIconButton(icon: "square.and.pencil", help: "New Chat") {
+                    model.startNewChat()
                 }
-                .foregroundColor(NordTheme.accent(colorScheme))
-                .padding(.horizontal, 12)
-                .padding(.vertical, 9)
-                .background(
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .fill(NordTheme.accent(colorScheme).opacity(0.10))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .strokeBorder(NordTheme.accent(colorScheme).opacity(0.25), lineWidth: 1)
-                )
+                SidebarIconButton(icon: "sidebar.left", help: "Collapse sidebar") {
+                    onCollapse()
+                }
             }
-            .buttonStyle(.plain)
             .padding(.horizontal, 12)
+            .padding(.top, 16)
+            .padding(.bottom, 8)
+
+            // Search field — filters sessions by their title, which the
+            // backend sets to the first user message of the thread.
+            ChatSidebarSearchField(query: $model.sessionSearchQuery)
+                .padding(.horizontal, 10)
+                .padding(.bottom, 10)
 
             Rectangle()
                 .fill(NordTheme.border(colorScheme))
                 .frame(height: 1)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 12)
+                .padding(.horizontal, 10)
 
             // Session list
             ScrollView {
-                LazyVStack(spacing: 2) {
+                LazyVStack(spacing: 0) {
+                    let visibleSessions = model.filteredSessions
                     if model.sessions.isEmpty {
-                        VStack(spacing: 10) {
-                            Image(systemName: "bubble.left.and.bubble.right")
-                                .font(.system(size: 24))
-                                .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.4))
-                            Text("No chats yet")
-                                .font(.system(size: 12))
-                                .foregroundColor(NordTheme.secondaryText(colorScheme))
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.top, 36)
+                        Text("No chats yet")
+                            .font(.system(size: 12))
+                            .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.55))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 12)
+                            .padding(.top, 24)
+                    } else if visibleSessions.isEmpty {
+                        ChatSidebarSearchEmptyState(
+                            query: model.sessionSearchQuery,
+                            onClear: { model.clearSessionSearch() }
+                        )
+                        .padding(.horizontal, 12)
+                        .padding(.top, 20)
                     } else {
-                        ForEach(model.sessions) { session in
+                        ForEach(visibleSessions) { session in
                             ChatSessionRowView(
                                 session: session,
                                 isActive: session.id == model.activeSessionId,
@@ -104,11 +119,266 @@ struct ChatSidebarView: View {
                         }
                     }
                 }
-                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
                 .padding(.bottom, 16)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(NordTheme.panelBackground(colorScheme))
+    }
+}
+
+// MARK: - Sidebar Search Field
+
+/// Compact, rounded search field shown at the top of the sidebar. It
+/// filters the session list by the first user message of each thread
+/// (which is stored as the session's `title` on the backend).
+///
+/// UX details:
+/// - Magnifying-glass leading icon for affordance.
+/// - Inline clear ("x") button appears once the field has any content.
+/// - Hover and focus states subtly raise the background / border so
+///   the field feels interactive without competing with the chat list.
+/// - Esc clears the query (and gives up focus); ⌘F focuses the field
+///   from anywhere in the sidebar.
+/// - No debouncing is needed because filtering happens in-memory over
+///   the already-loaded session list.
+private struct ChatSidebarSearchField: View {
+    @Binding var query: String
+    @Environment(\.colorScheme) private var colorScheme
+    @FocusState private var isFocused: Bool
+    @State private var isHovered: Bool = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(
+                    isFocused
+                        ? NordTheme.primaryText(colorScheme).opacity(0.85)
+                        : NordTheme.secondaryText(colorScheme).opacity(0.65)
+                )
+                .frame(width: 14)
+
+            TextField("Search chats", text: $query)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+                .foregroundColor(NordTheme.primaryText(colorScheme))
+                .focused($isFocused)
+                .submitLabel(.search)
+                .onExitCommand {
+                    // Esc: clear if there's content, otherwise drop focus.
+                    if query.isEmpty {
+                        isFocused = false
+                    } else {
+                        query = ""
+                    }
+                }
+                .accessibilityLabel("Search chats")
+                .accessibilityHint("Filter the sidebar by the first message of each chat")
+
+            if !query.isEmpty {
+                Button(action: { query = "" }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 12, weight: .regular))
+                        .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.7))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Clear search")
+                .accessibilityLabel("Clear search")
+                .transition(.opacity)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(
+                    isFocused
+                        ? NordTheme.editorBackground(colorScheme)
+                        : NordTheme.badgeFill(colorScheme).opacity(isHovered ? 1.0 : 0.75)
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .strokeBorder(
+                    isFocused
+                        ? NordTheme.accent(colorScheme).opacity(0.45)
+                        : NordTheme.border(colorScheme),
+                    lineWidth: 1
+                )
+        )
+        .onHover { isHovered = $0 }
+        .animation(.easeInOut(duration: 0.12), value: isFocused)
+        .animation(.easeInOut(duration: 0.12), value: isHovered)
+        .animation(.easeInOut(duration: 0.12), value: query.isEmpty)
+        // ⌘F focuses the search field from anywhere on the chat page.
+        .background(
+            Button(action: { isFocused = true }) { EmptyView() }
+                .keyboardShortcut("f", modifiers: [.command])
+                .frame(width: 0, height: 0)
+                .opacity(0)
+                .accessibilityHidden(true)
+        )
+    }
+}
+
+/// Empty state shown in the sidebar when a search query is active but
+/// no sessions match it. Keeps the user oriented and gives them a
+/// one-click way to reset the filter.
+private struct ChatSidebarSearchEmptyState: View {
+    let query: String
+    let onClear: () -> Void
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.6))
+                Text("No matches")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(NordTheme.primaryText(colorScheme).opacity(0.85))
+            }
+
+            Text("No chats start with \u{201C}\(query)\u{201D}.")
+                .font(.system(size: 11))
+                .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.65))
+                .lineLimit(2)
+                .truncationMode(.tail)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Button(action: onClear) {
+                Text("Clear search")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(NordTheme.accent(colorScheme))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Clear search")
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct SidebarIconButton: View {
+    let icon: String
+    let help: String
+    let action: () -> Void
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(
+                    hovered
+                        ? NordTheme.primaryText(colorScheme)
+                        : NordTheme.secondaryText(colorScheme).opacity(0.7)
+                )
+                .frame(width: 28, height: 28)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(hovered ? NordTheme.badgeFill(colorScheme) : Color.clear)
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(help)
+        .onHover { hovered = $0 }
+        .animation(.easeInOut(duration: 0.12), value: hovered)
+    }
+}
+
+// MARK: - Collapsed Sidebar Rail
+
+struct ChatSidebarRailView: View {
+    @ObservedObject var model: ChatModel
+    var onExpand: () -> Void
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Expand button
+            Button(action: onExpand) {
+                Image(systemName: "sidebar.left")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(NordTheme.secondaryText(colorScheme))
+                    .frame(width: 36, height: 36)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Color.clear)
+                    )
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Expand sidebar")
+            .padding(.top, 16)
+
+            // New chat button
+            Button(action: model.startNewChat) {
+                Image(systemName: "square.and.pencil")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(NordTheme.accent(colorScheme))
+                    .frame(width: 36, height: 36)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(NordTheme.accent(colorScheme).opacity(0.10))
+                    )
+            }
+            .buttonStyle(.plain)
+            .help("New Chat")
+            .padding(.top, 4)
+
+            Rectangle()
+                .fill(NordTheme.border(colorScheme))
+                .frame(height: 1)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 10)
+
+            // Recent session dots
+            ScrollView(.vertical, showsIndicators: false) {
+                LazyVStack(spacing: 6) {
+                    ForEach(model.sessions.prefix(12)) { session in
+                        Button(action: { model.openSession(session) }) {
+                            ZStack {
+                                Circle()
+                                    .fill(
+                                        session.id == model.activeSessionId
+                                            ? NordTheme.accent(colorScheme).opacity(0.18)
+                                            : NordTheme.badgeFill(colorScheme)
+                                    )
+                                    .frame(width: 34, height: 34)
+                                    .overlay(
+                                        Circle()
+                                            .strokeBorder(
+                                                session.id == model.activeSessionId
+                                                    ? NordTheme.accent(colorScheme).opacity(0.40)
+                                                    : NordTheme.border(colorScheme),
+                                                lineWidth: 1
+                                            )
+                                    )
+                                Text(String(session.title.prefix(1)).uppercased())
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundColor(
+                                        session.id == model.activeSessionId
+                                            ? NordTheme.accent(colorScheme)
+                                            : NordTheme.secondaryText(colorScheme)
+                                    )
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .help(session.title)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(NordTheme.panelBackground(colorScheme))
     }
 }
@@ -126,58 +396,54 @@ struct ChatSessionRowView: View {
 
     var body: some View {
         Button(action: onTap) {
-            HStack(spacing: 8) {
-                Image(systemName: "message.fill")
-                    .font(.system(size: 10))
+            HStack(spacing: 0) {
+                // Active indicator bar
+                Rectangle()
+                    .fill(isActive ? NordTheme.accent(colorScheme) : Color.clear)
+                    .frame(width: 2.5)
+                    .clipShape(Capsule())
+                    .padding(.vertical, 6)
+
+                Text(session.title)
+                    .font(.system(size: 12.5, weight: isActive ? .medium : .regular))
                     .foregroundColor(
-                        isActive ? NordTheme.accent(colorScheme) : NordTheme.secondaryText(colorScheme).opacity(0.5)
+                        isActive
+                            ? NordTheme.primaryText(colorScheme)
+                            : NordTheme.secondaryText(colorScheme)
                     )
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(session.title)
-                        .font(.system(size: 12, weight: isActive ? .semibold : .regular))
-                        .foregroundColor(
-                            isActive ? NordTheme.accent(colorScheme) : NordTheme.primaryText(colorScheme)
-                        )
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-
-                    Text("\(session.turns) turn\(session.turns == 1 ? "" : "s")")
-                        .font(.system(size: 10))
-                        .foregroundColor(NordTheme.secondaryText(colorScheme))
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.leading, 8)
 
                 if isHovered {
                     Button(action: onDelete) {
-                        Image(systemName: "trash")
-                            .font(.system(size: 10))
-                            .foregroundColor(.red.opacity(0.7))
+                        Image(systemName: "xmark")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.6))
+                            .frame(width: 18, height: 18)
+                            .background(Circle().fill(NordTheme.badgeFill(colorScheme)))
                     }
                     .buttonStyle(.plain)
-                    .transition(.opacity)
+                    .transition(.opacity.combined(with: .scale(scale: 0.85)))
+                    .padding(.trailing, 6)
                 }
             }
-            .padding(.horizontal, 9)
-            .padding(.vertical, 8)
+            .frame(height: 32)
+            .padding(.leading, 8)
             .background(
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(
-                        isActive ? NordTheme.accent(colorScheme).opacity(0.12) :
-                        isHovered ? NordTheme.badgeFill(colorScheme) :
-                        Color.clear
+                        isActive
+                            ? NordTheme.accent(colorScheme).opacity(colorScheme == .dark ? 0.10 : 0.07)
+                            : isHovered ? NordTheme.badgeFill(colorScheme)
+                            : Color.clear
                     )
             )
-            .overlay(
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .strokeBorder(
-                        isActive ? NordTheme.accent(colorScheme).opacity(0.28) : Color.clear,
-                        lineWidth: 1
-                    )
-            )
+            .padding(.horizontal, 6)
         }
         .buttonStyle(.plain)
-        .animation(.easeInOut(duration: 0.15), value: isHovered)
+        .animation(.easeInOut(duration: 0.12), value: isHovered)
         .onHover { isHovered = $0 }
     }
 }
@@ -186,66 +452,89 @@ struct ChatSessionRowView: View {
 
 struct ChatConversationView: View {
     @ObservedObject var model: ChatModel
+    var onToggleSidebar: () -> Void
     @Environment(\.colorScheme) private var colorScheme
+
+    /// The "landing" layout — Codex-style centered composer with
+    /// quick-access tiles — is shown for a brand-new chat (no active
+    /// session yet, no messages, not currently hydrating history).
+    /// Once the user sends a turn or opens an existing session, we
+    /// switch to the standard scrolling transcript layout.
+    private var showLandingLayout: Bool {
+        model.activeSessionId == nil
+            && model.messages.isEmpty
+            && !model.isLoadingSessionHistory
+            && !model.isRunning
+    }
 
     var body: some View {
         VStack(spacing: 0) {
-            ChatHeaderBar(model: model)
+            ChatHeaderBar(model: model, onToggleSidebar: onToggleSidebar)
 
             Rectangle()
                 .fill(NordTheme.border(colorScheme))
                 .frame(height: 1)
 
-            // Message feed
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        if model.isLoadingSessionHistory {
-                            ChatLoadingStateView()
-                        } else if model.messages.isEmpty {
-                            ChatEmptyStateView()
-                        }
-                        if model.trimmedOlderMessageCount > 0, !model.messages.isEmpty {
-                            ChatTrimmedHistoryNotice(trimmedCount: model.trimmedOlderMessageCount)
-                                .padding(.vertical, 8)
-                        }
-                        ForEach(model.messages) { message in
-                            ChatMessageView(message: message)
-                                .padding(.vertical, 10)
-                        }
-                        if model.isRunning {
-                            ChatThinkingIndicator()
-                                .padding(.bottom, 10)
-                        }
-                        Color.clear.frame(height: 1).id("bottom")
-                    }
-                    .padding(.horizontal, 28)
-                    .padding(.vertical, 8)
-                    .frame(maxWidth: 980, alignment: .leading)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                }
-                .onChange(of: model.messages.count) { _, _ in
-                    withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
-                }
-                .onChange(of: model.messages.last?.blocks.count ?? 0) { _, _ in
-                    withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
-                }
-                .onChange(of: model.isRunning) { _, _ in
-                    withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
-                }
+            if showLandingLayout {
+                ChatNewChatLandingView(model: model)
+            } else {
+                conversationContent
             }
 
             if let err = model.lastErrorMessage {
                 ChatErrorBanner(message: err) { model.lastErrorMessage = nil }
             }
 
-            Rectangle()
-                .fill(NordTheme.border(colorScheme))
-                .frame(height: 1)
-
-            ChatInputBar(model: model)
+            if !showLandingLayout {
+                LandingInputComposer(model: model)
+                    .frame(maxWidth: 980)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.horizontal, 22)
+                    .padding(.vertical, 14)
+                    .background(NordTheme.editorBackground(colorScheme))
+            }
         }
         .background(NordTheme.editorBackground(colorScheme))
+    }
+
+    @ViewBuilder
+    private var conversationContent: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    if model.isLoadingSessionHistory {
+                        ChatLoadingStateView()
+                    } else if model.messages.isEmpty {
+                        ChatEmptyStateView()
+                    }
+                    if model.trimmedOlderMessageCount > 0, !model.messages.isEmpty {
+                        ChatTrimmedHistoryNotice(trimmedCount: model.trimmedOlderMessageCount)
+                            .padding(.vertical, 8)
+                    }
+                    ForEach(model.messages) { message in
+                        ChatMessageView(
+                            message: message,
+                            isStreaming: model.isRunning && message.id == model.messages.last?.id
+                        )
+                        .padding(.vertical, 10)
+                    }
+                    Color.clear.frame(height: 1).id("bottom")
+                }
+                .padding(.horizontal, 28)
+                .padding(.vertical, 8)
+                .frame(maxWidth: 980, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .center)
+            }
+            .onChange(of: model.messages.count) { _, _ in
+                withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+            }
+            .onChange(of: model.messages.last?.blocks.count ?? 0) { _, _ in
+                withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+            }
+            .onChange(of: model.isRunning) { _, _ in
+                withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+            }
+        }
     }
 }
 
@@ -253,13 +542,24 @@ struct ChatConversationView: View {
 
 struct ChatHeaderBar: View {
     @ObservedObject var model: ChatModel
+    var onToggleSidebar: () -> Void
     @Environment(\.colorScheme) private var colorScheme
     @State private var pulse = false
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 10) {
+            Button(action: onToggleSidebar) {
+                Image(systemName: "sidebar.left")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(NordTheme.secondaryText(colorScheme))
+                    .frame(width: 30, height: 30)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Toggle sidebar")
+
             Text(model.activeSessionTitle)
-                .font(.system(size: 15, weight: .semibold))
+                .font(.system(size: 14, weight: .semibold))
                 .foregroundColor(NordTheme.primaryText(colorScheme))
                 .lineLimit(1)
 
@@ -374,52 +674,452 @@ private struct ChatLoadingStateView: View {
     }
 }
 
-// MARK: - Thinking indicator
+// MARK: - New Chat Landing
 
-struct ChatThinkingIndicator: View {
+struct ChatNewChatLandingView: View {
+    @ObservedObject var model: ChatModel
     @Environment(\.colorScheme) private var colorScheme
-    @State private var animating = false
+
+    private let tileColumns = [
+        GridItem(.adaptive(minimum: 160, maximum: 260), spacing: 10)
+    ]
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            agentAvatar
-            HStack(spacing: 5) {
-                ForEach(0 ..< 3) { i in
-                    Circle()
-                        .fill(NordTheme.accentPurple(colorScheme))
-                        .frame(width: 6, height: 6)
-                        .opacity(animating ? 1.0 : 0.25)
-                        .animation(
-                            .easeInOut(duration: 0.55).repeatForever().delay(Double(i) * 0.18),
-                            value: animating
-                        )
+        GeometryReader { geo in
+            ScrollView {
+                VStack(spacing: 0) {
+                    // Greeting + composer, vertically centered
+                    VStack(spacing: 20) {
+                        // Greeting
+                        VStack(spacing: 7) {
+                            Image(systemName: "sparkles")
+                                .font(.system(size: 26, weight: .light))
+                                .foregroundColor(NordTheme.accentPurple(colorScheme).opacity(0.65))
+                            Text("What can I help with?")
+                                .font(.system(size: 19, weight: .semibold))
+                                .foregroundColor(NordTheme.primaryText(colorScheme))
+                        }
+                        .frame(maxWidth: .infinity)
+
+                        // Split input composer (no background fill)
+                        LandingInputComposer(model: model)
+                    }
+                    .padding(.bottom, 28)
+
+                    // ── Tiles grid ──────────────────────────────────────
+                    VStack(alignment: .leading, spacing: 20) {
+
+                        // Task Instructions — top 2 recent + "New", all in one row
+                        VStack(alignment: .leading, spacing: 9) {
+                            HStack(alignment: .firstTextBaseline) {
+                                Text("TASK INSTRUCTIONS")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.7))
+                                    .tracking(0.6)
+                                Spacer()
+                                Button("Manage") {
+                                    AppDelegate.shared?.showTaskInstructionsWindow()
+                                }
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(NordTheme.accent(colorScheme))
+                                .buttonStyle(.plain)
+                            }
+
+                            HStack(spacing: 10) {
+                                ForEach(Array(model.availableTaskTemplates.suffix(2).reversed())) { template in
+                                    TaskInstructionTile(template: template, model: model)
+                                        .frame(maxWidth: 200)
+                                }
+                                LandingAddTile(
+                                    icon: "plus",
+                                    label: "New",
+                                    help: "Add a task instruction"
+                                ) {
+                                    AppDelegate.shared?.showTaskInstructionsWindow()
+                                }
+                                .frame(width: 72)
+                                Spacer(minLength: 0)
+                            }
+                        }
+
+                        // Tools
+                        LandingTileSection(title: "Tools", actionLabel: nil, action: nil) {
+                            FeatureTile(
+                                icon: "server.rack",
+                                title: "MCP Servers",
+                                description: "Connect external tools and APIs via Model Context Protocol"
+                            ) { AppDelegate.shared?.showMCPServersWindow() }
+
+                            FeatureTile(
+                                icon: "calendar.badge.clock",
+                                title: "Scheduled Jobs",
+                                description: "Run agent tasks automatically on a recurring schedule"
+                            ) { AppDelegate.shared?.showScheduledJobsWindow() }
+                        }
+                    }
                 }
+                .padding(.horizontal, 44)
+                .frame(maxWidth: 680)
+                .frame(maxWidth: .infinity)
+                // Centre vertically when content is shorter than the view;
+                // scroll naturally when tiles overflow.
+                .frame(minHeight: geo.size.height, alignment: .center)
+                .padding(.vertical, 36)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            .background(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(NordTheme.panelBackground(colorScheme))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(NordTheme.border(colorScheme), lineWidth: 1)
-            )
-            Spacer()
         }
-        .onAppear { animating = true }
-        .onDisappear { animating = false }
+    }
+}
+
+// MARK: - Landing Input Composer
+
+/// Two-part input: text area on top, a thin divider, then a footer row
+/// with a task-instruction menu on the left and send/stop on the right.
+/// No opaque fill — only a border so the editor background shows through.
+private struct LandingInputComposer: View {
+    @ObservedObject var model: ChatModel
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var isFocused = false
+    @State private var inputHeight: CGFloat = 88
+
+    private var inputIsEmpty: Bool {
+        model.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    private var agentAvatar: some View {
-        ZStack {
-            Circle()
-                .fill(NordTheme.accentPurple(colorScheme).opacity(0.14))
-                .frame(width: 30, height: 30)
-            Image(systemName: "sparkles")
-                .font(.system(size: 13))
-                .foregroundColor(NordTheme.accentPurple(colorScheme))
+    var body: some View {
+        VStack(spacing: 0) {
+            // ── Top: text area ───────────────────────────────────────
+            ZStack(alignment: .topLeading) {
+                if model.inputText.isEmpty {
+                    Text("Ask OmniAgent anything…")
+                        .font(.system(size: 13))
+                        .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.42))
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 12)
+                        .allowsHitTesting(false)
+                }
+                ChatNSTextInput(
+                    text: $model.inputText,
+                    isFocused: $isFocused,
+                    colorScheme: colorScheme,
+                    onSend: {
+                        guard !model.isRunning, !inputIsEmpty else { return }
+                        model.sendCurrentInput()
+                    },
+                    onRecallHistory: { model.recallLastUserMessage() }
+                )
+                .frame(height: inputHeight)
+                .onChange(of: model.inputText) { _, newValue in
+                    let lineCount = max(1, newValue.components(separatedBy: "\n").count)
+                    inputHeight = max(88, min(CGFloat(lineCount) * 20 + 40, 220))
+                }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture { isFocused = true }
+
+            // ── Divider ──────────────────────────────────────────────
+            Rectangle()
+                .fill(NordTheme.border(colorScheme))
+                .frame(height: 1)
+
+            // ── Bottom: task instruction + send/stop ─────────────────
+            HStack(spacing: 10) {
+                // Task instruction dropdown
+                if !model.availableTaskTemplates.isEmpty {
+                    Menu {
+                        ForEach(model.availableTaskTemplates) { tpl in
+                            Button {
+                                model.setDefaultTaskTemplate(id: tpl.id)
+                            } label: {
+                                if tpl.id == model.defaultTaskTemplate?.id {
+                                    Label(tpl.heading, systemImage: "checkmark")
+                                } else {
+                                    Text(tpl.heading)
+                                }
+                            }
+                        }
+                        Divider()
+                        Button("No instruction") {
+                            model.setDefaultTaskTemplate(id: nil)
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "text.badge.star")
+                                .font(.system(size: 9, weight: .medium))
+                            Text(model.defaultTaskTemplate?.heading ?? "No instruction")
+                                .font(.system(size: 11, weight: .medium))
+                                .lineLimit(1)
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.system(size: 8, weight: .medium))
+                        }
+                        .foregroundColor(
+                            model.defaultTaskTemplate != nil
+                                ? NordTheme.accent(colorScheme)
+                                : NordTheme.secondaryText(colorScheme).opacity(0.55)
+                        )
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(
+                            Capsule()
+                                .fill(
+                                    model.defaultTaskTemplate != nil
+                                        ? NordTheme.accent(colorScheme).opacity(0.09)
+                                        : NordTheme.badgeFill(colorScheme)
+                                )
+                        )
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .disabled(model.isUpdatingDefaultTaskTemplate)
+                } else {
+                    // Placeholder so the send button stays right-aligned
+                    Button {
+                        AppDelegate.shared?.showTaskInstructionsWindow()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "plus")
+                                .font(.system(size: 9, weight: .medium))
+                            Text("Add instruction")
+                                .font(.system(size: 11, weight: .medium))
+                        }
+                        .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.5))
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                Spacer()
+
+                // Send / Stop
+                Button {
+                    if model.isRunning { model.cancelCurrentTurn() }
+                    else { model.sendCurrentInput() }
+                } label: {
+                    ZStack {
+                        Circle()
+                            .fill(
+                                model.isRunning
+                                    ? Color.red
+                                    : inputIsEmpty
+                                        ? NordTheme.border(colorScheme).opacity(2.5)
+                                        : NordTheme.accent(colorScheme)
+                            )
+                            .frame(width: 30, height: 30)
+                        Image(systemName: model.isRunning ? "stop.fill" : "arrow.up")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundColor(inputIsEmpty && !model.isRunning ? NordTheme.secondaryText(colorScheme).opacity(0.4) : .white)
+                    }
+                    .animation(.easeInOut(duration: 0.14), value: model.isRunning)
+                }
+                .buttonStyle(.plain)
+                .disabled(!model.isRunning && inputIsEmpty)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
         }
+        .background(Color.clear)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(
+                    isFocused
+                        ? NordTheme.accent(colorScheme).opacity(0.5)
+                        : NordTheme.border(colorScheme).opacity(1.6),
+                    lineWidth: isFocused ? 1.5 : 1
+                )
+        )
+        .shadow(
+            color: .black.opacity(colorScheme == .dark ? 0.18 : 0.07),
+            radius: 10, x: 0, y: 3
+        )
+    }
+}
+
+// MARK: - Tile Section Header
+
+private struct LandingTileSection<Content: View>: View {
+    let title: String
+    let actionLabel: String?
+    let action: (() -> Void)?
+    @ViewBuilder let content: () -> Content
+    @Environment(\.colorScheme) private var colorScheme
+
+    private let columns = [GridItem(.adaptive(minimum: 154, maximum: 260), spacing: 10)]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            // Section header
+            HStack(alignment: .firstTextBaseline) {
+                Text(title.uppercased())
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.7))
+                    .tracking(0.6)
+                Spacer()
+                if let label = actionLabel, let action = action {
+                    Button(action: action) {
+                        Text(label)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(NordTheme.accent(colorScheme))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            LazyVGrid(columns: columns, spacing: 10) {
+                content()
+            }
+        }
+    }
+}
+
+// MARK: - Tile Components
+
+private struct TaskInstructionTile: View {
+    let template: APIClient.TaskTemplateDTO
+    @ObservedObject var model: ChatModel
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var hovered = false
+
+    private var isDefault: Bool { template.id == model.defaultTaskTemplate?.id }
+
+    var body: some View {
+        Button {
+            model.setDefaultTaskTemplate(id: isDefault ? nil : template.id)
+        } label: {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 5) {
+                    Image(systemName: isDefault ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 11))
+                        .foregroundColor(
+                            isDefault
+                                ? NordTheme.accent(colorScheme)
+                                : NordTheme.secondaryText(colorScheme).opacity(0.35)
+                        )
+                    Text(template.heading)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(NordTheme.primaryText(colorScheme))
+                        .lineLimit(1)
+                }
+                Text(template.instructions)
+                    .font(.system(size: 11))
+                    .foregroundColor(NordTheme.secondaryText(colorScheme))
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, minHeight: 66, alignment: .topLeading)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(
+                        isDefault
+                            ? NordTheme.accent(colorScheme).opacity(colorScheme == .dark ? 0.12 : 0.08)
+                            : hovered
+                                ? NordTheme.badgeFill(colorScheme)
+                                : NordTheme.panelBackground(colorScheme)
+                    )
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(
+                        isDefault
+                            ? NordTheme.accent(colorScheme).opacity(0.38)
+                            : NordTheme.border(colorScheme),
+                        lineWidth: 1
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+        .animation(.easeInOut(duration: 0.12), value: hovered)
+        .help(isDefault ? "Active — click to deselect" : "Set as default instruction")
+    }
+}
+
+private struct LandingAddTile: View {
+    let icon: String
+    let label: String
+    let help: String
+    let action: () -> Void
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 5) {
+                Image(systemName: icon)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(NordTheme.accent(colorScheme).opacity(0.75))
+                Text(label)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(NordTheme.secondaryText(colorScheme))
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+            }
+            .frame(maxWidth: .infinity, minHeight: 66)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(hovered ? NordTheme.badgeFill(colorScheme) : Color.clear)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(
+                        NordTheme.border(colorScheme),
+                        style: StrokeStyle(lineWidth: 1, dash: [4, 3])
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .help(help)
+        .onHover { hovered = $0 }
+        .animation(.easeInOut(duration: 0.12), value: hovered)
+    }
+}
+
+private struct FeatureTile: View {
+    let icon: String
+    let title: String
+    let description: String
+    let action: () -> Void
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(alignment: .top, spacing: 11) {
+                Image(systemName: icon)
+                    .font(.system(size: 15))
+                    .foregroundColor(NordTheme.accent(colorScheme).opacity(0.85))
+                    .frame(width: 20, alignment: .top)
+                    .padding(.top, 1)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(NordTheme.primaryText(colorScheme))
+                    Text(description)
+                        .font(.system(size: 11))
+                        .foregroundColor(NordTheme.secondaryText(colorScheme))
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .padding(.horizontal, 13)
+            .padding(.vertical, 11)
+            .frame(maxWidth: .infinity, minHeight: 66, alignment: .topLeading)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(hovered ? NordTheme.badgeFill(colorScheme) : NordTheme.panelBackground(colorScheme))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(NordTheme.border(colorScheme), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+        .animation(.easeInOut(duration: 0.12), value: hovered)
+        .help("Open \(title)")
     }
 }
 
@@ -427,6 +1127,7 @@ struct ChatThinkingIndicator: View {
 
 struct ChatMessageView: View {
     let message: ChatMessage
+    var isStreaming: Bool = false
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -434,7 +1135,7 @@ struct ChatMessageView: View {
         case .user:
             UserBubbleView(text: message.text)
         case .assistant:
-            AssistantMessageView(message: message)
+            AssistantMessageView(message: message, isStreaming: isStreaming)
         case .system:
             EmptyView()
         }
@@ -505,6 +1206,7 @@ struct UserBubbleView: View {
 
 struct AssistantMessageView: View {
     let message: ChatMessage
+    var isStreaming: Bool = false
     @Environment(\.colorScheme) private var colorScheme
 
     private var thinkingBlocks: [ChatBlock] {
@@ -529,7 +1231,7 @@ struct AssistantMessageView: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 if !thinkingBlocks.isEmpty {
-                    ThinkingSectionView(blocks: thinkingBlocks)
+                    ThinkingSectionView(blocks: thinkingBlocks, isStreaming: isStreaming)
                 }
 
                 // Final answer — rendered as markdown
@@ -549,135 +1251,269 @@ struct AssistantMessageView: View {
     }
 }
 
-// MARK: - Thinking Section
+// MARK: - Thinking Section (Timeline)
 
 private struct ThinkingSectionView: View {
     let blocks: [ChatBlock]
+    var isStreaming: Bool = false
     @Environment(\.colorScheme) private var colorScheme
     @State private var expanded = false
-
-    private var stepCountText: String {
-        "\(blocks.count) step\(blocks.count == 1 ? "" : "s")"
-    }
+    @State private var glowPulse = false
+    @State private var expandedSteps: Set<Int> = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
-            } label: {
-                HStack(spacing: 7) {
-                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 9, weight: .semibold))
-                    Image(systemName: "brain")
-                        .font(.system(size: 10, weight: .semibold))
-                    Text("Thinking")
-                        .font(.system(size: 11, weight: .medium))
-                    Text(stepCountText)
-                        .font(.system(size: 10))
-                        .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.72))
-                    Spacer()
-                }
-                .foregroundColor(NordTheme.secondaryText(colorScheme))
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(NordTheme.badgeFill(colorScheme).opacity(colorScheme == .dark ? 0.62 : 0.55))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .strokeBorder(NordTheme.border(colorScheme).opacity(0.85), lineWidth: 1)
-                )
-            }
-            .buttonStyle(.plain)
-            .help(expanded ? "Hide thinking" : "Show thinking")
-
+            headerPill
             if expanded {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(blocks.indices, id: \.self) { index in
-                        ThinkingStepView(block: blocks[index])
-                        if index < blocks.count - 1 {
-                            Rectangle()
-                                .fill(NordTheme.border(colorScheme).opacity(0.65))
-                                .frame(height: 1)
-                        }
-                    }
-                }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .fill(NordTheme.badgeFill(colorScheme).opacity(colorScheme == .dark ? 0.45 : 0.35))
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .strokeBorder(NordTheme.border(colorScheme).opacity(0.65), lineWidth: 1)
-                    )
+                timelineBody
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .onAppear { if isStreaming { startGlow() } }
+        .onChange(of: isStreaming) { _, streaming in
+            if streaming { startGlow() }
+            else { withAnimation(.easeOut(duration: 0.4)) { glowPulse = false } }
+        }
+    }
+
+    private var headerPill: some View {
+        Button {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) { expanded.toggle() }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "brain")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(
+                        isStreaming
+                            ? NordTheme.accentPurple(colorScheme)
+                            : NordTheme.secondaryText(colorScheme)
+                    )
+                Text(isStreaming ? "Thinking…" : "Thinking")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(NordTheme.secondaryText(colorScheme))
+                // Step count badge
+                Text("\(blocks.count)")
+                    .font(.system(size: 9, weight: .bold, design: .rounded))
+                    .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.7))
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1.5)
+                    .background(Capsule().fill(NordTheme.badgeFill(colorScheme)))
+                Spacer()
+                Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.5))
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(NordTheme.badgeFill(colorScheme))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .strokeBorder(
+                        isStreaming
+                            ? NordTheme.accentPurple(colorScheme).opacity(glowPulse ? 0.52 : 0.18)
+                            : NordTheme.border(colorScheme),
+                        lineWidth: 1
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .shadow(
+            color: isStreaming
+                ? NordTheme.accentPurple(colorScheme).opacity(glowPulse ? 0.30 : 0.04)
+                : .clear,
+            radius: isStreaming ? (glowPulse ? 8 : 2) : 0
+        )
+        .help(expanded ? "Collapse thinking" : "Expand thinking")
+    }
+
+    private var timelineBody: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(blocks.indices, id: \.self) { i in
+                ThinkingTimelineRow(
+                    block: blocks[i],
+                    isLast: i == blocks.count - 1,
+                    isActive: isStreaming && i == blocks.count - 1,
+                    isExpanded: expandedSteps.contains(i),
+                    glowPulse: glowPulse,
+                    onToggle: {
+                        withAnimation(.easeInOut(duration: 0.18)) {
+                            if expandedSteps.contains(i) { expandedSteps.remove(i) }
+                            else { expandedSteps.insert(i) }
+                        }
+                    }
+                )
+            }
+        }
+        .padding(.leading, 2)
+        .padding(.top, 2)
+    }
+
+    private func startGlow() {
+        withAnimation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true)) {
+            glowPulse = true
+        }
     }
 }
 
-private struct ThinkingStepView: View {
-    let block: ChatBlock
-    @Environment(\.colorScheme) private var colorScheme
+// MARK: - Timeline Row
 
-    private var meta: (icon: String, label: String) {
+private struct ThinkingTimelineRow: View {
+    let block: ChatBlock
+    let isLast: Bool
+    let isActive: Bool
+    let isExpanded: Bool
+    let glowPulse: Bool
+    let onToggle: () -> Void
+
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var hovered = false
+
+    // Per-kind visual metadata
+    private var meta: (icon: String, label: String, accent: Color) {
         switch block.kind {
-        case .agentReasoning:
-            return ("brain", "Reasoning")
-        case .shellCommand:
-            return ("terminal", "Command")
-        case .terminalOutput:
-            return ("terminal", "Terminal")
-        case .webCall:
-            return ("globe", "Web Search")
-        case .mcpCall:
-            return ("server.rack", "MCP Call")
-        case .imageRendering:
-            return ("photo", "Image")
-        case .finalAnswer:
-            return ("checkmark.circle", "Answer")
+        case .agentReasoning:  return ("brain",             "Reasoning",  NordTheme.accentPurple(colorScheme))
+        case .shellCommand:    return ("terminal.fill",     "Command",    NordTheme.accent(colorScheme))
+        case .terminalOutput:  return ("terminal",          "Output",     NordTheme.secondaryText(colorScheme))
+        case .webCall:         return ("globe",             "Web Search", NordTheme.accentBlue(colorScheme))
+        case .mcpCall:         return ("server.rack",       "MCP Call",   NordTheme.accentAmber(colorScheme))
+        case .imageRendering:  return ("photo",             "Image",      NordTheme.accentGreen(colorScheme))
+        case .finalAnswer:     return ("checkmark.circle.fill", "Answer", NordTheme.accentGreen(colorScheme))
         }
+    }
+
+    // First non-empty line of block text, capped at 120 chars
+    private var summary: String {
+        let raw = block.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty else { return "" }
+        let line = raw.components(separatedBy: "\n")
+            .first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) ?? ""
+        let s = line.trimmingCharacters(in: .whitespaces)
+        return s.isEmpty ? String(raw.prefix(120)) : s
     }
 
     var body: some View {
-        let (icon, label) = meta
+        let (icon, label, accent) = meta
+        HStack(alignment: .top, spacing: 0) {
 
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Image(systemName: icon)
-                    .font(.system(size: 10, weight: .semibold))
-                Text(label)
-                    .font(.system(size: 10, weight: .medium))
-                Spacer()
+            // ── Left: dot + vertical connector ──────────────────────
+            VStack(spacing: 0) {
+                ZStack {
+                    // Pulsing halo for the active step
+                    if isActive {
+                        Circle()
+                            .fill(accent.opacity(glowPulse ? 0.22 : 0.06))
+                            .frame(width: 14, height: 14)
+                    }
+                    Circle()
+                        .fill(isActive ? accent : NordTheme.secondaryText(colorScheme).opacity(0.22))
+                        .frame(width: isActive ? 7 : 5, height: isActive ? 7 : 5)
+                }
+                .frame(width: 20, height: 22) // fixed height keeps dot aligned with label
+
+                if !isLast {
+                    Rectangle()
+                        .fill(NordTheme.border(colorScheme))
+                        .frame(width: 1)
+                        .frame(maxHeight: .infinity)
+                }
             }
-            .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.86))
+            .frame(width: 20)
 
-            expandedContent
-                .opacity(0.72)
+            // ── Right: label row + optional expanded detail ──────────
+            VStack(alignment: .leading, spacing: 0) {
+                // Label row — always visible, tap to expand
+                Button(action: onToggle) {
+                    HStack(spacing: 5) {
+                        Image(systemName: icon)
+                            .font(.system(size: 9.5, weight: .semibold))
+                            .foregroundColor(accent)
+                            .frame(width: 13, alignment: .center)
+
+                        Text(label)
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(NordTheme.primaryText(colorScheme).opacity(0.82))
+
+                        if !isExpanded, !summary.isEmpty {
+                            Text("·")
+                                .font(.system(size: 11))
+                                .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.3))
+                            Text(summary)
+                                .font(.system(size: 11))
+                                .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.58))
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
+
+                        Spacer(minLength: 4)
+
+                        // Chevron — only visible on hover
+                        Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 8, weight: .medium))
+                            .foregroundColor(
+                                hovered
+                                    ? NordTheme.secondaryText(colorScheme).opacity(0.45)
+                                    : .clear
+                            )
+                    }
+                    .padding(.vertical, 5)
+                    .padding(.trailing, 6)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .onHover { hovered = $0 }
+
+                // Expanded full content
+                if isExpanded {
+                    expandedDetail
+                        .padding(.top, 4)
+                        .padding(.bottom, 10)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+            }
+            .padding(.leading, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        // Bottom gap between rows (the connector fills this space)
+        .padding(.bottom, isLast ? 4 : 0)
     }
 
     @ViewBuilder
-    private var expandedContent: some View {
+    private var expandedDetail: some View {
+        let trimmed = block.text.trimmingCharacters(in: .whitespacesAndNewlines)
         switch block.kind {
         case .shellCommand, .terminalOutput:
             ScrollView(.horizontal, showsIndicators: false) {
-                Text(block.text)
+                Text(trimmed)
                     .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(NordTheme.secondaryText(colorScheme))
+                    .foregroundColor(NordTheme.primaryText(colorScheme).opacity(0.82))
                     .textSelection(.enabled)
                     .fixedSize(horizontal: true, vertical: true)
             }
-        case .agentReasoning, .webCall, .mcpCall, .imageRendering:
-            ChatMarkdownView(text: block.text, baseFontSize: 12)
-        case .finalAnswer:
-            ChatMarkdownView(text: block.text)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(
+                        colorScheme == .dark
+                            ? Color(red: 16 / 255, green: 18 / 255, blue: 26 / 255)
+                            : Color(red: 248 / 255, green: 249 / 255, blue: 253 / 255)
+                    )
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .strokeBorder(NordTheme.border(colorScheme), lineWidth: 1)
+            )
+            .padding(.trailing, 6)
+
+        default:
+            ChatMarkdownView(text: trimmed, baseFontSize: 11.5)
+                .opacity(0.85)
+                .padding(.trailing, 6)
         }
     }
 }
@@ -1203,104 +2039,6 @@ private struct ChatErrorBanner: View {
     }
 }
 
-// MARK: - Input Bar
-
-struct ChatInputBar: View {
-    @ObservedObject var model: ChatModel
-    @Environment(\.colorScheme) private var colorScheme
-    @State private var isFocused = false
-    @State private var inputHeight: CGFloat = 76
-
-    private var inputIsEmpty: Bool {
-        model.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            VStack(spacing: 0) {
-                HStack(alignment: .bottom, spacing: 10) {
-                    // Text input
-                    ZStack(alignment: .topLeading) {
-                        if model.inputText.isEmpty {
-                            Text("Message OmniAgent…")
-                                .font(.system(size: 13))
-                                .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.5))
-                                .padding(.horizontal, 14)
-                                .padding(.top, 12)
-                                .allowsHitTesting(false)
-                        }
-                        ChatNSTextInput(
-                            text: $model.inputText,
-                            isFocused: $isFocused,
-                            colorScheme: colorScheme,
-                            onSend: {
-                                guard !model.isRunning, !inputIsEmpty else { return }
-                                model.sendCurrentInput()
-                            },
-                            onRecallHistory: {
-                                model.recallLastUserMessage()
-                            }
-                        )
-                        .frame(height: inputHeight)
-                        .onChange(of: model.inputText) { _, newValue in
-                            let lines = max(1, newValue.components(separatedBy: "\n").count)
-                            inputHeight = max(76, min(CGFloat(lines) * 20 + 36, 180))
-                        }
-                    }
-                    .contentShape(Rectangle())
-                    .onTapGesture { isFocused = true }
-                    .background(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(NordTheme.panelBackground(colorScheme))
-                            .shadow(color: .black.opacity(colorScheme == .dark ? 0.20 : 0.05), radius: 4, x: 0, y: 2)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .strokeBorder(
-                                isFocused
-                                    ? NordTheme.accent(colorScheme).opacity(0.5)
-                                    : NordTheme.border(colorScheme),
-                                lineWidth: isFocused ? 1.5 : 1
-                            )
-                    )
-
-                    // Send / Stop button
-                    Button {
-                        if model.isRunning { model.cancelCurrentTurn() } else { model.sendCurrentInput() }
-                    } label: {
-                        Image(systemName: model.isRunning ? "stop.circle.fill" : "arrow.up.circle.fill")
-                            .font(.system(size: 32))
-                            .foregroundColor(
-                                model.isRunning ? .red :
-                                    inputIsEmpty ? NordTheme.secondaryText(colorScheme).opacity(0.28) :
-                                    NordTheme.accent(colorScheme)
-                            )
-                            .animation(.easeInOut(duration: 0.15), value: model.isRunning)
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!model.isRunning && inputIsEmpty)
-                }
-
-                // Bottom meta-row: default task chip on the left, context
-                // window indicator on the right. Both are informational and
-                // tucked under the input box so they don't compete with the
-                // send button.
-                ChatInputFooterView(model: model)
-                    .padding(.top, 8)
-            }
-            .frame(maxWidth: 980)
-            .frame(maxWidth: .infinity, alignment: .center)
-            .padding(.horizontal, 22)
-            .padding(.top, 12)
-            .padding(.bottom, 12)
-        }
-        .background(
-            NordTheme.panelBackground(colorScheme)
-                .shadow(color: .black.opacity(colorScheme == .dark ? 0.20 : 0.06), radius: 8, x: 0, y: -4)
-        )
-    }
-}
-
 // MARK: - NSTextView wrapper (Return-to-send, Shift-Return-for-newline)
 
 /// Wraps `NSTextView` so that Return sends the current message and
@@ -1481,144 +2219,3 @@ struct ChatNSTextInput: NSViewRepresentable {
     }
 }
 
-// MARK: - Input Footer (default-task chip + context window indicator)
-
-/// Footer row tucked beneath the chat input. Shows the user's default
-/// task instruction (left, informational chip with hover-tooltip) and
-/// the remaining context window for the active session (right, a small
-/// circular gauge — similar to the indicators standard AI chat tools
-/// show under their input fields).
-struct ChatInputFooterView: View {
-    @ObservedObject var model: ChatModel
-    @Environment(\.colorScheme) private var colorScheme
-
-    var body: some View {
-        // Both chips live on the left edge of the input footer. The task
-        // instruction chip only appears when a default exists; the context
-        // gauge only appears once the active session has been hydrated.
-        HStack(spacing: 8) {
-            if let template = model.defaultTaskTemplate {
-                DefaultTaskChip(template: template)
-            }
-            if let session = model.activeSession, session.contextBudget > 0 {
-                ContextWindowIndicator(session: session)
-            }
-            Spacer(minLength: 0)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        // Reserve a tiny minimum height so the input bar layout doesn't
-        // jitter on first render when neither chip nor gauge is present.
-        .frame(minHeight: 18)
-    }
-}
-
-/// Small pill showing "Using <heading>" with a tooltip on hover
-/// exposing the full template name and instructions preview.
-private struct DefaultTaskChip: View {
-    let template: APIClient.TaskTemplateDTO
-    @Environment(\.colorScheme) private var colorScheme
-
-    private var tooltip: String {
-        let trimmedInstructions = template.instructions
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmedInstructions.isEmpty {
-            return "Default task instruction: \(template.heading)"
-        }
-        // Cap the preview so the tooltip stays readable.
-        let preview: String
-        if trimmedInstructions.count > 320 {
-            let idx = trimmedInstructions.index(trimmedInstructions.startIndex, offsetBy: 320)
-            preview = String(trimmedInstructions[..<idx]) + "…"
-        } else {
-            preview = trimmedInstructions
-        }
-        return "Default task instruction: \(template.heading)\n\n\(preview)"
-    }
-
-    var body: some View {
-        HStack(spacing: 5) {
-            Image(systemName: "text.justify.left")
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundColor(NordTheme.accentPurple(colorScheme))
-            Text("Using \(template.heading)")
-                .font(.system(size: 10, weight: .medium))
-                .foregroundColor(NordTheme.accentPurple(colorScheme))
-                .lineLimit(1)
-                .truncationMode(.tail)
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(
-            Capsule()
-                .fill(NordTheme.accentPurple(colorScheme).opacity(0.12))
-        )
-        .overlay(
-            Capsule()
-                .strokeBorder(NordTheme.accentPurple(colorScheme).opacity(0.30), lineWidth: 1)
-        )
-        .help(tooltip)
-        .accessibilityLabel(Text("Default task instruction \(template.heading)"))
-    }
-}
-
-/// Circular gauge showing the percentage of context window remaining
-/// for the active session. Hover reveals the exact "X / Y tokens left".
-private struct ContextWindowIndicator: View {
-    let session: AgentSessionInfo
-    @Environment(\.colorScheme) private var colorScheme
-
-    private var fraction: Double {
-        guard session.contextBudget > 0 else { return 0 }
-        let raw = Double(session.remainingContextTokens) / Double(session.contextBudget)
-        return min(max(raw, 0.0), 1.0)
-    }
-
-    /// Colour bands mirror common chat-tool conventions:
-    /// green when plenty remains, amber once you've burnt through more
-    /// than ~70% of the window, red once you're below 15%.
-    private var gaugeColor: Color {
-        if fraction <= 0.15 {
-            return .red
-        } else if fraction <= 0.30 {
-            return NordTheme.accentAmber(colorScheme)
-        } else {
-            return NordTheme.accentGreen(colorScheme)
-        }
-    }
-
-    private var percentLabel: String {
-        "\(Int((fraction * 100).rounded()))%"
-    }
-
-    private var tooltip: String {
-        let remaining = session.remainingContextTokens.formatted()
-        let budget = session.contextBudget.formatted()
-        return "Context window: \(remaining) of \(budget) tokens left (\(percentLabel))"
-    }
-
-    var body: some View {
-        HStack(spacing: 6) {
-            ZStack {
-                Circle()
-                    .stroke(NordTheme.border(colorScheme), lineWidth: 2)
-                Circle()
-                    .trim(from: 0, to: CGFloat(fraction))
-                    .stroke(gaugeColor, style: StrokeStyle(lineWidth: 2, lineCap: .round))
-                    .rotationEffect(.degrees(-90))
-                    .animation(.easeOut(duration: 0.25), value: fraction)
-            }
-            .frame(width: 14, height: 14)
-
-            Text(percentLabel)
-                .font(.system(size: 10, weight: .medium))
-                .foregroundColor(NordTheme.secondaryText(colorScheme))
-                .monospacedDigit()
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(Capsule().fill(NordTheme.badgeFill(colorScheme)))
-        .overlay(Capsule().strokeBorder(NordTheme.border(colorScheme), lineWidth: 1))
-        .help(tooltip)
-        .accessibilityLabel(Text(tooltip))
-    }
-}
