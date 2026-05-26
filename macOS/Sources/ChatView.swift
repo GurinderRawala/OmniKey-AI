@@ -65,7 +65,8 @@ struct ChatSidebarView: View {
             // Header row: app name + compose + collapse
             HStack(spacing: 4) {
                 Text("OmniAgent")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(OKFont.bodyEmphasized)
+                    .okTighten(-0.15)
                     .foregroundColor(NordTheme.primaryText(colorScheme))
                 Spacer()
                 SidebarIconButton(icon: "square.and.pencil", help: "New Chat") {
@@ -405,7 +406,7 @@ struct ChatSessionRowView: View {
                     .padding(.vertical, 6)
 
                 Text(session.title)
-                    .font(.system(size: 12.5, weight: isActive ? .medium : .regular))
+                    .font(.system(size: 13, weight: isActive ? .medium : .regular, design: .default))
                     .foregroundColor(
                         isActive
                             ? NordTheme.primaryText(colorScheme)
@@ -537,18 +538,20 @@ struct ChatConversationView: View {
                         ChatTrimmedHistoryNotice(trimmedCount: model.trimmedOlderMessageCount)
                             .padding(.vertical, 8)
                     }
-                    ForEach(model.messages) { message in
+                    ForEach(Array(model.messages.enumerated()), id: \.element.id) { index, message in
                         ChatMessageView(
                             message: message,
                             isStreaming: model.isRunning && message.id == model.messages.last?.id
                         )
-                        .padding(.vertical, 10)
+                        .padding(.top, index == 0 ? 8 : 18)
+                        .padding(.bottom, index == model.messages.count - 1 ? 8 : 0)
                     }
                     Color.clear.frame(height: 1).id("bottom")
                 }
-                .padding(.horizontal, 28)
-                .padding(.vertical, 8)
-                .frame(maxWidth: 980, alignment: .leading)
+                .padding(.horizontal, 32)
+                .padding(.top, 12)
+                .padding(.bottom, 16)
+                .frame(maxWidth: 820, alignment: .leading)
                 .frame(maxWidth: .infinity, alignment: .center)
             }
             .defaultScrollAnchor(.bottom)
@@ -600,9 +603,11 @@ struct ChatHeaderBar: View {
             .help("Toggle sidebar")
 
             Text(model.activeSessionTitle)
-                .font(.system(size: 14, weight: .semibold))
+                .font(OKFont.headline)
+                .okTighten(-0.15)
                 .foregroundColor(NordTheme.primaryText(colorScheme))
                 .lineLimit(1)
+                .truncationMode(.tail)
 
             Spacer()
 
@@ -617,7 +622,7 @@ struct ChatHeaderBar: View {
                         .onAppear { pulse = true }
                         .onDisappear { pulse = false }
                     Text("Running")
-                        .font(.system(size: 11, weight: .medium))
+                        .font(OKFont.captionSmall)
                         .foregroundColor(NordTheme.accentGreen(colorScheme))
                 }
                 .padding(.horizontal, 10)
@@ -630,7 +635,7 @@ struct ChatHeaderBar: View {
                         Image(systemName: "stop.circle.fill")
                             .font(.system(size: 11))
                         Text("Stop")
-                            .font(.system(size: 11, weight: .medium))
+                            .font(OKFont.captionSmall)
                     }
                     .foregroundColor(.red.opacity(0.9))
                     .padding(.horizontal, 10)
@@ -659,11 +664,11 @@ struct ChatEmptyStateView: View {
                 .foregroundColor(NordTheme.accent(colorScheme).opacity(0.55))
 
             Text("Start a conversation")
-                .font(.system(size: 17, weight: .semibold))
+                .font(OKFont.title)
                 .foregroundColor(NordTheme.primaryText(colorScheme))
 
             Text("Ask anything. Existing chats are in the sidebar.")
-                .font(.system(size: 13))
+                .font(OKFont.bodyCompact)
                 .foregroundColor(NordTheme.secondaryText(colorScheme))
                 .multilineTextAlignment(.center)
         }
@@ -685,10 +690,10 @@ private struct ChatTrimmedHistoryNotice: View {
     var body: some View {
         HStack(spacing: 6) {
             Image(systemName: "clock.arrow.circlepath")
-                .font(.system(size: 10, weight: .semibold))
+                .font(OKFont.eyebrow)
                 .foregroundColor(NordTheme.secondaryText(colorScheme))
             Text("Showing the latest \(ChatModel.maxVisibleMessages) of \(ChatModel.maxVisibleMessages + trimmedCount) messages")
-                .font(.system(size: 11))
+                .font(OKFont.captionSmall)
                 .foregroundColor(NordTheme.secondaryText(colorScheme))
         }
         .padding(.horizontal, 10)
@@ -707,7 +712,7 @@ private struct ChatLoadingStateView: View {
             ProgressView()
                 .scaleEffect(0.75)
             Text("Opening chat…")
-                .font(.system(size: 13, weight: .medium))
+                .font(OKFont.bodyCompact)
                 .foregroundColor(NordTheme.secondaryText(colorScheme))
         }
         .frame(maxWidth: .infinity)
@@ -1264,24 +1269,35 @@ struct UserBubbleView: View {
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
+        // The user message now lives inside its own rounded "paper"
+        // container, mirroring the assistant's final-answer surface.
+        // The copy icon is tucked into the bottom-right corner of the
+        // same container so the affordance is always one click away
+        // without sitting outside the bubble.
         HStack(alignment: .top) {
-            Spacer(minLength: 80)
-            Text(text)
-                .font(.system(size: 13))
-                .foregroundColor(bubbleTextColor)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: 620, alignment: .leading)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 11)
-                .background(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .fill(bubbleFillColor)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .strokeBorder(bubbleBorderColor, lineWidth: 1)
-                )
+            Spacer(minLength: 60)
+            VStack(alignment: .trailing, spacing: 4) {
+                Text(text)
+                    .font(OKFont.body)
+                    .foregroundColor(bubbleTextColor)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                ChatCopyButton(text: text, title: "Copy message")
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 10)
+            .padding(.bottom, 6)
+            .frame(maxWidth: 560, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(bubbleFillColor)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(bubbleBorderColor, lineWidth: 1)
+            )
         }
         .frame(maxWidth: .infinity)
     }
@@ -1289,30 +1305,29 @@ struct UserBubbleView: View {
     // In dark mode the user-bubble uses a muted tinted surface instead of
     // a saturated accent fill so it reads as a soft chip rather than a
     // bright blue block. Light mode keeps the existing accent fill.
+    // The user bubble uses a tinted accent surface in both light and
+    // dark mode (Codex-style) instead of a saturated fill. This keeps
+    // the conversation visually quiet so the assistant prose — which is
+    // where the actual answer lives — remains the focal point.
     private var bubbleFillColor: Color {
         switch colorScheme {
         case .dark:
-            return NordTheme.accent(colorScheme).opacity(0.22)
+            return NordTheme.accent(colorScheme).opacity(0.18)
         default:
-            return NordTheme.accent(colorScheme)
+            return NordTheme.accent(colorScheme).opacity(0.10)
         }
     }
 
     private var bubbleTextColor: Color {
-        switch colorScheme {
-        case .dark:
-            return NordTheme.primaryText(colorScheme)
-        default:
-            return .white
-        }
+        NordTheme.primaryText(colorScheme)
     }
 
     private var bubbleBorderColor: Color {
         switch colorScheme {
         case .dark:
-            return NordTheme.accent(colorScheme).opacity(0.35)
+            return NordTheme.accent(colorScheme).opacity(0.32)
         default:
-            return Color.clear
+            return NordTheme.accent(colorScheme).opacity(0.22)
         }
     }
 }
@@ -1324,14 +1339,34 @@ struct UserBubbleView: View {
 private struct TypingDotsView: View {
     @Environment(\.colorScheme) private var colorScheme
     @State private var animating = false
+    @State private var iconPulse = false
 
     var body: some View {
-        HStack(spacing: 5) {
-            dotView(delay: 0.00)
-            dotView(delay: 0.18)
-            dotView(delay: 0.36)
+        // A subtly-pulsing sparkles glyph sits to the left of the
+        // dots as the assistant-is-thinking cue. It uses the accent
+        // purple shared with the thinking section so the visual
+        // language is consistent across the two states.
+        HStack(spacing: 8) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(NordTheme.accentPurple(colorScheme))
+                .scaleEffect(iconPulse ? 1.08 : 0.94)
+                .opacity(iconPulse ? 1.0 : 0.75)
+                .animation(
+                    .easeInOut(duration: 0.9).repeatForever(autoreverses: true),
+                    value: iconPulse
+                )
+
+            HStack(spacing: 5) {
+                dotView(delay: 0.00)
+                dotView(delay: 0.18)
+                dotView(delay: 0.36)
+            }
         }
-        .onAppear { animating = true }
+        .onAppear {
+            animating = true
+            iconPulse = true
+        }
     }
 
     private func dotView(delay: Double) -> some View {
@@ -1365,33 +1400,24 @@ struct AssistantMessageView: View {
     }
 
     var body: some View {
-        HStack(alignment: message.blocks.isEmpty ? .center : .top, spacing: 10) {
-            // Avatar
-            ZStack {
-                Circle()
-                    .fill(NordTheme.accentPurple(colorScheme).opacity(0.13))
-                    .frame(width: 30, height: 30)
-                Image(systemName: "sparkles")
-                    .font(.system(size: 13))
-                    .foregroundColor(NordTheme.accentPurple(colorScheme))
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                if message.blocks.isEmpty {
-                    // No blocks yet — show animated dots until the first block arrives.
-                    TypingDotsView()
-                } else {
-                    if !thinkingBlocks.isEmpty {
-                        ThinkingSectionView(blocks: thinkingBlocks, isStreaming: isStreaming)
-                    }
-                    if let final = finalBlock {
-                        FinalAnswerView(text: final.text)
-                    }
+        // Codex-style: no avatar, no boxed bubble. The assistant turn
+        // is rendered as a flush-left column of clean prose, with the
+        // collapsible thinking row sitting above the final answer as a
+        // slim pill — matching the reference design while keeping the
+        // existing Nord palette.
+        VStack(alignment: .leading, spacing: 10) {
+            if message.blocks.isEmpty {
+                // No blocks yet — show animated dots until the first block arrives.
+                TypingDotsView()
+                    .padding(.vertical, 6)
+            } else {
+                if !thinkingBlocks.isEmpty {
+                    ThinkingSectionView(blocks: thinkingBlocks, isStreaming: isStreaming)
+                }
+                if let final = finalBlock {
+                    FinalAnswerView(text: final.text)
                 }
             }
-            .frame(maxWidth: 760, alignment: .leading)
-
-            Spacer(minLength: 24)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -1428,52 +1454,40 @@ private struct ThinkingSectionView: View {
             withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) { expanded.toggle() }
         } label: {
             HStack(spacing: 6) {
-                Image(systemName: "brain")
-                    .font(.system(size: 10, weight: .semibold))
+                Image(systemName: isStreaming ? "sparkles" : "brain")
+                    .font(.system(size: 11, weight: .semibold))
                     .foregroundColor(
                         isStreaming
                             ? NordTheme.accentPurple(colorScheme)
-                            : NordTheme.secondaryText(colorScheme)
+                            : NordTheme.secondaryText(colorScheme).opacity(0.85)
                     )
-                Text(isStreaming ? "Thinking…" : "Thinking")
-                    .font(.system(size: 11, weight: .medium))
+                Text(thinkingHeaderTitle)
+                    .font(OKFont.captionSmall)
                     .foregroundColor(NordTheme.secondaryText(colorScheme))
-                // Step count badge
-                Text("\(blocks.count)")
-                    .font(.system(size: 9, weight: .bold, design: .rounded))
-                    .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.7))
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 1.5)
-                    .background(Capsule().fill(NordTheme.badgeFill(colorScheme)))
-                Spacer()
                 Image(systemName: expanded ? "chevron.up" : "chevron.down")
                     .font(.system(size: 9, weight: .semibold))
-                    .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.5))
+                    .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.55))
+                Spacer(minLength: 0)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(NordTheme.badgeFill(colorScheme))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .strokeBorder(
-                        isStreaming
-                            ? NordTheme.accentPurple(colorScheme).opacity(glowPulse ? 0.52 : 0.18)
-                            : NordTheme.border(colorScheme),
-                        lineWidth: 1
-                    )
-            )
+            .padding(.horizontal, 0)
+            .padding(.vertical, 2)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .shadow(
-            color: isStreaming
-                ? NordTheme.accentPurple(colorScheme).opacity(glowPulse ? 0.30 : 0.04)
-                : .clear,
-            radius: isStreaming ? (glowPulse ? 8 : 2) : 0
-        )
         .help(expanded ? "Collapse thinking" : "Expand thinking")
+    }
+
+    /// Codex shows "Worked for 2m 37s" / "Thinking…" instead of a
+    /// terse "Thinking" label. We don't have per-block timing in
+    /// `ChatBlock` yet, so for now we surface the step count when not
+    /// streaming and keep the live label when streaming.
+    private var thinkingHeaderTitle: String {
+        if isStreaming {
+            return "Thinking…"
+        }
+        let steps = blocks.count
+        if steps <= 0 { return "Thought" }
+        return "Thought for \(steps) step\(steps == 1 ? "" : "s")"
     }
 
     private var timelineBody: some View {
@@ -1687,30 +1701,41 @@ struct FinalAnswerView: View {
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(NordTheme.accentGreen(colorScheme))
-                Text("Final Answer")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(NordTheme.secondaryText(colorScheme))
-                Spacer()
-                ChatCopyButton(text: text, title: "Copy final answer")
-            }
-
+        // Soft "paper" surface: a low-contrast lift on top of the
+        // editor background so the final answer reads as its own
+        // container without ever feeling bright. The copy icon stays
+        // permanently anchored bottom-right.
+        VStack(alignment: .trailing, spacing: 6) {
             ChatMarkdownView(text: text)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            ChatCopyButton(text: text, title: "Copy answer")
         }
-        .padding(12)
+        .padding(.horizontal, 16)
+        .padding(.top, 14)
+        .padding(.bottom, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(NordTheme.panelBackground(colorScheme))
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(paperFill)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(NordTheme.border(colorScheme), lineWidth: 1)
         )
-        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Subtle, never-bright paper colour:
+    /// - dark mode → a small lift above the window background
+    /// - light mode → a near-white tint, kept noticeably below pure white
+    /// Both tones sit comfortably next to the existing Nord palette.
+    private var paperFill: Color {
+        switch colorScheme {
+        case .dark:
+            return Color(red: 50 / 255, green: 50 / 255, blue: 54 / 255).opacity(0.85)
+        default:
+            return Color(red: 252 / 255, green: 252 / 255, blue: 254 / 255)
+        }
     }
 }
 
@@ -1719,27 +1744,61 @@ struct FinalAnswerView: View {
 private struct ChatCopyButton: View {
     let text: String
     var title: String = "Copy"
+    /// When true (the default), the button renders as a compact
+    /// icon-only square — used for the persistent affordances on the
+    /// final answer and user bubble. Set to false to get the original
+    /// "icon + Copy" label (e.g. inside the code-block toolbar).
+    var iconOnly: Bool = true
     @Environment(\.colorScheme) private var colorScheme
     @State private var copied = false
+    @State private var hovered = false
 
     var body: some View {
         Button(action: copy) {
-            HStack(spacing: 4) {
-                Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                    .font(.system(size: 10, weight: .semibold))
-                Text(copied ? "Copied" : "Copy")
-                    .font(.system(size: 10, weight: .medium))
+            Group {
+                if iconOnly {
+                    Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                        .font(.system(size: 11, weight: .semibold))
+                        .frame(width: 22, height: 22)
+                } else {
+                    HStack(spacing: 4) {
+                        Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                            .font(.system(size: 10, weight: .semibold))
+                        Text(copied ? "Copied" : "Copy")
+                            .font(.system(size: 10, weight: .medium))
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                }
             }
             .foregroundColor(
-                copied ? NordTheme.accentGreen(colorScheme) : NordTheme.secondaryText(colorScheme)
+                copied
+                    ? NordTheme.accentGreen(colorScheme)
+                    : NordTheme.secondaryText(colorScheme).opacity(hovered ? 1.0 : 0.75)
             )
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(Capsule().fill(NordTheme.badgeFill(colorScheme)))
-            .overlay(Capsule().strokeBorder(NordTheme.border(colorScheme), lineWidth: 1))
+            .background(
+                Group {
+                    if iconOnly {
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(hovered ? NordTheme.badgeFill(colorScheme) : Color.clear)
+                    } else {
+                        Capsule().fill(NordTheme.badgeFill(colorScheme))
+                    }
+                }
+            )
+            .overlay(
+                Group {
+                    if !iconOnly {
+                        Capsule().strokeBorder(NordTheme.border(colorScheme), lineWidth: 1)
+                    }
+                }
+            )
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(title)
+        .onHover { hovered = $0 }
+        .animation(.easeInOut(duration: 0.12), value: hovered)
+        .help(copied ? "Copied" : title)
     }
 
     private func copy() {
@@ -1835,9 +1894,9 @@ struct ChatMarkdownView: View {
     private func headingSize(_ level: Int) -> CGFloat {
         switch level {
         case 1:
-            return baseFontSize + 5
+            return baseFontSize + 4
         case 2:
-            return baseFontSize + 3
+            return baseFontSize + 2
         case 3:
             return baseFontSize + 1
         default:
@@ -2042,17 +2101,20 @@ private struct MarkdownTableView: View {
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
+        // Wrap the table in the rounded shape *and* clip its contents
+        // to it, so the header band's fill and the per-cell separators
+        // stop at the rounded edge instead of poking into square
+        // corners. The outer scroll view sits outside the clip so
+        // horizontal overflow still works as before.
         ScrollView(.horizontal, showsIndicators: true) {
             VStack(alignment: .leading, spacing: 0) {
-                tableRow(header, isHeader: true)
-                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                    tableRow(row, isHeader: false)
+                tableRow(header, isHeader: true, isLastRow: rows.isEmpty)
+                ForEach(Array(rows.enumerated()), id: \.offset) { offset, row in
+                    tableRow(row, isHeader: false, isLastRow: offset == rows.count - 1)
                 }
             }
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(NordTheme.panelBackground(colorScheme))
-            )
+            .background(NordTheme.panelBackground(colorScheme))
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .strokeBorder(NordTheme.border(colorScheme), lineWidth: 1)
@@ -2061,8 +2123,9 @@ private struct MarkdownTableView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func tableRow(_ cells: [String], isHeader: Bool) -> some View {
-        HStack(spacing: 0) {
+    private func tableRow(_ cells: [String], isHeader: Bool, isLastRow: Bool) -> some View {
+        let lastColumnIndex = maxColumnCount - 1
+        return HStack(spacing: 0) {
             ForEach(0 ..< maxColumnCount, id: \.self) { index in
                 Text(index < cells.count ? cells[index] : "")
                     .font(.system(size: 12, weight: isHeader ? .semibold : .regular))
@@ -2075,16 +2138,25 @@ private struct MarkdownTableView: View {
                     .padding(.vertical, 7)
                     .background(isHeader ? NordTheme.badgeFill(colorScheme) : Color.clear)
                     .overlay(alignment: .trailing) {
-                        Rectangle()
-                            .fill(NordTheme.border(colorScheme))
-                            .frame(width: 1)
+                        // Skip the trailing vertical separator on the
+                        // rightmost cell — it would otherwise sit
+                        // flush against the rounded right edge.
+                        if index < lastColumnIndex {
+                            Rectangle()
+                                .fill(NordTheme.border(colorScheme))
+                                .frame(width: 1)
+                        }
                     }
             }
         }
         .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(NordTheme.border(colorScheme))
-                .frame(height: 1)
+            // Skip the horizontal separator under the final row so the
+            // bottom rounded edge stays clean.
+            if !isLastRow {
+                Rectangle()
+                    .fill(NordTheme.border(colorScheme))
+                    .frame(height: 1)
+            }
         }
     }
 
@@ -2112,7 +2184,7 @@ struct ChatCodeBlockView: View {
             // Top bar: language + copy button
             HStack {
                 Text(language ?? "code")
-                    .font(.system(size: 10, weight: .medium))
+                    .font(OKFont.eyebrow)
                     .foregroundColor(NordTheme.secondaryText(colorScheme))
                 Spacer()
                 Button(action: doCopy) {
@@ -2138,7 +2210,7 @@ struct ChatCodeBlockView: View {
 
             ScrollView(.horizontal, showsIndicators: false) {
                 Text(code)
-                    .font(.system(size: 12, design: .monospaced))
+                    .font(OKFont.monoBlock)
                     .foregroundColor(NordTheme.primaryText(colorScheme))
                     .textSelection(.enabled)
                     .fixedSize(horizontal: true, vertical: true)
@@ -2184,7 +2256,7 @@ private struct ChatErrorBanner: View {
                 .font(.system(size: 12))
                 .foregroundColor(.red)
             Text(message)
-                .font(.system(size: 12))
+                .font(OKFont.caption)
                 .foregroundColor(NordTheme.primaryText(colorScheme))
                 .lineLimit(2)
             Spacer()
