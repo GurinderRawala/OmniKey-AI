@@ -479,6 +479,18 @@ struct ChatConversationView: View {
                 ChatNewChatLandingView(model: model)
             } else {
                 conversationContent
+                    .overlay(alignment: .center) {
+                        // Show the loading indicator as an overlay so the
+                        // ScrollView stays mounted across the open-session
+                        // transition. This avoids the "black flash" caused
+                        // by tearing the conversation view down and rebuilding
+                        // it once the history fetch completes.
+                        if model.isLoadingSessionHistory, model.messages.isEmpty {
+                            ChatLoadingStateView()
+                                .transition(.opacity)
+                        }
+                    }
+                    .animation(.easeInOut(duration: 0.18), value: model.isLoadingSessionHistory)
             }
 
             if let err = model.lastErrorMessage {
@@ -499,12 +511,26 @@ struct ChatConversationView: View {
 
     @ViewBuilder
     private var conversationContent: some View {
+        // Switching from `LazyVStack` to `VStack` here is intentional.
+        // The transcript is already capped at `ChatModel.maxVisibleMessages`
+        // (currently 30), so eager rendering is cheap, and it fixes two
+        // bugs in the previous implementation:
+        //   1. With the lazy stack nested in a centred 980-pt frame inside
+        //      a ScrollView, SwiftUI sometimes failed to materialize rows
+        //      until the user scrolled, leaving the view blank.
+        //   2. `proxy.scrollTo("bottom")` ran *before* lazy rows had been
+        //      laid out, so the animated scroll-on-load fired against
+        //      stale geometry and produced a jarring jump.
+        //
+        // We also drop the `withAnimation { proxy.scrollTo }` cascade and
+        // rely on `defaultScrollAnchor(.bottom)`. The scroll view sticks
+        // to the bottom as new content streams in, and lands at the
+        // bottom immediately when an existing chat is opened — no
+        // animated jump, no flash of "top-then-jump-to-bottom".
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(spacing: 0) {
-                    if model.isLoadingSessionHistory {
-                        ChatLoadingStateView()
-                    } else if model.messages.isEmpty {
+                VStack(spacing: 0) {
+                    if model.messages.isEmpty, !model.isLoadingSessionHistory {
                         ChatEmptyStateView()
                     }
                     if model.trimmedOlderMessageCount > 0, !model.messages.isEmpty {
@@ -525,14 +551,29 @@ struct ChatConversationView: View {
                 .frame(maxWidth: 980, alignment: .leading)
                 .frame(maxWidth: .infinity, alignment: .center)
             }
-            .onChange(of: model.messages.count) { _, _ in
-                withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
-            }
+            .defaultScrollAnchor(.bottom)
+            // Only animate scroll-to-bottom for *live* turn activity. New
+            // assistant blocks and the user's own sends should glide into
+            // view, but opening an existing chat (where messages.count
+            // jumps from 0 to N in a single hydration step) must not —
+            // that's the "auto-scroll disrupts loading" bug. The
+            // `isRunning` guard keeps the animation scoped to the
+            // active turn.
             .onChange(of: model.messages.last?.blocks.count ?? 0) { _, _ in
-                withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+                guard model.isRunning else { return }
+                withAnimation(.easeOut(duration: 0.2)) {
+                    proxy.scrollTo("bottom", anchor: .bottom)
+                }
             }
-            .onChange(of: model.isRunning) { _, _ in
-                withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+            .onChange(of: model.messages.count) { oldCount, newCount in
+                // Animate when the user adds a turn (count increments by
+                // 1 or 2 during an active run). Skip the initial hydration
+                // jump from 0 → N, which is handled by
+                // `defaultScrollAnchor(.bottom)`.
+                guard model.isRunning, newCount > oldCount, oldCount > 0 else { return }
+                withAnimation(.easeOut(duration: 0.2)) {
+                    proxy.scrollTo("bottom", anchor: .bottom)
+                }
             }
         }
     }

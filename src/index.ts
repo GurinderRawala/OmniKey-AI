@@ -92,8 +92,8 @@ app.get('/macos/appcast', (req, res) => {
 
   // These should match the values embedded into the macOS app
   // Info.plist in macOS/build_release_dmg.sh.
-  const bundleVersion = '33';
-  const shortVersion = '1.0.32';
+  const bundleVersion = '34';
+  const shortVersion = '1.0.33';
 
   const xml = `<?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0"
