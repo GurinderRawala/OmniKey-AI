@@ -88,6 +88,7 @@ namespace OmniKey.Windows
             MinimumSize   = new Size(700, 480);
             StartPosition = FormStartPosition.CenterScreen;
             BackColor     = NordColors.WindowBackground;
+            Icon          = UIStyles.AppIcon;
 
             // ── Title ─────────────────────────────────────────────────────
             Controls.Add(new Label

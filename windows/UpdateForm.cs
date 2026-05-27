@@ -20,6 +20,7 @@ namespace OmniKey.Windows
             MinimizeBox     = false;
             StartPosition   = FormStartPosition.CenterScreen;
             BackColor       = NordColors.WindowBackground;
+            Icon            = UIStyles.AppIcon;
 
             // ── Title ────────────────────────────────────────────────────
             var titleLabel = new Label

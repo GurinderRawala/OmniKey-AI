@@ -35,6 +35,7 @@ namespace OmniKey.Windows
             MinimizeBox = false;
             ClientSize = new Size(560, 454);
             BackColor = NordColors.WindowBackground;
+            Icon = UIStyles.AppIcon;
 
             var titleLabel = new Label
             {

@@ -16,4 +16,8 @@
     <EmbeddedResource Include="app.ico" />
     <EmbeddedResource Include="tray.ico" />
   </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="FontAwesome.Sharp" Version="6.6.0" />
+    <PackageReference Include="Markdig" Version="1.2.0" />
+  </ItemGroup>
 </Project>

@@ -230,10 +230,7 @@ namespace OmniKey.Windows
             LastErrorMessage = null;
             IsLoadingSessionHistory = true;
 
-            var state = _states.TryGetValue(session.Id, out var existing)
-                ? existing
-                : sessionState(session.Id);
-            loadState(state);
+            loadState(sessionState(session.Id));
 
             DefaultTaskTemplate = null;
             FetchDefaultTaskTemplate();
@@ -347,6 +344,11 @@ namespace OmniKey.Windows
 
             InputText = last.Text;
             return true;
+        }
+
+        public void DismissError()
+        {
+            LastErrorMessage = null;
         }
 
         public void CancelCurrentTurn()

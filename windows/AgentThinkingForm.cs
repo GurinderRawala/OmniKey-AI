@@ -41,6 +41,7 @@ namespace OmniKey.Windows
             StartPosition   = FormStartPosition.CenterScreen;
             BackColor       = NordColors.WindowBackground;
             FormBorderStyle = FormBorderStyle.Sizable;
+            Icon            = UIStyles.AppIcon;
 
             // ── Log area ──────────────────────────────────────────────────
             var logSurround = new Panel

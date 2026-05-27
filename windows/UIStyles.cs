@@ -8,6 +8,26 @@ namespace OmniKey.Windows
 {
     internal static class UIStyles
     {
+        private static Icon? _cachedAppIcon;
+
+        public static Icon? AppIcon
+        {
+            get
+            {
+                if (_cachedAppIcon != null) return _cachedAppIcon;
+                try
+                {
+                    var assembly = System.Reflection.Assembly.GetExecutingAssembly();
+                    using var stream = assembly.GetManifestResourceStream("OmniKey.Windows.app.ico");
+                    if (stream != null) _cachedAppIcon = new Icon(stream);
+                }
+                catch
+                {
+                }
+                return _cachedAppIcon;
+            }
+        }
+
         public static Button MakePrimaryButton(string text, Size? size = null, Image? icon = null)
         {
             var back = NordColors.Accent;

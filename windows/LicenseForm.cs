@@ -21,6 +21,7 @@ namespace OmniKey.Windows
             MaximizeBox     = false;
             StartPosition   = FormStartPosition.CenterScreen;
             BackColor       = NordColors.WindowBackground;
+            Icon            = UIStyles.AppIcon;
 
             // ── Zone 1: Header card ───────────────────────────────────────
             var headerPanel = new Panel
