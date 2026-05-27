@@ -1,0 +1,665 @@
+<Page
+    x:Class="OmniKey.Windows.Views.Pages.AgentSessionPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+    xmlns:vm="clr-namespace:OmniKey.Windows.ViewModels"
+    xmlns:om="clr-namespace:OmniKey.Windows"
+    Title="OmniAgent Session"
+    Background="Transparent"
+    ScrollViewer.CanContentScroll="False"
+    d:DesignHeight="760"
+    d:DesignWidth="1180"
+    mc:Ignorable="d">
+
+    <Page.Resources>
+        <SolidColorBrush x:Key="Sess.CardBackgroundBrush" Color="#FF101012" />
+        <SolidColorBrush x:Key="Sess.HoverBrush" Color="#1AFFFFFF" />
+
+        <!-- Ghost button (used for copy + small toggles) -->
+        <Style x:Key="Sess.GhostButtonStyle" TargetType="Button">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="6,3" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Foreground" Value="{StaticResource Nord.SecondaryTextBrush}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border
+                            x:Name="Bg"
+                            Background="{TemplateBinding Background}"
+                            CornerRadius="6"
+                            SnapsToDevicePixels="True">
+                            <ContentPresenter
+                                HorizontalAlignment="Center"
+                                VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bg" Property="Background" Value="{StaticResource Sess.HoverBrush}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- ─── Collapsible timeline row ───────────────────────────────
+             One row per agent action (reasoning, web search, MCP, terminal).
+             The dot lives in the SAME grid row as the header button (both
+             VerticalAlignment="Center") so they share an exact vertical
+             centerline. -->
+        <DataTemplate x:Key="TimelineRowTemplate" DataType="{x:Type vm:AgentTimelineRow}">
+            <Grid Margin="0,0,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="22" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <!-- Dot — centered against the header button. -->
+                <Grid
+                    Grid.Row="0"
+                    Grid.Column="0"
+                    Width="20"
+                    Height="20"
+                    VerticalAlignment="Center">
+                    <Ellipse
+                        Width="6"
+                        Height="6"
+                        Fill="{Binding AccentBrush}"
+                        Opacity="0.85" />
+                </Grid>
+
+                <!-- Connector — only when expanded, descending alongside the body. -->
+                <Rectangle
+                    Grid.Row="1"
+                    Grid.Column="0"
+                    Width="1"
+                    Margin="0,2,0,0"
+                    HorizontalAlignment="Center"
+                    Fill="{StaticResource Nord.BorderBrush}"
+                    Visibility="{Binding IsExpanded, Converter={StaticResource BooleanToVisibilityConverter}}" />
+
+                <!-- Header button -->
+                <Button
+                    Grid.Row="0"
+                    Grid.Column="1"
+                    Margin="6,0,0,0"
+                    Padding="2,4"
+                    HorizontalContentAlignment="Stretch"
+                    VerticalAlignment="Center"
+                    Background="Transparent"
+                    BorderThickness="0"
+                    Command="{Binding ToggleCommand}"
+                    Cursor="Hand">
+                    <Button.Template>
+                        <ControlTemplate TargetType="Button">
+                            <ContentPresenter />
+                        </ControlTemplate>
+                    </Button.Template>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <ui:SymbolIcon
+                            Grid.Column="0"
+                            Margin="0,0,6,0"
+                            VerticalAlignment="Center"
+                            FontSize="12"
+                            Foreground="{Binding AccentBrush}"
+                            Symbol="{Binding IconSymbol}" />
+                        <TextBlock
+                            Grid.Column="1"
+                            Margin="0,0,10,0"
+                            VerticalAlignment="Center"
+                            FontFamily="{StaticResource OK.FontFamily}"
+                            FontSize="11.5"
+                            FontWeight="SemiBold"
+                            Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                            Text="{Binding Label}" />
+                        <TextBlock
+                            Grid.Column="2"
+                            VerticalAlignment="Center"
+                            FontFamily="{StaticResource OK.FontFamily}"
+                            FontSize="11.5"
+                            Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                            Opacity="0.65"
+                            Text="{Binding Summary}"
+                            TextTrimming="CharacterEllipsis"
+                            Visibility="{Binding IsExpanded, Converter={StaticResource InverseBooleanToVisibilityConverter}}" />
+                        <ui:SymbolIcon
+                            Grid.Column="3"
+                            Margin="6,0,0,0"
+                            VerticalAlignment="Center"
+                            FontSize="10"
+                            Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                            Opacity="0.55">
+                            <ui:SymbolIcon.Style>
+                                <Style TargetType="ui:SymbolIcon">
+                                    <Setter Property="Symbol" Value="ChevronDown24" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsExpanded}" Value="True">
+                                            <Setter Property="Symbol" Value="ChevronUp24" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </ui:SymbolIcon.Style>
+                        </ui:SymbolIcon>
+                    </Grid>
+                </Button>
+
+                <!-- Expanded full content -->
+                <Border
+                    Grid.Row="1"
+                    Grid.Column="1"
+                    Margin="6,6,8,12"
+                    Padding="10,8"
+                    Background="{StaticResource Sess.CardBackgroundBrush}"
+                    BorderBrush="{StaticResource Nord.BorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="6"
+                    Visibility="{Binding IsExpanded, Converter={StaticResource BooleanToVisibilityConverter}}">
+                    <TextBlock
+                        FontFamily="{StaticResource OK.MonoFontFamily}"
+                        FontSize="11.5"
+                        Foreground="#FFDCDCE0"
+                        Text="{Binding Text}"
+                        TextWrapping="Wrap" />
+                </Border>
+            </Grid>
+        </DataTemplate>
+
+        <!-- History-turn (when resuming an existing session). -->
+        <DataTemplate x:Key="HistoryTurnTemplate" DataType="{x:Type vm:HistoryTurnRow}">
+            <StackPanel Margin="0,4,0,8">
+                <Border
+                    Padding="6,1"
+                    HorizontalAlignment="Left"
+                    Background="#22FFFFFF"
+                    CornerRadius="999">
+                    <TextBlock
+                        FontFamily="{StaticResource OK.FontFamily}"
+                        FontSize="10"
+                        FontWeight="SemiBold"
+                        Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                        Text="{Binding RoleDisplay}" />
+                </Border>
+                <TextBlock
+                    Margin="0,4,0,0"
+                    FontFamily="{StaticResource OK.FontFamily}"
+                    FontSize="12"
+                    Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                    LineHeight="18"
+                    Text="{Binding Text}"
+                    TextWrapping="Wrap" />
+            </StackPanel>
+        </DataTemplate>
+    </Page.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="1" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- ─────────── Header: title + dropdown + status + cancel ───────────
+             This row stays fixed (Auto height, sits outside the ScrollViewer)
+             so the dropdown is always visible while the body scrolls. -->
+        <Grid Grid.Row="0" Margin="22,16,22,12">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <TextBlock
+                Grid.Row="0"
+                Grid.Column="0"
+                VerticalAlignment="Center"
+                FontFamily="{StaticResource OK.FontFamily}"
+                FontSize="16"
+                FontWeight="SemiBold"
+                Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                Text="OmniAgent Session" />
+
+            <StackPanel
+                Grid.Row="0"
+                Grid.Column="1"
+                VerticalAlignment="Center"
+                Orientation="Horizontal">
+                <ui:ProgressRing
+                    Width="14"
+                    Height="14"
+                    Margin="0,0,8,0"
+                    IsIndeterminate="True"
+                    Visibility="{Binding IsRunning, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                <TextBlock
+                    Margin="0,0,12,0"
+                    VerticalAlignment="Center"
+                    FontFamily="{StaticResource OK.FontFamily}"
+                    FontSize="11.5"
+                    Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                    Text="{Binding StatusText}" />
+                <ui:Button
+                    Padding="10,4"
+                    Appearance="Danger"
+                    Command="{Binding CancelCommand}"
+                    Content="Cancel"
+                    Visibility="{Binding IsRunning, Converter={StaticResource BooleanToVisibilityConverter}}" />
+            </StackPanel>
+
+            <!-- Session dropdown row -->
+            <Grid
+                Grid.Row="1"
+                Grid.Column="0"
+                Grid.ColumnSpan="2"
+                Margin="0,12,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <TextBlock
+                    Grid.Column="0"
+                    Margin="0,0,8,0"
+                    VerticalAlignment="Center"
+                    FontFamily="{StaticResource OK.FontFamily}"
+                    FontSize="12"
+                    Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                    Text="Session:" />
+
+                <ComboBox
+                    Grid.Column="1"
+                    MinWidth="280"
+                    HorizontalAlignment="Left"
+                    VerticalAlignment="Center"
+                    DisplayMemberPath="Title"
+                    FontFamily="{StaticResource OK.FontFamily}"
+                    FontSize="12"
+                    IsEnabled="{Binding IsRunning, Converter={StaticResource InverseBooleanConverter}, FallbackValue=True}"
+                    ItemsSource="{Binding AvailableSessions}"
+                    SelectedValue="{Binding SelectedSessionId, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                    SelectedValuePath="Id"
+                    ToolTip="Resume an existing session, or start a new one" />
+
+                <ui:Button
+                    Grid.Column="2"
+                    Margin="8,0,0,0"
+                    Padding="8,3"
+                    Appearance="Transparent"
+                    Command="{Binding ToggleSelectedAsDefaultCommand}"
+                    ToolTip="Persist this selection as the default for Ctrl+T">
+                    <StackPanel Orientation="Horizontal">
+                        <ui:SymbolIcon
+                            Margin="0,0,4,0"
+                            VerticalAlignment="Center"
+                            FontSize="12">
+                            <ui:SymbolIcon.Style>
+                                <Style TargetType="ui:SymbolIcon">
+                                    <Setter Property="Symbol" Value="StarLineHorizontal324" />
+                                    <Setter Property="Foreground" Value="{StaticResource Nord.SecondaryTextBrush}" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding SelectedIsDefault}" Value="True">
+                                            <Setter Property="Symbol" Value="Star24" />
+                                            <Setter Property="Foreground" Value="{StaticResource Nord.AccentAmberBrush}" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </ui:SymbolIcon.Style>
+                        </ui:SymbolIcon>
+                        <TextBlock
+                            VerticalAlignment="Center"
+                            FontFamily="{StaticResource OK.FontFamily}"
+                            FontSize="11.5">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Text" Value="Set as default" />
+                                    <Setter Property="Foreground" Value="{StaticResource Nord.SecondaryTextBrush}" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding SelectedIsDefault}" Value="True">
+                                            <Setter Property="Text" Value="Default" />
+                                            <Setter Property="Foreground" Value="{StaticResource Nord.AccentAmberBrush}" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </StackPanel>
+                </ui:Button>
+            </Grid>
+        </Grid>
+
+        <Border Grid.Row="1" Background="{StaticResource Nord.BorderBrush}" />
+
+        <!-- ─────────── Body (the ONLY scrollable region) ─────────── -->
+        <ScrollViewer
+            x:Name="LogScroll"
+            Grid.Row="2"
+            Padding="22,8,22,16"
+            HorizontalScrollBarVisibility="Disabled"
+            PreviewMouseWheel="OnLogScrollPreviewMouseWheel"
+            VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+                <!-- Empty state -->
+                <StackPanel
+                    Margin="0,80,0,0"
+                    MaxWidth="360"
+                    HorizontalAlignment="Center"
+                    Visibility="{Binding HasNoActivity, Converter={StaticResource BooleanToVisibilityConverter}}">
+                    <ui:SymbolIcon
+                        HorizontalAlignment="Center"
+                        FontSize="44"
+                        Foreground="{StaticResource Nord.AccentBrush}"
+                        Opacity="0.55"
+                        Symbol="Sparkle24" />
+                    <TextBlock
+                        Margin="0,12,0,6"
+                        HorizontalAlignment="Center"
+                        FontFamily="{StaticResource OK.FontFamily}"
+                        FontSize="{StaticResource OK.Font.Title}"
+                        FontWeight="SemiBold"
+                        Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                        Text="Trigger @omniAgent" />
+                    <TextBlock
+                        HorizontalAlignment="Center"
+                        FontFamily="{StaticResource OK.FontFamily}"
+                        FontSize="{StaticResource OK.Font.BodyCompact}"
+                        Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                        Text="Select text containing @omniAgent in any app, then press Ctrl+T. The run will stream here."
+                        TextAlignment="Center"
+                        TextWrapping="Wrap" />
+                </StackPanel>
+
+                <StackPanel Visibility="{Binding HasNoActivity, Converter={StaticResource InverseBooleanToVisibilityConverter}}">
+                    <!-- Error bar -->
+                    <Border
+                        Margin="0,0,0,10"
+                        Padding="12,8"
+                        Background="#33FC6464"
+                        BorderBrush="#FFFC6464"
+                        BorderThickness="1"
+                        CornerRadius="6"
+                        Visibility="{Binding HasError, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <ui:SymbolIcon
+                                Grid.Column="0"
+                                Margin="0,0,8,0"
+                                VerticalAlignment="Center"
+                                FontSize="13"
+                                Foreground="#FFFC6464"
+                                Symbol="ErrorCircle24" />
+                            <TextBlock
+                                Grid.Column="1"
+                                VerticalAlignment="Center"
+                                FontFamily="{StaticResource OK.FontFamily}"
+                                FontSize="12"
+                                Foreground="#FFFC6464"
+                                Text="{Binding LastErrorMessage}"
+                                TextWrapping="Wrap" />
+                            <ui:Button
+                                Grid.Column="2"
+                                Width="28"
+                                Height="28"
+                                Padding="0"
+                                Appearance="Transparent"
+                                Command="{Binding DismissErrorCommand}"
+                                Icon="{ui:SymbolIcon Symbol=Dismiss24, FontSize=12}" />
+                        </Grid>
+                    </Border>
+
+                    <!-- Pending request banner (no default → user picks then clicks Start) -->
+                    <Border
+                        Margin="0,0,0,12"
+                        Padding="14,12"
+                        Background="{StaticResource Nord.PanelBackgroundBrush}"
+                        BorderBrush="{StaticResource Nord.BorderBrush}"
+                        BorderThickness="1"
+                        CornerRadius="10"
+                        Visibility="{Binding PendingRequestText, Converter={StaticResource StringToVisibilityConverter}}">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <TextBlock
+                                Grid.Row="0"
+                                FontFamily="{StaticResource OK.FontFamily}"
+                                FontSize="11"
+                                FontWeight="SemiBold"
+                                Foreground="{StaticResource Nord.AccentBrush}"
+                                Text="WAITING FOR YOU" />
+                            <TextBlock
+                                Grid.Row="1"
+                                Margin="0,4,0,8"
+                                FontFamily="{StaticResource OK.FontFamily}"
+                                FontSize="12"
+                                Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                                Text="Pick a session above (or keep 'Start new session'), then click Start to run."
+                                TextWrapping="Wrap" />
+                            <Border
+                                Grid.Row="2"
+                                Padding="10,8"
+                                Background="{StaticResource Sess.CardBackgroundBrush}"
+                                BorderBrush="{StaticResource Nord.BorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="6">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock
+                                        Grid.Column="0"
+                                        VerticalAlignment="Center"
+                                        FontFamily="{StaticResource OK.MonoFontFamily}"
+                                        FontSize="11.5"
+                                        Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                                        MaxHeight="120"
+                                        Text="{Binding PendingRequestText}"
+                                        TextTrimming="CharacterEllipsis"
+                                        TextWrapping="Wrap" />
+                                    <ui:Button
+                                        Grid.Column="1"
+                                        Margin="10,0,0,0"
+                                        Padding="14,6"
+                                        Appearance="Primary"
+                                        Command="{Binding StartCommand}"
+                                        Content="Start"
+                                        Icon="{ui:SymbolIcon Symbol=Play24, FontSize=12}" />
+                                </Grid>
+                            </Border>
+                        </Grid>
+                    </Border>
+
+                    <!-- Previous-conversation card (when resuming) -->
+                    <Expander
+                        Margin="0,0,0,12"
+                        Background="{StaticResource Nord.PanelBackgroundBrush}"
+                        BorderBrush="{StaticResource Nord.BorderBrush}"
+                        BorderThickness="1"
+                        Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                        IsExpanded="False"
+                        Visibility="{Binding HasHistory, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <Expander.Header>
+                            <StackPanel Orientation="Horizontal">
+                                <ui:SymbolIcon
+                                    Margin="0,0,6,0"
+                                    VerticalAlignment="Center"
+                                    FontSize="12"
+                                    Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                                    Symbol="History24" />
+                                <TextBlock
+                                    VerticalAlignment="Center"
+                                    FontFamily="{StaticResource OK.FontFamily}"
+                                    FontSize="12"
+                                    FontWeight="SemiBold"
+                                    Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                                    Text="Previous Conversation" />
+                            </StackPanel>
+                        </Expander.Header>
+                        <ItemsControl
+                            Margin="14,6,14,14"
+                            ItemTemplate="{StaticResource HistoryTurnTemplate}"
+                            ItemsSource="{Binding History}" />
+                    </Expander>
+
+                    <!-- Your Request — single prominent card, always-visible content. -->
+                    <Border
+                        Margin="0,0,0,12"
+                        Padding="14,10"
+                        Background="{StaticResource Nord.BlueSectionFillBrush}"
+                        BorderBrush="{StaticResource Nord.BlueSectionBorderBrush}"
+                        BorderThickness="1"
+                        CornerRadius="10"
+                        Visibility="{Binding HasRequest, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <StackPanel>
+                            <StackPanel Margin="0,0,0,6" Orientation="Horizontal">
+                                <ui:SymbolIcon
+                                    Margin="0,0,6,0"
+                                    VerticalAlignment="Center"
+                                    FontSize="13"
+                                    Foreground="{StaticResource Nord.AccentBlueBrush}"
+                                    Symbol="Comment24" />
+                                <TextBlock
+                                    VerticalAlignment="Center"
+                                    FontFamily="{StaticResource OK.FontFamily}"
+                                    FontSize="12"
+                                    FontWeight="SemiBold"
+                                    Foreground="{StaticResource Nord.AccentBlueBrush}"
+                                    Text="Your Request" />
+                            </StackPanel>
+                            <TextBlock
+                                FontFamily="{StaticResource OK.MonoFontFamily}"
+                                FontSize="12"
+                                Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                                Text="{Binding RequestText}"
+                                TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Border>
+
+                    <!-- "Thinking…" / "Thought for N steps" header + timeline. -->
+                    <StackPanel
+                        Margin="0,0,0,12"
+                        Visibility="{Binding HasTimeline, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <StackPanel Margin="0,0,0,8" Orientation="Horizontal">
+                            <ui:SymbolIcon
+                                Margin="0,0,6,0"
+                                VerticalAlignment="Center"
+                                FontSize="13"
+                                Foreground="{StaticResource Nord.AccentPurpleBrush}">
+                                <ui:SymbolIcon.Style>
+                                    <Style TargetType="ui:SymbolIcon">
+                                        <Setter Property="Symbol" Value="BrainCircuit24" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsRunning}" Value="True">
+                                                <Setter Property="Symbol" Value="Sparkle24" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </ui:SymbolIcon.Style>
+                            </ui:SymbolIcon>
+                            <TextBlock
+                                VerticalAlignment="Center"
+                                FontFamily="{StaticResource OK.FontFamily}"
+                                FontSize="11.5"
+                                Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                                Text="{Binding ThinkingHeader}" />
+                        </StackPanel>
+
+                        <ItemsControl
+                            Margin="2,0,0,0"
+                            ItemTemplate="{StaticResource TimelineRowTemplate}"
+                            ItemsSource="{Binding Timeline}" />
+                    </StackPanel>
+
+                    <!-- Final Answer card (with copy button) -->
+                    <Border
+                        Margin="0,4,0,0"
+                        Padding="14,10"
+                        Background="{StaticResource Nord.GreenSectionFillBrush}"
+                        BorderBrush="{StaticResource Nord.GreenSectionBorderBrush}"
+                        BorderThickness="1"
+                        CornerRadius="10"
+                        Visibility="{Binding HasFinalAnswer, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <Grid Grid.Row="0" Margin="0,0,0,6">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Orientation="Horizontal">
+                                    <ui:SymbolIcon
+                                        Margin="0,0,6,0"
+                                        VerticalAlignment="Center"
+                                        FontSize="13"
+                                        Foreground="{StaticResource Nord.AccentGreenBrush}"
+                                        Symbol="Checkmark24" />
+                                    <TextBlock
+                                        VerticalAlignment="Center"
+                                        FontFamily="{StaticResource OK.FontFamily}"
+                                        FontSize="12"
+                                        FontWeight="SemiBold"
+                                        Foreground="{StaticResource Nord.AccentGreenBrush}"
+                                        Text="Final Response" />
+                                </StackPanel>
+                                <Button
+                                    Grid.Column="1"
+                                    Width="28"
+                                    Height="28"
+                                    Command="{Binding CopyFinalAnswerCommand}"
+                                    Style="{StaticResource Sess.GhostButtonStyle}"
+                                    ToolTip="Copy">
+                                    <Grid>
+                                        <ui:SymbolIcon
+                                            FontSize="14"
+                                            Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                                            Symbol="Copy24"
+                                            Visibility="{Binding JustCopiedFinal, Converter={StaticResource InverseBooleanToVisibilityConverter}}" />
+                                        <ui:SymbolIcon
+                                            FontSize="14"
+                                            Foreground="{StaticResource Nord.AccentGreenBrush}"
+                                            Symbol="Checkmark24"
+                                            Visibility="{Binding JustCopiedFinal, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                                    </Grid>
+                                </Button>
+                            </Grid>
+                            <TextBlock
+                                Grid.Row="1"
+                                FontFamily="{StaticResource OK.FontFamily}"
+                                FontSize="13"
+                                Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                                LineHeight="20"
+                                Text="{Binding FinalAnswer}"
+                                TextWrapping="Wrap" />
+                        </Grid>
+                    </Border>
+                </StackPanel>
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</Page>

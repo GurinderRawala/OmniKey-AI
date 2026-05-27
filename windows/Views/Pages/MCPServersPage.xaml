@@ -1,0 +1,428 @@
+<Page
+    x:Class="OmniKey.Windows.Views.Pages.MCPServersPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+    Title="MCP Servers"
+    Background="Transparent"
+    d:DesignHeight="700"
+    d:DesignWidth="1100"
+    ScrollViewer.CanContentScroll="False"
+    mc:Ignorable="d">
+
+    <Grid Margin="24,20,24,20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- ────────────────── Header ────────────────── -->
+        <Grid Grid.Row="0" Margin="0,0,0,14">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <StackPanel Grid.Column="0">
+                <StackPanel Orientation="Horizontal">
+                    <ui:SymbolIcon
+                        Margin="0,0,10,0"
+                        VerticalAlignment="Center"
+                        FontSize="20"
+                        Foreground="{StaticResource Nord.AccentBrush}"
+                        Symbol="Server24" />
+                    <TextBlock
+                        VerticalAlignment="Center"
+                        FontFamily="{StaticResource OK.FontFamily}"
+                        FontSize="{StaticResource OK.Font.Title}"
+                        FontWeight="SemiBold"
+                        Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                        Text="MCP Servers" />
+                </StackPanel>
+                <TextBlock
+                    Margin="0,4,0,0"
+                    FontFamily="{StaticResource OK.FontFamily}"
+                    FontSize="{StaticResource OK.Font.Body}"
+                    Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                    Text="Manage Model Context Protocol servers that extend the agent's capabilities." />
+            </StackPanel>
+
+            <ui:Button
+                Grid.Column="1"
+                VerticalAlignment="Center"
+                Appearance="Primary"
+                Command="{Binding AddServerCommand}"
+                Content="Add server"
+                Icon="{ui:SymbolIcon Symbol=Add24}" />
+        </Grid>
+
+        <Border
+            Grid.Row="1"
+            Height="1"
+            Margin="0,0,0,14"
+            Background="{StaticResource Nord.BorderBrush}" />
+
+        <!-- ────────────────── Master-detail body ────────────────── -->
+        <Grid Grid.Row="2">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="320" MinWidth="260" />
+                <ColumnDefinition Width="14" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <!-- Left: list of servers -->
+            <Border
+                Grid.Column="0"
+                Padding="6"
+                Background="{StaticResource Nord.PanelBackgroundBrush}"
+                CornerRadius="14">
+                <Border.Effect>
+                    <DropShadowEffect
+                        BlurRadius="22"
+                        Direction="270"
+                        Opacity="0.45"
+                        ShadowDepth="6"
+                        Color="Black" />
+                </Border.Effect>
+
+                <ListBox
+                    Background="Transparent"
+                    BorderThickness="0"
+                    HorizontalContentAlignment="Stretch"
+                    ItemsSource="{Binding Servers}"
+                    ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                    ScrollViewer.VerticalScrollBarVisibility="Auto"
+                    SelectedItem="{Binding SelectedServer}">
+                    <ListBox.ItemContainerStyle>
+                        <Style TargetType="ListBoxItem">
+                            <Setter Property="Padding" Value="10,8" />
+                            <Setter Property="Margin" Value="0,2" />
+                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                        </Style>
+                    </ListBox.ItemContainerStyle>
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+
+                                <ui:ToggleSwitch
+                                    Grid.Column="0"
+                                    Margin="0,2,10,0"
+                                    VerticalAlignment="Top"
+                                    IsChecked="{Binding IsEnabled, Mode=TwoWay}" />
+
+                                <StackPanel Grid.Column="1">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock
+                                            VerticalAlignment="Center"
+                                            FontFamily="{StaticResource OK.FontFamily}"
+                                            FontSize="{StaticResource OK.Font.Body}"
+                                            FontWeight="SemiBold"
+                                            Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                                            Text="{Binding Name}"
+                                            TextTrimming="CharacterEllipsis" />
+                                        <Border
+                                            Margin="8,0,0,0"
+                                            Padding="6,1"
+                                            VerticalAlignment="Center"
+                                            Background="{StaticResource Nord.EditorBackgroundBrush}"
+                                            BorderBrush="{StaticResource Nord.BorderBrush}"
+                                            BorderThickness="1"
+                                            CornerRadius="6">
+                                            <TextBlock
+                                                FontFamily="{StaticResource OK.MonoFontFamily}"
+                                                FontSize="{StaticResource OK.Font.CaptionSmall}"
+                                                Foreground="{StaticResource Nord.AccentBlueBrush}"
+                                                Text="{Binding Transport}" />
+                                        </Border>
+                                    </StackPanel>
+                                    <TextBlock
+                                        Margin="0,2,0,0"
+                                        FontFamily="{StaticResource OK.FontFamily}"
+                                        FontSize="{StaticResource OK.Font.Caption}"
+                                        Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                                        Text="{Binding Description}"
+                                        TextTrimming="CharacterEllipsis"
+                                        TextWrapping="NoWrap" />
+                                </StackPanel>
+                            </Grid>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </Border>
+
+            <!-- Right: editor pane -->
+            <Border
+                Grid.Column="2"
+                Padding="20"
+                Background="{StaticResource Nord.PanelBackgroundBrush}"
+                CornerRadius="14">
+                <Border.Effect>
+                    <DropShadowEffect
+                        BlurRadius="22"
+                        Direction="270"
+                        Opacity="0.45"
+                        ShadowDepth="6"
+                        Color="Black" />
+                </Border.Effect>
+
+                <Grid>
+                    <!-- Empty state -->
+                    <StackPanel
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        Visibility="{Binding HasNoSelection, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <ui:SymbolIcon
+                            HorizontalAlignment="Center"
+                            FontSize="40"
+                            Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                            Symbol="Server24" />
+                        <TextBlock
+                            Margin="0,12,0,4"
+                            HorizontalAlignment="Center"
+                            FontFamily="{StaticResource OK.FontFamily}"
+                            FontSize="{StaticResource OK.Font.Headline}"
+                            FontWeight="SemiBold"
+                            Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                            Text="No server selected" />
+                        <TextBlock
+                            Margin="0,0,0,14"
+                            HorizontalAlignment="Center"
+                            FontFamily="{StaticResource OK.FontFamily}"
+                            FontSize="{StaticResource OK.Font.Body}"
+                            Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                            Text="Pick a server on the left to edit, or add a new one." />
+                        <ui:Button
+                            HorizontalAlignment="Center"
+                            Appearance="Primary"
+                            Command="{Binding AddServerCommand}"
+                            Content="Add server"
+                            Icon="{ui:SymbolIcon Symbol=Add24}" />
+                    </StackPanel>
+
+                    <!-- Editor form -->
+                    <ScrollViewer
+                        HorizontalScrollBarVisibility="Disabled"
+                        VerticalScrollBarVisibility="Auto"
+                        Visibility="{Binding HasSelection, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+
+                            <TextBlock
+                                Grid.Row="0"
+                                Margin="0,0,0,14"
+                                FontFamily="{StaticResource OK.FontFamily}"
+                                FontSize="{StaticResource OK.Font.Headline}"
+                                FontWeight="SemiBold"
+                                Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                                Text="{Binding EditorTitle}" />
+
+                            <!-- Name -->
+                            <TextBlock
+                                Grid.Row="1"
+                                Margin="0,0,0,4"
+                                FontFamily="{StaticResource OK.FontFamily}"
+                                FontSize="{StaticResource OK.Font.CaptionSmall}"
+                                FontWeight="SemiBold"
+                                Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                                Text="NAME" />
+                            <ui:TextBox
+                                Grid.Row="2"
+                                Margin="0,0,0,12"
+                                FontFamily="{StaticResource OK.FontFamily}"
+                                FontSize="{StaticResource OK.Font.Body}"
+                                PlaceholderText="e.g. Filesystem"
+                                Text="{Binding EditName, UpdateSourceTrigger=PropertyChanged}" />
+
+                            <!-- Description -->
+                            <TextBlock
+                                Grid.Row="3"
+                                Margin="0,0,0,4"
+                                FontFamily="{StaticResource OK.FontFamily}"
+                                FontSize="{StaticResource OK.Font.CaptionSmall}"
+                                FontWeight="SemiBold"
+                                Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                                Text="DESCRIPTION" />
+                            <ui:TextBox
+                                Grid.Row="4"
+                                Margin="0,0,0,12"
+                                FontFamily="{StaticResource OK.FontFamily}"
+                                FontSize="{StaticResource OK.Font.Body}"
+                                PlaceholderText="What does this server expose?"
+                                Text="{Binding EditDescription, UpdateSourceTrigger=PropertyChanged}" />
+
+                            <!-- Transport + Enabled -->
+                            <Grid Grid.Row="5" Margin="0,0,0,12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="200" />
+                                    <ColumnDefinition Width="14" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0">
+                                    <TextBlock
+                                        Margin="0,0,0,4"
+                                        FontFamily="{StaticResource OK.FontFamily}"
+                                        FontSize="{StaticResource OK.Font.CaptionSmall}"
+                                        FontWeight="SemiBold"
+                                        Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                                        Text="TRANSPORT" />
+                                    <ComboBox
+                                        FontFamily="{StaticResource OK.FontFamily}"
+                                        FontSize="{StaticResource OK.Font.Body}"
+                                        ItemsSource="{Binding TransportOptions}"
+                                        SelectedItem="{Binding EditTransport}" />
+                                </StackPanel>
+                                <StackPanel
+                                    Grid.Column="2"
+                                    VerticalAlignment="Bottom"
+                                    Orientation="Horizontal">
+                                    <ui:ToggleSwitch
+                                        Margin="0,0,8,0"
+                                        IsChecked="{Binding EditEnabled, Mode=TwoWay}" />
+                                    <TextBlock
+                                        VerticalAlignment="Center"
+                                        FontFamily="{StaticResource OK.FontFamily}"
+                                        FontSize="{StaticResource OK.Font.Body}"
+                                        Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                                        Text="Enabled" />
+                                </StackPanel>
+                            </Grid>
+
+                            <!-- stdio fields -->
+                            <StackPanel
+                                Grid.Row="6"
+                                Visibility="{Binding IsStdio, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                <TextBlock
+                                    Margin="0,0,0,4"
+                                    FontFamily="{StaticResource OK.FontFamily}"
+                                    FontSize="{StaticResource OK.Font.CaptionSmall}"
+                                    FontWeight="SemiBold"
+                                    Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                                    Text="COMMAND" />
+                                <ui:TextBox
+                                    Margin="0,0,0,12"
+                                    FontFamily="{StaticResource OK.MonoFontFamily}"
+                                    FontSize="{StaticResource OK.Font.Body}"
+                                    PlaceholderText="e.g. npx"
+                                    Text="{Binding EditCommand, UpdateSourceTrigger=PropertyChanged}" />
+
+                                <TextBlock
+                                    Margin="0,0,0,4"
+                                    FontFamily="{StaticResource OK.FontFamily}"
+                                    FontSize="{StaticResource OK.Font.CaptionSmall}"
+                                    FontWeight="SemiBold"
+                                    Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                                    Text="ARGS (one per line)" />
+                                <Border
+                                    BorderBrush="{StaticResource Nord.BorderBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="8">
+                                    <ui:TextBox
+                                        MinHeight="90"
+                                        AcceptsReturn="True"
+                                        AcceptsTab="True"
+                                        Background="{StaticResource Nord.EditorBackgroundBrush}"
+                                        BorderThickness="0"
+                                        FontFamily="{StaticResource OK.MonoFontFamily}"
+                                        FontSize="{StaticResource OK.Font.Body}"
+                                        PlaceholderText="--port&#x0a;8080"
+                                        Text="{Binding EditArgs, UpdateSourceTrigger=PropertyChanged}"
+                                        TextWrapping="NoWrap"
+                                        VerticalScrollBarVisibility="Auto" />
+                                </Border>
+                            </StackPanel>
+
+                            <!-- remote fields -->
+                            <StackPanel
+                                Grid.Row="7"
+                                Visibility="{Binding IsRemote, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                <TextBlock
+                                    Margin="0,0,0,4"
+                                    FontFamily="{StaticResource OK.FontFamily}"
+                                    FontSize="{StaticResource OK.Font.CaptionSmall}"
+                                    FontWeight="SemiBold"
+                                    Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                                    Text="URL" />
+                                <ui:TextBox
+                                    Margin="0,0,0,12"
+                                    FontFamily="{StaticResource OK.MonoFontFamily}"
+                                    FontSize="{StaticResource OK.Font.Body}"
+                                    PlaceholderText="https://example.com/mcp"
+                                    Text="{Binding EditUrl, UpdateSourceTrigger=PropertyChanged}" />
+                            </StackPanel>
+                        </Grid>
+                    </ScrollViewer>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <!-- ────────────────── Bottom bar ────────────────── -->
+        <Grid Grid.Row="3" Margin="0,14,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <ui:Button
+                Grid.Column="0"
+                Appearance="Danger"
+                Command="{Binding DeleteCommand}"
+                Content="Delete"
+                Icon="{ui:SymbolIcon Symbol=Delete24}"
+                Visibility="{Binding HasSelection, Converter={StaticResource BooleanToVisibilityConverter}}" />
+
+            <StackPanel
+                Grid.Column="1"
+                Margin="14,0,0,0"
+                VerticalAlignment="Center"
+                Orientation="Horizontal">
+                <ui:ProgressRing
+                    Width="16"
+                    Height="16"
+                    Margin="0,0,8,0"
+                    IsIndeterminate="True"
+                    Visibility="{Binding IsLoading, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                <TextBlock
+                    VerticalAlignment="Center"
+                    FontFamily="{StaticResource OK.FontFamily}"
+                    FontSize="{StaticResource OK.Font.CaptionSmall}"
+                    Foreground="{Binding StatusBrush}"
+                    Text="{Binding StatusMessage}"
+                    TextTrimming="CharacterEllipsis" />
+            </StackPanel>
+
+            <StackPanel Grid.Column="2" Orientation="Horizontal">
+                <ui:Button
+                    Margin="0,0,6,0"
+                    Command="{Binding RefreshCommand}"
+                    Content="Refresh"
+                    Icon="{ui:SymbolIcon Symbol=ArrowSync24}" />
+                <ui:Button
+                    Appearance="Primary"
+                    Command="{Binding SaveCommand}"
+                    Content="Save"
+                    Icon="{ui:SymbolIcon Symbol=Save24}"
+                    Visibility="{Binding HasSelection, Converter={StaticResource BooleanToVisibilityConverter}}" />
+            </StackPanel>
+        </Grid>
+    </Grid>
+</Page>

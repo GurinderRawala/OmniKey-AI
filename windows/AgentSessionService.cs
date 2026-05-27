@@ -5,7 +5,6 @@ using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.Win32;
-using System.Windows.Forms;
 
 namespace OmniKey.Windows
 {
@@ -13,8 +12,12 @@ namespace OmniKey.Windows
     {
         public string Id { get; set; } = "";
         public string Title { get; set; } = "";
+        public string Platform { get; set; } = "";
         public int Turns { get; set; }
+        public int TotalTokensUsed { get; set; }
         public int RemainingContextTokens { get; set; }
+        public int ContextBudget { get; set; }
+        public string? LastActiveAt { get; set; }
     }
 
     internal sealed class AgentSessionSelection
@@ -63,68 +66,7 @@ namespace OmniKey.Windows
     {
         private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(20) };
 
-        /// Always shows the session picker regardless of any stored default.
-        /// Used by the History button in AgentThinkingForm to let the user configure
-        /// the default session for future runs without starting a new agent run.
-        public static async Task<AgentSessionSelection?> ShowSessionSettingsAsync(IWin32Window owner)
-        {
-            var sessions = await FetchSessionsAsync();
-            string? storedDefault = AgentSessionPreferences.ReadDefaultSessionId();
-
-            using var picker = new AgentSessionPickerForm(sessions, storedDefault, settingsMode: true);
-            if (picker.ShowDialog(owner) != DialogResult.OK)
-                return null;
-
-            return picker.Selection;
-        }
-
-        public static async Task<AgentSessionSelection?> ResolveSelectionAsync(IWin32Window owner)
-        {
-            var sessions = await FetchSessionsAsync();
-            string? storedDefault = AgentSessionPreferences.ReadDefaultSessionId();
-
-            if (!string.IsNullOrWhiteSpace(storedDefault))
-            {
-                if (storedDefault == AgentSessionPreferences.NewSessionSentinel)
-                {
-                    return new AgentSessionSelection
-                    {
-                        SessionId = null,
-                        SessionTitle = "New Session"
-                    };
-                }
-
-                var matched = sessions.Find(s => s.Id == storedDefault);
-                if (matched != null)
-                {
-                    return new AgentSessionSelection
-                    {
-                        SessionId = matched.Id,
-                        SessionTitle = matched.Title
-                    };
-                }
-
-                AgentSessionPreferences.ClearDefaultSessionId();
-                storedDefault = null;
-            }
-
-            if (sessions.Count == 0)
-            {
-                return new AgentSessionSelection
-                {
-                    SessionId = null,
-                    SessionTitle = "New Session"
-                };
-            }
-
-            using var picker = new AgentSessionPickerForm(sessions, storedDefault);
-            if (picker.ShowDialog(owner) != DialogResult.OK)
-                return null;
-
-            return picker.Selection;
-        }
-
-        private static async Task<List<AgentSessionInfo>> FetchSessionsAsync()
+        internal static async Task<List<AgentSessionInfo>> FetchSessionsAsync()
         {
             var token = SubscriptionManager.Instance.JwtToken;
             if (string.IsNullOrWhiteSpace(token))
