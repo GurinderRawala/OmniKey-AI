@@ -1,0 +1,215 @@
+<Page
+    x:Class="OmniKey.Windows.Views.Pages.TaskInstructionsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+    Title="Task Instructions"
+    Background="Transparent"
+    d:DesignHeight="700"
+    d:DesignWidth="980"
+    ScrollViewer.CanContentScroll="False"
+    mc:Ignorable="d">
+
+    <Grid Margin="24,20,24,20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- ────────────────── Header ────────────────── -->
+        <StackPanel Grid.Row="0" Margin="0,0,0,14">
+            <StackPanel Orientation="Horizontal">
+                <ui:SymbolIcon
+                    Margin="0,0,10,0"
+                    VerticalAlignment="Center"
+                    FontSize="20"
+                    Foreground="{StaticResource Nord.AccentBrush}"
+                    Symbol="ClipboardTask24" />
+                <TextBlock
+                    VerticalAlignment="Center"
+                    FontFamily="{StaticResource OK.FontFamily}"
+                    FontSize="{StaticResource OK.Font.Title}"
+                    FontWeight="SemiBold"
+                    Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                    Text="Task Templates for Ctrl+T" />
+            </StackPanel>
+            <TextBlock
+                Margin="0,4,0,0"
+                FontFamily="{StaticResource OK.FontFamily}"
+                FontSize="{StaticResource OK.Font.Body}"
+                Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                Text="Save and manage task instruction templates. Choose one as the default to run whenever you press Ctrl+T." />
+        </StackPanel>
+
+        <Border
+            Grid.Row="1"
+            Height="1"
+            Margin="0,0,0,14"
+            Background="{StaticResource Nord.BorderBrush}" />
+
+        <!-- ────────────────── Editor card ────────────────── -->
+        <Border
+            Grid.Row="2"
+            Padding="16"
+            Background="{StaticResource Nord.PanelBackgroundBrush}"
+            CornerRadius="14">
+            <Border.Effect>
+                <DropShadowEffect
+                    BlurRadius="22"
+                    Direction="270"
+                    Opacity="0.45"
+                    ShadowDepth="6"
+                    Color="Black" />
+            </Border.Effect>
+
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+
+                <!-- Heading + template picker -->
+                <Grid Grid.Row="0" Margin="0,0,0,10">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" MinWidth="240" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <ui:TextBox
+                        Grid.Column="0"
+                        Margin="0,0,14,0"
+                        FontFamily="{StaticResource OK.FontFamily}"
+                        FontSize="{StaticResource OK.Font.Body}"
+                        PlaceholderText="Template heading"
+                        Text="{Binding Heading, UpdateSourceTrigger=PropertyChanged}" />
+
+                    <StackPanel
+                        Grid.Column="1"
+                        VerticalAlignment="Center"
+                        Orientation="Horizontal">
+                        <TextBlock
+                            Margin="0,0,6,0"
+                            VerticalAlignment="Center"
+                            FontFamily="{StaticResource OK.FontFamily}"
+                            FontSize="{StaticResource OK.Font.Caption}"
+                            FontWeight="Medium"
+                            Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                            Text="Template:" />
+                        <ComboBox
+                            Width="240"
+                            DisplayMemberPath="DisplayName"
+                            FontFamily="{StaticResource OK.FontFamily}"
+                            FontSize="{StaticResource OK.Font.Caption}"
+                            ItemsSource="{Binding Choices}"
+                            SelectedItem="{Binding SelectedChoice}" />
+                    </StackPanel>
+                </Grid>
+
+                <!-- Example picker (visible only in new-template mode) -->
+                <StackPanel
+                    Grid.Row="1"
+                    Margin="0,0,0,10"
+                    Orientation="Horizontal"
+                    Visibility="{Binding IsExampleSectionVisible, Converter={StaticResource BooleanToVisibilityConverter}}">
+                    <TextBlock
+                        Margin="0,0,6,0"
+                        VerticalAlignment="Center"
+                        FontFamily="{StaticResource OK.FontFamily}"
+                        FontSize="{StaticResource OK.Font.Caption}"
+                        FontWeight="Medium"
+                        Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                        Text="Load example:" />
+                    <ComboBox
+                        Width="220"
+                        DisplayMemberPath="Name"
+                        FontFamily="{StaticResource OK.FontFamily}"
+                        FontSize="{StaticResource OK.Font.Caption}"
+                        ItemsSource="{Binding ExampleTemplates}"
+                        SelectedItem="{Binding SelectedExample}" />
+                </StackPanel>
+
+                <!-- Instructions editor -->
+                <Border
+                    Grid.Row="2"
+                    BorderBrush="{StaticResource Nord.BorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8">
+                    <ui:TextBox
+                        AcceptsReturn="True"
+                        AcceptsTab="True"
+                        Background="{StaticResource Nord.EditorBackgroundBrush}"
+                        BorderThickness="0"
+                        FontFamily="{StaticResource OK.MonoFontFamily}"
+                        FontSize="13"
+                        Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                        PlaceholderText="Describe the role, context, and task this template should apply when you press Ctrl+T…"
+                        Text="{Binding Instructions, UpdateSourceTrigger=PropertyChanged}"
+                        TextWrapping="Wrap"
+                        VerticalScrollBarVisibility="Auto" />
+                </Border>
+            </Grid>
+        </Border>
+
+        <!-- ────────────────── Bottom bar ────────────────── -->
+        <Grid Grid.Row="3" Margin="0,14,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <ui:Button
+                Grid.Column="0"
+                Appearance="Danger"
+                Command="{Binding DeleteCommand}"
+                Content="Delete Template"
+                Icon="{ui:SymbolIcon Symbol=Delete24}" />
+
+            <StackPanel
+                Grid.Column="1"
+                Margin="14,0,0,0"
+                VerticalAlignment="Center"
+                Orientation="Horizontal">
+                <ui:ProgressRing
+                    Width="16"
+                    Height="16"
+                    Margin="0,0,8,0"
+                    IsIndeterminate="True"
+                    Visibility="{Binding IsLoading, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                <TextBlock
+                    VerticalAlignment="Center"
+                    FontFamily="{StaticResource OK.FontFamily}"
+                    FontSize="{StaticResource OK.Font.CaptionSmall}"
+                    Foreground="{Binding StatusBrush}"
+                    Text="{Binding StatusMessage}"
+                    TextTrimming="CharacterEllipsis" />
+            </StackPanel>
+
+            <StackPanel
+                Grid.Column="2"
+                Orientation="Horizontal">
+                <ui:Button
+                    Margin="0,0,6,0"
+                    Command="{Binding NewTemplateCommand}"
+                    Content="New" />
+                <ui:Button
+                    Margin="0,0,6,0"
+                    Command="{Binding ClearDefaultCommand}"
+                    Content="Clear Default" />
+                <ui:Button
+                    Margin="0,0,6,0"
+                    Command="{Binding SetDefaultCommand}"
+                    Content="Use for Ctrl+T" />
+                <ui:Button
+                    Appearance="Primary"
+                    Command="{Binding SaveCommand}"
+                    Content="Save Template" />
+            </StackPanel>
+        </Grid>
+    </Grid>
+</Page>

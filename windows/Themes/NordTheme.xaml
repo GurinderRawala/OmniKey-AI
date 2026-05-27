@@ -1,0 +1,124 @@
+<ResourceDictionary
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:sys="clr-namespace:System;assembly=mscorlib">
+
+    <!--
+        Palette mirrors macOS/Sources/NordTheme.swift (dark variant).
+        Light variants live alongside under *.Light keys so a theme switch
+        can swap them in later. Names match the SwiftUI helpers so the two
+        codebases stay in step.
+    -->
+
+    <!-- Window & panel surfaces -->
+    <Color x:Key="Nord.WindowBackgroundTop.Dark">#FF1C1C1E</Color>
+    <Color x:Key="Nord.WindowBackgroundBottom.Dark">#FF262628</Color>
+    <Color x:Key="Nord.PanelBackground.Dark">#F72C2C2E</Color>
+    <Color x:Key="Nord.EditorBackground.Dark">#E61E1E20</Color>
+
+    <Color x:Key="Nord.WindowBackgroundTop.Light">#FFEEF2FF</Color>
+    <Color x:Key="Nord.WindowBackgroundBottom.Light">#FFE8EEFF</Color>
+    <Color x:Key="Nord.PanelBackground.Light">#FAFFFFFF</Color>
+    <Color x:Key="Nord.EditorBackground.Light">#FFF5F7FF</Color>
+
+    <!-- Borders -->
+    <Color x:Key="Nord.Border.Dark">#14FFFFFF</Color>
+    <Color x:Key="Nord.Border.Light">#170F1535</Color>
+
+    <!-- Text -->
+    <Color x:Key="Nord.PrimaryText.Dark">#FFDCDCE0</Color>
+    <Color x:Key="Nord.SecondaryText.Dark">#D8989899</Color>
+    <Color x:Key="Nord.PrimaryText.Light">#FF0F1535</Color>
+    <Color x:Key="Nord.SecondaryText.Light">#D84A5578</Color>
+
+    <!-- Accents -->
+    <Color x:Key="Nord.Accent.Dark">#FF5E8CD2</Color>
+    <Color x:Key="Nord.AccentPurple.Dark">#FFAA8CDC</Color>
+    <Color x:Key="Nord.AccentBlue.Dark">#FF5E8CD2</Color>
+    <Color x:Key="Nord.AccentGreen.Dark">#FF6EC88C</Color>
+    <!--
+        Was a warm sandy amber (#FFE6C86E) — clashed with the cool
+        cyan/purple palette of the app icon and read as harsh orange
+        against the dark theme. Replaced with a soft logo-matching
+        cyan picked from the icon's outer ring. The brush name kept
+        as "AccentAmber" to avoid a global rename across XAML +
+        WinForms code; semantically it's still the secondary
+        attention colour, just visually re-tuned.
+    -->
+    <Color x:Key="Nord.AccentAmber.Dark">#FF80D8EB</Color>
+
+    <Color x:Key="Nord.Accent.Light">#FF4F46E5</Color>
+    <Color x:Key="Nord.AccentPurple.Light">#FF7C3AED</Color>
+    <Color x:Key="Nord.AccentBlue.Light">#FF2563EB</Color>
+    <Color x:Key="Nord.AccentGreen.Light">#FF059669</Color>
+    <Color x:Key="Nord.AccentAmber.Light">#FFD97706</Color>
+
+    <!-- Brushes (Dark active) -->
+    <LinearGradientBrush x:Key="Nord.WindowBackgroundBrush" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="{StaticResource Nord.WindowBackgroundTop.Dark}" Offset="0" />
+        <GradientStop Color="{StaticResource Nord.WindowBackgroundBottom.Dark}" Offset="1" />
+    </LinearGradientBrush>
+    <SolidColorBrush x:Key="Nord.PanelBackgroundBrush" Color="{StaticResource Nord.PanelBackground.Dark}" />
+    <SolidColorBrush x:Key="Nord.EditorBackgroundBrush" Color="{StaticResource Nord.EditorBackground.Dark}" />
+    <SolidColorBrush x:Key="Nord.BorderBrush" Color="{StaticResource Nord.Border.Dark}" />
+    <SolidColorBrush x:Key="Nord.PrimaryTextBrush" Color="{StaticResource Nord.PrimaryText.Dark}" />
+    <SolidColorBrush x:Key="Nord.SecondaryTextBrush" Color="{StaticResource Nord.SecondaryText.Dark}" />
+    <SolidColorBrush x:Key="Nord.AccentBrush" Color="{StaticResource Nord.Accent.Dark}" />
+    <SolidColorBrush x:Key="Nord.AccentPurpleBrush" Color="{StaticResource Nord.AccentPurple.Dark}" />
+    <SolidColorBrush x:Key="Nord.AccentBlueBrush" Color="{StaticResource Nord.AccentBlue.Dark}" />
+    <SolidColorBrush x:Key="Nord.AccentGreenBrush" Color="{StaticResource Nord.AccentGreen.Dark}" />
+    <SolidColorBrush x:Key="Nord.AccentAmberBrush" Color="{StaticResource Nord.AccentAmber.Dark}" />
+
+    <!--
+        Section card fill/border tints. Mirror NordColors.{Blue|Purple|Amber|Green}{SectionFill|SectionBorder}
+        from the WinForms palette so the OmniAgent session page renders
+        section cards with the same colour vocabulary as the legacy
+        AgentThinkingForm. Fill ≈ accent @ 7% over WindowBackground;
+        border ≈ accent @ 25% over WindowBackground (pre-blended dark
+        values from NordColors.cs).
+    -->
+    <SolidColorBrush x:Key="Nord.BlueSectionFillBrush"     Color="#FF22242B" />
+    <SolidColorBrush x:Key="Nord.PurpleSectionFillBrush"   Color="#FF26242B" />
+    <!-- Cyan ≈ AccentAmber.Dark blended @ 7% over WindowBackground. -->
+    <SolidColorBrush x:Key="Nord.AmberSectionFillBrush"    Color="#FF23292C" />
+    <SolidColorBrush x:Key="Nord.GreenSectionFillBrush"    Color="#FF222826" />
+
+    <SolidColorBrush x:Key="Nord.BlueSectionBorderBrush"   Color="#FF2D384B" />
+    <SolidColorBrush x:Key="Nord.PurpleSectionBorderBrush" Color="#FF40384E" />
+    <!-- Cyan ≈ AccentAmber.Dark blended @ 25% over WindowBackground. -->
+    <SolidColorBrush x:Key="Nord.AmberSectionBorderBrush"  Color="#FF354B52" />
+    <SolidColorBrush x:Key="Nord.GreenSectionBorderBrush"  Color="#FF31473A" />
+
+    <!--
+        Typography sizes mirror macOS/Sources/Typography.swift exactly so
+        the two clients render at the same scale. Weights map onto WPF's
+        FontWeight values (Semibold == 600).
+    -->
+    <!--
+        Font stack — tried left-to-right; WPF falls through on missing
+        fonts. Order is deliberate:
+          1. Aptos       — Microsoft 365's modern default sans-serif
+                            (auto-installed with Office 2024+). Friendly,
+                            high-contrast, designed for UI.
+          2. Inter       — popular modern UI font; the user may install
+                            it manually for an even nicer look.
+          3. Segoe UI Variable Display — Windows 11 fallback. Heavier
+                            weights / stronger contrast than the
+                            "Variable Text" variant we used previously,
+                            which makes labels feel less "thin".
+          4. Segoe UI Variable Text / Segoe UI — base Windows fallback.
+    -->
+    <FontFamily x:Key="OK.FontFamily">Aptos, Inter, Segoe UI Variable Display, Segoe UI Variable Text, Segoe UI</FontFamily>
+    <FontFamily x:Key="OK.MonoFontFamily">Cascadia Mono, JetBrains Mono, Consolas</FontFamily>
+
+    <sys:Double x:Key="OK.Font.Display">26</sys:Double>
+    <sys:Double x:Key="OK.Font.Title">19</sys:Double>
+    <sys:Double x:Key="OK.Font.Headline">14</sys:Double>
+    <sys:Double x:Key="OK.Font.Body">13</sys:Double>
+    <sys:Double x:Key="OK.Font.BodyCompact">12</sys:Double>
+    <sys:Double x:Key="OK.Font.Caption">12</sys:Double>
+    <sys:Double x:Key="OK.Font.CaptionSmall">11</sys:Double>
+    <sys:Double x:Key="OK.Font.Eyebrow">10</sys:Double>
+    <sys:Double x:Key="OK.Font.MonoInline">12.5</sys:Double>
+
+</ResourceDictionary>

@@ -1,0 +1,166 @@
+<Application
+    x:Class="OmniKey.Windows.App"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+    xmlns:conv="clr-namespace:OmniKey.Windows.Converters">
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ui:ThemesDictionary Theme="Dark" />
+                <ui:ControlsDictionary />
+                <ResourceDictionary Source="pack://application:,,,/Themes/NordTheme.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+
+            <!--
+                ════════════════════════════════════════════════════════
+                Accent-colour overrides
+                ════════════════════════════════════════════════════════
+                Wpf.Ui (and WPF system theming generally) pulls accent
+                colour from the user's Windows system accent. On many
+                machines that's a hot orange / red that fights the cool
+                cyan/purple palette of our logo. We override the entire
+                SystemAccentColor family plus downstream Accent* brushes
+                so EVERYTHING that shows accent — Primary buttons,
+                ToggleSwitch on-state, RadioButton check, hyperlinks,
+                focus rings — adopts our Nord blue.
+
+                Light1/2/3 are progressively lighter tints used by hover
+                states; Dark1/2/3 are progressively darker tints used by
+                pressed/disabled states.
+            -->
+            <!--
+                Logo-matching light purple. Mirrors the lavender key in
+                app.ico — softer than the previous blue and pleasant
+                against the dark theme. Light1-3 are progressively
+                lighter tints (hover); Dark1-3 are progressively darker
+                (pressed / disabled).
+            -->
+            <Color x:Key="OK.Accent.Color">#FFB29EE2</Color>
+            <Color x:Key="OK.AccentLight1.Color">#FFC2B0EA</Color>
+            <Color x:Key="OK.AccentLight2.Color">#FFD0C2F0</Color>
+            <Color x:Key="OK.AccentLight3.Color">#FFE0D6F5</Color>
+            <Color x:Key="OK.AccentDark1.Color">#FF9A85CC</Color>
+            <Color x:Key="OK.AccentDark2.Color">#FF7E6CB0</Color>
+            <Color x:Key="OK.AccentDark3.Color">#FF625594</Color>
+            <Color x:Key="OK.AccentDisabled.Color">#553A2F70</Color>
+
+            <!-- Fundamental SystemAccentColor family (Color + Brush). -->
+            <Color x:Key="SystemAccentColor">#FFB29EE2</Color>
+            <Color x:Key="SystemAccentColorLight1">#FFC2B0EA</Color>
+            <Color x:Key="SystemAccentColorLight2">#FFD0C2F0</Color>
+            <Color x:Key="SystemAccentColorLight3">#FFE0D6F5</Color>
+            <Color x:Key="SystemAccentColorDark1">#FF9A85CC</Color>
+            <Color x:Key="SystemAccentColorDark2">#FF7E6CB0</Color>
+            <Color x:Key="SystemAccentColorDark3">#FF625594</Color>
+
+            <SolidColorBrush x:Key="SystemAccentColorBrush"        Color="{StaticResource OK.Accent.Color}" />
+            <SolidColorBrush x:Key="SystemAccentColorPrimaryBrush" Color="{StaticResource OK.Accent.Color}" />
+            <SolidColorBrush x:Key="SystemAccentColorLight1Brush"  Color="{StaticResource OK.AccentLight1.Color}" />
+            <SolidColorBrush x:Key="SystemAccentColorLight2Brush"  Color="{StaticResource OK.AccentLight2.Color}" />
+            <SolidColorBrush x:Key="SystemAccentColorLight3Brush"  Color="{StaticResource OK.AccentLight3.Color}" />
+            <SolidColorBrush x:Key="SystemAccentColorDark1Brush"   Color="{StaticResource OK.AccentDark1.Color}" />
+            <SolidColorBrush x:Key="SystemAccentColorDark2Brush"   Color="{StaticResource OK.AccentDark2.Color}" />
+            <SolidColorBrush x:Key="SystemAccentColorDark3Brush"   Color="{StaticResource OK.AccentDark3.Color}" />
+
+            <!-- Wpf.Ui AccentFill (Primary button surfaces). -->
+            <SolidColorBrush x:Key="AccentFillColorDefaultBrush"        Color="{StaticResource OK.Accent.Color}" />
+            <SolidColorBrush x:Key="AccentFillColorSecondaryBrush"      Color="{StaticResource OK.AccentLight1.Color}" />
+            <SolidColorBrush x:Key="AccentFillColorTertiaryBrush"       Color="{StaticResource OK.AccentDark1.Color}" />
+            <SolidColorBrush x:Key="AccentFillColorDisabledBrush"       Color="{StaticResource OK.AccentDisabled.Color}" />
+            <SolidColorBrush x:Key="AccentFillColorSelectedTextBackgroundBrush" Color="{StaticResource OK.Accent.Color}" />
+            <SolidColorBrush x:Key="AccentControlElevationBorderBrush"  Color="#33000000" />
+
+            <!--
+                The brushes Wpf.Ui 4.3's Button.baml ACTUALLY resolves
+                for Appearance="Primary". The AccentFillColor* family
+                above is one step earlier in Wpf.Ui's internal chain —
+                StaticResource resolution inside the compiled BAML
+                already locked AccentButtonBackground to the original
+                Wpf.Ui-defined accent at parse time, so overriding
+                AccentFillColor* at App level doesn't propagate. We
+                have to override the AccentButton* keys directly.
+            -->
+            <SolidColorBrush x:Key="AccentButtonBackground"             Color="{StaticResource OK.Accent.Color}" />
+            <SolidColorBrush x:Key="AccentButtonBackgroundPointerOver"  Color="{StaticResource OK.AccentLight1.Color}" />
+            <SolidColorBrush x:Key="AccentButtonBackgroundPressed"      Color="{StaticResource OK.AccentDark1.Color}" />
+            <SolidColorBrush x:Key="AccentButtonBackgroundDisabled"     Color="{StaticResource OK.AccentDisabled.Color}" />
+            <SolidColorBrush x:Key="AccentButtonForeground"             Color="#FFFFFFFF" />
+            <SolidColorBrush x:Key="AccentButtonForegroundPointerOver"  Color="#FFFFFFFF" />
+            <SolidColorBrush x:Key="AccentButtonForegroundPressed"      Color="#FFE9F0FA" />
+            <SolidColorBrush x:Key="AccentButtonForegroundDisabled"     Color="#80FFFFFF" />
+            <SolidColorBrush x:Key="AccentButtonBorderBrushPressed"     Color="{StaticResource OK.AccentDark1.Color}" />
+
+            <!-- Accent text colours (hyperlinks, accent labels). -->
+            <SolidColorBrush x:Key="AccentTextFillColorPrimaryBrush"   Color="{StaticResource OK.AccentLight1.Color}" />
+            <SolidColorBrush x:Key="AccentTextFillColorSecondaryBrush" Color="{StaticResource OK.AccentLight2.Color}" />
+            <SolidColorBrush x:Key="AccentTextFillColorTertiaryBrush"  Color="{StaticResource OK.Accent.Color}" />
+            <SolidColorBrush x:Key="AccentTextFillColorDisabledBrush"  Color="{StaticResource OK.AccentDisabled.Color}" />
+
+            <!-- Text rendered on top of an accent fill (Primary button label). -->
+            <SolidColorBrush x:Key="TextOnAccentFillColorPrimaryBrush"      Color="#FFFFFFFF" />
+            <SolidColorBrush x:Key="TextOnAccentFillColorSecondaryBrush"    Color="#FFE9F0FA" />
+            <SolidColorBrush x:Key="TextOnAccentFillColorDisabledBrush"     Color="#80FFFFFF" />
+            <SolidColorBrush x:Key="TextOnAccentFillColorSelectedTextBrush" Color="#FFFFFFFF" />
+
+            <!--
+                Muted destructive red. Wpf.Ui's Button.baml references
+                PaletteRedColor (a Color) inline for the Danger
+                appearance, so overriding the Color resource is what
+                actually changes the Danger button fill.
+            -->
+            <Color x:Key="OK.Danger.Color">#FFD06464</Color>
+            <Color x:Key="OK.DangerHover.Color">#FFDC7878</Color>
+            <Color x:Key="OK.DangerPressed.Color">#FFB85454</Color>
+            <Color x:Key="PaletteRedColor">#FFD06464</Color>
+            <SolidColorBrush x:Key="PaletteRedBrush"            Color="{StaticResource OK.Danger.Color}" />
+            <SolidColorBrush x:Key="PaletteRedBrushPointerOver" Color="{StaticResource OK.DangerHover.Color}" />
+            <SolidColorBrush x:Key="PaletteRedBrushPressed"     Color="{StaticResource OK.DangerPressed.Color}" />
+
+            <!--
+                NOTE: an implicit <Style TargetType="{x:Type ui:Button}">
+                without BasedOn would replace Wpf.Ui's default Button
+                template entirely, leaving buttons with the bare WPF
+                template (white system surface). Wpf.Ui's default style
+                handles the rounded corners + Fluent visuals for us —
+                we only override the colour brushes above, not the
+                button template itself.
+            -->
+
+            <!--
+                Ghost-style danger button. Renders as a transparent surface
+                with red icon + label so destructive actions don't fight
+                the primary action for click attention.
+
+                CRITICAL: BasedOn the Wpf.Ui DefaultUiButtonStyle. Setting
+                Style="..." explicitly on a ui:Button suppresses the
+                implicit (default) Wpf.Ui style, so without BasedOn the
+                button would lose Wpf.Ui's ControlTemplate and render
+                as the bare WPF Button (broken white surface).
+            -->
+            <Style x:Key="OK.DangerGhostButtonStyle"
+                   TargetType="{x:Type ui:Button}"
+                   BasedOn="{StaticResource DefaultUiButtonStyle}">
+                <Setter Property="CornerRadius" Value="8" />
+                <Setter Property="Padding" Value="12,6" />
+                <Setter Property="FontFamily" Value="{StaticResource OK.FontFamily}" />
+                <Setter Property="FontWeight" Value="Medium" />
+                <Setter Property="Cursor" Value="Hand" />
+                <Setter Property="Appearance" Value="Transparent" />
+                <Setter Property="Foreground" Value="{StaticResource PaletteRedBrush}" />
+                <Style.Triggers>
+                    <Trigger Property="IsMouseOver" Value="True">
+                        <Setter Property="Foreground" Value="{StaticResource PaletteRedBrushPointerOver}" />
+                    </Trigger>
+                </Style.Triggers>
+            </Style>
+
+            <!-- Shared converters used across pages -->
+            <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
+            <conv:InverseBooleanToVisibilityConverter x:Key="InverseBooleanToVisibilityConverter" />
+            <conv:StringToVisibilityConverter x:Key="StringToVisibilityConverter" />
+            <conv:InverseBooleanConverter x:Key="InverseBooleanConverter" />
+            <conv:StringToUpperConverter x:Key="ToUpper" />
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>

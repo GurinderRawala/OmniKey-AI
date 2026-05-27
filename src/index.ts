@@ -124,7 +124,7 @@ app.get('/macos/appcast', (req, res) => {
 // ── Windows distribution endpoints ───────────────────────────────────────────
 // These should match the values in windows/OmniKey.Windows.csproj
 // <Version> and windows/build_release_zip.ps1 $APP_VERSION.
-const WIN_VERSION = '1.11';
+const WIN_VERSION = '1.12';
 const WIN_ZIP_FILENAME = 'OmniKeyAI-windows-win-x64.zip';
 const WIN_ZIP_PATH = path.join(process.cwd(), 'windows', WIN_ZIP_FILENAME);
 
@@ -174,7 +174,19 @@ app.get('/windows/update', (req, res) => {
     version: WIN_VERSION,
     downloadUrl: `${baseUrl}/windows/download`,
     fileSize,
-    releaseNotes: `What's new in ${WIN_VERSION}\n\n• OmniAgent flow improvements\n• Bug fixes and performance enhancements\n\n Support for MCP servers now you can add any custom MCP server to OmniKeyAI using CLI or Windows app.`,
+    releaseNotes: [
+      `What's new in ${WIN_VERSION}`,
+      ``,
+      `• Brand-new WPF shell — Agent Chat, OmniAgent Session, Task Instructions, Scheduled Jobs, Job Run History, MCP Servers, Manual, Subscription, and Check Updates all reachable from a unified sidebar.`,
+      `• Agent Chat with session sidebar, search, hover-to-delete, context-window indicator, default task-instruction picker (with a built-in "No task instructions" option).`,
+      `• OmniAgent Session replaces the old thinking window — sticky session picker, streaming collapsible timeline (web search, MCP, reasoning, terminal) and a copyable final-answer card. Selecting an existing session previews its last turn in-place.`,
+      `• Scheduled Jobs redesigned: clearer labels, self-contained Active toggle, restructured Save / Run now / Reset / Delete action bar, tooltips throughout.`,
+      `• Theme reworked to match the app icon — cyan + light purple. The Windows system-accent leak (orange/red buttons) is gone everywhere.`,
+      `• Modern typography (Aptos / Inter / Segoe UI Variable Display).`,
+      `• Mouse-wheel scroll fixed across Chat and OmniAgent pages.`,
+      `• Production-default backend URL: shipping binary defaults to https://omnikeyai.ca.`,
+      `• Internals: removed ~5,200 lines of unwired WinForms code; build is warning-free.`,
+    ].join('\n'),
   });
 });
 

@@ -76,13 +76,13 @@ namespace OmniKey.Windows
         /// Base URL resolution order (mirrors macOS APIClient.swift):
         /// 1. ~/.omnikey/config.json OMNIKEY_PORT  →  http://localhost:{port}
         /// 2. OMNIKEY_BACKEND_URL environment variable
-        /// 3. Fallback: http://localhost:7172
+        /// 3. Fallback: https://omnikeyai.ca (production)
         /// </summary>
         public static readonly string BaseUrl = _selfHostedPort is { Length: > 0 } port
             ? $"http://localhost:{port}"
             : Environment.GetEnvironmentVariable("OMNIKEY_BACKEND_URL") is { Length: > 0 } env
                 ? env
-                : "http://localhost:7172";
+                : "https://omnikeyai.ca";
 
         public static readonly bool IsSelfHosted = _selfHostedPort != null;
 

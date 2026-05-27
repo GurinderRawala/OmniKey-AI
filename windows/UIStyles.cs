@@ -231,10 +231,33 @@ namespace OmniKey.Windows
                     return;
 
                 Region?.Dispose();
-                using var path = GfxHelpers.RoundedPath(
+                using var path = BuildRoundedPath(
                     new RectangleF(0, 0, Width, Height),
                     Math.Min(CornerRadius, Height / 2f));
                 Region = new Region(path);
+            }
+
+            // Inlined from the now-deleted GfxHelpers helper. This Region
+            // factory is the sole remaining consumer.
+            private static GraphicsPath BuildRoundedPath(RectangleF r, float radius)
+            {
+                float maxRadius = Math.Min(r.Width, r.Height) / 2f;
+                radius = Math.Max(0, Math.Min(radius, maxRadius));
+
+                var p = new GraphicsPath();
+                if (radius <= 0 || r.Width <= 0 || r.Height <= 0)
+                {
+                    if (r.Width > 0 && r.Height > 0) p.AddRectangle(r);
+                    return p;
+                }
+
+                float d = radius * 2;
+                p.AddArc(r.X, r.Y, d, d, 180, 90);
+                p.AddArc(r.Right - d, r.Y, d, d, 270, 90);
+                p.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+                p.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
+                p.CloseFigure();
+                return p;
             }
         }
     }

@@ -1,0 +1,203 @@
+<Page
+    x:Class="OmniKey.Windows.Views.Pages.UpdatesPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+    Title="Updates"
+    Background="Transparent"
+    d:DesignHeight="600"
+    d:DesignWidth="980"
+    ScrollViewer.CanContentScroll="False"
+    mc:Ignorable="d">
+
+    <Grid Margin="24,20,24,20">
+        <Border
+            MaxWidth="560"
+            VerticalAlignment="Center"
+            Padding="0"
+            Background="{StaticResource Nord.PanelBackgroundBrush}"
+            CornerRadius="14">
+            <Border.Effect>
+                <DropShadowEffect
+                    BlurRadius="22"
+                    Direction="270"
+                    Opacity="0.45"
+                    ShadowDepth="6"
+                    Color="Black" />
+            </Border.Effect>
+
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <!--  Header  -->
+                <StackPanel
+                    Grid.Row="0"
+                    Margin="0,28,0,20"
+                    HorizontalAlignment="Center">
+                    <ui:SymbolIcon
+                        HorizontalAlignment="Center"
+                        FontSize="36"
+                        Foreground="{StaticResource Nord.AccentBrush}"
+                        Symbol="ArrowSync24" />
+                    <TextBlock
+                        Margin="0,12,0,4"
+                        HorizontalAlignment="Center"
+                        FontFamily="{StaticResource OK.FontFamily}"
+                        FontSize="{StaticResource OK.Font.Display}"
+                        FontWeight="SemiBold"
+                        Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                        Text="Software Updates" />
+                    <StackPanel
+                        Margin="0,6,0,0"
+                        HorizontalAlignment="Center"
+                        Orientation="Horizontal">
+                        <TextBlock
+                            VerticalAlignment="Center"
+                            FontFamily="{StaticResource OK.FontFamily}"
+                            FontSize="{StaticResource OK.Font.Body}"
+                            Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                            Text="Current version:" />
+                        <TextBlock
+                            Margin="6,0,0,0"
+                            VerticalAlignment="Center"
+                            FontFamily="{StaticResource OK.MonoFontFamily}"
+                            FontSize="{StaticResource OK.Font.Body}"
+                            FontWeight="SemiBold"
+                            Foreground="{StaticResource Nord.AccentBlueBrush}"
+                            Text="{Binding CurrentVersion}" />
+                    </StackPanel>
+                </StackPanel>
+
+                <Border
+                    Grid.Row="1"
+                    Height="1"
+                    Background="{StaticResource Nord.BorderBrush}" />
+
+                <!--  Body  -->
+                <StackPanel Grid.Row="2" Margin="24,20,24,24">
+
+                    <!--  Status row  -->
+                    <StackPanel Margin="0,0,0,16" Orientation="Horizontal">
+                        <ui:ProgressRing
+                            Width="16"
+                            Height="16"
+                            Margin="0,0,8,0"
+                            IsIndeterminate="True"
+                            Visibility="{Binding IsChecking, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                        <TextBlock
+                            VerticalAlignment="Center"
+                            FontFamily="{StaticResource OK.FontFamily}"
+                            FontSize="{StaticResource OK.Font.Caption}"
+                            Foreground="{Binding StatusBrush}"
+                            Text="{Binding StatusMessage}"
+                            TextWrapping="Wrap" />
+                    </StackPanel>
+
+                    <!--  Update available card  -->
+                    <ui:Card
+                        Margin="0,0,0,16"
+                        Padding="14"
+                        Visibility="{Binding HasUpdate, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <StackPanel>
+                            <StackPanel Margin="0,0,0,8" Orientation="Horizontal">
+                                <ui:SymbolIcon
+                                    Margin="0,0,8,0"
+                                    VerticalAlignment="Center"
+                                    FontSize="18"
+                                    Foreground="{StaticResource Nord.AccentGreenBrush}"
+                                    Symbol="Sparkle24" />
+                                <TextBlock
+                                    VerticalAlignment="Center"
+                                    FontFamily="{StaticResource OK.FontFamily}"
+                                    FontSize="{StaticResource OK.Font.Headline}"
+                                    FontWeight="SemiBold"
+                                    Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                                    Text="A new version is available" />
+                            </StackPanel>
+
+                            <StackPanel Margin="0,0,0,10" Orientation="Horizontal">
+                                <TextBlock
+                                    VerticalAlignment="Center"
+                                    FontFamily="{StaticResource OK.MonoFontFamily}"
+                                    FontSize="{StaticResource OK.Font.Caption}"
+                                    Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                                    Text="{Binding CurrentVersion}" />
+                                <TextBlock
+                                    Margin="8,0,8,0"
+                                    VerticalAlignment="Center"
+                                    FontFamily="{StaticResource OK.FontFamily}"
+                                    FontSize="{StaticResource OK.Font.Caption}"
+                                    Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                                    Text="&#x2192;" />
+                                <TextBlock
+                                    VerticalAlignment="Center"
+                                    FontFamily="{StaticResource OK.MonoFontFamily}"
+                                    FontSize="{StaticResource OK.Font.Caption}"
+                                    FontWeight="SemiBold"
+                                    Foreground="{StaticResource Nord.AccentGreenBrush}"
+                                    Text="{Binding NewVersion}" />
+                            </StackPanel>
+
+                            <TextBlock
+                                Margin="0,4,0,6"
+                                FontFamily="{StaticResource OK.FontFamily}"
+                                FontSize="{StaticResource OK.Font.CaptionSmall}"
+                                FontWeight="SemiBold"
+                                Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                                Text="RELEASE NOTES" />
+
+                            <Border
+                                MaxHeight="160"
+                                Background="{StaticResource Nord.EditorBackgroundBrush}"
+                                BorderBrush="{StaticResource Nord.BorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="6">
+                                <ScrollViewer
+                                    Padding="10,8"
+                                    HorizontalScrollBarVisibility="Disabled"
+                                    VerticalScrollBarVisibility="Auto">
+                                    <TextBlock
+                                        FontFamily="{StaticResource OK.FontFamily}"
+                                        FontSize="{StaticResource OK.Font.Caption}"
+                                        Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                                        Text="{Binding ReleaseNotes}"
+                                        TextWrapping="Wrap" />
+                                </ScrollViewer>
+                            </Border>
+                        </StackPanel>
+                    </ui:Card>
+
+                    <!--  Action buttons  -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <ui:Button
+                            Grid.Column="0"
+                            HorizontalAlignment="Left"
+                            Command="{Binding CheckForUpdatesCommand}"
+                            Content="Check for updates"
+                            Icon="{ui:SymbolIcon Symbol=ArrowSync24}" />
+
+                        <ui:Button
+                            Grid.Column="1"
+                            Appearance="Primary"
+                            Command="{Binding DownloadCommand}"
+                            Content="Download Update"
+                            Icon="{ui:SymbolIcon Symbol=ArrowDownload24}"
+                            IsDefault="True"
+                            Visibility="{Binding HasUpdate, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                    </Grid>
+                </StackPanel>
+            </Grid>
+        </Border>
+    </Grid>
+</Page>

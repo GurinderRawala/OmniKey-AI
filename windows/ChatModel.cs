@@ -695,8 +695,20 @@ namespace OmniKey.Windows
                         var message = ChatMessage.Assistant();
                         foreach (var block in entry.Blocks ?? new List<SessionHistoryBlockDto>())
                         {
-                            if (BlockKindFromString(block.Kind) is { } kind)
-                                message.Blocks.Add(new ChatBlock(kind, block.Text));
+                            if (BlockKindFromString(block.Kind) is not { } kind) continue;
+
+                            // Strip stray <final_answer>…</final_answer> wrappers that
+                            // the API sometimes embeds inside hydrated block text.
+                            // For FinalAnswer blocks, extract the inner text; for
+                            // everything else, scrub any control tags so the chat
+                            // doesn't render literal XML.
+                            string text = block.Text ?? string.Empty;
+                            text = kind == ChatBlockKind.FinalAnswer
+                                ? (AgentRunner.ExtractFinalAnswer(text) ?? AgentRunner.CleanDisplayText(text))
+                                : AgentRunner.CleanDisplayText(text);
+
+                            if (string.IsNullOrWhiteSpace(text)) continue;
+                            message.Blocks.Add(new ChatBlock(kind, text));
                         }
 
                         return message.Blocks.Count == 0 ? null : message;

@@ -12,14 +12,14 @@
 # three-level precedence as ApiClient.cs:
 #   1. ~/.omnikey/config.json  (OMNIKEY_PORT key)
 #   2. OMNIKEY_BACKEND_URL environment variable
-#   3. Fallback: http://localhost:7172
+#   3. Fallback: https://omnikeyai.ca (production)
 #
 # Requirements:
 #   - .NET SDK 10 (net10.0-windows)  – https://dotnet.microsoft.com/download
 #   - PowerShell 7+ (pwsh)           – https://github.com/PowerShell/PowerShell
 
 param(
-    [string]$BackendBaseUrl = ($env:OMNIKEY_BACKEND_URL ?? "http://localhost:7172"),
+    [string]$BackendBaseUrl = ($env:OMNIKEY_BACKEND_URL ?? "https://omnikeyai.ca"),
     [string]$Runtime        = "win-x64"
 )
 
@@ -83,19 +83,28 @@ OmniKey AI $APP_VERSION – Windows ($Runtime)
 
 What's new in $APP_VERSION
 --------------------------
-- New cron job automation (Scheduled Jobs): create recurring jobs using cron-style
-  schedules or one-time jobs, then run them automatically in the background.
-- Scheduled Jobs controls: add, activate/deactivate, run now, refresh status, and
-  view last-run history directly in the app.
-- OmniAgent session management: when you trigger @omniAgent, a picker lets you
-  start a new session or resume an existing one.  You can remember your choice
-  as a default so the picker is skipped on future runs.
-- History button in the OmniAgent window: change your default session at any time
-  without re-running the agent.
-- "OmniAgent Session" tray menu item: open session settings directly from the tray.
-- Left-clicking the tray icon now opens the menu (previously right-click only).
-- Manual updated with detailed OmniAgent, session management, web search provider,
-  and LLM provider documentation.
+- Brand-new WPF shell with a unified sidebar: Agent Chat, OmniAgent Session,
+  Task Instructions, Scheduled Jobs, Job Run History, MCP Servers, Manual,
+  Subscription, and Check Updates are all reachable from one window.
+- Agent Chat: full WPF chat page with a session sidebar, search, hover-to-delete,
+  a context-window indicator, default task-instruction selector, and a "No task
+  instructions" option built into the picker.
+- OmniAgent Session: replaces the old separate thinking window. Sticky session
+  picker at the top, streaming step-by-step timeline (web search, MCP, reasoning,
+  terminal) with collapsible details, and a final-answer card with copy. Selecting
+  an existing session previews its last request + steps + final answer in-place.
+- Scheduled Jobs: redesigned editor with clearer labels, a self-contained Active
+  toggle, restructured Save / Run now / Reset / Delete action bar, and tooltips.
+- Theme: cool cyan + light-purple palette pulled from the app icon. The Windows
+  system-accent leak (orange/red buttons) is gone — every Primary button is
+  logo-purple, every Danger button is a muted red.
+- Typography: modernised font stack (Aptos / Inter / Segoe UI Variable Display).
+- Mouse-wheel scroll fixed across Chat and OmniAgent pages — wheel events route
+  to the right scroll surface even over FlowDocument and Expander children.
+- Production-default backend URL: shipping binary now defaults to
+  https://omnikeyai.ca; self-hosted users can still override via
+  ~/.omnikey/config.json or OMNIKEY_BACKEND_URL.
+- Internals: removed ~5,200 lines of unwired WinForms code; build is warning-free.
 
 Installation
 ------------
