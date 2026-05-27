@@ -158,7 +158,7 @@ namespace OmniKey.Windows
                 string? script = ExtractShellScript(content);
                 if (script != null)
                 {
-                    var (output, exitCode) = await RunShellCommandAsync(script, ct);
+                    var (output, exitCode) = await ExecuteShellAsync(script, ct);
 
                     string statusLabel = exitCode == 0 ? "success" : $"error (exit code: {exitCode})";
                     thinkingForm.AppendTerminalOutput($"[terminal {statusLabel}]\n{output}");
@@ -196,14 +196,14 @@ namespace OmniKey.Windows
             throw new OperationCanceledException("Agent session ended without a final answer.");
         }
 
-        private static async Task SendMessageAsync(ClientWebSocket ws, AgentMessage msg, CancellationToken ct)
+        internal static async Task SendMessageAsync(ClientWebSocket ws, AgentMessage msg, CancellationToken ct)
         {
             string json = JsonSerializer.Serialize(msg, JsonOptions);
             byte[] bytes = Encoding.UTF8.GetBytes(json);
             await ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, ct);
         }
 
-        private static async Task<string?> ReceiveTextAsync(ClientWebSocket ws, CancellationToken ct)
+        internal static async Task<string?> ReceiveTextAsync(ClientWebSocket ws, CancellationToken ct)
         {
             var buffer = new byte[8192];
             var sb = new StringBuilder();
@@ -231,7 +231,7 @@ namespace OmniKey.Windows
             }
         }
 
-        private static async Task CloseWebSocketAsync(ClientWebSocket ws)
+        internal static async Task CloseWebSocketAsync(ClientWebSocket ws)
         {
             try
             {
@@ -241,8 +241,10 @@ namespace OmniKey.Windows
             catch { }
         }
 
-        private static async Task<(string output, int exitCode)> RunShellCommandAsync(
-            string script, CancellationToken ct)
+        internal static async Task<(string output, int exitCode)> ExecuteShellAsync(
+            string script,
+            CancellationToken ct,
+            Action<Process?>? onProcessChanged = null)
         {
             // Encode the script as Base64 UTF-16LE so that PowerShell -EncodedCommand
             // receives it verbatim — no quoting, escaping, or curly-brace conflicts.
@@ -292,6 +294,7 @@ namespace OmniKey.Windows
             process.ErrorDataReceived  += (_, e) => { if (e.Data != null) outputSb.AppendLine(e.Data); };
 
             process.Start();
+            onProcessChanged?.Invoke(process);
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();
 
@@ -302,7 +305,14 @@ namespace OmniKey.Windows
                 catch { }
             });
 
-            await process.WaitForExitAsync(ct).ConfigureAwait(false);
+            try
+            {
+                await process.WaitForExitAsync(ct).ConfigureAwait(false);
+            }
+            finally
+            {
+                onProcessChanged?.Invoke(null);
+            }
 
             return (outputSb.ToString(), process.ExitCode);
         }
@@ -393,7 +403,7 @@ namespace OmniKey.Windows
             }
         }
 
-        private static string MakeWebSocketUrl()
+        internal static string MakeWebSocketUrl()
         {
             string baseUrl = ApiClient.BaseUrl;
             string wsUrl = baseUrl
@@ -404,7 +414,7 @@ namespace OmniKey.Windows
 
         // ─── Tag parsing ─────────────────────────────────────────────
 
-        private static string? ExtractShellScript(string text)
+        internal static string? ExtractShellScript(string text)
         {
             int start = text.IndexOf("<shell_script>", StringComparison.Ordinal);
             if (start < 0) return null;
@@ -414,7 +424,7 @@ namespace OmniKey.Windows
             return text[start..end].Trim();
         }
 
-        private static string? ExtractFinalAnswer(string text)
+        internal static string? ExtractFinalAnswer(string text)
         {
             int start = text.IndexOf("<final_answer>", StringComparison.Ordinal);
             if (start < 0) return null;
@@ -424,7 +434,7 @@ namespace OmniKey.Windows
             return text[start..end].Trim();
         }
 
-        private static string CleanDisplayText(string text)
+        internal static string CleanDisplayText(string text)
         {
             return text
                 .Replace("<shell_script>", "")
@@ -436,12 +446,12 @@ namespace OmniKey.Windows
 
         // ─── JSON ─────────────────────────────────────────────────────
 
-        private static readonly JsonSerializerOptions JsonOptions = new()
+        internal static readonly JsonSerializerOptions JsonOptions = new()
         {
             PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower
         };
 
-        private sealed class AgentMessage
+        internal sealed class AgentMessage
         {
             public string? session_id { get; set; }
             public string? sender { get; set; }
@@ -449,6 +459,7 @@ namespace OmniKey.Windows
             public bool is_terminal_output { get; set; }
             public bool is_error { get; set; }
             public bool? is_web_call { get; set; }
+            public bool? is_image_rendering { get; set; }
             public bool? is_mcp_call { get; set; }
             public string platform { get; set; } = "windows";
         }

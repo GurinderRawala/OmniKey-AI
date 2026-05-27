@@ -257,17 +257,8 @@ namespace OmniKey.Windows
             {
                 var preset = label;
                 var val    = value;
-                var btn = new Button
-                {
-                    Text      = preset,
-                    Location  = new Point(presetX, 290),
-                    Size      = new Size(120, 24),
-                    BackColor = NordColors.BadgeBackground,
-                    ForeColor = NordColors.PrimaryText,
-                    FlatStyle = FlatStyle.Flat,
-                    Font      = new Font("Segoe UI", 8),
-                };
-                btn.FlatAppearance.BorderColor = NordColors.Border;
+                var btn = UIStyles.MakeCapsulePill(preset, new Size(120, 24));
+                btn.Location = new Point(presetX, 290);
                 btn.Click += (_, _) => _cronBox.Text = val;
                 _editPanel.Controls.Add(btn);
                 presetX += 128;
@@ -314,19 +305,12 @@ namespace OmniKey.Windows
 
         private static Button MakeButton(string text, Point location, Color backColor, Color? foreColor = null)
         {
-            var btn = new Button
-            {
-                Text      = text,
-                Location  = location,
-                Size      = new Size(88, 28),
-                BackColor = backColor,
-                ForeColor = foreColor ?? Color.White,
-                FlatStyle = FlatStyle.Flat,
-                Font      = new Font("Segoe UI", 9, FontStyle.Bold),
-            };
-            btn.FlatAppearance.BorderSize = 0;
-            if (backColor == NordColors.BadgeBackground)
-                btn.FlatAppearance.BorderColor = NordColors.Border;
+            Button btn = backColor == NordColors.BadgeBackground
+                ? UIStyles.MakeSecondaryButton(text, new Size(88, 28))
+                : UIStyles.MakePrimaryButton(text, new Size(88, 28));
+            btn.Location = location;
+            if (foreColor.HasValue)
+                btn.ForeColor = foreColor.Value;
             return btn;
         }
 

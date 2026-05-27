@@ -67,28 +67,16 @@ namespace OmniKey.Windows
                 Location = new Point(16, 66),
             };
 
-            _copyFinalAnswerButton = new Button
-            {
-                Text = "  Copy Final Answer",
-                Font = new Font("Segoe UI", 9, FontStyle.Bold),
-                ForeColor = NordColors.AccentGreen,
-                BackColor = NordColors.GreenSectionFill,
-                FlatStyle = FlatStyle.Flat,
-                Cursor = Cursors.Hand,
-                AutoSize = false,
-                Size = new Size(170, 28),
-                Anchor = AnchorStyles.Top | AnchorStyles.Right,
-                Image = WinIcons.ClipboardIcon(14, NordColors.AccentGreen),
-                ImageAlign = ContentAlignment.MiddleLeft,
-                TextAlign = ContentAlignment.MiddleCenter,
-                TextImageRelation = TextImageRelation.ImageBeforeText,
-                Padding = new Padding(8, 0, 8, 0),
-                Visible = false,
-            };
+            _copyFinalAnswerButton = UIStyles.MakeSecondaryButton(
+                "  Copy Final Answer",
+                new Size(170, 28),
+                WinIcons.ClipboardIcon(14, NordColors.AccentGreen));
+            _copyFinalAnswerButton.ForeColor = NordColors.AccentGreen;
+            _copyFinalAnswerButton.BackColor = NordColors.GreenSectionFill;
+            _copyFinalAnswerButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            _copyFinalAnswerButton.Visible = false;
             _copyFinalAnswerButton.FlatAppearance.BorderColor = NordColors.GreenSectionBorder;
-            _copyFinalAnswerButton.FlatAppearance.BorderSize = 1;
-            _copyFinalAnswerButton.FlatAppearance.MouseOverBackColor =
-                Color.FromArgb(40, NordColors.AccentGreen);
+            _copyFinalAnswerButton.FlatAppearance.MouseOverBackColor = NordColors.GreenSectionFill;
             _copyFinalAnswerButton.Click += OnCopyFinalAnswerClick;
 
             _contentBox = new RichTextBox

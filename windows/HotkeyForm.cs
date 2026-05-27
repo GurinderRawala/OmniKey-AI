@@ -21,6 +21,7 @@ namespace OmniKey.Windows
         private bool _isProcessing;
         private ToolStripMenuItem? _statusMenuItem;
         private AgentThinkingForm? _agentThinkingForm;
+        private ChatForm? _chatForm;
         private ToolStripMenuItem? _checkUpdatesMenuItem;
 
         public HotkeyForm()
@@ -127,7 +128,7 @@ namespace OmniKey.Windows
             using var g = Graphics.FromImage(bmp);
             g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
             g.Clear(Color.Transparent);
-            using var brush = new SolidBrush(active ? Color.FromArgb(34, 197, 94) : Color.FromArgb(239, 68, 68));
+            using var brush = new SolidBrush(active ? NordColors.AccentGreen : NordColors.ErrorRed);
             g.FillEllipse(brush, 2, 2, 12, 12);
             return bmp;
         }
@@ -145,6 +146,10 @@ namespace OmniKey.Windows
             var taskInstructionsItem = new ToolStripMenuItem("Task Instructions");
             taskInstructionsItem.Click += (_, _) => ShowTaskInstructions();
             menu.Items.Add(taskInstructionsItem);
+
+            var agentChatItem = new ToolStripMenuItem("OmniAgent Chat");
+            agentChatItem.Click += (_, _) => ShowAgentChat();
+            menu.Items.Add(agentChatItem);
 
             var agentSessionItem = new ToolStripMenuItem("OmniAgent Session");
             agentSessionItem.Click += (_, _) => ShowAgentSessionPickerFromMenuAsync();
@@ -196,6 +201,25 @@ namespace OmniKey.Windows
         {
             var form = new MCPServersForm();
             form.Show(this);
+        }
+
+        private void ShowAgentChat()
+        {
+            if (_chatForm != null && !_chatForm.IsDisposed)
+            {
+                if (_chatForm.WindowState == FormWindowState.Minimized)
+                    _chatForm.WindowState = FormWindowState.Normal;
+                _chatForm.Show(this);
+                _chatForm.BringToFront();
+                _chatForm.Activate();
+                return;
+            }
+
+            _chatForm = new ChatForm();
+            _chatForm.FormClosed += (_, _) => _chatForm = null;
+            _chatForm.Show(this);
+            _chatForm.BringToFront();
+            _chatForm.Activate();
         }
 
         private void ShowManual()

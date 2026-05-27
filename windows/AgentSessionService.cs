@@ -13,8 +13,12 @@ namespace OmniKey.Windows
     {
         public string Id { get; set; } = "";
         public string Title { get; set; } = "";
+        public string Platform { get; set; } = "";
         public int Turns { get; set; }
+        public int TotalTokensUsed { get; set; }
         public int RemainingContextTokens { get; set; }
+        public int ContextBudget { get; set; }
+        public string? LastActiveAt { get; set; }
     }
 
     internal sealed class AgentSessionSelection
@@ -124,7 +128,7 @@ namespace OmniKey.Windows
             return picker.Selection;
         }
 
-        private static async Task<List<AgentSessionInfo>> FetchSessionsAsync()
+        internal static async Task<List<AgentSessionInfo>> FetchSessionsAsync()
         {
             var token = SubscriptionManager.Instance.JwtToken;
             if (string.IsNullOrWhiteSpace(token))

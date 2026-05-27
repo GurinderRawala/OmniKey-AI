@@ -283,33 +283,13 @@ namespace OmniKey.Windows
 
         private static Button MakeButton(string text, ButtonRole role)
         {
-            var b = new Button
+            var size = new Size(text.Length > 10 ? 120 : 80, 28);
+            return role switch
             {
-                Text      = text,
-                Size      = new Size(text.Length > 10 ? 120 : 80, 28),
-                FlatStyle = FlatStyle.Flat
+                ButtonRole.Primary => UIStyles.MakePrimaryButton(text, size),
+                ButtonRole.Danger => UIStyles.MakeDangerButton(text, size),
+                _ => UIStyles.MakeSecondaryButton(text, size)
             };
-
-            switch (role)
-            {
-                case ButtonRole.Primary:
-                    b.BackColor = NordColors.AccentBlue;
-                    b.ForeColor = Color.White;
-                    b.FlatAppearance.BorderColor = NordColors.AccentBlue;
-                    break;
-                case ButtonRole.Danger:
-                    b.BackColor = NordColors.RedSectionFill;
-                    b.ForeColor = NordColors.ErrorRed;
-                    b.FlatAppearance.BorderColor = NordColors.RedSectionBorder;
-                    break;
-                default:
-                    b.BackColor = NordColors.SurfaceBackground;
-                    b.ForeColor = NordColors.PrimaryText;
-                    b.FlatAppearance.BorderColor = NordColors.Border;
-                    break;
-            }
-
-            return b;
         }
 
         private static void DrawDarkComboItem(object? sender, DrawItemEventArgs e)

@@ -176,19 +176,9 @@ namespace OmniKey.Windows
             rtb.ScrollToCaret();
 
             // ── Close button ──────────────────────────────────────────────
-            var closeButton = new Button
-            {
-                Text      = "Close",
-                Font      = new Font("Segoe UI", 9, FontStyle.Bold),
-                ForeColor = NordColors.PrimaryText,
-                BackColor = NordColors.SurfaceBackground,
-                FlatStyle = FlatStyle.Flat,
-                Size      = new Size(80, 28),
-                Location  = new Point(804, 580),
-                Anchor    = AnchorStyles.Bottom | AnchorStyles.Right
-            };
-            closeButton.FlatAppearance.BorderColor        = NordColors.Border;
-            closeButton.FlatAppearance.MouseOverBackColor = NordColors.PanelBackground;
+            var closeButton = UIStyles.MakeSecondaryButton("Close", new Size(80, 28));
+            closeButton.Location = new Point(804, 580);
+            closeButton.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
             closeButton.Click += (_, _) => Close();
             Controls.Add(closeButton);
         }

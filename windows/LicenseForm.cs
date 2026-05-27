@@ -110,30 +110,14 @@ namespace OmniKey.Windows
                 Anchor    = AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right
             };
 
-            var quitButton = new Button
-            {
-                Text      = "Quit",
-                Location  = new Point(24, 220),
-                Size      = new Size(80, 32),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = NordColors.SurfaceBackground,
-                ForeColor = NordColors.SecondaryText,
-                Anchor    = AnchorStyles.Bottom | AnchorStyles.Left
-            };
-            quitButton.FlatAppearance.BorderColor = NordColors.Border;
+            var quitButton = UIStyles.MakeSecondaryButton("Quit", new Size(80, 32));
+            quitButton.Location = new Point(24, 220);
+            quitButton.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
             quitButton.Click += (_, _) => Application.Exit();
 
-            _activateButton = new Button
-            {
-                Text      = "Activate",
-                Location  = new Point(416, 220),
-                Size      = new Size(80, 32),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = NordColors.AccentBlue,
-                ForeColor = Color.White,
-                Anchor    = AnchorStyles.Bottom | AnchorStyles.Right
-            };
-            _activateButton.FlatAppearance.BorderColor = NordColors.AccentBlue;
+            _activateButton = UIStyles.MakePrimaryButton("Activate", new Size(80, 32));
+            _activateButton.Location = new Point(416, 220);
+            _activateButton.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
             _activateButton.Click += async (_, _) => await ActivateAsync();
 
             AcceptButton = _activateButton;

@@ -88,21 +88,12 @@ namespace OmniKey.Windows
                 e.Graphics.DrawLine(pen, 0, 0, _bottomPanel.Width, 0);
             };
 
-            _cancelButton = new Button
-            {
-                Text      = "  Cancel",
-                Image     = WinIcons.StopSquare(12, NordColors.ErrorRed),
-                ImageAlign = ContentAlignment.MiddleLeft,
-                TextImageRelation = TextImageRelation.ImageBeforeText,
-                Size      = new Size(100, 32),
-                Location  = new Point(122, 10),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = NordColors.RedSectionFill,
-                ForeColor = NordColors.ErrorRed,
-                Visible   = false
-            };
-            _cancelButton.FlatAppearance.BorderColor        = NordColors.RedSectionBorder;
-            _cancelButton.FlatAppearance.MouseOverBackColor = Color.FromArgb(40, NordColors.ErrorRed);
+            _cancelButton = UIStyles.MakeDangerButton(
+                "  Cancel",
+                new Size(100, 32),
+                WinIcons.StopSquare(12, NordColors.ErrorRed));
+            _cancelButton.Location = new Point(122, 10);
+            _cancelButton.Visible = false;
             _cancelButton.Click += (_, _) =>
             {
                 AgentRunner.CancelCurrentSession();
@@ -110,19 +101,11 @@ namespace OmniKey.Windows
                 SetRunning(false);
             };
 
-            _historyButton = new Button
-            {
-                Text      = "  History",
-                Image     = WinIcons.ClockIcon(12, NordColors.SecondaryText),
-                ImageAlign = ContentAlignment.MiddleLeft,
-                TextImageRelation = TextImageRelation.ImageBeforeText,
-                Size      = new Size(104, 32),
-                Location  = new Point(14, 10),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = NordColors.SurfaceBackground,
-                ForeColor = NordColors.PrimaryText,
-            };
-            _historyButton.FlatAppearance.BorderColor = NordColors.Border;
+            _historyButton = UIStyles.MakeSecondaryButton(
+                "  History",
+                new Size(104, 32),
+                WinIcons.ClockIcon(12, NordColors.SecondaryText));
+            _historyButton.Location = new Point(14, 10);
             _historyButton.Click += async (_, _) =>
             {
                 _historyButton.Enabled = false;
@@ -479,17 +462,10 @@ namespace OmniKey.Windows
 
         private Button CreateCopyButton(string textToCopy)
         {
-            var btn = new Button
-            {
-                Size      = new Size(26, 20),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = Color.Transparent,
-                ForeColor = NordColors.SecondaryText,
-                Cursor    = Cursors.Hand,
-                Image     = WinIcons.ClipboardIcon(12, NordColors.SecondaryText),
-            };
-            btn.FlatAppearance.BorderSize          = 0;
-            btn.FlatAppearance.MouseOverBackColor  = Color.FromArgb(30, NordColors.AccentGreen);
+            var btn = UIStyles.MakeIconButton(
+                WinIcons.ClipboardIcon(12, NordColors.SecondaryText),
+                new Size(26, 20),
+                toolTip: "Copy");
             btn.Click += async (_, _) =>
             {
                 btn.Image    = WinIcons.Checkmark(12, NordColors.AccentGreen);

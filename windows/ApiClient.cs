@@ -55,6 +55,13 @@ namespace OmniKey.Windows
         public string Id { get; set; } = "";
         public string Role { get; set; } = "";
         public string Text { get; set; } = "";
+        public List<SessionHistoryBlockDto>? Blocks { get; set; }
+    }
+
+    internal sealed class SessionHistoryBlockDto
+    {
+        public string Kind { get; set; } = "";
+        public string Text { get; set; } = "";
     }
 
     internal sealed class ApiClient
@@ -421,6 +428,7 @@ namespace OmniKey.Windows
                         Id = el.TryGetProperty("id", out var id) ? id.GetString() ?? "" : "",
                         Role = el.TryGetProperty("role", out var role) ? role.GetString() ?? "" : "",
                         Text = el.TryGetProperty("text", out var text) ? text.GetString() ?? "" : "",
+                        Blocks = ParseSessionHistoryBlocks(el),
                     });
                 }
             }
@@ -451,6 +459,24 @@ namespace OmniKey.Windows
             Instructions = el.TryGetProperty("instructions", out var ins) ? ins.GetString() ?? "" : "",
             IsDefault    = el.TryGetProperty("isDefault", out var def) && def.GetBoolean()
         };
+
+        private static List<SessionHistoryBlockDto>? ParseSessionHistoryBlocks(JsonElement el)
+        {
+            if (!el.TryGetProperty("blocks", out var arr) || arr.ValueKind != JsonValueKind.Array)
+                return null;
+
+            var blocks = new List<SessionHistoryBlockDto>();
+            foreach (var block in arr.EnumerateArray())
+            {
+                blocks.Add(new SessionHistoryBlockDto
+                {
+                    Kind = block.TryGetProperty("kind", out var kind) ? kind.GetString() ?? "" : "",
+                    Text = block.TryGetProperty("text", out var text) ? text.GetString() ?? "" : "",
+                });
+            }
+
+            return blocks;
+        }
 
         private static string ExtractImprovedText(string response)
         {

@@ -122,46 +122,22 @@ namespace OmniKey.Windows
                 Location = new Point(18, settingsMode ? 370 : 388)
             };
 
-            var clearDefaultButton = new Button
-            {
-                Text = "Clear Default",
-                Size = new Size(100, 28),
-                Location = new Point(18, 412),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = NordColors.SurfaceBackground,
-                ForeColor = NordColors.PrimaryText,
-            };
-            clearDefaultButton.FlatAppearance.BorderColor = NordColors.Border;
+            var clearDefaultButton = UIStyles.MakeSecondaryButton("Clear Default", new Size(110, 28));
+            clearDefaultButton.Location = new Point(18, 412);
             clearDefaultButton.Click += (_, _) =>
             {
                 AgentSessionPreferences.ClearDefaultSessionId();
                 _defaultHintLabel.Text = "No default session is currently set.";
             };
 
-            _okButton = new Button
-            {
-                Text = settingsMode ? "Save Default" : "Continue",
-                Size = new Size(96, 30),
-                Location = new Point(446, 412),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = NordColors.Accent,
-                ForeColor = Color.White,
-                DialogResult = DialogResult.OK
-            };
-            _okButton.FlatAppearance.BorderSize = 0;
+            _okButton = UIStyles.MakePrimaryButton(settingsMode ? "Save Default" : "Continue", new Size(104, 30));
+            _okButton.Location = new Point(438, 412);
+            _okButton.DialogResult = DialogResult.OK;
             _okButton.Click += OnContinueClicked;
 
-            var cancelButton = new Button
-            {
-                Text = "Cancel",
-                Size = new Size(96, 30),
-                Location = new Point(344, 412),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = NordColors.SurfaceBackground,
-                ForeColor = NordColors.PrimaryText,
-                DialogResult = DialogResult.Cancel
-            };
-            cancelButton.FlatAppearance.BorderColor = NordColors.Border;
+            var cancelButton = UIStyles.MakeSecondaryButton("Cancel", new Size(96, 30));
+            cancelButton.Location = new Point(336, 412);
+            cancelButton.DialogResult = DialogResult.Cancel;
 
             _newSessionRadio.CheckedChanged += (_, _) => UpdateUiState();
             _resumeRadio.CheckedChanged += (_, _) => UpdateUiState();

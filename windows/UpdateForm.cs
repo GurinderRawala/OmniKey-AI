@@ -69,28 +69,12 @@ namespace OmniKey.Windows
             };
 
             // ── Buttons ───────────────────────────────────────────────────
-            var laterButton = new Button
-            {
-                Text      = "Later",
-                Location  = new Point(20, 268),
-                Size      = new Size(90, 32),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = NordColors.PanelBackground,
-                ForeColor = NordColors.PrimaryText,
-            };
-            laterButton.FlatAppearance.BorderColor = NordColors.Border;
+            var laterButton = UIStyles.MakeSecondaryButton("Later", new Size(90, 32));
+            laterButton.Location = new Point(20, 268);
             laterButton.Click += (_, _) => Close();
 
-            var downloadButton = new Button
-            {
-                Text      = "Download Update",
-                Location  = new Point(382, 268),
-                Size      = new Size(110, 32),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = NordColors.Accent,
-                ForeColor = Color.White,
-            };
-            downloadButton.FlatAppearance.BorderColor = NordColors.Accent;
+            var downloadButton = UIStyles.MakePrimaryButton("Download Update", new Size(126, 32));
+            downloadButton.Location = new Point(366, 268);
             downloadButton.Click += (_, _) =>
             {
                 if (!string.IsNullOrEmpty(info.DownloadUrl))

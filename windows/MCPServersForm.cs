@@ -279,19 +279,8 @@ namespace OmniKey.Windows
 
         private static Button MakeInlineAddButton(Point location)
         {
-            var btn = new Button
-            {
-                Text      = "+ Add",
-                Location  = location,
-                Size      = new Size(60, 22),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = NordColors.BadgeBackground,
-                ForeColor = NordColors.PrimaryText,
-                Font      = new Font("Segoe UI", 8, FontStyle.Bold),
-                Cursor    = Cursors.Hand,
-            };
-            btn.FlatAppearance.BorderColor = NordColors.Border;
-            btn.FlatAppearance.BorderSize  = 1;
+            var btn = UIStyles.MakeSecondaryButton("+ Add", new Size(60, 22));
+            btn.Location = location;
             return btn;
         }
 
@@ -327,18 +316,8 @@ namespace OmniKey.Windows
                 Font        = new Font("Segoe UI", 9),
                 BorderStyle = BorderStyle.FixedSingle,
             };
-            var removeBtn = new Button
-            {
-                Text      = "×",
-                Location  = new Point(726, 2),
-                Size      = new Size(24, 24),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = NordColors.PanelBackground,
-                ForeColor = NordColors.SecondaryText,
-                Font      = new Font("Segoe UI", 10),
-                Cursor    = Cursors.Hand,
-            };
-            removeBtn.FlatAppearance.BorderSize = 0;
+            var removeBtn = UIStyles.MakeIconButton(WinIcons.XmarkCircleFill, 12, new Size(24, 24), NordColors.SecondaryText, toolTip: "Remove");
+            removeBtn.Location = new Point(726, 2);
             removeBtn.Click += (_, _) =>
             {
                 container.Controls.Remove(row);
@@ -382,19 +361,17 @@ namespace OmniKey.Windows
 
         private static Button MakeButton(string text, Point location, Color backColor, Color? foreColor = null)
         {
-            var btn = new Button
-            {
-                Text      = text,
-                Location  = location,
-                Size      = new Size(88, 28),
-                BackColor = backColor,
-                ForeColor = foreColor ?? Color.White,
-                FlatStyle = FlatStyle.Flat,
-                Font      = new Font("Segoe UI", 9, FontStyle.Bold),
-            };
-            btn.FlatAppearance.BorderSize = 0;
-            if (backColor == NordColors.BadgeBackground)
-                btn.FlatAppearance.BorderColor = NordColors.Border;
+            Button btn;
+            if (backColor == NordColors.Accent || backColor == NordColors.AccentBlue)
+                btn = UIStyles.MakePrimaryButton(text, new Size(88, 28));
+            else if (backColor == NordColors.AccentGreen)
+                btn = UIStyles.MakePrimaryButton(text, new Size(88, 28), WinIcons.Checkmark(12, NordColors.WindowBackground));
+            else
+                btn = UIStyles.MakeSecondaryButton(text, new Size(88, 28));
+
+            btn.Location = location;
+            if (foreColor.HasValue)
+                btn.ForeColor = foreColor.Value;
             return btn;
         }
 
