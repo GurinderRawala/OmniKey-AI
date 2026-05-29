@@ -30,6 +30,14 @@ namespace OmniKey.Windows
 
     internal sealed class ChatBlock
     {
+        /// <summary>Per-block display cap for non-final-answer text. Long
+        /// terminal dumps were stalling the WPF render loop and causing a
+        /// visible type lag in the composer; we trim at the model boundary
+        /// so every consumer (live stream, history hydration) is covered
+        /// while the full text is still sent back to the agent in
+        /// <see cref="ChatSessionRunner"/>.</summary>
+        public const int MaxDisplayChars = 2000;
+
         public Guid Id { get; } = Guid.NewGuid();
         public ChatBlockKind Kind { get; }
         public string Text { get; set; }
@@ -37,7 +45,13 @@ namespace OmniKey.Windows
         public ChatBlock(ChatBlockKind kind, string text)
         {
             Kind = kind;
-            Text = text;
+            Text = kind == ChatBlockKind.FinalAnswer ? text : TruncateForDisplay(text);
+        }
+
+        private static string TruncateForDisplay(string text)
+        {
+            if (string.IsNullOrEmpty(text) || text.Length <= MaxDisplayChars) return text;
+            return text.Substring(0, MaxDisplayChars) + "\n…[truncated]";
         }
     }
 
@@ -86,6 +100,7 @@ namespace OmniKey.Windows
         private string _activeSessionTitle = "New Chat";
         private string? _lastErrorMessage;
         private string _inputText = "";
+        private AgentGroupInfo? _selectedGroup;
 
         private ChatModel()
         {
@@ -95,6 +110,28 @@ namespace OmniKey.Windows
         public event EventHandler? StateChanged;
 
         public List<AgentSessionInfo> Sessions { get; private set; } = new();
+
+        /// <summary>All distinct project groups returned by /api/agent/groups
+        /// for the active subscription. Drives the sidebar group filter pills.</summary>
+        public List<AgentGroupInfo> AvailableGroups { get; private set; } = new();
+
+        /// <summary>The project group the user picked in the composer.
+        /// When set, its <c>GroupName</c> is sent with the next chat turn
+        /// so the backend can stamp the new session with that group.
+        /// Mirrors macOS <c>ChatModel.selectedGroup</c>.</summary>
+        public AgentGroupInfo? SelectedGroup
+        {
+            get => _selectedGroup;
+            set
+            {
+                if (ReferenceEquals(_selectedGroup, value)) return;
+                // Treat null and "empty Id" equivalently so the dropdown
+                // sentinel doesn't constantly fire spurious changes.
+                if (_selectedGroup?.GroupName == value?.GroupName) return;
+                _selectedGroup = value;
+                NotifyStateChanged();
+            }
+        }
 
         public string SessionSearchQuery
         {
@@ -133,6 +170,22 @@ namespace OmniKey.Windows
         public bool IsLoadingSessionHistory { get; private set; }
         public bool IsRunning { get; private set; }
 
+        /// <summary>One-shot signal consumed by the sidebar: when set, the
+        /// sidebar expands whichever group currently contains this session
+        /// id so the user can see the freshly-classified chat right after
+        /// the backend assigns its <c>group_name</c> (post final answer).
+        /// Cleared by the view-model once it has acted on it. Mirrors
+        /// macOS <c>pendingExpandSessionId</c>.</summary>
+        public string? PendingExpandSessionId { get; private set; }
+
+        public void ClearPendingExpand()
+        {
+            if (PendingExpandSessionId == null) return;
+            PendingExpandSessionId = null;
+            // No NotifyStateChanged — the caller is reacting to the very
+            // state-change event that surfaced the signal.
+        }
+
         public string? LastErrorMessage
         {
             get => _lastErrorMessage;
@@ -168,13 +221,11 @@ namespace OmniKey.Windows
             get
             {
                 string query = SessionSearchQuery.Trim();
-                if (query.Length == 0)
-                    return Sessions;
+                if (query.Length == 0) return Sessions;
 
                 var tokens = NormalizeSearchText(query)
                     .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-                if (tokens.Length == 0)
-                    return Sessions;
+                if (tokens.Length == 0) return Sessions;
 
                 return Sessions
                     .Where(session =>
@@ -201,6 +252,14 @@ namespace OmniKey.Windows
         public void RefreshSessions(Action? completion = null)
         {
             _ = RefreshSessionsAsync(completion);
+        }
+
+        /// <summary>Reload the list of distinct project groups in the
+        /// background. Safe to call repeatedly — failures are swallowed
+        /// and the existing list is preserved.</summary>
+        public void FetchGroups()
+        {
+            _ = RefreshGroupsAsync();
         }
 
         public void StartNewChat()
@@ -293,6 +352,8 @@ namespace OmniKey.Windows
                     Platform = "windows",
                     Turns = 0,
                     RemainingContextTokens = 0,
+                    GroupName = _selectedGroup?.GroupName,
+                    GroupDescription = _selectedGroup?.GroupDescription,
                     LastActiveAt = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture),
                 };
 
@@ -305,6 +366,7 @@ namespace OmniKey.Windows
             var handle = ChatSessionRunner.Shared.Run(
                 sessionId,
                 text,
+                _selectedGroup?.GroupName,
                 block => RunOnUi(() => appendBlock(block, sessionSt)),
                 finalText => RunOnUi(() =>
                 {
@@ -315,7 +377,18 @@ namespace OmniKey.Windows
                     if (ReferenceEquals(_states.GetValueOrDefault(activeStateKey), sessionSt))
                         IsRunning = false;
                     NotifyStateChanged();
-                    RefreshSessions();
+                    // After the backend has persisted the turn (and possibly
+                    // assigned / updated this session's group_name) refresh
+                    // the sidebar list, then ask the view-model to expand
+                    // whichever group the active session now lives in so
+                    // the user sees the newly-classified chat without
+                    // manually opening folders. Mirrors macOS.
+                    string completedSessionId = sessionId;
+                    RefreshSessions(() =>
+                    {
+                        PendingExpandSessionId = completedSessionId;
+                        NotifyStateChanged();
+                    });
                 }),
                 error => RunOnUi(() =>
                 {
@@ -434,6 +507,40 @@ namespace OmniKey.Windows
                     LastErrorMessage = ex.Message;
                     completion?.Invoke();
                 });
+            }
+
+            // Refresh groups alongside sessions so the sidebar pills stay in
+            // step (new project group can appear after the first turn that
+            // gets classified). Best-effort — fetch failures leave the list
+            // intact.
+            _ = RefreshGroupsAsync();
+        }
+
+        private async Task RefreshGroupsAsync()
+        {
+            try
+            {
+                var groups = await AgentSessionService.FetchGroupsAsync();
+                RunOnUi(() =>
+                {
+                    AvailableGroups = groups;
+
+                    // If the user's chosen project disappeared from the
+                    // server (no longer reported by /api/agent/groups) clear
+                    // it so the composer doesn't keep claiming a project
+                    // that no longer exists.
+                    if (_selectedGroup is { GroupName: { Length: > 0 } current } &&
+                        !groups.Exists(g => g.GroupName == current))
+                    {
+                        _selectedGroup = null;
+                    }
+
+                    NotifyStateChanged();
+                });
+            }
+            catch
+            {
+                // Swallow — the existing group list is still valid.
             }
         }
 

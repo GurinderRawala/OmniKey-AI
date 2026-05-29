@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Linq;
 using System.Threading;
 using System.Windows.Media;
@@ -20,9 +21,24 @@ namespace OmniKey.Windows.ViewModels
         private readonly SynchronizationContext _ui;
         private bool _suppressSelectionFeedback;
         private bool _suppressDefaultTemplateFeedback;
+        private bool _suppressSelectedGroupFeedback;
 
         public ObservableCollection<AgentSessionInfo> Sessions { get; } = new();
         public ObservableCollection<ChatMessageRow> Messages { get; } = new();
+
+        /// <summary>Flattened, section-aware session list. When the visible
+        /// sessions span multiple groups (filter = "All") a
+        /// <see cref="SessionGroupHeaderRow"/> is emitted before each group's
+        /// sessions; when a single group is in view, no headers are added.
+        /// The sidebar ListBox binds to this so the UI stays declarative.</summary>
+        public ObservableCollection<object> SessionRows { get; } = new();
+
+        /// <summary>Project group picker shown in the composer toolbar.
+        /// Seeded with a sentinel "No project" row so the ComboBox always
+        /// has a resolvable SelectedValue even before <see cref="LoadCommand"/>
+        /// fetches groups. Mirrors the task-template pattern next to it.</summary>
+        public ObservableCollection<AgentGroupInfo> AvailableProjectGroups { get; } =
+            new() { NoProjectSentinel };
 
         // Seed with the sentinel so the ComboBox can resolve its SelectedValue
         // (which defaults to "" for "no template active") on the very first
@@ -52,6 +68,16 @@ namespace OmniKey.Windows.ViewModels
             Heading = "No task instructions",
         };
 
+        /// <summary>Sentinel "no project" row injected at the top of
+        /// <see cref="AvailableProjectGroups"/>. Mirrors the task-template
+        /// sentinel: picking it clears <see cref="ChatModel.SelectedGroup"/>
+        /// so the next send goes out ungrouped.</summary>
+        private static readonly AgentGroupInfo NoProjectSentinel = new()
+        {
+            GroupName = "",
+            GroupDescription = "No project selected",
+        };
+
         /// <summary>
         /// Id-based binding for the default-task ComboBox. We can't bind
         /// SelectedItem to <see cref="TaskTemplateDto"/> directly because
@@ -78,6 +104,40 @@ namespace OmniKey.Windows.ViewModels
                 var normalized = string.IsNullOrEmpty(value) ? null : value;
                 if (_model.DefaultTaskTemplate?.Id == normalized) return;
                 _model.SetDefaultTaskTemplate(normalized);
+            }
+        }
+
+        /// <summary>Id-based two-way binding for the composer's project
+        /// ComboBox. Same pattern as <see cref="SelectedDefaultTemplateId"/>:
+        /// the underlying model rebuilds DTO instances on refresh, so
+        /// binding by reference would orphan the SelectedItem and trigger
+        /// spurious clears. We bind by GroupName instead (empty = "No
+        /// project").</summary>
+        public string? SelectedProjectGroupName
+        {
+            get => _model.SelectedGroup?.GroupName ?? NoProjectSentinel.GroupName;
+            set
+            {
+                if (_suppressSelectedGroupFeedback) return;
+                string? normalized = string.IsNullOrEmpty(value) ? null : value;
+                if (_model.SelectedGroup?.GroupName == normalized) return;
+
+                if (normalized == null)
+                {
+                    _model.SelectedGroup = null;
+                    return;
+                }
+
+                // Resolve the GroupName back to the matching AgentGroupInfo
+                // so the model carries the description too (used as the
+                // ComboBox tooltip and the placeholder GroupDescription
+                // on the optimistic session row).
+                var match = _model.AvailableGroups
+                    .Find(g => string.Equals(g.GroupName, normalized, StringComparison.Ordinal));
+                _model.SelectedGroup = match ?? new AgentGroupInfo
+                {
+                    GroupName = normalized,
+                };
             }
         }
 
@@ -112,6 +172,21 @@ namespace OmniKey.Windows.ViewModels
         }
 
         public bool HasContextSummary => ContextSummary is not null;
+
+        /// <summary>Group name of the active session, for the small
+        /// uppercase eyebrow above the conversation title. Null when the
+        /// active session is ungrouped or no session is selected — the
+        /// XAML hides the eyebrow in that case.</summary>
+        public string? ActiveSessionGroup
+        {
+            get
+            {
+                var s = _model.ActiveSession;
+                return string.IsNullOrWhiteSpace(s?.GroupName) ? null : s!.GroupName;
+            }
+        }
+
+        public bool HasActiveSessionGroup => !string.IsNullOrEmpty(ActiveSessionGroup);
 
         /// <summary>Fraction of the context window already consumed, 0..1.</summary>
         public double ContextUsedFraction
@@ -232,9 +307,34 @@ namespace OmniKey.Windows.ViewModels
 
         private void ProjectFromModel()
         {
-            // Sessions list — filtered for search
+            // Sessions list — filtered for search AND active group.
             var visible = _model.FilteredSessions;
             ReplaceCollection(Sessions, visible);
+
+            // One-shot expand request from the model: when a final answer
+            // lands and the just-refreshed sidebar now carries an updated
+            // group_name for the active session, expand that group so the
+            // newly-classified chat is visible without the user clicking
+            // folders. Must run before RebuildSessionRows so the resolved
+            // group is marked seen (preventing the default-collapse path
+            // below from re-collapsing it).
+            if (_model.PendingExpandSessionId is { Length: > 0 } expandId)
+            {
+                var target = _model.Sessions.Find(s => s.Id == expandId);
+                if (target != null)
+                {
+                    string key = target.GroupName ?? "";
+                    _collapsedGroups[key] = false;
+                    _seenGroups.Add(key);
+                }
+                _model.ClearPendingExpand();
+            }
+
+            // Sectioned session rows: when more than one group is visible
+            // (i.e. the user hasn't picked a specific group filter and the
+            // backend reports multiple) inject uppercase eyebrow headers
+            // so the sidebar reads like a tidy contact list.
+            RebuildSessionRows(visible);
 
             // Active session sync (without re-entering OpenSession)
             var active = _model.ActiveSession;
@@ -245,13 +345,6 @@ namespace OmniKey.Windows.ViewModels
                 finally { _suppressSelectionFeedback = false; }
             }
 
-            // Mark active session rows for active-bar styling
-            for (int i = 0; i < Sessions.Count; i++)
-            {
-                // Re-wrap with active flag would require dedicated rows; instead just
-                // expose ActiveSessionId for binding in the row template.
-            }
-
             // Messages — project with streaming flag on the last assistant turn.
             int lastIndex = _model.Messages.Count - 1;
             var rows = new List<ChatMessageRow>(_model.Messages.Count);
@@ -259,7 +352,9 @@ namespace OmniKey.Windows.ViewModels
             {
                 bool streaming = _model.IsRunning && i == lastIndex
                     && _model.Messages[i].Role == ChatMessageRole.Assistant;
-                rows.Add(ChatMessageRow.Create(_model.Messages[i], streaming));
+                var row = ChatMessageRow.Create(_model.Messages[i], streaming);
+                AttachExpansionTracking(row);
+                rows.Add(row);
             }
             ReplaceCollection(Messages, rows);
 
@@ -280,6 +375,19 @@ namespace OmniKey.Windows.ViewModels
                 _suppressDefaultTemplateFeedback = false;
             }
 
+            // Project groups — same diff-by-key pattern so the open
+            // ComboBox doesn't reset its selection on every model tick.
+            _suppressSelectedGroupFeedback = true;
+            try
+            {
+                SyncProjectGroups(_model.AvailableGroups);
+                OnPropertyChanged(nameof(SelectedProjectGroupName));
+            }
+            finally
+            {
+                _suppressSelectedGroupFeedback = false;
+            }
+
             // Scalar properties
             ActiveSessionTitle = _model.ActiveSessionTitle;
             IsRunning = _model.IsRunning;
@@ -296,12 +404,84 @@ namespace OmniKey.Windows.ViewModels
             OnPropertyChanged(nameof(HasContextSummary));
             OnPropertyChanged(nameof(ContextUsedFraction));
             OnPropertyChanged(nameof(ContextRingBrush));
+            OnPropertyChanged(nameof(ActiveSessionGroup));
+            OnPropertyChanged(nameof(HasActiveSessionGroup));
         }
 
         private static void ReplaceCollection<T>(ObservableCollection<T> target, IList<T> source)
         {
             target.Clear();
             foreach (var item in source) target.Add(item);
+        }
+
+        /// <summary>Rehydrate previously-toggled expansion state onto the
+        /// freshly-built row and wire up listeners so future user toggles
+        /// are persisted. Without this the thinking panel snaps closed
+        /// every time a new block streams in.</summary>
+        private void AttachExpansionTracking(ChatMessageRow row)
+        {
+            if (_thinkingExpandedByMessage.TryGetValue(row.Source.Id, out var expanded))
+                row.IsThinkingExpanded = expanded;
+
+            row.PropertyChanged += OnRowPropertyChanged;
+
+            foreach (var block in row.ThinkingBlocks)
+                AttachBlockTracking(block);
+
+            if (row.FinalAnswer != null)
+                AttachBlockTracking(row.FinalAnswer);
+        }
+
+        private void AttachBlockTracking(ChatBlockRow block)
+        {
+            if (_blockExpanded.TryGetValue(block.Source.Id, out var expanded))
+                block.IsExpanded = expanded;
+
+            block.PropertyChanged += OnBlockPropertyChanged;
+        }
+
+        private void OnRowPropertyChanged(object? sender, PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName != nameof(ChatMessageRow.IsThinkingExpanded)) return;
+            if (sender is not ChatMessageRow row) return;
+            _thinkingExpandedByMessage[row.Source.Id] = row.IsThinkingExpanded;
+        }
+
+        private void OnBlockPropertyChanged(object? sender, PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName != nameof(ChatBlockRow.IsExpanded)) return;
+            if (sender is not ChatBlockRow block) return;
+            _blockExpanded[block.Source.Id] = block.IsExpanded;
+        }
+
+
+        /// <summary>Mirror of <see cref="SyncTaskTemplates"/> for the
+        /// project-group ComboBox. Always renders as [sentinel, ...groups];
+        /// diffs by <see cref="AgentGroupInfo.GroupName"/> so the open
+        /// dropdown stays mounted across refreshes.</summary>
+        private void SyncProjectGroups(IList<AgentGroupInfo> source)
+        {
+            if (AvailableProjectGroups.Count == source.Count + 1
+                && ReferenceEquals(AvailableProjectGroups[0], NoProjectSentinel))
+            {
+                bool sameOrder = true;
+                for (int i = 0; i < source.Count; i++)
+                {
+                    if (!string.Equals(
+                            AvailableProjectGroups[i + 1].GroupName,
+                            source[i].GroupName,
+                            StringComparison.Ordinal))
+                    {
+                        sameOrder = false;
+                        break;
+                    }
+                }
+                if (sameOrder) return;
+            }
+
+            AvailableProjectGroups.Clear();
+            AvailableProjectGroups.Add(NoProjectSentinel);
+            foreach (var item in source) AvailableProjectGroups.Add(item);
         }
 
         /// <summary>
@@ -330,6 +510,120 @@ namespace OmniKey.Windows.ViewModels
             AvailableTaskTemplates.Clear();
             AvailableTaskTemplates.Add(NoTemplateSentinel);
             foreach (var item in source) AvailableTaskTemplates.Add(item);
+        }
+
+        /// <summary>Map of header-key → collapsed flag. Keeps collapse state
+        /// across session-list rebuilds so a streaming-in turn doesn't
+        /// snap the user's view open. Key is the raw GroupName ("" for
+        /// "Ungrouped") so it matches the macOS grouping behaviour.</summary>
+        private readonly Dictionary<string, bool> _collapsedGroups = new(StringComparer.Ordinal);
+
+        /// <summary>Tracks which group keys we've already observed so newly-
+        /// discovered groups can default to collapsed without re-collapsing
+        /// groups the user has explicitly expanded. Mirrors macOS
+        /// <c>seenGroups</c>.</summary>
+        private readonly HashSet<string> _seenGroups = new(StringComparer.Ordinal);
+
+        /// <summary>Per-message persisted "thinking expanded" flag. The row
+        /// objects are rebuilt every time the model publishes (every block
+        /// arrival, every input edit) — without this map the user's
+        /// expanded thinking panel would snap shut on the next streamed
+        /// step. Key is <see cref="ChatMessage.Id"/>.</summary>
+        private readonly Dictionary<Guid, bool> _thinkingExpandedByMessage = new();
+
+        /// <summary>Per-block persisted "expanded" flag. Same rationale as
+        /// <see cref="_thinkingExpandedByMessage"/> but for individual
+        /// reasoning / command / output rows inside the thinking panel.</summary>
+        private readonly Dictionary<Guid, bool> _blockExpanded = new();
+
+        private void RebuildSessionRows(IList<AgentSessionInfo> visible)
+        {
+            SessionRows.Clear();
+
+            // Group sessions by GroupName preserving the source order (which
+            // is already sorted by lastActiveAt on the server).
+            var orderedKeys = new List<string>();
+            var bucket = new Dictionary<string, List<AgentSessionInfo>>(StringComparer.Ordinal);
+            foreach (var s in visible)
+            {
+                string key = s.GroupName ?? "";
+                if (!bucket.TryGetValue(key, out var list))
+                {
+                    list = new List<AgentSessionInfo>();
+                    bucket[key] = list;
+                    orderedKeys.Add(key);
+                }
+                list.Add(s);
+            }
+
+            // Inject headers when we have grouped sessions (at least one
+            // sees a non-empty GroupName). For an entirely ungrouped list
+            // (older sessions without classification) we skip headers so
+            // the sidebar stays compact, mirroring macOS behaviour.
+            bool hasNamedGroup = orderedKeys.Exists(k => !string.IsNullOrEmpty(k));
+            bool injectHeaders = hasNamedGroup;
+
+            foreach (var key in orderedKeys)
+            {
+                var sessions = bucket[key];
+
+                if (injectHeaders)
+                {
+                    // Newly discovered groups start collapsed (mirrors
+                    // macOS). Groups the user has already toggled keep
+                    // their stored state.
+                    if (_seenGroups.Add(key) && !_collapsedGroups.ContainsKey(key))
+                        _collapsedGroups[key] = true;
+
+                    bool collapsed = _collapsedGroups.TryGetValue(key, out var c) && c;
+                    var header = new SessionGroupHeaderRow
+                    {
+                        GroupName = string.IsNullOrEmpty(key) ? "Ungrouped" : key,
+                        IsCollapsed = collapsed,
+                        SessionCount = sessions.Count,
+                    };
+                    // Persist toggles back into the dictionary so the next
+                    // rebuild starts from the same state.
+                    header.ToggleRequested = () =>
+                    {
+                        _collapsedGroups[key] = header.IsCollapsed;
+                        RebuildSessionRows(_model.FilteredSessions);
+                    };
+                    SessionRows.Add(header);
+
+                    if (collapsed) continue;
+                }
+
+                foreach (var s in sessions)
+                    SessionRows.Add(s);
+            }
+        }
+    }
+
+    /// <summary>Section header injected between groups in the sessions
+    /// ListBox. Clickable: toggles whether the sessions under the header
+    /// are visible. Collapsed state lives on the ChatViewModel so it
+    /// survives session-list rebuilds.</summary>
+    internal sealed partial class SessionGroupHeaderRow : ObservableObject
+    {
+        public string GroupName { get; set; } = "";
+
+        /// <summary>UI binding for the chevron glyph + the row visibility
+        /// of the sessions below this header.</summary>
+        [ObservableProperty] private bool isCollapsed;
+
+        /// <summary>Number of sessions currently grouped under this header.
+        /// Shown as a small muted count on the right of the chevron so the
+        /// user knows how many are hidden when collapsed.</summary>
+        [ObservableProperty] private int sessionCount;
+
+        public Action? ToggleRequested { get; set; }
+
+        [RelayCommand]
+        private void Toggle()
+        {
+            IsCollapsed = !IsCollapsed;
+            ToggleRequested?.Invoke();
         }
     }
 

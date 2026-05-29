@@ -120,6 +120,7 @@ namespace OmniKey.Windows
         public ChatSessionRunHandle Run(
             string sessionId,
             string userText,
+            string? groupName,
             Action<ChatBlock> onBlock,
             Action<string> onFinal,
             Action<Exception> onError)
@@ -157,6 +158,7 @@ namespace OmniKey.Windows
                     await ConnectAndRunAsync(
                         sessionId,
                         userText,
+                        groupName,
                         allowReauth: hadToken,
                         handle,
                         onBlock,
@@ -177,6 +179,7 @@ namespace OmniKey.Windows
         private static async Task ConnectAndRunAsync(
             string sessionId,
             string userText,
+            string? groupName,
             bool allowReauth,
             ChatSessionRunHandle handle,
             Action<ChatBlock> onBlock,
@@ -205,7 +208,7 @@ namespace OmniKey.Windows
                 if (!ok)
                     throw new InvalidOperationException("Subscription is not active.");
 
-                await ConnectAndRunAsync(sessionId, userText, false, handle, onBlock, onFinal);
+                await ConnectAndRunAsync(sessionId, userText, groupName, false, handle, onBlock, onFinal);
                 return;
             }
 
@@ -218,7 +221,8 @@ namespace OmniKey.Windows
                     content = userText,
                     is_terminal_output = false,
                     is_error = false,
-                    platform = "windows"
+                    platform = "windows",
+                    group_name = string.IsNullOrWhiteSpace(groupName) ? null : groupName,
                 };
 
                 await AgentRunner.SendMessageAsync(ws, initial, cts.Token);

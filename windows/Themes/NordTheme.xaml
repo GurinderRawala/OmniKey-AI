@@ -70,6 +70,35 @@
     <SolidColorBrush x:Key="Nord.AccentAmberBrush" Color="{StaticResource Nord.AccentAmber.Dark}" />
 
     <!--
+        Shared interactive-surface brushes used across chat + sidebar +
+        OmniAgent session pages. Previously these lived as ad-hoc hex
+        SolidColorBrushes inside individual Page.Resources, which made
+        future re-theming painful. Promoted here so all pages stay in
+        visual lockstep.
+    -->
+    <SolidColorBrush x:Key="Nord.HoverBrush"            Color="#1AFFFFFF" />
+    <SolidColorBrush x:Key="Nord.PressBrush"            Color="#26FFFFFF" />
+    <SolidColorBrush x:Key="Nord.CodeBackgroundBrush"   Color="#FF101012" />
+    <SolidColorBrush x:Key="Nord.UserBubbleBrush"       Color="#FF36363B" />
+    <SolidColorBrush x:Key="Nord.AssistantTextBrush"    Color="#FFE6E6EA" />
+    <SolidColorBrush x:Key="Nord.DangerSoftBrush"       Color="#33FC6464" />
+
+    <!--
+        "Paper" surface used by the assistant's Final Answer card. Mirrors
+        macOS FinalAnswerView.paperFill — a small lift above the window
+        background (#323236 @ 85%) so the answer reads as its own
+        container without ever feeling bright against the dark chat.
+    -->
+    <SolidColorBrush x:Key="Nord.FinalAnswerSurfaceBrush" Color="#D9323236" />
+
+    <!--
+        Compact pill background used by chips inside markdown chrome
+        (inline code, code-block header, copy button hover target).
+        Sits a touch below the panel so it reads as inset.
+    -->
+    <SolidColorBrush x:Key="Nord.BadgeFillBrush"          Color="#26FFFFFF" />
+
+    <!--
         Section card fill/border tints. Mirror NordColors.{Blue|Purple|Amber|Green}{SectionFill|SectionBorder}
         from the WinForms palette so the OmniAgent session page renders
         section cards with the same colour vocabulary as the legacy

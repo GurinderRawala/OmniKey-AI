@@ -62,6 +62,77 @@ async function runSQLiteMigrations(logger: Logger): Promise<void> {
       logger.info(`SQLite migration: added column ${table}.${column}`);
     }
   }
+
+  // mcp_servers was originally created with UNIQUE on both subscription_id and
+  // name as column-level constraints (SQLite auto-indexes). These can't be
+  // dropped with DROP INDEX — the only fix is to recreate the table with the
+  // correct schema (composite unique on subscription_id+name only).
+  await migrateMcpServersTableIfNeeded(logger);
+}
+
+async function migrateMcpServersTableIfNeeded(logger: Logger): Promise<void> {
+  // Check if the old schema is still in place by inspecting the CREATE TABLE sql.
+  const rows = (await sequelize.query(
+    `SELECT sql FROM sqlite_master WHERE type='table' AND name='mcp_servers'`
+  ))[0] as Array<{ sql: string }>;
+
+  if (!rows.length) return; // table doesn't exist yet — sync() will create it correctly
+
+  const createSql = rows[0].sql;
+  // Old schema has UNIQUE on subscription_id at the column level.
+  // New schema only has the composite index mcp_servers_subscription_id_name.
+  const needsMigration = /`subscription_id`[^,]*UNIQUE/i.test(createSql);
+  if (!needsMigration) return;
+
+  logger.info('SQLite migration: recreating mcp_servers table to remove stale UNIQUE constraints');
+
+  await sequelize.query('PRAGMA foreign_keys = OFF');
+  try {
+    await sequelize.query('BEGIN TRANSACTION');
+
+    await sequelize.query(`
+      CREATE TABLE \`mcp_servers_new\` (
+        \`id\` VARCHAR(255) NOT NULL PRIMARY KEY,
+        \`subscription_id\` VARCHAR(255) NOT NULL REFERENCES \`subscriptions\` (\`id\`) ON DELETE CASCADE ON UPDATE CASCADE,
+        \`name\` VARCHAR(100) NOT NULL,
+        \`description\` VARCHAR(500),
+        \`transport\` VARCHAR(16) NOT NULL DEFAULT 'stdio',
+        \`command\` VARCHAR(500),
+        \`args\` JSON NOT NULL DEFAULT '[]',
+        \`env\` JSON NOT NULL DEFAULT '{}',
+        \`url\` VARCHAR(1000),
+        \`headers\` JSON NOT NULL DEFAULT '{}',
+        \`is_enabled\` TINYINT(1) NOT NULL DEFAULT 1,
+        \`last_connected_at\` DATETIME,
+        \`last_error\` TEXT,
+        \`createdAt\` DATETIME NOT NULL,
+        \`updatedAt\` DATETIME NOT NULL
+      )
+    `);
+
+    await sequelize.query(`
+      INSERT INTO \`mcp_servers_new\`
+        SELECT id, subscription_id, name, description, transport, command, args, env,
+               url, headers, is_enabled, last_connected_at, last_error, createdAt, updatedAt
+        FROM \`mcp_servers\`
+    `);
+
+    await sequelize.query('DROP TABLE `mcp_servers`');
+    await sequelize.query('ALTER TABLE `mcp_servers_new` RENAME TO `mcp_servers`');
+
+    await sequelize.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS \`mcp_servers_subscription_id_name\`
+        ON \`mcp_servers\` (\`subscription_id\`, \`name\`)
+    `);
+
+    await sequelize.query('COMMIT');
+    logger.info('SQLite migration: mcp_servers table recreated successfully');
+  } catch (err) {
+    await sequelize.query('ROLLBACK');
+    throw err;
+  } finally {
+    await sequelize.query('PRAGMA foreign_keys = ON');
+  }
 }
 
 export async function initDatabase(logger: Logger): Promise<void> {

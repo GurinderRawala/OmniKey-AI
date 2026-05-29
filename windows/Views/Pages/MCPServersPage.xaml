@@ -367,6 +367,31 @@
                                     FontSize="{StaticResource OK.Font.Body}"
                                     PlaceholderText="https://example.com/mcp"
                                     Text="{Binding EditUrl, UpdateSourceTrigger=PropertyChanged}" />
+
+                                <TextBlock
+                                    Margin="0,0,0,4"
+                                    FontFamily="{StaticResource OK.FontFamily}"
+                                    FontSize="{StaticResource OK.Font.CaptionSmall}"
+                                    FontWeight="SemiBold"
+                                    Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                                    Text="HEADERS (one Key: Value per line)" />
+                                <Border
+                                    BorderBrush="{StaticResource Nord.BorderBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="8">
+                                    <ui:TextBox
+                                        MinHeight="90"
+                                        AcceptsReturn="True"
+                                        AcceptsTab="True"
+                                        Background="{StaticResource Nord.EditorBackgroundBrush}"
+                                        BorderThickness="0"
+                                        FontFamily="{StaticResource OK.MonoFontFamily}"
+                                        FontSize="{StaticResource OK.Font.Body}"
+                                        PlaceholderText="Authorization: Bearer abc123&#x0a;X-Workspace: omnikey"
+                                        Text="{Binding EditHeaders, UpdateSourceTrigger=PropertyChanged}"
+                                        TextWrapping="NoWrap"
+                                        VerticalScrollBarVisibility="Auto" />
+                                </Border>
                             </StackPanel>
                         </Grid>
                     </ScrollViewer>

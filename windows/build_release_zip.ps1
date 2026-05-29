@@ -83,28 +83,40 @@ OmniKey AI $APP_VERSION – Windows ($Runtime)
 
 What's new in $APP_VERSION
 --------------------------
-- Brand-new WPF shell with a unified sidebar: Agent Chat, OmniAgent Session,
-  Task Instructions, Scheduled Jobs, Job Run History, MCP Servers, Manual,
-  Subscription, and Check Updates are all reachable from one window.
-- Agent Chat: full WPF chat page with a session sidebar, search, hover-to-delete,
-  a context-window indicator, default task-instruction selector, and a "No task
-  instructions" option built into the picker.
-- OmniAgent Session: replaces the old separate thinking window. Sticky session
-  picker at the top, streaming step-by-step timeline (web search, MCP, reasoning,
-  terminal) with collapsible details, and a final-answer card with copy. Selecting
-  an existing session previews its last request + steps + final answer in-place.
-- Scheduled Jobs: redesigned editor with clearer labels, a self-contained Active
-  toggle, restructured Save / Run now / Reset / Delete action bar, and tooltips.
-- Theme: cool cyan + light-purple palette pulled from the app icon. The Windows
-  system-accent leak (orange/red buttons) is gone — every Primary button is
-  logo-purple, every Danger button is a muted red.
-- Typography: modernised font stack (Aptos / Inter / Segoe UI Variable Display).
-- Mouse-wheel scroll fixed across Chat and OmniAgent pages — wheel events route
-  to the right scroll surface even over FlowDocument and Expander children.
-- Production-default backend URL: shipping binary now defaults to
-  https://omnikeyai.ca; self-hosted users can still override via
-  ~/.omnikey/config.json or OMNIKEY_BACKEND_URL.
-- Internals: removed ~5,200 lines of unwired WinForms code; build is warning-free.
+- Projects: chats are now grouped by project in the sidebar — collapsible "folder"
+  headers per group, a session-count badge, and per-header collapse state that
+  survives streaming turns.
+- Projects: new project picker in the composer toolbar (next to the task-instruction
+  selector) — pick the project for your next turn, mirrors the macOS "Select project"
+  menu. Auto-hides until the backend has classified at least one group.
+- Projects: the chosen project is stamped onto the outbound message and the optimistic
+  session placeholder, so new chats appear under the right header immediately.
+- Chat: messages now sit in a centered 820 DIP reading column on large monitors and
+  stretch edge-to-edge on smaller windows — matches the macOS layout exactly. User
+  bubbles stay pinned right, assistant content stays pinned left, on every viewport.
+- Chat: new Final Answer card with a soft "paper" surface (mirrors macOS), copy
+  button anchored bottom-right so it no longer overlaps long markdown headings,
+  and an "Answer" tooltip on copy.
+- Chat: animated typing indicator (pulsing sparkle + three staggered dots) appears
+  the moment you send your first message — matches macOS TypingDotsView.
+- Chat: extra breathing room between thinking-timeline steps so the agent's
+  intermediate reasoning reads as discrete actions instead of a cramped wall.
+- Markdown: brand-new Nord-themed renderer — no more white-background leaks from
+  the underlying MdXaml engine on paragraphs, blockquotes, lists, tables, or
+  inline code.
+- Markdown: bullets and numbered lists are no longer clipped on the left edge.
+- Markdown: inline code now renders as a soft pill (BadgeFill) instead of a dark
+  slab; fenced code blocks keep their rounded macOS-style chrome with language
+  label + copy.
+- MCP Servers: editor now supports custom HTTP headers — one Key: Value per line,
+  monospace input, persisted alongside the URL. Authorization headers are
+  unredacted on edit so they round-trip cleanly, and stale fetches won't clobber
+  what you're typing.
+- Composer: capped + centered at 820 DIP on wide monitors for a balanced layout,
+  full pane width on smaller windows.
+- Theme: shared interactive-surface brushes (Hover, Press, CodeBackground,
+  UserBubble, AssistantText, DangerSoft, FinalAnswerSurface, BadgeFill) promoted
+  to NordTheme.xaml so every page stays in visual lockstep.
 
 Installation
 ------------

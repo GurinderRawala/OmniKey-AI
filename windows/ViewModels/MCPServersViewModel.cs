@@ -89,6 +89,12 @@ namespace OmniKey.Windows.ViewModels
         [ObservableProperty]
         private string editUrl = string.Empty;
 
+        /// <summary>HTTP/SSE auth + custom headers. One <c>Key: Value</c>
+        /// pair per line. Empty lines are ignored on save. Lines without
+        /// a colon are dropped (no key/value split).</summary>
+        [ObservableProperty]
+        private string editHeaders = string.Empty;
+
         [ObservableProperty]
         private bool editEnabled = true;
 
@@ -138,6 +144,7 @@ namespace OmniKey.Windows.ViewModels
                 EditCommand = string.Empty;
                 EditArgs = string.Empty;
                 EditUrl = string.Empty;
+                EditHeaders = string.Empty;
                 EditEnabled = true;
             }
             else
@@ -149,7 +156,14 @@ namespace OmniKey.Windows.ViewModels
                 EditCommand = dto.Command ?? string.Empty;
                 EditArgs = string.Join(Environment.NewLine, dto.Args ?? new List<string>());
                 EditUrl = dto.Url ?? string.Empty;
+                // Cached dto values come from the redacted list endpoint
+                // (header values arrive as "***"). Fire-and-forget a single-
+                // record fetch so the editor shows real values for round-
+                // tripping. Persisted rows only — drafts have no id yet.
+                EditHeaders = HeadersToText(dto.Headers);
                 EditEnabled = dto.IsEnabled;
+                if (value.IsPersisted)
+                    _ = HydrateSelectedAsync(value);
             }
 
             OnPropertyChanged(nameof(HasSelection));
@@ -158,6 +172,53 @@ namespace OmniKey.Windows.ViewModels
             OnPropertyChanged(nameof(EditorTitle));
             RaiseAllCanExecuteChanged();
         }
+
+        /// <summary>Replace cached redacted Env/Headers with the real
+        /// server-side values from the single-record endpoint. Safe to
+        /// no-op if the user has switched selection mid-flight: we only
+        /// patch when the still-selected row is the one we fetched for.</summary>
+        private async Task HydrateSelectedAsync(MCPServerItem item)
+        {
+            try
+            {
+                var fresh = await _api.FetchMCPServerAsync(item.Dto.Id);
+                // Stale-callback guard: bail if the user moved on.
+                if (!ReferenceEquals(SelectedServer, item)) return;
+
+                item.Dto.Env = fresh.Env ?? new Dictionary<string, string>();
+                item.Dto.Headers = fresh.Headers ?? new Dictionary<string, string>();
+
+                // Only patch fields the user hasn't already started
+                // editing — typing into the headers box during the fetch
+                // shouldn't be clobbered.
+                if (EditHeaders == HeadersToText(StripRedacted(fresh.Headers))
+                    || ContainsRedactedMarker(EditHeaders))
+                {
+                    EditHeaders = HeadersToText(item.Dto.Headers);
+                }
+            }
+            catch
+            {
+                // Best-effort — fall back to the redacted values already
+                // populated. The user will see "***" and can clear/replace
+                // them if they want to update.
+            }
+        }
+
+        private static Dictionary<string, string> StripRedacted(Dictionary<string, string>? headers)
+        {
+            if (headers is null) return new Dictionary<string, string>();
+            var copy = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var kv in headers)
+                if (kv.Value != RedactedMarker)
+                    copy[kv.Key] = kv.Value;
+            return copy;
+        }
+
+        private static bool ContainsRedactedMarker(string text) =>
+            !string.IsNullOrEmpty(text) && text.Contains(RedactedMarker, StringComparison.Ordinal);
+
+        private const string RedactedMarker = "***";
 
         partial void OnEditTransportChanged(string value)
         {
@@ -254,7 +315,9 @@ namespace OmniKey.Windows.ViewModels
                     : new List<string>(),
                 Env = current.Dto.Env ?? new Dictionary<string, string>(),
                 Url = transport != "stdio" ? EditUrl.Trim() : null,
-                Headers = current.Dto.Headers ?? new Dictionary<string, string>(),
+                Headers = transport != "stdio"
+                    ? ParseHeaders(EditHeaders)
+                    : (current.Dto.Headers ?? new Dictionary<string, string>()),
                 IsEnabled = EditEnabled,
             };
 
@@ -383,6 +446,41 @@ namespace OmniKey.Windows.ViewModels
         {
             StatusMessage = text;
             StatusKind = kind;
+        }
+
+        /// <summary>Format a header dictionary as one <c>Key: Value</c>
+        /// pair per line for the editor. Order is alphabetical so the
+        /// editor reads stably across opens.</summary>
+        private static string HeadersToText(Dictionary<string, string>? headers)
+        {
+            if (headers is null || headers.Count == 0) return string.Empty;
+            return string.Join(
+                Environment.NewLine,
+                headers.OrderBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase)
+                       .Select(kv => $"{kv.Key}: {kv.Value}"));
+        }
+
+        /// <summary>Parse the editor's text back into a header dictionary.
+        /// Lines without a colon are dropped; whitespace around key/value
+        /// is trimmed. Duplicate keys keep the last value (last-write-
+        /// wins), matching what most HTTP stacks do.</summary>
+        private static Dictionary<string, string> ParseHeaders(string text)
+        {
+            var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (string.IsNullOrWhiteSpace(text)) return result;
+
+            foreach (var rawLine in text.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None))
+            {
+                var line = rawLine.Trim();
+                if (line.Length == 0) continue;
+                int sep = line.IndexOf(':');
+                if (sep <= 0) continue; // need a non-empty key + a colon
+                var key = line.Substring(0, sep).Trim();
+                var value = line.Substring(sep + 1).Trim();
+                if (key.Length == 0) continue;
+                result[key] = value;
+            }
+            return result;
         }
     }
 }

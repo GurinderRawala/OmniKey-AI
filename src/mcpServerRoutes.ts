@@ -127,7 +127,12 @@ export function mcpServerRouter(): express.Router {
         return res.status(400).json({ error: 'Invalid MCP server data.' });
       }
       if (err?.name === 'SequelizeUniqueConstraintError') {
-        return res.status(409).json({ error: 'An MCP server with that name already exists.' });
+        const isNameConflict = err?.fields?.includes('name') || err?.errors?.some((e: any) => e.path === 'name');
+        return res.status(409).json({
+          error: isNameConflict
+            ? 'An MCP server with that name already exists.'
+            : 'Failed to create MCP server due to a conflict.',
+        });
       }
       res.status(500).json({ error: 'Failed to create MCP server.' });
     }

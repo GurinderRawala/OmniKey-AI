@@ -10,11 +10,7 @@ import { SubscriptionUsage } from '../models/subscriptionUsage';
 import { AgentSession } from '../models/agentSession';
 import { getAgentPrompt } from './agentPrompts';
 import { getPromptMcpsForSubscription } from './mcpPromptCache';
-import {
-  getMcpToolsForSubscription,
-  executeMcpTool,
-  MCP_TOOL_PREFIX,
-} from './mcpRuntime';
+import { getMcpToolsForSubscription, executeMcpTool, MCP_TOOL_PREFIX } from './mcpRuntime';
 import { getPromptForCommand } from '../featureRoutes';
 import { executeTool } from '../web-search/web-search-provider';
 import { createLazyAuthContext } from './agentAuth';
@@ -28,7 +24,13 @@ import {
   createUserContentForCronJob,
 } from './utils';
 import { updateSessionGroup } from './sessionGrouping';
-import { aiClient, AITool, AICompletionResult, getDefaultModel, getContextWindowSize } from '../ai-client';
+import {
+  aiClient,
+  AITool,
+  AICompletionResult,
+  getDefaultModel,
+  getContextWindowSize,
+} from '../ai-client';
 import type { AgentMessage, AgentSendFn, SessionState } from './types';
 import { Logger } from 'winston';
 
@@ -703,20 +705,30 @@ async function runAgentTurnInternal(
       // is not the final turn (e.g. plain-text conclusion after terminal
       // output). Treat it as a final answer so the client is never left
       // hanging.
-      log.info('Agent returned untagged content on a non-final turn; treating as final answer', {
-        sessionId,
-        subscriptionId: subscription.id,
-        turn: session.turns,
-      });
+      log.info(
+        'Agent returned untagged content on a non-final turn; treating as assistant response and looping the function again.',
+        {
+          sessionId,
+          subscriptionId: subscription.id,
+          turn: session.turns,
+        },
+      );
 
       pushToSessionHistory(log, session, { role: 'assistant', content });
       await persistSessionToDB(sessionId, session);
-      send({
-        session_id: sessionId,
-        sender: 'agent',
-        content: `<final_answer>\n${content}\n</final_answer>`,
-      });
-      void updateSessionGroup(sessionId, subscription.id);
+      await runAgentTurnInternal(
+        sessionId,
+        subscription,
+        {
+          sender: 'agent',
+          session_id: sessionId,
+          content: '',
+          is_web_call: true,
+        },
+        send,
+        logger,
+        options,
+      );
     } else {
       log.warn('Agent returned empty content with no recognized tags; sending error', {
         sessionId,
@@ -967,7 +979,12 @@ function buildTranscript(raw: RawHistoryMessage[]): TranscriptMessage[] {
       }
     }
 
-    currentAssistant.text = finalText || blocks.map((b) => b.text).join('\n\n').trim();
+    currentAssistant.text =
+      finalText ||
+      blocks
+        .map((b) => b.text)
+        .join('\n\n')
+        .trim();
     messages.push(currentAssistant);
     currentAssistant = null;
   };
@@ -1003,10 +1020,7 @@ function buildTranscript(raw: RawHistoryMessage[]): TranscriptMessage[] {
     }
 
     if (entry.role === 'tool') {
-      appendAssistantBlock(
-        toolBlockKind(entry.tool_name),
-        toolBlockText(entry.tool_name, content),
-      );
+      appendAssistantBlock(toolBlockKind(entry.tool_name), toolBlockText(entry.tool_name, content));
       return;
     }
 

@@ -311,6 +311,19 @@ namespace OmniKey.Windows
             return list;
         }
 
+        /// <summary>Fetch a single server by id. Unlike the list endpoint
+        /// (which redacts <c>env</c> and <c>headers</c> values to <c>***</c>
+        /// for accidental-disclosure safety), this returns the full record
+        /// so the editor can round-trip secrets.</summary>
+        public async Task<MCPServerDto> FetchMCPServerAsync(string id)
+        {
+            using var req  = BuildRequest(HttpMethod.Get, $"/api/mcp-servers/{id}");
+            using var resp = await Http.SendAsync(req);
+            await EnsureSuccessAsync(resp);
+            using var doc  = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+            return ParseMCPServer(doc.RootElement);
+        }
+
         public async Task<MCPServerDto> CreateMCPServerAsync(MCPServerDto dto)
         {
             using var req = BuildRequest(HttpMethod.Post, "/api/mcp-servers");

@@ -185,8 +185,7 @@
                 <Border
                     Padding="6,1"
                     HorizontalAlignment="Left"
-                    Background="#22FFFFFF"
-                    CornerRadius="999">
+                    Background="#22FFFFFF">
                     <TextBlock
                         FontFamily="{StaticResource OK.FontFamily}"
                         FontSize="10"

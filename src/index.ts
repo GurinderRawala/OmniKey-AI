@@ -125,7 +125,7 @@ app.get('/macos/appcast', (req, res) => {
 // ── Windows distribution endpoints ───────────────────────────────────────────
 // These should match the values in windows/OmniKey.Windows.csproj
 // <Version> and windows/build_release_zip.ps1 $APP_VERSION.
-const WIN_VERSION = '1.12';
+const WIN_VERSION = '1.13';
 const WIN_ZIP_FILENAME = 'OmniKeyAI-windows-win-x64.zip';
 const WIN_ZIP_PATH = path.join(process.cwd(), 'windows', WIN_ZIP_FILENAME);
 
@@ -178,15 +178,19 @@ app.get('/windows/update', (req, res) => {
     releaseNotes: [
       `What's new in ${WIN_VERSION}`,
       ``,
-      `• Brand-new WPF shell — Agent Chat, OmniAgent Session, Task Instructions, Scheduled Jobs, Job Run History, MCP Servers, Manual, Subscription, and Check Updates all reachable from a unified sidebar.`,
-      `• Agent Chat with session sidebar, search, hover-to-delete, context-window indicator, default task-instruction picker (with a built-in "No task instructions" option).`,
-      `• OmniAgent Session replaces the old thinking window — sticky session picker, streaming collapsible timeline (web search, MCP, reasoning, terminal) and a copyable final-answer card. Selecting an existing session previews its last turn in-place.`,
-      `• Scheduled Jobs redesigned: clearer labels, self-contained Active toggle, restructured Save / Run now / Reset / Delete action bar, tooltips throughout.`,
-      `• Theme reworked to match the app icon — cyan + light purple. The Windows system-accent leak (orange/red buttons) is gone everywhere.`,
-      `• Modern typography (Aptos / Inter / Segoe UI Variable Display).`,
-      `• Mouse-wheel scroll fixed across Chat and OmniAgent pages.`,
-      `• Production-default backend URL: shipping binary defaults to https://omnikeyai.ca.`,
-      `• Internals: removed ~5,200 lines of unwired WinForms code; build is warning-free.`,
+      `• Projects: chats are now grouped by project in the sidebar — collapsible "folder" headers per group, a session count badge, and per-header collapse state that survives streaming turns.`,
+      `• Projects: new project picker in the composer toolbar (next to the task-instruction selector) — pick the project for your next turn, mirrors the macOS "Select project" menu. Auto-hides until the backend has classified at least one group.`,
+      `• Projects: the chosen project is stamped onto the outbound message and the optimistic session placeholder, so new chats appear under the right header immediately.`,
+      `• Chat: messages now sit in a centered 820 DIP reading column on large monitors and stretch edge-to-edge on smaller windows — matches the macOS layout exactly. User bubbles stay pinned right, assistant content stays pinned left, on every viewport.`,
+      `• Chat: new Final Answer card with a soft "paper" surface (mirrors macOS), copy button anchored bottom-right so it no longer overlaps long markdown headings, and an "Answer" tooltip on copy.`,
+      `• Chat: animated typing indicator (pulsing sparkle + three staggered dots) appears the moment you send your first message — matches macOS TypingDotsView.`,
+      `• Chat: extra breathing room between thinking-timeline steps so the agent's intermediate reasoning reads as discrete actions instead of a cramped wall.`,
+      `• Markdown: brand-new Nord-themed renderer — no more white-background leaks from the underlying MdXaml engine on paragraphs, blockquotes, lists, tables, or inline code.`,
+      `• Markdown: bullets and numbered lists are no longer clipped on the left edge.`,
+      `• Markdown: inline code now renders as a soft pill (BadgeFill) instead of a dark slab; fenced code blocks keep their rounded macOS-style chrome with language label + copy.`,
+      `• MCP Servers: editor now supports custom HTTP headers — one Key: Value per line, monospace input, persisted alongside the URL. Authorization headers are unredacted on edit so they round-trip cleanly, and stale fetches won't clobber what you're typing.`,
+      `• Composer: capped + centered at 820 DIP on wide monitors for a balanced layout, full pane width on smaller windows.`,
+      `• Theme: shared interactive-surface brushes (Hover, Press, CodeBackground, UserBubble, AssistantText, DangerSoft, FinalAnswerSurface, BadgeFill) promoted to NordTheme.xaml so every page stays in visual lockstep.`,
     ].join('\n'),
   });
 });

@@ -17,13 +17,11 @@
     mc:Ignorable="d">
 
     <Page.Resources>
-        <!-- Subtle hover background for sidebar rows and icon buttons -->
-        <SolidColorBrush x:Key="Chat.HoverBrush" Color="#1AFFFFFF" />
-        <SolidColorBrush x:Key="Chat.RowActiveBarBrush" Color="#FF5E8CD2" />
-        <SolidColorBrush x:Key="Chat.CodeBackgroundBrush" Color="#FF101012" />
-        <!-- Claude-style muted user bubble: subtle elevated gray, not a loud accent -->
-        <SolidColorBrush x:Key="Chat.BubbleUserBrush" Color="#FF36363B" />
-        <SolidColorBrush x:Key="Chat.AssistantPlainTextBrush" Color="#FFE6E6EA" />
+        <!--
+            All chat surface brushes now live in Themes/NordTheme.xaml so
+            every page stays in lockstep. Active session indicator uses the
+            global accent (lavender) instead of a one-off blue.
+        -->
 
         <!-- Modern ghost copy button. We use a plain WPF Button with a
              hand-rolled template rather than ui:Button + Appearance="Transparent",
@@ -55,7 +53,7 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Bg" Property="Background" Value="{StaticResource Chat.HoverBrush}" />
+                                <Setter TargetName="Bg" Property="Background" Value="{StaticResource Nord.HoverBrush}" />
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -75,7 +73,11 @@
              Auto row above the button, which made it sit ~2-3 px high
              relative to the icon/label baseline. -->
         <DataTemplate x:Key="TimelineRowTemplate" DataType="{x:Type vm:ChatBlockRow}">
-            <Grid Margin="0,0,0,0">
+            <!-- Bottom margin gives each thinking step breathing room
+                 (matches macOS ThinkingSectionView VStack spacing: 10).
+                 Previously rows abutted with 0 gap which read as a
+                 cramped wall. -->
+            <Grid Margin="0,0,0,10">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="22" />
                     <ColumnDefinition Width="*" />
@@ -205,7 +207,7 @@
                     Grid.Column="1"
                     Margin="6,6,8,12"
                     Padding="10,8"
-                    Background="{StaticResource Chat.CodeBackgroundBrush}"
+                    Background="{StaticResource Nord.CodeBackgroundBrush}"
                     BorderBrush="{StaticResource Nord.BorderBrush}"
                     BorderThickness="1"
                     CornerRadius="6"
@@ -220,17 +222,21 @@
             </Grid>
         </DataTemplate>
 
-        <!-- User-message bubble: right-aligned, muted gray fill, soft corners -->
+        <!-- User-message bubble: right-aligned, muted gray fill,
+             soft corners. Outer Grid stretches to fill the row width
+             so the inner StackPanel actually reaches the right edge
+             of the transcript column on every viewport size. -->
         <DataTemplate x:Key="UserMessageTemplate" DataType="{x:Type vm:ChatMessageRow}">
-            <StackPanel HorizontalAlignment="Right" Margin="0,14,0,14">
+            <Grid HorizontalAlignment="Stretch" Margin="0,14,0,14">
+                <StackPanel HorizontalAlignment="Right">
                 <Border
                     MaxWidth="600"
                     Padding="16,12"
-                    Background="{StaticResource Chat.BubbleUserBrush}"
+                    Background="{StaticResource Nord.UserBubbleBrush}"
                     CornerRadius="14">
                     <TextBlock
                         FontFamily="{StaticResource OK.FontFamily}"
-                        FontSize="14"
+                        FontSize="{StaticResource OK.Font.Body}"
                         Foreground="{StaticResource Nord.PrimaryTextBrush}"
                         LineHeight="22"
                         Text="{Binding Text}"
@@ -254,34 +260,157 @@
                             Visibility="{Binding JustCopied, Converter={StaticResource BooleanToVisibilityConverter}}" />
                     </Grid>
                 </Button>
-            </StackPanel>
+                </StackPanel>
+            </Grid>
         </DataTemplate>
 
-        <!-- Assistant-message turn: thinking header + timeline + answer -->
+        <!-- Assistant-message turn: thinking header + timeline + answer.
+             Stretch the outer StackPanel so the Final Answer card and
+             timeline span the full column width (instead of shrinking
+             to their content) — without this, on narrow screens the
+             assistant content drifts toward centre because the parent
+             ContentControl wraps it tight. -->
         <DataTemplate x:Key="AssistantMessageTemplate" DataType="{x:Type vm:ChatMessageRow}">
-            <StackPanel Margin="0,8,0,18">
-                <!-- Typing dots while we wait for first block -->
+            <StackPanel HorizontalAlignment="Stretch" Margin="0,8,0,18">
+                <!-- Animated typing indicator — mirrors macOS
+                     TypingDotsView (sparkle pulse + three staggered
+                     dots). Storyboards live on EventTriggers attached
+                     to the panel itself so no code-behind is needed.
+                     The panel only mounts while IsAwaitingFirstBlock
+                     is true; when the first block arrives the parent
+                     collapses this region and the storyboards stop
+                     with it. -->
                 <StackPanel
-                    Margin="0,6,0,6"
+                    Margin="0,6,0,10"
                     Orientation="Horizontal"
                     Visibility="{Binding IsAwaitingFirstBlock, Converter={StaticResource BooleanToVisibilityConverter}}">
+                    <StackPanel.Resources>
+                        <Storyboard x:Key="TypingPulse" RepeatBehavior="Forever" AutoReverse="True">
+                            <!-- Sparkle icon: subtle 0.94 → 1.08 scale +
+                                 0.75 → 1.0 opacity, 0.9 s round-trip. -->
+                            <DoubleAnimation
+                                Storyboard.TargetName="TypingSparkleScale"
+                                Storyboard.TargetProperty="ScaleX"
+                                From="0.94" To="1.08" Duration="0:0:0.9" />
+                            <DoubleAnimation
+                                Storyboard.TargetName="TypingSparkleScale"
+                                Storyboard.TargetProperty="ScaleY"
+                                From="0.94" To="1.08" Duration="0:0:0.9" />
+                            <DoubleAnimation
+                                Storyboard.TargetName="TypingSparkle"
+                                Storyboard.TargetProperty="Opacity"
+                                From="0.75" To="1.0" Duration="0:0:0.9" />
+
+                            <!-- Three dots: 0.5 s scale+opacity pulse
+                                 with 0.18 s stagger between them. -->
+                            <DoubleAnimation
+                                Storyboard.TargetName="TypingDot1"
+                                Storyboard.TargetProperty="Opacity"
+                                From="0.30" To="1.0" Duration="0:0:0.5"
+                                BeginTime="0:0:0.00" />
+                            <DoubleAnimation
+                                Storyboard.TargetName="TypingDot1Scale"
+                                Storyboard.TargetProperty="ScaleX"
+                                From="0.55" To="1.0" Duration="0:0:0.5"
+                                BeginTime="0:0:0.00" />
+                            <DoubleAnimation
+                                Storyboard.TargetName="TypingDot1Scale"
+                                Storyboard.TargetProperty="ScaleY"
+                                From="0.55" To="1.0" Duration="0:0:0.5"
+                                BeginTime="0:0:0.00" />
+
+                            <DoubleAnimation
+                                Storyboard.TargetName="TypingDot2"
+                                Storyboard.TargetProperty="Opacity"
+                                From="0.30" To="1.0" Duration="0:0:0.5"
+                                BeginTime="0:0:0.18" />
+                            <DoubleAnimation
+                                Storyboard.TargetName="TypingDot2Scale"
+                                Storyboard.TargetProperty="ScaleX"
+                                From="0.55" To="1.0" Duration="0:0:0.5"
+                                BeginTime="0:0:0.18" />
+                            <DoubleAnimation
+                                Storyboard.TargetName="TypingDot2Scale"
+                                Storyboard.TargetProperty="ScaleY"
+                                From="0.55" To="1.0" Duration="0:0:0.5"
+                                BeginTime="0:0:0.18" />
+
+                            <DoubleAnimation
+                                Storyboard.TargetName="TypingDot3"
+                                Storyboard.TargetProperty="Opacity"
+                                From="0.30" To="1.0" Duration="0:0:0.5"
+                                BeginTime="0:0:0.36" />
+                            <DoubleAnimation
+                                Storyboard.TargetName="TypingDot3Scale"
+                                Storyboard.TargetProperty="ScaleX"
+                                From="0.55" To="1.0" Duration="0:0:0.5"
+                                BeginTime="0:0:0.36" />
+                            <DoubleAnimation
+                                Storyboard.TargetName="TypingDot3Scale"
+                                Storyboard.TargetProperty="ScaleY"
+                                From="0.55" To="1.0" Duration="0:0:0.5"
+                                BeginTime="0:0:0.36" />
+                        </Storyboard>
+                    </StackPanel.Resources>
+                    <StackPanel.Triggers>
+                        <EventTrigger RoutedEvent="FrameworkElement.Loaded">
+                            <BeginStoryboard Storyboard="{StaticResource TypingPulse}" />
+                        </EventTrigger>
+                    </StackPanel.Triggers>
+
+                    <!-- Pulsing sparkle (matches the AccentPurple used
+                         by the thinking section header). -->
+                    <ui:SymbolIcon
+                        x:Name="TypingSparkle"
+                        Margin="0,0,8,0"
+                        VerticalAlignment="Center"
+                        FontSize="12"
+                        Foreground="{StaticResource Nord.AccentPurpleBrush}"
+                        RenderTransformOrigin="0.5,0.5"
+                        Symbol="Sparkle24">
+                        <ui:SymbolIcon.RenderTransform>
+                            <ScaleTransform x:Name="TypingSparkleScale" ScaleX="0.94" ScaleY="0.94" />
+                        </ui:SymbolIcon.RenderTransform>
+                    </ui:SymbolIcon>
+
                     <Ellipse
-                        Width="6"
-                        Height="6"
-                        Margin="0,0,4,0"
+                        x:Name="TypingDot1"
+                        Width="5"
+                        Height="5"
+                        Margin="0,0,5,0"
+                        VerticalAlignment="Center"
                         Fill="{StaticResource Nord.SecondaryTextBrush}"
-                        Opacity="0.55" />
+                        Opacity="0.55"
+                        RenderTransformOrigin="0.5,0.5">
+                        <Ellipse.RenderTransform>
+                            <ScaleTransform x:Name="TypingDot1Scale" ScaleX="0.55" ScaleY="0.55" />
+                        </Ellipse.RenderTransform>
+                    </Ellipse>
                     <Ellipse
-                        Width="6"
-                        Height="6"
-                        Margin="0,0,4,0"
+                        x:Name="TypingDot2"
+                        Width="5"
+                        Height="5"
+                        Margin="0,0,5,0"
+                        VerticalAlignment="Center"
                         Fill="{StaticResource Nord.SecondaryTextBrush}"
-                        Opacity="0.40" />
+                        Opacity="0.55"
+                        RenderTransformOrigin="0.5,0.5">
+                        <Ellipse.RenderTransform>
+                            <ScaleTransform x:Name="TypingDot2Scale" ScaleX="0.55" ScaleY="0.55" />
+                        </Ellipse.RenderTransform>
+                    </Ellipse>
                     <Ellipse
-                        Width="6"
-                        Height="6"
+                        x:Name="TypingDot3"
+                        Width="5"
+                        Height="5"
+                        VerticalAlignment="Center"
                         Fill="{StaticResource Nord.SecondaryTextBrush}"
-                        Opacity="0.25" />
+                        Opacity="0.55"
+                        RenderTransformOrigin="0.5,0.5">
+                        <Ellipse.RenderTransform>
+                            <ScaleTransform x:Name="TypingDot3Scale" ScaleX="0.55" ScaleY="0.55" />
+                        </Ellipse.RenderTransform>
+                    </Ellipse>
                 </StackPanel>
 
                 <!-- Collapsible "Thinking" pill -->
@@ -353,8 +482,8 @@
                 <TextBlock
                     Margin="0,8,0,0"
                     FontFamily="{StaticResource OK.FontFamily}"
-                    FontSize="14"
-                    Foreground="{StaticResource Chat.AssistantPlainTextBrush}"
+                    FontSize="{StaticResource OK.Font.Body}"
+                    Foreground="{StaticResource Nord.AssistantTextBrush}"
                     LineHeight="22"
                     Text="{Binding Text}"
                     TextWrapping="Wrap">
@@ -374,16 +503,20 @@
                     </TextBlock.Style>
                 </TextBlock>
 
-                <!-- Final Answer block (rendered as markdown, plain card, with copy button) -->
+                <!-- Final Answer block — mirrors macOS FinalAnswerView:
+                     soft "paper" surface, markdown content on top, copy
+                     button anchored bottom-right BELOW the content (the
+                     previous DockPanel layout let the button float on
+                     top of long markdown headings). -->
                 <Border
                     Margin="0,10,0,0"
-                    Padding="14,8,14,8"
-                    Background="{StaticResource Nord.PanelBackgroundBrush}"
+                    Padding="16,14,16,10"
+                    Background="{StaticResource Nord.FinalAnswerSurfaceBrush}"
                     BorderBrush="{StaticResource Nord.BorderBrush}"
                     BorderThickness="1"
-                    CornerRadius="10"
+                    CornerRadius="12"
                     Visibility="{Binding HasFinalAnswer, Converter={StaticResource BooleanToVisibilityConverter}}">
-                    <Grid>
+                    <StackPanel>
                         <FlowDocumentScrollViewer
                             Background="Transparent"
                             BorderThickness="0"
@@ -392,11 +525,11 @@
                             VerticalScrollBarVisibility="Disabled"
                             md:Markdown.Source="{Binding FinalAnswer.Text}" />
                         <Button
-                            Margin="0,6,6,0"
+                            Margin="0,6,0,0"
                             HorizontalAlignment="Right"
-                            VerticalAlignment="Top"
                             Command="{Binding CopyVisibleTextCommand}"
-                            Style="{StaticResource Chat.CopyButtonStyle}">
+                            Style="{StaticResource Chat.CopyButtonStyle}"
+                            ToolTip="Copy answer">
                             <Grid>
                                 <ui:SymbolIcon
                                     FontSize="14"
@@ -410,7 +543,7 @@
                                     Visibility="{Binding JustCopied, Converter={StaticResource BooleanToVisibilityConverter}}" />
                             </Grid>
                         </Button>
-                    </Grid>
+                    </StackPanel>
                 </Border>
             </StackPanel>
         </DataTemplate>
@@ -424,6 +557,94 @@
                 FontSize="11.5"
                 Foreground="{StaticResource Nord.SecondaryTextBrush}"
                 Text="{Binding Text}" />
+        </DataTemplate>
+
+        <!-- Group section header — clickable to collapse/expand the
+             sessions below. Folder icon + group name + count of
+             grouped sessions + chevron. Hover surfaces a subtle bg.
+             Mirrors macOS SessionPickerView headers (which are also
+             collapsible). -->
+        <DataTemplate x:Key="SessionGroupHeaderTemplate" DataType="{x:Type vm:SessionGroupHeaderRow}">
+            <Button
+                Margin="2,10,4,2"
+                Padding="4,4"
+                HorizontalContentAlignment="Stretch"
+                Background="Transparent"
+                BorderThickness="0"
+                Command="{Binding ToggleCommand}"
+                Cursor="Hand"
+                ToolTip="Collapse / expand group">
+                <Button.Template>
+                    <ControlTemplate TargetType="Button">
+                        <Border
+                            x:Name="HeaderBg"
+                            Background="{TemplateBinding Background}"
+                            CornerRadius="4">
+                            <ContentPresenter />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="HeaderBg" Property="Background" Value="{StaticResource Nord.HoverBrush}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Button.Template>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <ui:SymbolIcon
+                        Grid.Column="0"
+                        Margin="0,0,6,0"
+                        VerticalAlignment="Center"
+                        FontSize="11"
+                        Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                        Opacity="0.7"
+                        Symbol="Folder24" />
+                    <TextBlock
+                        Grid.Column="1"
+                        VerticalAlignment="Center"
+                        FontFamily="{StaticResource OK.FontFamily}"
+                        FontSize="{StaticResource OK.Font.Eyebrow}"
+                        FontWeight="SemiBold"
+                        Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                        Opacity="0.85"
+                        Text="{Binding GroupName}"
+                        TextTrimming="CharacterEllipsis" />
+                    <Border Grid.Column="2" />
+                    <TextBlock
+                        Grid.Column="3"
+                        Margin="6,0,4,0"
+                        VerticalAlignment="Center"
+                        FontFamily="{StaticResource OK.FontFamily}"
+                        FontSize="{StaticResource OK.Font.Eyebrow}"
+                        FontWeight="Medium"
+                        Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                        Opacity="0.55"
+                        Text="{Binding SessionCount}" />
+                    <ui:SymbolIcon
+                        Grid.Column="4"
+                        VerticalAlignment="Center"
+                        FontSize="10"
+                        Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                        Opacity="0.65">
+                        <ui:SymbolIcon.Style>
+                            <Style TargetType="ui:SymbolIcon">
+                                <Setter Property="Symbol" Value="ChevronDown24" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsCollapsed}" Value="True">
+                                        <Setter Property="Symbol" Value="ChevronRight24" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </ui:SymbolIcon.Style>
+                    </ui:SymbolIcon>
+                </Grid>
+            </Button>
         </DataTemplate>
 
         <!-- Sidebar session row template. Hovering reveals a small delete
@@ -448,7 +669,7 @@
                     <Style TargetType="Border">
                         <Style.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter Property="Background" Value="{StaticResource Chat.HoverBrush}" />
+                                <Setter Property="Background" Value="{StaticResource Nord.HoverBrush}" />
                             </Trigger>
                         </Style.Triggers>
                     </Style>
@@ -464,7 +685,7 @@
                         Grid.Column="0"
                         Width="3"
                         Margin="2,4,0,4"
-                        Background="{StaticResource Chat.RowActiveBarBrush}"
+                        Background="{StaticResource Nord.AccentBrush}"
                         CornerRadius="2">
                         <Border.Style>
                             <Style TargetType="Border">
@@ -481,7 +702,7 @@
                         Grid.Column="1"
                         Margin="8,7,0,7"
                         FontFamily="{StaticResource OK.FontFamily}"
-                        FontSize="12.5"
+                        FontSize="{StaticResource OK.Font.BodyCompact}"
                         Foreground="{StaticResource Nord.PrimaryTextBrush}"
                         Text="{Binding Title}"
                         TextTrimming="CharacterEllipsis" />
@@ -517,7 +738,7 @@
                                 </Border>
                                 <ControlTemplate.Triggers>
                                     <Trigger Property="IsMouseOver" Value="True">
-                                        <Setter TargetName="Bg" Property="Background" Value="#33FC6464" />
+                                        <Setter TargetName="Bg" Property="Background" Value="{StaticResource Nord.DangerSoftBrush}" />
                                     </Trigger>
                                 </ControlTemplate.Triggers>
                             </ControlTemplate>
@@ -552,6 +773,7 @@
             Width="260"
             Margin="14,14,8,14">
             <Grid.RowDefinitions>
+                <!-- 0: header, 1: search, 2: divider, 3: session list -->
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
@@ -567,7 +789,7 @@
                 <TextBlock
                     VerticalAlignment="Center"
                     FontFamily="{StaticResource OK.FontFamily}"
-                    FontSize="14"
+                    FontSize="{StaticResource OK.Font.Headline}"
                     FontWeight="SemiBold"
                     Foreground="{StaticResource Nord.PrimaryTextBrush}"
                     Text="OmniAgent" />
@@ -617,12 +839,21 @@
                     Background="Transparent"
                     BorderThickness="0"
                     HorizontalContentAlignment="Stretch"
-                    ItemTemplate="{StaticResource SessionRowTemplate}"
-                    ItemsSource="{Binding Sessions}"
+                    ItemsSource="{Binding SessionRows}"
                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                     ScrollViewer.VerticalScrollBarVisibility="Auto"
                     SelectedItem="{Binding SelectedSession}"
                     Visibility="{Binding SidebarHasSessions, Converter={StaticResource BooleanToVisibilityConverter}}">
+                    <ListBox.Resources>
+                        <!-- Type-keyed templates. Headers are non-selectable;
+                             sessions reuse the existing SessionRowTemplate. -->
+                        <DataTemplate DataType="{x:Type vm:SessionGroupHeaderRow}">
+                            <ContentControl Content="{Binding}" ContentTemplate="{StaticResource SessionGroupHeaderTemplate}" />
+                        </DataTemplate>
+                        <DataTemplate DataType="{x:Type om:AgentSessionInfo}">
+                            <ContentControl Content="{Binding}" ContentTemplate="{StaticResource SessionRowTemplate}" />
+                        </DataTemplate>
+                    </ListBox.Resources>
                     <ListBox.ItemContainerStyle>
                         <Style TargetType="ListBoxItem">
                             <Setter Property="Padding" Value="0" />
@@ -638,6 +869,13 @@
                                     </ControlTemplate>
                                 </Setter.Value>
                             </Setter>
+                            <Style.Triggers>
+                                <!-- Group headers shouldn't be selectable or
+                                     show a focus rect — make them inert. -->
+                                <DataTrigger Binding="{Binding}" Value="{x:Null}">
+                                    <Setter Property="IsHitTestVisible" Value="False" />
+                                </DataTrigger>
+                            </Style.Triggers>
                         </Style>
                     </ListBox.ItemContainerStyle>
                 </ListBox>
@@ -662,14 +900,38 @@
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                <TextBlock
-                    VerticalAlignment="Center"
-                    FontFamily="{StaticResource OK.FontFamily}"
-                    FontSize="16"
-                    FontWeight="SemiBold"
-                    Foreground="{StaticResource Nord.PrimaryTextBrush}"
-                    Text="{Binding ActiveSessionTitle}"
-                    TextTrimming="CharacterEllipsis" />
+                <StackPanel VerticalAlignment="Center">
+                    <!-- Project eyebrow: uppercase tag of the active session's
+                         group. Hidden when the session has no group yet
+                         (older sessions, just-started "New Chat"). -->
+                    <StackPanel
+                        Margin="0,0,0,3"
+                        Orientation="Horizontal"
+                        Visibility="{Binding HasActiveSessionGroup, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <ui:SymbolIcon
+                            Margin="0,0,5,0"
+                            VerticalAlignment="Center"
+                            FontSize="10"
+                            Foreground="{StaticResource Nord.AccentPurpleBrush}"
+                            Opacity="0.85"
+                            Symbol="Folder24" />
+                        <TextBlock
+                            VerticalAlignment="Center"
+                            FontFamily="{StaticResource OK.FontFamily}"
+                            FontSize="{StaticResource OK.Font.Eyebrow}"
+                            FontWeight="SemiBold"
+                            Foreground="{StaticResource Nord.AccentPurpleBrush}"
+                            Opacity="0.85"
+                            Text="{Binding ActiveSessionGroup, Converter={StaticResource ToUpper}}" />
+                    </StackPanel>
+                    <TextBlock
+                        FontFamily="{StaticResource OK.FontFamily}"
+                        FontSize="16"
+                        FontWeight="SemiBold"
+                        Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                        Text="{Binding ActiveSessionTitle}"
+                        TextTrimming="CharacterEllipsis" />
+                </StackPanel>
                 <StackPanel
                     Grid.Column="1"
                     VerticalAlignment="Center"
@@ -692,7 +954,22 @@
                 Padding="22,8,22,8"
                 HorizontalScrollBarVisibility="Disabled"
                 VerticalScrollBarVisibility="Auto">
-                <Grid>
+                <!-- Transcript content is capped at 820 DIP and
+                     horizontally centered, mirroring macOS ChatView
+                     (".frame(maxWidth: 820).frame(maxWidth: .infinity,
+                     alignment: .center)"). On narrow windows the cap
+                     is wider than the available space so the column
+                     fills the pane; on large monitors the conversation
+                     stays a comfortable reading width in the centre. -->
+                <!-- HorizontalAlignment=Stretch is critical here: with
+                     Center, WPF sizes the Grid to its content's desired
+                     width, which collapses the conversation column on
+                     narrow windows (user messages drift to centre, etc.).
+                     Stretch + MaxWidth makes the Grid fill the pane up
+                     to 820 DIP and then cap, so the user bubble sticks
+                     to the right edge and the assistant turn sticks
+                     to the left edge on every viewport size. -->
+                <Grid HorizontalAlignment="Stretch" MaxWidth="820">
                     <!-- Empty state (matches macOS copy) -->
                     <StackPanel
                         MaxWidth="320"
@@ -723,10 +1000,26 @@
                             TextWrapping="Wrap" />
                     </StackPanel>
 
-                    <ItemsControl Margin="0,0,0,12" ItemsSource="{Binding Messages}">
+                    <ItemsControl
+                        Margin="0,0,0,12"
+                        HorizontalAlignment="Stretch"
+                        HorizontalContentAlignment="Stretch"
+                        ItemsSource="{Binding Messages}">
+                        <ItemsControl.ItemContainerStyle>
+                            <!-- Force every row to fill the column width
+                                 so HorizontalAlignment inside templates
+                                 (Right for user, Left for assistant)
+                                 actually reaches the column edges. -->
+                            <Style TargetType="ContentPresenter">
+                                <Setter Property="HorizontalAlignment" Value="Stretch" />
+                            </Style>
+                        </ItemsControl.ItemContainerStyle>
                         <ItemsControl.ItemTemplate>
                             <DataTemplate DataType="{x:Type vm:ChatMessageRow}">
-                                <ContentControl Content="{Binding}">
+                                <ContentControl
+                                    HorizontalAlignment="Stretch"
+                                    HorizontalContentAlignment="Stretch"
+                                    Content="{Binding}">
                                     <ContentControl.Style>
                                         <Style TargetType="ContentControl">
                                             <Setter Property="ContentTemplate" Value="{StaticResource SystemMessageTemplate}" />
@@ -752,7 +1045,7 @@
                 Grid.Row="3"
                 Margin="22,4,22,0"
                 Padding="12,8"
-                Background="#33FC6464"
+                Background="{StaticResource Nord.DangerSoftBrush}"
                 BorderBrush="{Binding ErrorBrush}"
                 BorderThickness="1"
                 CornerRadius="6"
@@ -792,10 +1085,13 @@
 
             <!-- Composer card — Claude-style: borderless TextBox, soft elevated
                  surface, single focus-ring on the outer card, no internal
-                 dividers, generous padding. -->
+                 dividers, generous padding. Capped + centered to match
+                 transcript column width on wide monitors. -->
             <Border
                 x:Name="ComposerCard"
                 Grid.Row="4"
+                MaxWidth="820"
+                HorizontalAlignment="Stretch"
                 Margin="22,10,22,22"
                 Padding="0"
                 Background="{StaticResource Nord.PanelBackgroundBrush}"
@@ -834,7 +1130,7 @@
                         Background="Transparent"
                         BorderThickness="0"
                         FontFamily="{StaticResource OK.FontFamily}"
-                        FontSize="14"
+                        FontSize="{StaticResource OK.Font.Body}"
                         Foreground="{StaticResource Nord.PrimaryTextBrush}"
                         MaxHeight="220"
                         PlaceholderText="Ask OmniAgent anything…"
@@ -866,9 +1162,11 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
 
-                        <!-- Task-instruction pill -->
+                        <!-- Composer pickers cluster (task instruction + project) -->
+                        <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+
+                                                <!-- Task-instruction pill -->
                         <Border
-                            Grid.Column="0"
                             Padding="4,2,4,2"
                             VerticalAlignment="Center"
                             CornerRadius="999">
@@ -914,6 +1212,60 @@
                                 </ComboBox>
                             </StackPanel>
                         </Border>
+
+                        <!-- Project / group picker — sits next to the task-
+                             instruction chip and stamps the next outbound
+                             turn with the chosen group_name. Mirrors the
+                             macOS composer "Select project" menu. -->
+                        <Border
+                            Margin="6,0,0,0"
+                            Padding="4,2,4,2"
+                            VerticalAlignment="Center"
+                            HorizontalAlignment="Left"
+                            CornerRadius="999">
+                            <StackPanel VerticalAlignment="Center" Orientation="Horizontal">
+                                <ui:SymbolIcon
+                                    Margin="4,0,6,0"
+                                    VerticalAlignment="Center"
+                                    FontSize="13"
+                                    Foreground="{StaticResource Nord.AccentPurpleBrush}"
+                                    Symbol="Folder24"
+                                    ToolTip="Project for this chat" />
+                                <ComboBox
+                                    MinWidth="160"
+                                    VerticalAlignment="Center"
+                                    Background="Transparent"
+                                    BorderThickness="0"
+                                    DisplayMemberPath="DisplayName"
+                                    FontFamily="{StaticResource OK.FontFamily}"
+                                    FontSize="12"
+                                    ItemsSource="{Binding AvailableProjectGroups}"
+                                    SelectedValue="{Binding SelectedProjectGroupName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                    SelectedValuePath="GroupName"
+                                    ToolTip="Project this chat belongs to (mirrors macOS)">
+                                    <ComboBox.Resources>
+                                        <!-- Match the task-instruction chip
+                                             chrome: borderless inside the
+                                             toolbar; popup background untouched. -->
+                                        <SolidColorBrush x:Key="ControlFillColorDefaultBrush" Color="Transparent" />
+                                        <SolidColorBrush x:Key="ControlFillColorSecondaryBrush" Color="Transparent" />
+                                        <SolidColorBrush x:Key="ControlFillColorTertiaryBrush" Color="Transparent" />
+                                        <SolidColorBrush x:Key="ControlStrokeColorDefaultBrush" Color="Transparent" />
+                                        <SolidColorBrush x:Key="ControlStrokeColorSecondaryBrush" Color="Transparent" />
+                                        <SolidColorBrush x:Key="ComboBoxBackground" Color="Transparent" />
+                                        <SolidColorBrush x:Key="ComboBoxBackgroundPointerOver" Color="#1AFFFFFF" />
+                                        <SolidColorBrush x:Key="ComboBoxBackgroundFocused" Color="Transparent" />
+                                        <SolidColorBrush x:Key="ComboBoxBackgroundUnfocused" Color="Transparent" />
+                                        <SolidColorBrush x:Key="ComboBoxBackgroundDisabled" Color="Transparent" />
+                                        <SolidColorBrush x:Key="ComboBoxBorderBrush" Color="Transparent" />
+                                        <SolidColorBrush x:Key="ComboBoxBorderBrushPointerOver" Color="Transparent" />
+                                        <SolidColorBrush x:Key="ComboBoxBorderBrushFocused" Color="Transparent" />
+                                    </ComboBox.Resources>
+                                </ComboBox>
+                            </StackPanel>
+                        </Border>
+
+                        </StackPanel>
 
                         <!-- Spacer between left chip and right cluster -->
                         <Border Grid.Column="1" />

@@ -97,20 +97,10 @@ namespace OmniKey.Windows.MarkdownRender
 
         private static void RestyleBlock(Block block, ThemeTokens theme)
         {
-            // Defensive: MdXaml ships with a light theme and stamps a
-            // near-white Background on several block types (Paragraph,
-            // Section/blockquote, List, Table). Always clear it before
-            // setting our own, otherwise individual paragraphs render
-            // with a white slab against the dark chat surface.
-            if (block.Background is SolidColorBrush)
-                block.Background = Brushes.Transparent;
-            block.Foreground ??= theme.Primary;
-
             switch (block)
             {
                 case Paragraph p:
                     p.Margin = new Thickness(0, 0, 0, 8);
-                    p.Background = Brushes.Transparent;
                     foreach (var inline in p.Inlines)
                         RestyleInline(inline, theme);
                     break;
@@ -118,7 +108,6 @@ namespace OmniKey.Windows.MarkdownRender
                 case Section section:
                     section.Padding = new Thickness(12, 6, 8, 6);
                     section.Margin = new Thickness(0, 0, 0, 8);
-                    section.Background = Brushes.Transparent;
                     section.BorderBrush = theme.Accent;
                     section.BorderThickness = new Thickness(3, 0, 0, 0);
                     foreach (var child in section.Blocks)
@@ -126,53 +115,30 @@ namespace OmniKey.Windows.MarkdownRender
                     break;
 
                 case List list:
-                    // Bullet/number markers live inside the List's left
-                    // padding area. With PagePadding=0 on the document
-                    // and a 20 DIP padding here, the marker glyph itself
-                    // was being clipped against the FlowDocument's left
-                    // edge (≈25% of the bullet eaten on the left). Bump
-                    // left padding to 28 DIP and pin MarkerOffset to a
-                    // small positive value so the bullet sits ~8 DIP to
-                    // the left of the text column, fully visible.
                     list.Margin = new Thickness(0, 0, 0, 8);
-                    list.Padding = new Thickness(28, 0, 0, 0);
-                    list.MarkerOffset = 8;
-                    list.Background = Brushes.Transparent;
+                    list.Padding = new Thickness(20, 0, 0, 0);
                     foreach (var item in list.ListItems)
-                    {
-                        item.Background = Brushes.Transparent;
                         foreach (var child in item.Blocks)
                             RestyleBlock(child, theme);
-                    }
                     break;
 
                 case Table table:
                     table.CellSpacing = 0;
-                    table.Background = Brushes.Transparent;
                     table.BorderBrush = theme.Border;
                     table.BorderThickness = new Thickness(1);
                     table.Margin = new Thickness(0, 0, 0, 10);
                     foreach (var col in table.Columns)
                         col.Width = new GridLength(1, GridUnitType.Star);
                     foreach (var rowGroup in table.RowGroups)
-                    {
-                        rowGroup.Background = Brushes.Transparent;
                         foreach (var row in rowGroup.Rows)
-                        {
-                            row.Background = Brushes.Transparent;
                             foreach (var cell in row.Cells)
                             {
-                                // Clear MdXaml's light-theme cell fill
-                                // before applying our own borders.
-                                cell.Background = Brushes.Transparent;
                                 cell.BorderBrush = theme.Border;
                                 cell.BorderThickness = new Thickness(0, 0, 1, 1);
                                 cell.Padding = new Thickness(8, 6, 8, 6);
                                 foreach (var child in cell.Blocks)
                                     RestyleBlock(child, theme);
                             }
-                        }
-                    }
                     break;
 
                 case BlockUIContainer container when container.Child is FrameworkElement fe:
@@ -215,23 +181,10 @@ namespace OmniKey.Windows.MarkdownRender
                     break;
 
                 case Run run when LooksLikeInlineCode(run):
-                    // Override MdXaml's light-theme tint. We use a
-                    // softer pill background (BadgeFill) rather than
-                    // the near-black CodeBg used by fenced blocks —
-                    // inline code should read as a chip, not a slab.
                     run.FontFamily = theme.MonoFont;
                     run.FontSize = 12;
-                    run.Background = theme.BadgeFill;
+                    run.Background = theme.CodeBg;
                     run.Foreground = theme.CodeFg;
-                    break;
-
-                case Run run when run.Background is SolidColorBrush:
-                    // Any other Run that arrives with a non-null
-                    // Background is almost certainly MdXaml's light-
-                    // theme leak (highlighted text, lead-in spans).
-                    // Clear it so the chat surface shows through.
-                    run.Background = Brushes.Transparent;
-                    run.Foreground ??= theme.Primary;
                     break;
 
                 case Span span:
@@ -256,16 +209,14 @@ namespace OmniKey.Windows.MarkdownRender
         // ── Code-block chrome (rounded card + Copy header) ──────────────
 
         /// <summary>True when MdXaml's BlockUIContainer is hosting a code
-        /// block. MdXaml uses BlockUIContainer for two cases: an
-        /// AvalonEdit <c>TextEditor</c> (when a language is recognised)
-        /// and a plain TextBlock fallback (no language). Both paint
-        /// themselves white by default, so we treat *any* text-bearing
-        /// BlockUIContainer as a code block and rebuild its surface from
-        /// scratch.</summary>
+        /// block — identified by AvalonEdit's TextEditor anywhere in its
+        /// logical subtree. We deliberately do not match every UI element
+        /// that happens to expose a Text property: that previously caught
+        /// non-code content (embedded TextBlocks, images, etc.) and broke
+        /// rendering when we tried to chrome it.</summary>
         private static bool IsCodeElement(FrameworkElement element)
         {
             if (IsAvalonEditType(element)) return true;
-            if (element is TextBlock) return true;
             // The element isn't in the visual tree yet (we're walking the
             // FlowDocument before assigning it to the viewer), so use the
             // logical tree which is populated at construction time.
@@ -292,35 +243,48 @@ namespace OmniKey.Windows.MarkdownRender
             string codeText = ExtractCodeText(original);
             string language = ResolveLanguageLabel(rawTag, original);
 
-            // Always render the code body with our own TextBlock. MdXaml
-            // hands us either an AvalonEdit TextEditor (light-themed,
-            // white TextArea + TextView that bleed through any chrome
-            // background we set) or a TextBlock-in-Border fallback (also
-            // painted white). Trying to clear those backgrounds via
-            // reflection worked on some builds but not others — replacing
-            // the surface entirely is the only consistent fix. We lose
-            // syntax highlighting, which matches the macOS app exactly.
-            var codeTextBlock = new TextBlock
+            // Inner code surface: AvalonEdit owns its own scrolling, so we
+            // only wrap a ScrollViewer around plain text hosts.
+            FrameworkElement body;
+            if (IsAvalonEdit(original))
             {
-                Text = codeText,
-                FontFamily = theme.MonoFont,
-                FontSize = 12.5,
-                Foreground = theme.CodeFg,
-                Background = Brushes.Transparent,
-                TextWrapping = TextWrapping.NoWrap,
-                Padding = new Thickness(0),
-                Margin = new Thickness(0),
-            };
-
-            FrameworkElement body = new ScrollViewer
+                if (original is Control ctl)
+                {
+                    ctl.Padding = new Thickness(12, 10, 12, 10);
+                    ctl.Background = Brushes.Transparent;
+                    ctl.BorderThickness = new Thickness(0);
+                    ctl.Foreground = theme.CodeFg;
+                    ctl.FontFamily = theme.MonoFont;
+                    ctl.FontSize = 12.5;
+                }
+                // TextEditor.Background only paints the outer chrome; the
+                // inner TextArea + TextView each carry their own brushes
+                // and default to the system base (white in light WPF
+                // theme). Drill through reflection so the dark chrome
+                // shows through every layer.
+                ClearAvalonEditInnerBackgrounds(original);
+                body = original;
+            }
+            else
             {
-                HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
-                VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
-                Background = Brushes.Transparent,
-                BorderThickness = new Thickness(0),
-                Padding = new Thickness(12, 10, 12, 10),
-                Content = codeTextBlock,
-            };
+                if (original is TextBlock tb)
+                {
+                    tb.FontFamily = theme.MonoFont;
+                    tb.FontSize = 12.5;
+                    tb.Foreground = theme.CodeFg;
+                    tb.TextWrapping = TextWrapping.NoWrap;
+                    tb.Margin = new Thickness(0);
+                }
+                body = new ScrollViewer
+                {
+                    HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+                    VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                    Background = Brushes.Transparent,
+                    BorderThickness = new Thickness(0),
+                    Padding = new Thickness(12, 10, 12, 10),
+                    Content = original,
+                };
+            }
 
             // Header bar: language label + Copy button.
             var header = BuildHeaderBar(language, codeText, theme);
@@ -461,26 +425,61 @@ namespace OmniKey.Windows.MarkdownRender
 
         // ── Helpers ─────────────────────────────────────────────────────
 
+        private static bool IsAvalonEdit(FrameworkElement element) =>
+            element.GetType().FullName?.Contains("AvalonEdit", StringComparison.OrdinalIgnoreCase) == true;
+
+        /// <summary>Set the TextArea + TextView (and any other inner panels)
+        /// of an AvalonEdit TextEditor to a transparent background so the
+        /// surrounding dark chrome shows through. AvalonEdit's default
+        /// theme paints the editing surface white, which leaks through
+        /// our Border even when <c>TextEditor.Background</c> is cleared.
+        /// All access is via reflection so we don't take a hard
+        /// dependency on AvalonEdit's public API.</summary>
+        private static void ClearAvalonEditInnerBackgrounds(FrameworkElement editor)
+        {
+            try
+            {
+                var type = editor.GetType();
+                var textAreaProp = type.GetProperty("TextArea");
+                var textArea = textAreaProp?.GetValue(editor) as DependencyObject;
+                if (textArea is Control areaCtl)
+                {
+                    areaCtl.Background = Brushes.Transparent;
+                    areaCtl.BorderThickness = new Thickness(0);
+                }
+
+                if (textArea != null)
+                {
+                    var textViewProp = textArea.GetType().GetProperty("TextView");
+                    if (textViewProp?.GetValue(textArea) is Control viewCtl)
+                    {
+                        viewCtl.Background = Brushes.Transparent;
+                    }
+                    // Some AvalonEdit themes paint a "selection background"
+                    // strip behind the caret line that defaults to white.
+                    var trySetBrushProp = (object owner, string propName) =>
+                    {
+                        var p = owner.GetType().GetProperty(propName);
+                        if (p?.CanWrite == true && p.PropertyType.IsAssignableFrom(typeof(Brush)))
+                            p.SetValue(owner, Brushes.Transparent);
+                    };
+                    trySetBrushProp(textArea, "SelectionBrush");
+                }
+            }
+            catch
+            {
+                // Reflection misses are non-fatal — worst case the inner
+                // panel keeps its default brush.
+            }
+        }
+
         private static string ExtractCodeText(FrameworkElement element)
         {
-            // Direct Text property — covers AvalonEdit's TextEditor and
-            // anything else that exposes a string Text DP.
+            // Reflective Text read — avoids a hard reference to AvalonEdit.
             var prop = element.GetType().GetProperty("Text");
             if (prop?.GetValue(element) is string s && !string.IsNullOrEmpty(s))
                 return s;
-            if (element is TextBlock tb && !string.IsNullOrEmpty(tb.Text))
-                return tb.Text;
-
-            // MdXaml's no-language fallback wraps the TextBlock in a
-            // Border — descend the logical tree to find it.
-            foreach (var child in LogicalChildren(element))
-            {
-                if (child is FrameworkElement childFe)
-                {
-                    var nested = ExtractCodeText(childFe);
-                    if (!string.IsNullOrEmpty(nested)) return nested;
-                }
-            }
+            if (element is TextBlock tb) return tb.Text;
             return string.Empty;
         }
 
