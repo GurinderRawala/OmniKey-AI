@@ -86,7 +86,7 @@ namespace OmniKey.Windows
         private string _activeSessionTitle = "New Chat";
         private string? _lastErrorMessage;
         private string _inputText = "";
-        private string? _selectedGroupFilter;
+        private AgentGroupInfo? _selectedGroup;
 
         private ChatModel()
         {
@@ -101,16 +101,20 @@ namespace OmniKey.Windows
         /// for the active subscription. Drives the sidebar group filter pills.</summary>
         public List<AgentGroupInfo> AvailableGroups { get; private set; } = new();
 
-        /// <summary>The group the user picked to filter the session list
-        /// (null = show every session, regardless of group). Mirrors macOS
-        /// <c>AgentThinkingModel.selectedGroupFilter</c>.</summary>
-        public string? SelectedGroupFilter
+        /// <summary>The project group the user picked in the composer.
+        /// When set, its <c>GroupName</c> is sent with the next chat turn
+        /// so the backend can stamp the new session with that group.
+        /// Mirrors macOS <c>ChatModel.selectedGroup</c>.</summary>
+        public AgentGroupInfo? SelectedGroup
         {
-            get => _selectedGroupFilter;
+            get => _selectedGroup;
             set
             {
-                if (_selectedGroupFilter == value) return;
-                _selectedGroupFilter = value;
+                if (ReferenceEquals(_selectedGroup, value)) return;
+                // Treat null and "empty Id" equivalently so the dropdown
+                // sentinel doesn't constantly fire spurious changes.
+                if (_selectedGroup?.GroupName == value?.GroupName) return;
+                _selectedGroup = value;
                 NotifyStateChanged();
             }
         }
@@ -186,28 +190,14 @@ namespace OmniKey.Windows
         {
             get
             {
-                IEnumerable<AgentSessionInfo> source = Sessions;
-
-                // Group filter: empty / null → "All", otherwise restrict to the
-                // group the user picked. Done first so the search box still
-                // searches across the filtered slice.
-                string? group = _selectedGroupFilter;
-                if (!string.IsNullOrEmpty(group))
-                {
-                    source = source.Where(s =>
-                        string.Equals(s.GroupName, group, StringComparison.Ordinal));
-                }
-
                 string query = SessionSearchQuery.Trim();
-                if (query.Length == 0)
-                    return source.ToList();
+                if (query.Length == 0) return Sessions;
 
                 var tokens = NormalizeSearchText(query)
                     .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-                if (tokens.Length == 0)
-                    return source.ToList();
+                if (tokens.Length == 0) return Sessions;
 
-                return source
+                return Sessions
                     .Where(session =>
                     {
                         string haystack = NormalizeSearchText(session.Title ?? "");
@@ -332,6 +322,8 @@ namespace OmniKey.Windows
                     Platform = "windows",
                     Turns = 0,
                     RemainingContextTokens = 0,
+                    GroupName = _selectedGroup?.GroupName,
+                    GroupDescription = _selectedGroup?.GroupDescription,
                     LastActiveAt = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture),
                 };
 
@@ -344,6 +336,7 @@ namespace OmniKey.Windows
             var handle = ChatSessionRunner.Shared.Run(
                 sessionId,
                 text,
+                _selectedGroup?.GroupName,
                 block => RunOnUi(() => appendBlock(block, sessionSt)),
                 finalText => RunOnUi(() =>
                 {
@@ -491,14 +484,14 @@ namespace OmniKey.Windows
                 {
                     AvailableGroups = groups;
 
-                    // If the previously-selected group disappeared from the
-                    // server (last session moved / deleted), reset to "All"
-                    // so the sidebar doesn't end up showing an empty list
-                    // with no obvious way out.
-                    if (_selectedGroupFilter is { Length: > 0 } current &&
+                    // If the user's chosen project disappeared from the
+                    // server (no longer reported by /api/agent/groups) clear
+                    // it so the composer doesn't keep claiming a project
+                    // that no longer exists.
+                    if (_selectedGroup is { GroupName: { Length: > 0 } current } &&
                         !groups.Exists(g => g.GroupName == current))
                     {
-                        _selectedGroupFilter = null;
+                        _selectedGroup = null;
                     }
 
                     NotifyStateChanged();

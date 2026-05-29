@@ -424,88 +424,92 @@
                 Text="{Binding Text}" />
         </DataTemplate>
 
-        <!-- Group filter pill. Capsule shape with state-aware fill driven by
-             the row's IsSelected flag. Click → SelectGroupCommand on the page
-             VM (passes the underlying GroupName, or empty for the "All" pill). -->
-        <DataTemplate x:Key="GroupFilterPillTemplate" DataType="{x:Type vm:GroupFilterRow}">
+        <!-- Group section header — clickable to collapse/expand the
+             sessions below. Folder icon + uppercase eyebrow + count of
+             grouped sessions + chevron. Hover surfaces a subtle bg.
+             Mirrors macOS SessionPickerView headers (which are also
+             collapsible). -->
+        <DataTemplate x:Key="SessionGroupHeaderTemplate" DataType="{x:Type vm:SessionGroupHeaderRow}">
             <Button
-                Margin="0,0,6,0"
-                Padding="0"
+                Margin="2,10,4,2"
+                Padding="4,4"
+                HorizontalContentAlignment="Stretch"
                 Background="Transparent"
                 BorderThickness="0"
-                Command="{Binding DataContext.SelectGroupCommand, RelativeSource={RelativeSource AncestorType=Page}}"
-                CommandParameter="{Binding GroupName}"
+                Command="{Binding ToggleCommand}"
                 Cursor="Hand"
-                ToolTip="{Binding Description}"
-                AutomationProperties.Name="{Binding DisplayName}">
+                ToolTip="Collapse / expand group">
                 <Button.Template>
                     <ControlTemplate TargetType="Button">
                         <Border
-                            x:Name="Pill"
-                            Padding="10,4"
-                            Background="Transparent"
-                            BorderBrush="{StaticResource Nord.BorderBrush}"
-                            BorderThickness="1"
-                            CornerRadius="999">
-                            <ContentPresenter
-                                HorizontalAlignment="Center"
-                                VerticalAlignment="Center"
-                                Content="{TemplateBinding Content}" />
+                            x:Name="HeaderBg"
+                            Background="{TemplateBinding Background}"
+                            CornerRadius="4">
+                            <ContentPresenter />
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Pill" Property="Background" Value="{StaticResource Nord.HoverBrush}" />
+                                <Setter TargetName="HeaderBg" Property="Background" Value="{StaticResource Nord.HoverBrush}" />
                             </Trigger>
-                            <DataTrigger Binding="{Binding IsSelected}" Value="True">
-                                <Setter TargetName="Pill" Property="Background" Value="{StaticResource Nord.AccentBrush}" />
-                                <Setter TargetName="Pill" Property="BorderBrush" Value="{StaticResource Nord.AccentBrush}" />
-                            </DataTrigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Button.Template>
-                <TextBlock
-                    FontFamily="{StaticResource OK.FontFamily}"
-                    FontSize="{StaticResource OK.Font.CaptionSmall}"
-                    FontWeight="SemiBold"
-                    Text="{Binding DisplayName}"
-                    TextTrimming="CharacterEllipsis"
-                    MaxWidth="160">
-                    <TextBlock.Style>
-                        <Style TargetType="TextBlock">
-                            <Setter Property="Foreground" Value="{StaticResource Nord.SecondaryTextBrush}" />
-                            <Style.Triggers>
-                                <DataTrigger Binding="{Binding IsSelected}" Value="True">
-                                    <Setter Property="Foreground" Value="#FFFFFFFF" />
-                                </DataTrigger>
-                            </Style.Triggers>
-                        </Style>
-                    </TextBlock.Style>
-                </TextBlock>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <ui:SymbolIcon
+                        Grid.Column="0"
+                        Margin="0,0,6,0"
+                        VerticalAlignment="Center"
+                        FontSize="11"
+                        Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                        Opacity="0.7"
+                        Symbol="Folder24" />
+                    <TextBlock
+                        Grid.Column="1"
+                        VerticalAlignment="Center"
+                        FontFamily="{StaticResource OK.FontFamily}"
+                        FontSize="{StaticResource OK.Font.Eyebrow}"
+                        FontWeight="SemiBold"
+                        Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                        Opacity="0.85"
+                        Text="{Binding GroupName, Converter={StaticResource ToUpper}}"
+                        TextTrimming="CharacterEllipsis" />
+                    <Border Grid.Column="2" />
+                    <TextBlock
+                        Grid.Column="3"
+                        Margin="6,0,4,0"
+                        VerticalAlignment="Center"
+                        FontFamily="{StaticResource OK.FontFamily}"
+                        FontSize="{StaticResource OK.Font.Eyebrow}"
+                        FontWeight="Medium"
+                        Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                        Opacity="0.55"
+                        Text="{Binding SessionCount}" />
+                    <ui:SymbolIcon
+                        Grid.Column="4"
+                        VerticalAlignment="Center"
+                        FontSize="10"
+                        Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                        Opacity="0.65">
+                        <ui:SymbolIcon.Style>
+                            <Style TargetType="ui:SymbolIcon">
+                                <Setter Property="Symbol" Value="ChevronDown24" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsCollapsed}" Value="True">
+                                        <Setter Property="Symbol" Value="ChevronRight24" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </ui:SymbolIcon.Style>
+                    </ui:SymbolIcon>
+                </Grid>
             </Button>
-        </DataTemplate>
-
-        <!-- Section header injected above each group when the unfiltered
-             "All" view spans multiple groups. Uppercase eyebrow + folder
-             glyph — mirrors macOS SessionPickerView headers. -->
-        <DataTemplate x:Key="SessionGroupHeaderTemplate" DataType="{x:Type vm:SessionGroupHeaderRow}">
-            <StackPanel
-                Margin="2,10,4,4"
-                Orientation="Horizontal">
-                <ui:SymbolIcon
-                    Margin="0,0,6,0"
-                    VerticalAlignment="Center"
-                    FontSize="11"
-                    Foreground="{StaticResource Nord.SecondaryTextBrush}"
-                    Opacity="0.7"
-                    Symbol="Folder24" />
-                <TextBlock
-                    FontFamily="{StaticResource OK.FontFamily}"
-                    FontSize="{StaticResource OK.Font.Eyebrow}"
-                    FontWeight="SemiBold"
-                    Foreground="{StaticResource Nord.SecondaryTextBrush}"
-                    Opacity="0.75"
-                    Text="{Binding GroupName, Converter={StaticResource ToUpper}}" />
-            </StackPanel>
         </DataTemplate>
 
         <!-- Sidebar session row template. Hovering reveals a small delete
@@ -634,8 +638,7 @@
             Width="260"
             Margin="14,14,8,14">
             <Grid.RowDefinitions>
-                <!-- 0: header, 1: search, 2: group pills, 3: divider, 4: session list -->
-                <RowDefinition Height="Auto" />
+                <!-- 0: header, 1: search, 2: divider, 3: session list -->
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
@@ -677,35 +680,14 @@
                 PlaceholderText="Search chats"
                 Text="{Binding SessionSearchQuery, UpdateSourceTrigger=PropertyChanged}" />
 
-            <!-- Group filter pills — only visible when at least one
-                 real group exists. Horizontal scroller so long names don't
-                 push the layout. Click a pill to filter the session list;
-                 "All" clears the filter. -->
-            <ScrollViewer
-                Grid.Row="2"
-                Margin="2,0,0,8"
-                HorizontalScrollBarVisibility="Hidden"
-                VerticalScrollBarVisibility="Disabled"
-                Visibility="{Binding HasGroups, Converter={StaticResource BooleanToVisibilityConverter}}">
-                <ItemsControl
-                    ItemTemplate="{StaticResource GroupFilterPillTemplate}"
-                    ItemsSource="{Binding GroupFilters}">
-                    <ItemsControl.ItemsPanel>
-                        <ItemsPanelTemplate>
-                            <StackPanel Orientation="Horizontal" />
-                        </ItemsPanelTemplate>
-                    </ItemsControl.ItemsPanel>
-                </ItemsControl>
-            </ScrollViewer>
-
             <Border
-                Grid.Row="3"
+                Grid.Row="2"
                 Height="1"
                 Margin="2,2,0,4"
                 Background="{StaticResource Nord.BorderBrush}" />
 
             <!-- Session list -->
-            <Grid Grid.Row="4">
+            <Grid Grid.Row="3">
                 <!-- Empty state when no sessions exist -->
                 <StackPanel
                     Margin="6,16,0,0"
@@ -1011,9 +993,11 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
 
-                        <!-- Task-instruction pill -->
+                        <!-- Composer pickers cluster (task instruction + project) -->
+                        <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+
+                                                <!-- Task-instruction pill -->
                         <Border
-                            Grid.Column="0"
                             Padding="4,2,4,2"
                             VerticalAlignment="Center"
                             CornerRadius="999">
@@ -1059,6 +1043,97 @@
                                 </ComboBox>
                             </StackPanel>
                         </Border>
+
+                        <!-- Project / group picker — sits next to the task-
+                             instruction chip and stamps the next outbound
+                             turn with the chosen group_name. Mirrors the
+                             macOS composer "Select project" menu. -->
+                        <Border
+                            Margin="6,0,0,0"
+                            Padding="4,2,4,2"
+                            VerticalAlignment="Center"
+                            HorizontalAlignment="Left"
+                            CornerRadius="999">
+                            <Border.Style>
+                                <Style TargetType="Border">
+                                    <!-- Visible by default; hide when the
+                                         only row in the picker is the
+                                         "Select project" sentinel (i.e.
+                                         the server has not classified any
+                                         sessions into groups yet). -->
+                                    <Setter Property="Visibility" Value="Visible" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding AvailableProjectGroups.Count}" Value="1">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Border.Style>
+                            <StackPanel VerticalAlignment="Center" Orientation="Horizontal">
+                                <ui:SymbolIcon
+                                    Margin="4,0,6,0"
+                                    VerticalAlignment="Center"
+                                    FontSize="13"
+                                    Foreground="{StaticResource Nord.AccentPurpleBrush}"
+                                    Symbol="Folder24"
+                                    ToolTip="Project for this chat" />
+                                <ComboBox
+                                    MinWidth="160"
+                                    VerticalAlignment="Center"
+                                    Background="Transparent"
+                                    BorderThickness="0"
+                                    DisplayMemberPath="GroupName"
+                                    FontFamily="{StaticResource OK.FontFamily}"
+                                    FontSize="12"
+                                    ItemsSource="{Binding AvailableProjectGroups}"
+                                    SelectedValue="{Binding SelectedProjectGroupName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                    SelectedValuePath="GroupName"
+                                    ToolTip="Project this chat belongs to (mirrors macOS)">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <TextBlock
+                                                FontFamily="{StaticResource OK.FontFamily}"
+                                                FontSize="12"
+                                                ToolTip="{Binding GroupDescription}">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Setter Property="Text" Value="{Binding GroupName}" />
+                                                        <Style.Triggers>
+                                                            <!-- Empty GroupName == sentinel → show
+                                                                 friendly "Select project" label. -->
+                                                            <DataTrigger Binding="{Binding GroupName}" Value="">
+                                                                <Setter Property="Text" Value="Select project" />
+                                                                <Setter Property="Foreground" Value="{StaticResource Nord.SecondaryTextBrush}" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                    <ComboBox.Resources>
+                                        <!-- Match the task-instruction chip
+                                             chrome: borderless inside the
+                                             toolbar; popup background untouched. -->
+                                        <SolidColorBrush x:Key="ControlFillColorDefaultBrush" Color="Transparent" />
+                                        <SolidColorBrush x:Key="ControlFillColorSecondaryBrush" Color="Transparent" />
+                                        <SolidColorBrush x:Key="ControlFillColorTertiaryBrush" Color="Transparent" />
+                                        <SolidColorBrush x:Key="ControlStrokeColorDefaultBrush" Color="Transparent" />
+                                        <SolidColorBrush x:Key="ControlStrokeColorSecondaryBrush" Color="Transparent" />
+                                        <SolidColorBrush x:Key="ComboBoxBackground" Color="Transparent" />
+                                        <SolidColorBrush x:Key="ComboBoxBackgroundPointerOver" Color="#1AFFFFFF" />
+                                        <SolidColorBrush x:Key="ComboBoxBackgroundFocused" Color="Transparent" />
+                                        <SolidColorBrush x:Key="ComboBoxBackgroundUnfocused" Color="Transparent" />
+                                        <SolidColorBrush x:Key="ComboBoxBackgroundDisabled" Color="Transparent" />
+                                        <SolidColorBrush x:Key="ComboBoxBorderBrush" Color="Transparent" />
+                                        <SolidColorBrush x:Key="ComboBoxBorderBrushPointerOver" Color="Transparent" />
+                                        <SolidColorBrush x:Key="ComboBoxBorderBrushFocused" Color="Transparent" />
+                                    </ComboBox.Resources>
+                                </ComboBox>
+                            </StackPanel>
+                        </Border>
+
+                        </StackPanel>
 
                         <!-- Spacer between left chip and right cluster -->
                         <Border Grid.Column="1" />

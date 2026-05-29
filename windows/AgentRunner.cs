@@ -462,6 +462,12 @@ namespace OmniKey.Windows
             public bool? is_image_rendering { get; set; }
             public bool? is_mcp_call { get; set; }
             public string platform { get; set; } = "windows";
+            // Project group selected in the composer. Sent on the initial
+            // outbound message; the backend stamps the new session with it
+            // so the resumed session shows up under the right group header.
+            // Wire format matches macOS ChatSessionRunner.AgentMessage —
+            // see snake_case `group_name` on that side.
+            public string? group_name { get; set; }
         }
     }
 }
