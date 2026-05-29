@@ -24,6 +24,20 @@ namespace OmniKey.Windows.ViewModels
         public ObservableCollection<AgentSessionInfo> Sessions { get; } = new();
         public ObservableCollection<ChatMessageRow> Messages { get; } = new();
 
+        /// <summary>Group filter pills shown above the sidebar session list.
+        /// First item is always the "All" pill (no filter). Selecting a pill
+        /// updates <see cref="ChatModel.SelectedGroupFilter"/> and the
+        /// <see cref="Sessions"/> / <see cref="SessionRows"/> collections
+        /// reproject through the model's <c>FilteredSessions</c>.</summary>
+        public ObservableCollection<GroupFilterRow> GroupFilters { get; } = new();
+
+        /// <summary>Flattened, section-aware session list. When the visible
+        /// sessions span multiple groups (filter = "All") a
+        /// <see cref="SessionGroupHeaderRow"/> is emitted before each group's
+        /// sessions; when a single group is in view, no headers are added.
+        /// The sidebar ListBox binds to this so the UI stays declarative.</summary>
+        public ObservableCollection<object> SessionRows { get; } = new();
+
         // Seed with the sentinel so the ComboBox can resolve its SelectedValue
         // (which defaults to "" for "no template active") on the very first
         // render, before SyncTaskTemplates has had a chance to run. Without
@@ -95,6 +109,7 @@ namespace OmniKey.Windows.ViewModels
 
         public bool CanSend => !IsRunning && !string.IsNullOrWhiteSpace(InputText);
         public bool HasError => !string.IsNullOrWhiteSpace(LastErrorMessage);
+        public bool HasGroups => GroupFilters.Count > 1; // sentinel "All" + at least one real
         public bool HasNoMessages => Messages.Count == 0;
         public bool HasSearchQuery => !string.IsNullOrWhiteSpace(SessionSearchQuery);
         public bool SidebarHasSessions => Sessions.Count > 0;
@@ -112,6 +127,21 @@ namespace OmniKey.Windows.ViewModels
         }
 
         public bool HasContextSummary => ContextSummary is not null;
+
+        /// <summary>Group name of the active session, for the small
+        /// uppercase eyebrow above the conversation title. Null when the
+        /// active session is ungrouped or no session is selected — the
+        /// XAML hides the eyebrow in that case.</summary>
+        public string? ActiveSessionGroup
+        {
+            get
+            {
+                var s = _model.ActiveSession;
+                return string.IsNullOrWhiteSpace(s?.GroupName) ? null : s!.GroupName;
+            }
+        }
+
+        public bool HasActiveSessionGroup => !string.IsNullOrEmpty(ActiveSessionGroup);
 
         /// <summary>Fraction of the context window already consumed, 0..1.</summary>
         public double ContextUsedFraction
@@ -208,6 +238,14 @@ namespace OmniKey.Windows.ViewModels
 
 
         [RelayCommand]
+        private void SelectGroup(string? groupName)
+        {
+            // Empty string from the "All" pill maps to null on the model
+            // (no filter). Real group names pass through unchanged.
+            _model.SelectedGroupFilter = string.IsNullOrEmpty(groupName) ? null : groupName;
+        }
+
+        [RelayCommand]
         private void ClearSearch() => _model.ClearSessionSearch();
 
         partial void OnSessionSearchQueryChanged(string value)
@@ -232,9 +270,19 @@ namespace OmniKey.Windows.ViewModels
 
         private void ProjectFromModel()
         {
-            // Sessions list — filtered for search
+            // Sessions list — filtered for search AND active group.
             var visible = _model.FilteredSessions;
             ReplaceCollection(Sessions, visible);
+
+            // Group filter pills — keep the "All" sentinel + one row per
+            // available group. IsSelected drives the pill's active visual.
+            SyncGroupFilters(_model.AvailableGroups, _model.SelectedGroupFilter);
+
+            // Sectioned session rows: when more than one group is visible
+            // (i.e. the user hasn't picked a specific group filter and the
+            // backend reports multiple) inject uppercase eyebrow headers
+            // so the sidebar reads like a tidy contact list.
+            RebuildSessionRows(visible);
 
             // Active session sync (without re-entering OpenSession)
             var active = _model.ActiveSession;
@@ -243,13 +291,6 @@ namespace OmniKey.Windows.ViewModels
                 _suppressSelectionFeedback = true;
                 try { SelectedSession = active; }
                 finally { _suppressSelectionFeedback = false; }
-            }
-
-            // Mark active session rows for active-bar styling
-            for (int i = 0; i < Sessions.Count; i++)
-            {
-                // Re-wrap with active flag would require dedicated rows; instead just
-                // expose ActiveSessionId for binding in the row template.
             }
 
             // Messages — project with streaming flag on the last assistant turn.
@@ -296,6 +337,9 @@ namespace OmniKey.Windows.ViewModels
             OnPropertyChanged(nameof(HasContextSummary));
             OnPropertyChanged(nameof(ContextUsedFraction));
             OnPropertyChanged(nameof(ContextRingBrush));
+            OnPropertyChanged(nameof(HasGroups));
+            OnPropertyChanged(nameof(ActiveSessionGroup));
+            OnPropertyChanged(nameof(HasActiveSessionGroup));
         }
 
         private static void ReplaceCollection<T>(ObservableCollection<T> target, IList<T> source)
@@ -331,6 +375,118 @@ namespace OmniKey.Windows.ViewModels
             AvailableTaskTemplates.Add(NoTemplateSentinel);
             foreach (var item in source) AvailableTaskTemplates.Add(item);
         }
+
+        private void SyncGroupFilters(IList<AgentGroupInfo> source, string? selected)
+        {
+            // Re-use existing items when possible so the ItemsControl doesn't
+            // tear down/rebuild the visual rows on every model tick.
+            // Layout: [All, group1, group2, ...].
+            int desired = 1 + source.Count;
+
+            // Sentinel "All" pill — always at index 0.
+            if (GroupFilters.Count == 0)
+            {
+                GroupFilters.Add(new GroupFilterRow(null, "All", null));
+            }
+            else
+            {
+                GroupFilters[0].IsSelected = string.IsNullOrEmpty(selected);
+            }
+
+            for (int i = 0; i < source.Count; i++)
+            {
+                var g = source[i];
+                int slot = i + 1;
+                if (slot < GroupFilters.Count)
+                {
+                    var row = GroupFilters[slot];
+                    if (row.GroupName != g.GroupName)
+                    {
+                        row.GroupName = g.GroupName;
+                        row.DisplayName = g.GroupName;
+                        row.Description = g.GroupDescription;
+                    }
+                    else
+                    {
+                        row.Description = g.GroupDescription;
+                    }
+                    row.IsSelected = string.Equals(selected, g.GroupName, StringComparison.Ordinal);
+                }
+                else
+                {
+                    GroupFilters.Add(new GroupFilterRow(
+                        g.GroupName,
+                        g.GroupName,
+                        g.GroupDescription)
+                    {
+                        IsSelected = string.Equals(selected, g.GroupName, StringComparison.Ordinal),
+                    });
+                }
+            }
+
+            // Trim any extra rows from a previous larger list.
+            while (GroupFilters.Count > desired)
+                GroupFilters.RemoveAt(GroupFilters.Count - 1);
+        }
+
+        private void RebuildSessionRows(IList<AgentSessionInfo> visible)
+        {
+            SessionRows.Clear();
+
+            // Decide whether to inject section headers. Headers appear when
+            // we're showing the unfiltered "All" view AND the visible
+            // sessions actually span multiple groups — matches macOS.
+            bool filterActive = !string.IsNullOrEmpty(_model.SelectedGroupFilter);
+            var distinct = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var s in visible)
+                distinct.Add(s.GroupName ?? "");
+            bool injectHeaders = !filterActive && distinct.Count > 1;
+
+            string? currentHeader = null;
+            foreach (var s in visible)
+            {
+                if (injectHeaders)
+                {
+                    string headerKey = s.GroupName ?? "";
+                    if (currentHeader != headerKey)
+                    {
+                        currentHeader = headerKey;
+                        SessionRows.Add(new SessionGroupHeaderRow
+                        {
+                            GroupName = string.IsNullOrEmpty(s.GroupName)
+                                ? "Ungrouped"
+                                : s.GroupName!,
+                        });
+                    }
+                }
+                SessionRows.Add(s);
+            }
+        }
+    }
+
+    /// <summary>One pill in the sidebar group filter strip. Mutating
+    /// <see cref="IsSelected"/> swaps its fill / foreground brushes via the
+    /// XAML data triggers — no template rebuilds.</summary>
+    internal sealed partial class GroupFilterRow : ObservableObject
+    {
+        public string? GroupName { get; set; }
+        [ObservableProperty] private string displayName = "";
+        [ObservableProperty] private string? description;
+        [ObservableProperty] private bool isSelected;
+
+        public GroupFilterRow(string? groupName, string displayName, string? description)
+        {
+            GroupName = groupName;
+            DisplayName = displayName;
+            Description = description;
+        }
+    }
+
+    /// <summary>Section header injected between groups in the sessions
+    /// ListBox when the unfiltered "All" view spans multiple groups.</summary>
+    internal sealed class SessionGroupHeaderRow
+    {
+        public string GroupName { get; set; } = "";
     }
 
     /// <summary>

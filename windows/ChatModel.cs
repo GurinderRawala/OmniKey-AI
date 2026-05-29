@@ -86,6 +86,7 @@ namespace OmniKey.Windows
         private string _activeSessionTitle = "New Chat";
         private string? _lastErrorMessage;
         private string _inputText = "";
+        private string? _selectedGroupFilter;
 
         private ChatModel()
         {
@@ -95,6 +96,24 @@ namespace OmniKey.Windows
         public event EventHandler? StateChanged;
 
         public List<AgentSessionInfo> Sessions { get; private set; } = new();
+
+        /// <summary>All distinct project groups returned by /api/agent/groups
+        /// for the active subscription. Drives the sidebar group filter pills.</summary>
+        public List<AgentGroupInfo> AvailableGroups { get; private set; } = new();
+
+        /// <summary>The group the user picked to filter the session list
+        /// (null = show every session, regardless of group). Mirrors macOS
+        /// <c>AgentThinkingModel.selectedGroupFilter</c>.</summary>
+        public string? SelectedGroupFilter
+        {
+            get => _selectedGroupFilter;
+            set
+            {
+                if (_selectedGroupFilter == value) return;
+                _selectedGroupFilter = value;
+                NotifyStateChanged();
+            }
+        }
 
         public string SessionSearchQuery
         {
@@ -167,16 +186,28 @@ namespace OmniKey.Windows
         {
             get
             {
+                IEnumerable<AgentSessionInfo> source = Sessions;
+
+                // Group filter: empty / null → "All", otherwise restrict to the
+                // group the user picked. Done first so the search box still
+                // searches across the filtered slice.
+                string? group = _selectedGroupFilter;
+                if (!string.IsNullOrEmpty(group))
+                {
+                    source = source.Where(s =>
+                        string.Equals(s.GroupName, group, StringComparison.Ordinal));
+                }
+
                 string query = SessionSearchQuery.Trim();
                 if (query.Length == 0)
-                    return Sessions;
+                    return source.ToList();
 
                 var tokens = NormalizeSearchText(query)
                     .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
                 if (tokens.Length == 0)
-                    return Sessions;
+                    return source.ToList();
 
-                return Sessions
+                return source
                     .Where(session =>
                     {
                         string haystack = NormalizeSearchText(session.Title ?? "");
@@ -201,6 +232,14 @@ namespace OmniKey.Windows
         public void RefreshSessions(Action? completion = null)
         {
             _ = RefreshSessionsAsync(completion);
+        }
+
+        /// <summary>Reload the list of distinct project groups in the
+        /// background. Safe to call repeatedly — failures are swallowed
+        /// and the existing list is preserved.</summary>
+        public void FetchGroups()
+        {
+            _ = RefreshGroupsAsync();
         }
 
         public void StartNewChat()
@@ -434,6 +473,40 @@ namespace OmniKey.Windows
                     LastErrorMessage = ex.Message;
                     completion?.Invoke();
                 });
+            }
+
+            // Refresh groups alongside sessions so the sidebar pills stay in
+            // step (new project group can appear after the first turn that
+            // gets classified). Best-effort — fetch failures leave the list
+            // intact.
+            _ = RefreshGroupsAsync();
+        }
+
+        private async Task RefreshGroupsAsync()
+        {
+            try
+            {
+                var groups = await AgentSessionService.FetchGroupsAsync();
+                RunOnUi(() =>
+                {
+                    AvailableGroups = groups;
+
+                    // If the previously-selected group disappeared from the
+                    // server (last session moved / deleted), reset to "All"
+                    // so the sidebar doesn't end up showing an empty list
+                    // with no obvious way out.
+                    if (_selectedGroupFilter is { Length: > 0 } current &&
+                        !groups.Exists(g => g.GroupName == current))
+                    {
+                        _selectedGroupFilter = null;
+                    }
+
+                    NotifyStateChanged();
+                });
+            }
+            catch
+            {
+                // Swallow — the existing group list is still valid.
             }
         }
 
