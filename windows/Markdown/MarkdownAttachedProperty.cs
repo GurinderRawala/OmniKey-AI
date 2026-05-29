@@ -126,8 +126,17 @@ namespace OmniKey.Windows.MarkdownRender
                     break;
 
                 case List list:
+                    // Bullet/number markers live inside the List's left
+                    // padding area. With PagePadding=0 on the document
+                    // and a 20 DIP padding here, the marker glyph itself
+                    // was being clipped against the FlowDocument's left
+                    // edge (≈25% of the bullet eaten on the left). Bump
+                    // left padding to 28 DIP and pin MarkerOffset to a
+                    // small positive value so the bullet sits ~8 DIP to
+                    // the left of the text column, fully visible.
                     list.Margin = new Thickness(0, 0, 0, 8);
-                    list.Padding = new Thickness(20, 0, 0, 0);
+                    list.Padding = new Thickness(28, 0, 0, 0);
+                    list.MarkerOffset = 8;
                     list.Background = Brushes.Transparent;
                     foreach (var item in list.ListItems)
                     {
