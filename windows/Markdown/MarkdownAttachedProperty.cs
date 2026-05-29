@@ -97,10 +97,20 @@ namespace OmniKey.Windows.MarkdownRender
 
         private static void RestyleBlock(Block block, ThemeTokens theme)
         {
+            // Defensive: MdXaml ships with a light theme and stamps a
+            // near-white Background on several block types (Paragraph,
+            // Section/blockquote, List, Table). Always clear it before
+            // setting our own, otherwise individual paragraphs render
+            // with a white slab against the dark chat surface.
+            if (block.Background is SolidColorBrush)
+                block.Background = Brushes.Transparent;
+            block.Foreground ??= theme.Primary;
+
             switch (block)
             {
                 case Paragraph p:
                     p.Margin = new Thickness(0, 0, 0, 8);
+                    p.Background = Brushes.Transparent;
                     foreach (var inline in p.Inlines)
                         RestyleInline(inline, theme);
                     break;
@@ -108,6 +118,7 @@ namespace OmniKey.Windows.MarkdownRender
                 case Section section:
                     section.Padding = new Thickness(12, 6, 8, 6);
                     section.Margin = new Thickness(0, 0, 0, 8);
+                    section.Background = Brushes.Transparent;
                     section.BorderBrush = theme.Accent;
                     section.BorderThickness = new Thickness(3, 0, 0, 0);
                     foreach (var child in section.Blocks)
@@ -117,28 +128,42 @@ namespace OmniKey.Windows.MarkdownRender
                 case List list:
                     list.Margin = new Thickness(0, 0, 0, 8);
                     list.Padding = new Thickness(20, 0, 0, 0);
+                    list.Background = Brushes.Transparent;
                     foreach (var item in list.ListItems)
+                    {
+                        item.Background = Brushes.Transparent;
                         foreach (var child in item.Blocks)
                             RestyleBlock(child, theme);
+                    }
                     break;
 
                 case Table table:
                     table.CellSpacing = 0;
+                    table.Background = Brushes.Transparent;
                     table.BorderBrush = theme.Border;
                     table.BorderThickness = new Thickness(1);
                     table.Margin = new Thickness(0, 0, 0, 10);
                     foreach (var col in table.Columns)
                         col.Width = new GridLength(1, GridUnitType.Star);
                     foreach (var rowGroup in table.RowGroups)
+                    {
+                        rowGroup.Background = Brushes.Transparent;
                         foreach (var row in rowGroup.Rows)
+                        {
+                            row.Background = Brushes.Transparent;
                             foreach (var cell in row.Cells)
                             {
+                                // Clear MdXaml's light-theme cell fill
+                                // before applying our own borders.
+                                cell.Background = Brushes.Transparent;
                                 cell.BorderBrush = theme.Border;
                                 cell.BorderThickness = new Thickness(0, 0, 1, 1);
                                 cell.Padding = new Thickness(8, 6, 8, 6);
                                 foreach (var child in cell.Blocks)
                                     RestyleBlock(child, theme);
                             }
+                        }
+                    }
                     break;
 
                 case BlockUIContainer container when container.Child is FrameworkElement fe:
@@ -181,10 +206,23 @@ namespace OmniKey.Windows.MarkdownRender
                     break;
 
                 case Run run when LooksLikeInlineCode(run):
+                    // Override MdXaml's light-theme tint. We use a
+                    // softer pill background (BadgeFill) rather than
+                    // the near-black CodeBg used by fenced blocks —
+                    // inline code should read as a chip, not a slab.
                     run.FontFamily = theme.MonoFont;
                     run.FontSize = 12;
-                    run.Background = theme.CodeBg;
+                    run.Background = theme.BadgeFill;
                     run.Foreground = theme.CodeFg;
+                    break;
+
+                case Run run when run.Background is SolidColorBrush:
+                    // Any other Run that arrives with a non-null
+                    // Background is almost certainly MdXaml's light-
+                    // theme leak (highlighted text, lead-in spans).
+                    // Clear it so the chat surface shows through.
+                    run.Background = Brushes.Transparent;
+                    run.Foreground ??= theme.Primary;
                     break;
 
                 case Span span:

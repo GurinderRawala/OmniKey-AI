@@ -372,26 +372,33 @@
                     </TextBlock.Style>
                 </TextBlock>
 
-                <!-- Final Answer block (rendered as markdown, plain card, with copy button) -->
+                <!-- Final Answer block — mirrors macOS FinalAnswerView:
+                     soft "paper" surface, markdown content on top, copy
+                     button anchored bottom-right BELOW the content (the
+                     previous DockPanel layout let the button float on
+                     top of long markdown headings). -->
                 <Border
                     Margin="0,10,0,0"
-                    Padding="16,14,16,8"
-                    Background="{StaticResource Nord.PanelBackgroundBrush}"
+                    Padding="16,14,16,10"
+                    Background="{StaticResource Nord.FinalAnswerSurfaceBrush}"
                     BorderBrush="{StaticResource Nord.BorderBrush}"
                     BorderThickness="1"
                     CornerRadius="12"
                     Visibility="{Binding HasFinalAnswer, Converter={StaticResource BooleanToVisibilityConverter}}">
-                    <DockPanel>
-                        <!-- Copy lives at the bottom-right of the surface
-                             (matching macOS) so it never overlaps the
-                             markdown content — long headings were getting
-                             clipped under the previous floating button. -->
+                    <StackPanel>
+                        <FlowDocumentScrollViewer
+                            Background="Transparent"
+                            BorderThickness="0"
+                            IsToolBarVisible="False"
+                            PreviewMouseWheel="OnInnerScrollableMouseWheel"
+                            VerticalScrollBarVisibility="Disabled"
+                            md:Markdown.Source="{Binding FinalAnswer.Text}" />
                         <Button
-                            Margin="0,8,0,0"
+                            Margin="0,6,0,0"
                             HorizontalAlignment="Right"
-                            DockPanel.Dock="Bottom"
                             Command="{Binding CopyVisibleTextCommand}"
-                            Style="{StaticResource Chat.CopyButtonStyle}">
+                            Style="{StaticResource Chat.CopyButtonStyle}"
+                            ToolTip="Copy answer">
                             <Grid>
                                 <ui:SymbolIcon
                                     FontSize="14"
@@ -405,14 +412,7 @@
                                     Visibility="{Binding JustCopied, Converter={StaticResource BooleanToVisibilityConverter}}" />
                             </Grid>
                         </Button>
-                        <FlowDocumentScrollViewer
-                            Background="Transparent"
-                            BorderThickness="0"
-                            IsToolBarVisible="False"
-                            PreviewMouseWheel="OnInnerScrollableMouseWheel"
-                            VerticalScrollBarVisibility="Disabled"
-                            md:Markdown.Source="{Binding FinalAnswer.Text}" />
-                    </DockPanel>
+                    </StackPanel>
                 </Border>
             </StackPanel>
         </DataTemplate>
@@ -823,7 +823,14 @@
                 Padding="22,8,22,8"
                 HorizontalScrollBarVisibility="Disabled"
                 VerticalScrollBarVisibility="Auto">
-                <Grid>
+                <!-- Transcript content is capped at 820 DIP and
+                     horizontally centered, mirroring macOS ChatView
+                     (".frame(maxWidth: 820).frame(maxWidth: .infinity,
+                     alignment: .center)"). On narrow windows the cap
+                     is wider than the available space so the column
+                     fills the pane; on large monitors the conversation
+                     stays a comfortable reading width in the centre. -->
+                <Grid HorizontalAlignment="Center" MaxWidth="820">
                     <!-- Empty state (matches macOS copy) -->
                     <StackPanel
                         MaxWidth="320"
@@ -923,10 +930,13 @@
 
             <!-- Composer card — Claude-style: borderless TextBox, soft elevated
                  surface, single focus-ring on the outer card, no internal
-                 dividers, generous padding. -->
+                 dividers, generous padding. Capped + centered to match
+                 transcript column width on wide monitors. -->
             <Border
                 x:Name="ComposerCard"
                 Grid.Row="4"
+                MaxWidth="820"
+                HorizontalAlignment="Stretch"
                 Margin="22,10,22,22"
                 Padding="0"
                 Background="{StaticResource Nord.PanelBackgroundBrush}"
