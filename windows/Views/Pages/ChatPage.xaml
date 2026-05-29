@@ -1082,7 +1082,6 @@
                                     VerticalAlignment="Center"
                                     Background="Transparent"
                                     BorderThickness="0"
-                                    DisplayMemberPath="GroupName"
                                     FontFamily="{StaticResource OK.FontFamily}"
                                     FontSize="12"
                                     ItemsSource="{Binding AvailableProjectGroups}"
