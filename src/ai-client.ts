@@ -85,6 +85,12 @@ export interface AIImageGenerateResult {
 // ---------------------------------------------------------------------------
 
 const DEFAULT_MODELS: Record<AIProvider, { fast: string; smart: string }> = {
+  // Smart-tier picks track each provider's current flagship for
+  // reasoning/coding workloads. Update here when a newer model becomes
+  // generally available so both the feature routes and the agent server pick
+  // it up automatically. When swapping a smart model in, also verify whether
+  // it accepts the `temperature` parameter and update
+  // `modelSupportsTemperature` accordingly.
   openai: { fast: 'gpt-4o-mini', smart: 'gpt-5.5' },
   gemini: { fast: 'gemini-2.5-flash', smart: 'gemini-2.5-pro' },
   anthropic: { fast: 'claude-haiku-4-5-20251001', smart: 'claude-opus-4-7' },
@@ -92,6 +98,37 @@ const DEFAULT_MODELS: Record<AIProvider, { fast: string; smart: string }> = {
 
 export function getDefaultModel(provider: AIProvider, tier: 'fast' | 'smart'): string {
   return DEFAULT_MODELS[provider][tier];
+}
+
+/**
+ * Returns whether a given model accepts the `temperature` parameter.
+ *
+ * Provider-specific rules (validated against published API docs and SDKs as
+ * of late 2025 / early 2026):
+ *  - OpenAI GPT-5 family (`gpt-5`, `gpt-5-mini`, `gpt-5.1`, …): NOT supported.
+ *    The API only accepts the default value (1) and returns
+ *    `unsupported_value: 'temperature'` for anything else.
+ *  - OpenAI o-series reasoning models (`o1`, `o3`, `o4-mini`, …): NOT
+ *    supported for the same reason.
+ *  - OpenAI GPT-4 / GPT-4o / GPT-3.5: supported.
+ *  - Google Gemini (2.x and 3.x families): supported via `generationConfig`.
+ *  - Anthropic Claude (Sonnet, Haiku, and Opus 4.x): supported, with the
+ *    exception of `claude-opus-4-7` (and its dated revisions) which rejects
+ *    `temperature` just like the OpenAI GPT-5 family.
+ */
+export function modelSupportsTemperature(model: string): boolean {
+  // OpenAI GPT-5 family (gpt-5, gpt-5-mini, gpt-5.1, gpt-5.5, …) only
+  // accepts the default temperature (1) — anything else is rejected with
+  // `unsupported_value: 'temperature'`.
+  if (/^gpt-5(\b|[.\-])/i.test(model)) return false;
+  // OpenAI o-series reasoning models (o1, o3, o4-mini, …) likewise drop the
+  // `temperature` knob.
+  if (/^o[134](\b|[-_])/i.test(model)) return false;
+  // Anthropic's Claude Opus 4.7 line (and its dated revisions like
+  // `claude-opus-4-7-20260101`) does not accept `temperature`; the rest of
+  // the Claude 4.x family (Sonnet, Haiku, Opus 4.5/4.6) does.
+  if (/^claude-opus-4-7(\b|[-_])/i.test(model)) return false;
+  return true;
 }
 
 /**
@@ -173,7 +210,7 @@ class OpenAIAdapter {
       model,
       messages: oaiMessages,
       tools: tools?.length ? tools : undefined,
-      temperature: model === 'gpt-5.5' ? 1 : (options.temperature ?? 0.2),
+      ...(modelSupportsTemperature(model) ? { temperature: options.temperature ?? 0.2 } : {}),
       max_tokens: options.maxTokens,
     });
 
@@ -231,7 +268,9 @@ class OpenAIAdapter {
     const stream = await this.client.chat.completions.create({
       model,
       messages: oaiMessages,
-      temperature: options.temperature ?? 0.3,
+      ...(modelSupportsTemperature(model)
+        ? { temperature: options.temperature ?? 0.3 }
+        : {}),
       stream: true,
       stream_options: { include_usage: true },
     });
@@ -312,7 +351,7 @@ class AnthropicAdapter {
       ...(system ? { system } : {}),
       messages: anthropicMessages,
       ...(tools?.length ? { tools } : {}),
-      ...(model === 'claude-opus-4-7' ? {} : { temperature: options.temperature ?? 0.2 }),
+      ...(modelSupportsTemperature(model) ? { temperature: options.temperature ?? 0.2 } : {}),
     });
 
     const textContent = response.content
@@ -373,7 +412,9 @@ class AnthropicAdapter {
       max_tokens: options.maxTokens ?? 8192,
       ...(system ? { system } : {}),
       messages: anthropicMessages,
-      temperature: options.temperature ?? 0.3,
+      ...(modelSupportsTemperature(model)
+        ? { temperature: options.temperature ?? 0.3 }
+        : {}),
     });
 
     for await (const event of stream) {
@@ -422,7 +463,9 @@ class GeminiAdapter {
       config: {
         ...(systemInstruction ? { systemInstruction } : {}),
         ...(tools?.length ? { tools } : {}),
-        temperature: options.temperature ?? 0.2,
+        ...(modelSupportsTemperature(model)
+          ? { temperature: options.temperature ?? 0.2 }
+          : {}),
       },
     });
 
@@ -488,7 +531,9 @@ class GeminiAdapter {
       contents,
       config: {
         ...(systemInstruction ? { systemInstruction } : {}),
-        temperature: options.temperature ?? 0.3,
+        ...(modelSupportsTemperature(model)
+          ? { temperature: options.temperature ?? 0.3 }
+          : {}),
       },
     });
 

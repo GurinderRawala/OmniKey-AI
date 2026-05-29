@@ -15,7 +15,7 @@ import { Subscription } from './models/subscription';
 import { SubscriptionUsage } from './models/subscriptionUsage';
 import { decompressString } from './compression';
 import { SubscriptionTaskTemplate } from './models/subscriptionTaskTemplate';
-import { aiClient, AIMessage } from './ai-client';
+import { aiClient, AIMessage, getDefaultModel } from './ai-client';
 
 function parseImprovedTextResponse(logger: Logger, response: string): string {
   const match = response.match(/<improved_text>([\s\S]*?)<\/improved_text>/);
@@ -74,13 +74,12 @@ type CompletionUsage = {
 };
 
 function getModelForCommand(cmd: EnhanceCommand): string {
-  const tier = cmd === 'task' ? 'smart' : 'fast';
-  const models: Record<string, { fast: string; smart: string }> = {
-    openai: { fast: 'gpt-4o-mini', smart: 'gpt-5.5' },
-    gemini: { fast: 'gemini-2.5-flash', smart: 'gemini-2.5-pro' },
-    anthropic: { fast: 'claude-haiku-4-5-20251001', smart: 'claude-opus-4-7' },
-  };
-  return models[config.aiProvider]?.[tier] ?? 'gpt-4o-mini';
+  // 'task' is the custom-task command and routes to the smart-tier model.
+  // 'enhance' and 'grammar' use the fast tier. The actual model strings live
+  // in ai-client.ts (DEFAULT_MODELS) so all callers stay in sync when we
+  // upgrade to a newer flagship model.
+  const tier: 'fast' | 'smart' = cmd === 'task' ? 'smart' : 'fast';
+  return getDefaultModel(config.aiProvider, tier);
 }
 
 function createMessagesParams(cmd: EnhanceCommand, input: string, prompt: string): AIMessage[] {
@@ -132,7 +131,14 @@ export async function runEnhancementModel(
   let rawResponse = '';
   let usage: CompletionUsage | undefined;
 
-  const result = await aiClient.streamComplete(model, messages, { temperature: 0.3 }, (delta) => {
+  // Smart-tier models (used by the custom-task command) include OpenAI's
+  // GPT-5 family, which rejects any non-default `temperature`. Even on
+  // providers where the smart model still accepts it (Gemini, Anthropic),
+  // omitting `temperature` keeps the request shape uniform across providers
+  // and lets each model use its own tuned default. The fast-tier models used
+  // by `enhance` and `grammar` keep the previous 0.3 default.
+  const completionOptions = cmd === 'task' ? {} : { temperature: 0.3 };
+  const result = await aiClient.streamComplete(model, messages, completionOptions, (delta) => {
     rawResponse += delta;
     if (onDelta) onDelta(delta);
   });
