@@ -112,20 +112,30 @@ const MAX_MESSAGE_CONTENT_LENGTH_BY_PROVIDER: Record<AIProvider, number> = {
 
 /**
  * Maximum total character length across all messages in the conversation
- * history, derived from each provider's context-window size minus headroom
- * for the system prompt and max output tokens.
+ * history. Uses 2 chars/token (conservative) instead of 4 to account for
+ * content with low chars-per-token ratios (JSON, code, tool results).
  *
- * - anthropic: Claude Opus 4.7 — 1M token ctx, 64K max output
- *              ≈ (1,000,000 - 64,000 - 10,000) tokens × 4 chars ≈ 3.7M chars
- * - openai:    GPT-5.5 — ~272K token ctx, ~32K max output
- *              ≈ (272,000 - 32,000 - 5,000) tokens × 4 chars ≈ 940K chars
- * - gemini:    Gemini 2.5 Pro — 1M token ctx, ~32K max output
- *              ≈ (1,000,000 - 32,000 - 10,000) tokens × 4 chars ≈ 3.8M chars
+ * - anthropic: 1M token ctx, reserve 100K for output + system prompt
+ *              → 900K target tokens × 2 chars ≈ 1.8M chars
+ * - openai:    ~272K token ctx, reserve 40K
+ *              → 230K target tokens × 2 chars ≈ 460K chars
+ * - gemini:    1M token ctx, reserve 100K
+ *              → 900K target tokens × 2 chars ≈ 1.8M chars
  */
 const MAX_HISTORY_LENGTH_BY_PROVIDER: Record<AIProvider, number> = {
-  anthropic: 3_500_000,
-  openai: 800_000,
-  gemini: 3_500_000,
+  anthropic: 1_800_000,
+  openai: 460_000,
+  gemini: 1_800_000,
+};
+
+/**
+ * Hard token limit of the context window for each provider/model tier.
+ * Used to compute the accurate "tokens remaining" value shown in the UI.
+ */
+const CONTEXT_WINDOW_BY_PROVIDER: Record<AIProvider, number> = {
+  anthropic: 1_000_000,
+  openai: 272_000,
+  gemini: 1_000_000,
 };
 
 export function getMaxMessageContentLength(provider: AIProvider): number {
@@ -134,6 +144,10 @@ export function getMaxMessageContentLength(provider: AIProvider): number {
 
 export function getMaxHistoryLength(provider: AIProvider): number {
   return MAX_HISTORY_LENGTH_BY_PROVIDER[provider];
+}
+
+export function getContextWindowSize(provider: AIProvider): number {
+  return CONTEXT_WINDOW_BY_PROVIDER[provider];
 }
 
 // ---------------------------------------------------------------------------

@@ -121,6 +121,7 @@ final class ChatSessionRunner {
     func run(
         sessionId: String,
         userText: String,
+        groupName: String? = nil,
         onBlock: @escaping @MainActor @Sendable (ChatBlock) -> Void,
         onFinal: @escaping @MainActor @Sendable (String) -> Void,
         onError: @escaping @MainActor @Sendable (Error) -> Void
@@ -133,6 +134,7 @@ final class ChatSessionRunner {
                 sessionId: sessionId,
                 jwt: token,
                 userText: userText,
+                groupName: groupName,
                 allowReauth: true,
                 handle: handle,
                 onBlock: onBlock,
@@ -151,6 +153,7 @@ final class ChatSessionRunner {
                         sessionId: sessionId,
                         jwt: jwt,
                         userText: userText,
+                        groupName: groupName,
                         allowReauth: false,
                         handle: handle,
                         onBlock: onBlock,
@@ -181,6 +184,7 @@ final class ChatSessionRunner {
         sessionId: String,
         jwt: String,
         userText: String,
+        groupName: String?,
         allowReauth: Bool,
         handle: ChatSessionRunHandle,
         onBlock: @escaping @MainActor @Sendable (ChatBlock) -> Void,
@@ -204,6 +208,7 @@ final class ChatSessionRunner {
             sessionID: sessionId,
             jwt: jwt,
             originalText: userText,
+            groupName: groupName,
             allowReauth: allowReauth,
             handle: handle,
             onBlock: onBlock,
@@ -224,6 +229,7 @@ final class ChatSessionRunner {
         let isImageRendering: Bool?
         let isMcpCall: Bool?
         let platform: String?
+        let groupName: String?
 
         init(
             sessionID: String,
@@ -234,7 +240,8 @@ final class ChatSessionRunner {
             isWebCall: Bool? = nil,
             isImageRendering: Bool? = nil,
             isMcpCall: Bool? = nil,
-            platform: String? = nil
+            platform: String? = nil,
+            groupName: String? = nil
         ) {
             self.sessionID = sessionID
             self.sender = sender
@@ -245,6 +252,7 @@ final class ChatSessionRunner {
             self.isImageRendering = isImageRendering
             self.isMcpCall = isMcpCall
             self.platform = platform
+            self.groupName = groupName
         }
 
         enum CodingKeys: String, CodingKey {
@@ -257,6 +265,7 @@ final class ChatSessionRunner {
             case isImageRendering = "is_image_rendering"
             case isMcpCall = "is_mcp_call"
             case platform
+            case groupName = "group_name"
         }
     }
 
@@ -265,6 +274,7 @@ final class ChatSessionRunner {
         sessionID: String,
         jwt: String,
         originalText: String,
+        groupName: String?,
         allowReauth: Bool,
         handle: ChatSessionRunHandle,
         onBlock: @escaping @MainActor @Sendable (ChatBlock) -> Void,
@@ -476,7 +486,8 @@ final class ChatSessionRunner {
             content: originalText,
             isTerminalOutput: false,
             isError: false,
-            platform: "macos"
+            platform: "macos",
+            groupName: groupName
         )
 
         guard let data = try? encoder.encode(initial),

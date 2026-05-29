@@ -461,6 +461,64 @@ struct SessionPickerView: View {
             Divider()
                 .padding(.bottom, 4)
 
+            // ── Group filter pills ─────────────────────────────────────────
+            if !model.availableGroups.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        // "All" pill
+                        Button {
+                            model.selectedGroupFilter = nil
+                        } label: {
+                            Text("All")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(
+                                    model.selectedGroupFilter == nil
+                                        ? Color.white
+                                        : NordTheme.secondaryText(colorScheme)
+                                )
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 4)
+                                .background(
+                                    Capsule().fill(
+                                        model.selectedGroupFilter == nil
+                                            ? NordTheme.accentBlue(colorScheme)
+                                            : NordTheme.badgeFill(colorScheme)
+                                    )
+                                )
+                        }
+                        .buttonStyle(.plain)
+
+                        ForEach(model.availableGroups) { group in
+                            Button {
+                                model.selectedGroupFilter = group.groupName
+                            } label: {
+                                Text(group.groupName)
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundColor(
+                                        model.selectedGroupFilter == group.groupName
+                                            ? Color.white
+                                            : NordTheme.secondaryText(colorScheme)
+                                    )
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 4)
+                                    .background(
+                                        Capsule().fill(
+                                            model.selectedGroupFilter == group.groupName
+                                                ? NordTheme.accentBlue(colorScheme)
+                                                : NordTheme.badgeFill(colorScheme)
+                                        )
+                                    )
+                            }
+                            .buttonStyle(.plain)
+                            .help(group.groupDescription ?? group.groupName)
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 8)
+                }
+                Divider()
+            }
+
             if model.availableSessions.isEmpty {
                 Text("No previous sessions found.")
                     .font(.system(size: 12))
@@ -468,72 +526,120 @@ struct SessionPickerView: View {
                     .padding(.horizontal, 20)
                     .padding(.vertical, 12)
             } else {
+                let displayed = model.filteredSessions
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
-                        ForEach(model.availableSessions) { session in
-                            HStack(spacing: 0) {
-                                // ── Select button ──────────────────────────
-                                Button {
-                                    model.selectedSessionId = session.id
-                                    model.currentSessionTitle = session.title
-                                    model.remainingContextTokens = session.remainingContextTokens
-                                    model.isShowingSessionPicker = false
-                                    dismiss()
-                                } label: {
-                                    HStack(spacing: 10) {
-                                        Image(systemName: "bubble.left.and.bubble.right")
-                                            .font(.system(size: 13))
-                                            .foregroundColor(NordTheme.accentBlue(colorScheme))
-                                            .frame(width: 20)
-                                        VStack(alignment: .leading, spacing: 3) {
-                                            Text(session.title)
-                                                .font(.system(size: 13, weight: .medium))
-                                                .foregroundColor(NordTheme.primaryText(colorScheme))
-                                                .lineLimit(1)
-                                                .truncationMode(.tail)
-
-                                            HStack(spacing: 8) {
-                                                Label("\(session.turns) turn\(session.turns == 1 ? "" : "s")", systemImage: "arrow.2.circlepath")
-                                                Label("\(session.remainingContextTokens.formatted()) tokens left", systemImage: "brain.head.profile")
-                                            }
-                                            .font(.system(size: 10))
-                                            .foregroundColor(NordTheme.secondaryText(colorScheme))
-                                        }
-                                        Spacer()
-                                        if model.selectedSessionId == session.id {
-                                            Image(systemName: "checkmark")
-                                                .font(.system(size: 11, weight: .semibold))
-                                                .foregroundColor(NordTheme.accentBlue(colorScheme))
-                                        }
-                                    }
-                                    .padding(.leading, 20)
-                                    .padding(.trailing, 8)
-                                    .padding(.vertical, 10)
-                                    .contentShape(Rectangle())
+                        // Build ordered list of groups present in displayed sessions
+                        let groupedSessions: [(String?, [AgentSessionInfo])] = {
+                            var order: [String?] = []
+                            var map: [String?: [AgentSessionInfo]] = [:]
+                            for s in displayed {
+                                let key = s.groupName
+                                if map[key] == nil {
+                                    order.append(key)
+                                    map[key] = []
                                 }
-                                .buttonStyle(.plain)
+                                map[key]!.append(s)
+                            }
+                            return order.map { ($0, map[$0]!) }
+                        }()
 
-                                // ── Delete button ──────────────────────────
-                                Button {
-                                    model.deleteSession(id: session.id)
-                                } label: {
-                                    Image(systemName: "trash")
-                                        .font(.system(size: 11))
-                                        .foregroundColor(Color(red: 252 / 255, green: 100 / 255, blue: 100 / 255))
-                                        .padding(.horizontal, 12)
+                        ForEach(Array(groupedSessions.enumerated()), id: \.offset) { _, pair in
+                            let (groupName, sessions) = pair
+
+                            // Section header (only when multiple groups visible)
+                            if groupedSessions.count > 1, let name = groupName {
+                                HStack(spacing: 5) {
+                                    Image(systemName: "folder")
+                                        .font(.system(size: 9, weight: .semibold))
+                                    Text(name.uppercased())
+                                        .font(.system(size: 10, weight: .semibold))
+                                        .tracking(0.5)
+                                }
+                                .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.6))
+                                .padding(.horizontal, 20)
+                                .padding(.top, 10)
+                                .padding(.bottom, 4)
+                            }
+
+                            ForEach(sessions) { session in
+                                HStack(spacing: 0) {
+                                    // ── Select button ──────────────────────
+                                    Button {
+                                        model.selectedSessionId = session.id
+                                        model.currentSessionTitle = session.title
+                                        model.remainingContextTokens = session.remainingContextTokens
+                                        model.isShowingSessionPicker = false
+                                        dismiss()
+                                    } label: {
+                                        HStack(spacing: 10) {
+                                            Image(systemName: "bubble.left.and.bubble.right")
+                                                .font(.system(size: 13))
+                                                .foregroundColor(NordTheme.accentBlue(colorScheme))
+                                                .frame(width: 20)
+                                            VStack(alignment: .leading, spacing: 3) {
+                                                Text(session.title)
+                                                    .font(.system(size: 13, weight: .medium))
+                                                    .foregroundColor(NordTheme.primaryText(colorScheme))
+                                                    .lineLimit(1)
+                                                    .truncationMode(.tail)
+
+                                                HStack(spacing: 8) {
+                                                    Label("\(session.turns) turn\(session.turns == 1 ? "" : "s")", systemImage: "arrow.2.circlepath")
+                                                }
+                                                .font(.system(size: 10))
+                                                .foregroundColor(NordTheme.secondaryText(colorScheme))
+                                            }
+                                            Spacer()
+                                            // Context-window ring — same component
+                                            // used by the chat composer, so the
+                                            // remaining-budget glyph stays consistent
+                                            // across the app. Hidden when the backend
+                                            // hasn't reported a budget yet to avoid
+                                            // drawing a misleading empty ring.
+                                            if session.contextBudget > 0 {
+                                                ContextWindowIndicator(
+                                                    remaining: session.remainingContextTokens,
+                                                    budget: session.contextBudget,
+                                                    colorScheme: colorScheme
+                                                )
+                                                .padding(.trailing, 4)
+                                            }
+                                            if model.selectedSessionId == session.id {
+                                                Image(systemName: "checkmark")
+                                                    .font(.system(size: 11, weight: .semibold))
+                                                    .foregroundColor(NordTheme.accentBlue(colorScheme))
+                                            }
+                                        }
+                                        .padding(.leading, 20)
+                                        .padding(.trailing, 8)
                                         .padding(.vertical, 10)
                                         .contentShape(Rectangle())
-                                }
-                                .buttonStyle(.plain)
-                                .help("Delete this session")
-                            }
-                            .background(
-                                model.selectedSessionId == session.id
-                                    ? NordTheme.sectionFill(accent: NordTheme.accentBlue(colorScheme), scheme: colorScheme)
-                                    : Color.clear
-                            )
+                                    }
+                                    .buttonStyle(.plain)
 
-                            Divider()
+                                    // ── Delete button ──────────────────────
+                                    Button {
+                                        model.deleteSession(id: session.id)
+                                    } label: {
+                                        Image(systemName: "trash")
+                                            .font(.system(size: 11))
+                                            .foregroundColor(Color(red: 252 / 255, green: 100 / 255, blue: 100 / 255))
+                                            .padding(.horizontal, 12)
+                                            .padding(.vertical, 10)
+                                            .contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help("Delete this session")
+                                }
+                                .background(
+                                    model.selectedSessionId == session.id
+                                        ? NordTheme.sectionFill(accent: NordTheme.accentBlue(colorScheme), scheme: colorScheme)
+                                        : Color.clear
+                                )
+
+                                Divider()
+                            }
                         }
                     }
                 }
@@ -544,6 +650,7 @@ struct SessionPickerView: View {
         }
         .frame(width: 420)
         .background(NordTheme.windowBackground(colorScheme))
+        .onAppear { model.fetchGroups() }
     }
 }
 
@@ -750,15 +857,31 @@ private struct ModelSettingsPopover: View {
                                 icon: "bubble.left.and.bubble.right",
                                 iconColor: NordTheme.accentBlue(colorScheme),
                                 title: session.title,
-                                subtitle: "\(session.turns) turn\(session.turns == 1 ? "" : "s") · \(session.remainingContextTokens.formatted()) tokens left",
-                                isSelected: storedDefaultRaw == session.id
-                            ) {
-                                storedDefaultRaw = session.id
-                                model.fetchSessionHistory(for: session.id)
-                            } onDelete: {
-                                if storedDefaultRaw == session.id { storedDefaultRaw = "" }
-                                model.deleteSession(id: session.id)
-                            }
+                                subtitle: "\(session.turns) turn\(session.turns == 1 ? "" : "s")",
+                                isSelected: storedDefaultRaw == session.id,
+                                action: {
+                                    storedDefaultRaw = session.id
+                                    model.fetchSessionHistory(for: session.id)
+                                },
+                                onDelete: {
+                                    if storedDefaultRaw == session.id { storedDefaultRaw = "" }
+                                    model.deleteSession(id: session.id)
+                                },
+                                trailingAccessory: {
+                                    // Mirror the chat composer's context-window
+                                    // ring instead of printing a raw "N tokens
+                                    // left" string, which was misleading when
+                                    // the model advertises a million-token
+                                    // budget.
+                                    if session.contextBudget > 0 {
+                                        ContextWindowIndicator(
+                                            remaining: session.remainingContextTokens,
+                                            budget: session.contextBudget,
+                                            colorScheme: colorScheme
+                                        )
+                                    }
+                                }
+                            )
                         }
                     }
                 }
@@ -794,14 +917,15 @@ private struct ModelSettingsPopover: View {
     }
 
     @ViewBuilder
-    private func defaultRow(
+    private func defaultRow<Trailing: View>(
         icon: String,
         iconColor: Color,
         title: String,
         subtitle: String,
         isSelected: Bool,
         action: @escaping () -> Void,
-        onDelete: (() -> Void)? = nil
+        onDelete: (() -> Void)? = nil,
+        @ViewBuilder trailingAccessory: () -> Trailing = { EmptyView() }
     ) -> some View {
         HStack(spacing: 0) {
             Button(action: action) {
@@ -821,6 +945,11 @@ private struct ModelSettingsPopover: View {
                             .foregroundColor(NordTheme.secondaryText(colorScheme))
                     }
                     Spacer()
+                    // Optional trailing accessory (e.g. the context-window
+                    // ring) shown between the subtitle column and the
+                    // selection checkmark so per-row metadata stays
+                    // visually aligned across rows.
+                    trailingAccessory()
                     if isSelected {
                         Image(systemName: "checkmark")
                             .font(.system(size: 10, weight: .semibold))

@@ -42,6 +42,8 @@ struct AgentSessionInfo: Identifiable, Decodable {
     let totalTokensUsed: Int
     let remainingContextTokens: Int
     let contextBudget: Int
+    let groupName: String?
+    let groupDescription: String?
     let lastActiveAt: String
 
     enum CodingKeys: String, CodingKey {
@@ -49,8 +51,18 @@ struct AgentSessionInfo: Identifiable, Decodable {
         case totalTokensUsed
         case remainingContextTokens
         case contextBudget
+        case groupName
+        case groupDescription
         case lastActiveAt
     }
+}
+
+// MARK: - Project group returned by GET /api/agent/groups
+
+struct AgentGroupInfo: Identifiable, Decodable, Hashable {
+    var id: String { groupName }
+    let groupName: String
+    let groupDescription: String?
 }
 
 @MainActor
@@ -82,6 +94,18 @@ final class AgentThinkingModel: ObservableObject {
     @Published var currentSessionTitle: String = "New Session"
     /// Compact transcript of the previous turns for a resumed session.
     @Published var sessionHistory: [SessionHistoryEntry] = []
+
+    // ── Project group state ───────────────────────────────────────────────────
+    /// All distinct project groups for the subscription.
+    @Published var availableGroups: [AgentGroupInfo] = []
+    /// The group the user chose to filter the session picker (nil = show all).
+    @Published var selectedGroupFilter: String? = nil
+
+    /// Sessions visible in the picker, filtered by `selectedGroupFilter`.
+    var filteredSessions: [AgentSessionInfo] {
+        guard let filter = selectedGroupFilter else { return availableSessions }
+        return availableSessions.filter { $0.groupName == filter }
+    }
     // MARK: - Default session (UserDefaults-backed)
 
     /// UserDefaults key for the stored default session.
@@ -238,6 +262,22 @@ final class AgentThinkingModel: ObservableObject {
                     self.remainingContextTokens = ctx.remainingContextTokens
                     self.currentSessionTitle = ctx.title
                 }
+            }
+        }.resume()
+    }
+
+    /// Fetch distinct project groups for the subscription and update `availableGroups`.
+    func fetchGroups() {
+        guard let token = SubscriptionManager.shared.jwtToken, !token.isEmpty else { return }
+        let url = APIClient.baseURL.appendingPathComponent("api/agent/groups")
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, _, _ in
+            guard let self, let data else { return }
+            struct Response: Decodable { let groups: [AgentGroupInfo] }
+            if let body = try? JSONDecoder().decode(Response.self, from: data) {
+                DispatchQueue.main.async { self.availableGroups = body.groups }
             }
         }.resume()
     }

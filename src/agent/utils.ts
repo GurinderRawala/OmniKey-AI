@@ -127,10 +127,11 @@ export function pushToSessionHistory(
   }
 
   // 2. Total history length limit.
-  const currentTotal = session.history.reduce(
-    (acc, msg) => acc + (typeof msg.content === 'string' ? msg.content.length : 0),
-    0,
-  );
+  const currentTotal = session.history.reduce((acc, msg) => {
+    if (typeof msg.content === 'string') return acc + msg.content.length;
+    if (msg.content != null) return acc + JSON.stringify(msg.content).length;
+    return acc;
+  }, 0);
   const remaining = MAX_HISTORY_TOTAL - currentTotal;
   if (content.length > remaining) {
     content = content.slice(0, Math.max(0, remaining - FINAL_ANSWER_REQUEST.content.length));

@@ -98,6 +98,21 @@ final class ChatModel: ObservableObject {
     @Published var activeSessionId: String? = nil
     @Published var activeSessionTitle: String = "New Chat"
 
+    /// True when the user has tapped "New Chat" but has not yet sent
+    /// the first message. Drives a synthetic placeholder row at the
+    /// top of the sidebar so the not-yet-persisted chat is immediately
+    /// visible. Cleared when the user sends, opens another session,
+    /// or closes the pending chat.
+    @Published var hasPendingNewChat: Bool = false
+
+    /// One-shot signal consumed by the sidebar: when set, the sidebar
+    /// expands whichever group currently contains this session id so the
+    /// user can see it highlighted after the backend assigns / updates
+    /// its `group_name` (e.g. right after a final answer arrives for a
+    /// freshly created chat). Cleared by the sidebar once it has acted
+    /// so the same signal doesn't re-fire on unrelated updates.
+    @Published var pendingExpandSessionId: String? = nil
+
     /// Messages rendered in the conversation view.
     @Published var messages: [ChatMessage] = []
 
@@ -129,6 +144,13 @@ final class ChatModel: ObservableObject {
     /// backend. The dropdown is disabled while this is in flight to
     /// avoid stacked POSTs from impatient clicks.
     @Published var isUpdatingDefaultTaskTemplate: Bool = false
+
+    // ── Project group state ───────────────────────────────────────────────────
+    /// Distinct project groups fetched from GET /api/agent/groups.
+    @Published var availableGroups: [AgentGroupInfo] = []
+    /// The project group the user has selected for context injection.
+    /// When set, the group description is prepended to each outgoing message.
+    @Published var selectedGroup: AgentGroupInfo? = nil
 
     /// Shared APIClient used for ancillary chat-page fetches (task
     /// instruction template list + default-template mutations).
@@ -279,6 +301,7 @@ final class ChatModel: ObservableObject {
 
         activeSessionId = nil
         activeSessionTitle = "New Chat"
+        hasPendingNewChat = true
         lastErrorMessage = nil
         isLoadingSessionHistory = false
 
@@ -298,6 +321,7 @@ final class ChatModel: ObservableObject {
 
         activeSessionId = session.id
         activeSessionTitle = session.title
+        hasPendingNewChat = false
         lastErrorMessage = nil
         isLoadingSessionHistory = true
 
@@ -530,17 +554,21 @@ final class ChatModel: ObservableObject {
                 totalTokensUsed: 0,
                 remainingContextTokens: 0,
                 contextBudget: 0,
+                groupName: selectedGroup?.groupName,
+                groupDescription: selectedGroup?.groupDescription,
                 lastActiveAt: ISO8601DateFormatter().string(from: Date())
             )
             sessions.removeAll { $0.id == sessionId }
             sessions.insert(placeholder, at: 0)
             activeSessionId = sessionId
             activeSessionTitle = placeholder.title
+            hasPendingNewChat = false
         }
 
         let handle = ChatSessionRunner.shared.run(
             sessionId: sessionId,
             userText: text,
+            groupName: selectedGroup?.groupName,
             onBlock: { [weak self] block in
                 guard let self else { return }
                 self.appendBlock(block, toSession: sessionSt)
@@ -558,7 +586,20 @@ final class ChatModel: ObservableObject {
                 if self.states[self.activeStateKey] === sessionSt {
                     self.isRunning = false
                 }
-                self.refreshSessions()
+                // After the backend has persisted the turn (and possibly
+                // assigned / updated this session's `group_name`) refresh
+                // the sidebar list, then ask it to expand whichever group
+                // the active session now lives in so the user sees the
+                // newly-categorised chat without manually opening folders.
+                let activeId = self.activeSessionId
+                self.refreshSessions {
+                    DispatchQueue.main.async {
+                        if let id = activeId {
+                            self.pendingExpandSessionId = id
+                        }
+                    }
+                }
+                self.fetchGroups()
             },
             onError: { [weak self] error in
                 guard let self else { return }
@@ -572,6 +613,18 @@ final class ChatModel: ObservableObject {
                 if self.states[self.activeStateKey] === sessionSt {
                     self.isRunning = false
                 }
+                // Even on error the backend may have persisted a partial
+                // session row (e.g. the user message). Refresh the sidebar
+                // so it stays in sync with the server.
+                let activeId = self.activeSessionId
+                self.refreshSessions {
+                    DispatchQueue.main.async {
+                        if let id = activeId {
+                            self.pendingExpandSessionId = id
+                        }
+                    }
+                }
+                self.fetchGroups()
             }
         )
 
@@ -624,6 +677,26 @@ final class ChatModel: ObservableObject {
         s?.streamingAssistantIndex = nil
         isRunning = false
     }
+    // MARK: - Project groups
+
+    /// Fetch distinct project groups for the subscription and populate
+    /// `availableGroups`. Called on `ChatView.onAppear` so the composer
+    /// dropdown is ready before the user types.
+    func fetchGroups() {
+        guard let token = SubscriptionManager.shared.jwtToken, !token.isEmpty else { return }
+        let url = APIClient.baseURL.appendingPathComponent("api/agent/groups")
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, _, _ in
+            guard let self, let data else { return }
+            struct Response: Decodable { let groups: [AgentGroupInfo] }
+            if let body = try? JSONDecoder().decode(Response.self, from: data) {
+                DispatchQueue.main.async { self.availableGroups = body.groups }
+            }
+        }.resume()
+    }
+
     // MARK: - Default task instruction template
 
     /// Fetch the user's task instruction templates and store both the

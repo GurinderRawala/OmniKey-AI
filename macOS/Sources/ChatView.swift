@@ -49,6 +49,7 @@ struct ChatView: View {
         .onAppear {
             model.refreshSessions()
             model.fetchDefaultTaskTemplate()
+            model.fetchGroups()
         }
     }
 }
@@ -59,11 +60,25 @@ struct ChatSidebarView: View {
     @ObservedObject var model: ChatModel
     var onCollapse: () -> Void
     @Environment(\.colorScheme) private var colorScheme
+    /// Names of groups that are currently collapsed in the sidebar.
+    /// Groups are collapsed by default — `seenGroups` tracks which group
+    /// names have been initialized so newly discovered groups also start
+    /// out collapsed without forcing previously expanded groups closed.
+    @State private var collapsedGroups: Set<String> = []
+    @State private var seenGroups: Set<String> = []
+
+    /// Fallback group name used when a session has no `group_name` from
+    /// the backend. Surfaced in the sidebar as a regular collapsible
+    /// section so unassigned chats remain easy to find.
+    private static let ungroupedName = "Other"
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Header row: app name + compose + collapse
-            HStack(spacing: 4) {
+            // Header row: app name + compose + collapse. Anchored to
+            // `.center` so the icon buttons (28×28) line up vertically
+            // with the title baseline instead of drifting when the
+            // accompanying SF Symbols have asymmetric metrics.
+            HStack(alignment: .center, spacing: 4) {
                 Text("OmniAgent")
                     .font(OKFont.bodyEmphasized)
                     .okTighten(-0.15)
@@ -95,7 +110,21 @@ struct ChatSidebarView: View {
             ScrollView {
                 LazyVStack(spacing: 0) {
                     let visibleSessions = model.filteredSessions
-                    if model.sessions.isEmpty {
+
+                    // Pending-new-chat placeholder. Shown above all
+                    // backend-sourced sessions so the not-yet-persisted
+                    // chat is immediately visible after tapping "New
+                    // Chat". Hidden while the user is searching to keep
+                    // the filtered results clean.
+                    if model.hasPendingNewChat && !model.isSessionSearchActive {
+                        ChatPendingSessionRowView(
+                            isActive: model.activeSessionId == nil,
+                            onTap: { /* already on the pending new chat */ }
+                        )
+                        .padding(.top, 6)
+                    }
+
+                    if model.sessions.isEmpty && !model.hasPendingNewChat {
                         Text("No chats yet")
                             .font(.system(size: 12))
                             .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.55))
@@ -110,13 +139,146 @@ struct ChatSidebarView: View {
                         .padding(.horizontal, 12)
                         .padding(.top, 20)
                     } else {
-                        ForEach(visibleSessions) { session in
+                        // While a brand-new session is running, the
+                        // backend hasn't yet assigned a `group_name`
+                        // — so without special handling the session
+                        // would land in the synthetic "Other" bucket
+                        // (rendered at the bottom of the sidebar). To
+                        // make the actively-running chat easy to find,
+                        // pin it above every group while it streams.
+                        // Once the final answer arrives, the existing
+                        // refresh + `pendingExpandSessionId` flow
+                        // moves it into its assigned group and expands
+                        // that group, so this pinned row disappears
+                        // automatically.
+                        let pinnedRunningSession: AgentSessionInfo? = {
+                            guard model.isRunning,
+                                  let activeId = model.activeSessionId,
+                                  let candidate = visibleSessions.first(where: { $0.id == activeId })
+                            else { return nil }
+                            let hasGroup = candidate.groupName?
+                                .trimmingCharacters(in: .whitespacesAndNewlines)
+                                .nilIfEmpty != nil
+                            return hasGroup ? nil : candidate
+                        }()
+
+                        if let pinned = pinnedRunningSession {
                             ChatSessionRowView(
-                                session: session,
-                                isActive: session.id == model.activeSessionId,
-                                onTap: { model.openSession(session) },
-                                onDelete: { model.deleteSession(session) }
+                                session: pinned,
+                                isActive: pinned.id == model.activeSessionId,
+                                onTap: { model.openSession(pinned) },
+                                onDelete: { model.deleteSession(pinned) }
                             )
+                        }
+
+                        // Build ordered groups from visible sessions.
+                        // Sessions without an explicit `group_name` from the
+                        // backend are bucketed into a synthetic "Other" group
+                        // so every session lives under a collapsible header.
+                        // The "Other" bucket is always pinned to the bottom
+                        // of the list so named projects stay at the top.
+                        // The currently-running ungrouped session (if any)
+                        // is excluded here because it's already rendered
+                        // above as the pinned row.
+                        let grouped: [(String, [AgentSessionInfo])] = {
+                            var order: [String] = []
+                            var map: [String: [AgentSessionInfo]] = [:]
+                            let pinnedId = pinnedRunningSession?.id
+                            for s in visibleSessions where s.id != pinnedId {
+                                let key = s.groupName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+                                    ?? Self.ungroupedName
+                                if map[key] == nil { order.append(key); map[key] = [] }
+                                map[key]!.append(s)
+                            }
+                            let other = Self.ungroupedName
+                            if let idx = order.firstIndex(of: other), idx != order.count - 1 {
+                                order.remove(at: idx)
+                                order.append(other)
+                            }
+                            return order.map { ($0, map[$0]!) }
+                        }()
+
+                        ForEach(Array(grouped.enumerated()), id: \.offset) { _, pair in
+                            let (name, sessions) = pair
+                            let isCollapsed = collapsedGroups.contains(name)
+
+                            // Section header — always rendered so every
+                            // group (including "Other") gets its own
+                            // collapsible heading and starts collapsed.
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.18)) {
+                                    if collapsedGroups.contains(name) {
+                                        collapsedGroups.remove(name)
+                                    } else {
+                                        collapsedGroups.insert(name)
+                                    }
+                                }
+                            } label: {
+                                HStack(spacing: 6) {
+                                    Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
+                                        .font(.system(size: 10, weight: .semibold))
+                                    Image(systemName: "folder.fill")
+                                        .font(.system(size: 11, weight: .semibold))
+                                    Text(name)
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .lineLimit(1)
+                                    Spacer()
+                                    Text("\(sessions.count)")
+                                        .font(.system(size: 12, weight: .medium))
+                                        .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.35))
+                                }
+                                .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.5))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 14)
+                                .padding(.top, 10)
+                                .padding(.bottom, 2)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .help(isCollapsed ? "Expand \(name)" : "Collapse \(name)")
+
+                            if !isCollapsed {
+                                ForEach(sessions) { session in
+                                    ChatSessionRowView(
+                                        session: session,
+                                        isActive: session.id == model.activeSessionId,
+                                        onTap: { model.openSession(session) },
+                                        onDelete: { model.deleteSession(session) }
+                                    )
+                                }
+                            }
+                        }
+                        .onAppear { initializeCollapsedGroups(for: grouped.map { $0.0 }) }
+                        .onChange(of: grouped.map { $0.0 }) { _, names in
+                            initializeCollapsedGroups(for: names)
+                        }
+                        // React to one-shot expand requests from the model
+                        // (e.g. when a final answer arrives and the backend
+                        // updates / assigns the session's `group_name`).
+                        // Resolve the session's *current* group from the
+                        // freshly-refreshed list, then expand that group and
+                        // clear the signal so it can fire again later.
+                        .onChange(of: model.pendingExpandSessionId) { _, sessionId in
+                            guard let sessionId else { return }
+                            let resolved = visibleSessions.first(where: { $0.id == sessionId })
+                                ?? model.sessions.first(where: { $0.id == sessionId })
+                            let groupName = resolved?.groupName?
+                                .trimmingCharacters(in: .whitespacesAndNewlines)
+                                .nilIfEmpty
+                                ?? Self.ungroupedName
+                            // Mark the group as "seen" so a subsequent
+                            // initializeCollapsedGroups() pass (triggered
+                            // by the same refresh) doesn't treat it as a
+                            // newly-discovered group and re-collapse it.
+                            seenGroups.insert(groupName)
+                            withAnimation(.easeInOut(duration: 0.18)) {
+                                _ = collapsedGroups.remove(groupName)
+                            }
+                            // Clear the signal so unrelated state changes
+                            // don't re-trigger the same expansion later.
+                            DispatchQueue.main.async {
+                                model.pendingExpandSessionId = nil
+                            }
                         }
                     }
                 }
@@ -126,6 +288,25 @@ struct ChatSidebarView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(NordTheme.panelBackground(colorScheme))
+    }
+
+    /// Ensure newly discovered groups start collapsed without affecting
+    /// groups the user has already expanded in this session. Group names
+    /// that disappear (e.g. the last session in a group was deleted) are
+    /// also pruned from the tracking sets so they collapse cleanly if
+    /// they ever reappear.
+    private func initializeCollapsedGroups(for names: [String]) {
+        let current = Set(names)
+        let newNames = current.subtracting(seenGroups)
+        if !newNames.isEmpty {
+            collapsedGroups.formUnion(newNames)
+            seenGroups.formUnion(newNames)
+        }
+        let removed = seenGroups.subtracting(current)
+        if !removed.isEmpty {
+            seenGroups.subtract(removed)
+            collapsedGroups.subtract(removed)
+        }
     }
 }
 
@@ -272,14 +453,22 @@ private struct SidebarIconButton: View {
 
     var body: some View {
         Button(action: action) {
+            // Render each SF Symbol inside a fixed-size square first so
+            // glyphs with different intrinsic widths (e.g.
+            // `square.and.pencil` vs. `sidebar.left`) share an identical
+            // optical bounding box. Without this, neighbouring icon
+            // buttons in the sidebar header look subtly misaligned even
+            // though their outer 28×28 hit targets are the same size.
             Image(systemName: icon)
                 .font(.system(size: 13, weight: .medium))
+                .symbolRenderingMode(.monochrome)
+                .frame(width: 16, height: 16, alignment: .center)
                 .foregroundColor(
                     hovered
                         ? NordTheme.primaryText(colorScheme)
                         : NordTheme.secondaryText(colorScheme).opacity(0.7)
                 )
-                .frame(width: 28, height: 28)
+                .frame(width: 28, height: 28, alignment: .center)
                 .background(
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
                         .fill(hovered ? NordTheme.badgeFill(colorScheme) : Color.clear)
@@ -342,6 +531,40 @@ struct ChatSidebarRailView: View {
             // Recent session dots
             ScrollView(.vertical, showsIndicators: false) {
                 LazyVStack(spacing: 6) {
+                    // Pending-new-chat placeholder dot. Mirrors the
+                    // expanded sidebar's placeholder row so the unsaved
+                    // chat is also visible while the sidebar is in
+                    // collapsed/rail mode.
+                    if model.hasPendingNewChat {
+                        let isActive = model.activeSessionId == nil
+                        ZStack {
+                            Circle()
+                                .fill(
+                                    isActive
+                                        ? NordTheme.accent(colorScheme).opacity(0.18)
+                                        : NordTheme.badgeFill(colorScheme)
+                                )
+                                .frame(width: 34, height: 34)
+                                .overlay(
+                                    Circle()
+                                        .strokeBorder(
+                                            isActive
+                                                ? NordTheme.accent(colorScheme).opacity(0.40)
+                                                : NordTheme.border(colorScheme),
+                                            lineWidth: 1
+                                        )
+                                )
+                            Image(systemName: "square.and.pencil")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(
+                                    isActive
+                                        ? NordTheme.accent(colorScheme)
+                                        : NordTheme.secondaryText(colorScheme)
+                                )
+                        }
+                        .help("New chat (unsaved)")
+                    }
+
                     ForEach(model.sessions.prefix(12)) { session in
                         Button(action: { model.openSession(session) }) {
                             ZStack {
@@ -446,6 +669,71 @@ struct ChatSessionRowView: View {
         .buttonStyle(.plain)
         .animation(.easeInOut(duration: 0.12), value: isHovered)
         .onHover { isHovered = $0 }
+    }
+}
+
+// MARK: - Pending New Chat Row
+
+/// Synthetic sidebar row representing a "New Chat" that the user has
+/// started (via the compose button) but has not yet sent the first
+/// message for. Rendered above the grouped session list so the
+/// not-yet-persisted chat is immediately visible. Once the user sends
+/// the first turn, the real session row replaces this placeholder.
+struct ChatPendingSessionRowView: View {
+    let isActive: Bool
+    let onTap: () -> Void
+
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: onTap) {
+            HStack(spacing: 0) {
+                // Active indicator bar — matches ChatSessionRowView so
+                // the placeholder visually aligns with real session rows.
+                Rectangle()
+                    .fill(isActive ? NordTheme.accent(colorScheme) : Color.clear)
+                    .frame(width: 2.5)
+                    .clipShape(Capsule())
+                    .padding(.vertical, 6)
+
+                HStack(spacing: 6) {
+                    Image(systemName: "square.and.pencil")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(
+                            isActive
+                                ? NordTheme.accent(colorScheme)
+                                : NordTheme.secondaryText(colorScheme).opacity(0.7)
+                        )
+                    Text("New Chat")
+                        .font(.system(size: 13, weight: isActive ? .medium : .regular))
+                        .foregroundColor(
+                            isActive
+                                ? NordTheme.primaryText(colorScheme)
+                                : NordTheme.secondaryText(colorScheme)
+                        )
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.leading, 8)
+            }
+            .frame(height: 32)
+            .padding(.leading, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(
+                        isActive
+                            ? NordTheme.accent(colorScheme).opacity(colorScheme == .dark ? 0.10 : 0.07)
+                            : isHovered ? NordTheme.badgeFill(colorScheme)
+                            : Color.clear
+                    )
+            )
+            .padding(.horizontal, 6)
+        }
+        .buttonStyle(.plain)
+        .animation(.easeInOut(duration: 0.12), value: isHovered)
+        .onHover { isHovered = $0 }
+        .accessibilityLabel("New chat (unsaved)")
     }
 }
 
@@ -824,7 +1112,7 @@ struct ChatNewChatLandingView: View {
 /// row. Visible whenever the active session exposes a non-zero
 /// `contextBudget`. The arc represents the *used* portion of the
 /// budget; hover for the exact remaining / total figures.
-private struct ContextWindowIndicator: View {
+struct ContextWindowIndicator: View {
     let remaining: Int
     let budget: Int
     let colorScheme: ColorScheme
@@ -992,6 +1280,65 @@ private struct LandingInputComposer: View {
                     }
                     .buttonStyle(.plain)
                 }
+
+                // Project path / group dropdown
+                Menu {
+                    Button {
+                        model.selectedGroup = nil
+                    } label: {
+                        if model.selectedGroup == nil {
+                            Label("Select project", systemImage: "checkmark")
+                        } else {
+                            Text("Select project")
+                        }
+                    }
+
+                    let distinctGroups: [AgentGroupInfo] = {
+                        var seen = Set<String>()
+                        return model.availableGroups.filter { seen.insert($0.groupName).inserted }
+                    }()
+                    if !distinctGroups.isEmpty {
+                        Divider()
+                        ForEach(distinctGroups) { group in
+                            Button {
+                                model.selectedGroup = group
+                            } label: {
+                                if model.selectedGroup?.groupName == group.groupName {
+                                    Label(group.groupName, systemImage: "checkmark")
+                                } else {
+                                    Text(group.groupName)
+                                }
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "folder")
+                            .font(.system(size: 9, weight: .medium))
+                        Text(model.selectedGroup?.groupName ?? "Select project")
+                            .font(.system(size: 11, weight: .medium))
+                            .lineLimit(1)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.system(size: 8, weight: .medium))
+                    }
+                    .foregroundColor(
+                        model.selectedGroup != nil
+                            ? NordTheme.accentGreen(colorScheme)
+                            : NordTheme.secondaryText(colorScheme).opacity(0.55)
+                    )
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(
+                        Capsule()
+                            .fill(
+                                model.selectedGroup != nil
+                                    ? NordTheme.accentGreen(colorScheme).opacity(0.09)
+                                    : NordTheme.badgeFill(colorScheme)
+                            )
+                    )
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
 
                 Spacer()
 
@@ -2453,3 +2800,11 @@ struct ChatNSTextInput: NSViewRepresentable {
     }
 }
 
+
+// MARK: - String helpers
+
+private extension String {
+    /// Returns `nil` when the string is empty so callers can use the
+    /// nil-coalescing operator to fall through to a default value.
+    var nilIfEmpty: String? { isEmpty ? nil : self }
+}

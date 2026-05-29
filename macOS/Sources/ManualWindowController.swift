@@ -13,7 +13,7 @@ final class ManualWindowController: NSWindowController {
             backing: .buffered,
             defer: false
         )
-        window.title = "OmniKey – Manual"
+        window.title = "OmniKey AI · User Manual"
         window.center()
         window.isReleasedWhenClosed = false
         window.contentViewController = hostingController

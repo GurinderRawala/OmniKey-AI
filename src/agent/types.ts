@@ -19,6 +19,7 @@ export interface AgentMessage {
   is_image_rendering?: boolean;
   is_mcp_call?: boolean;
   platform?: string;
+  group_name?: string;
 }
 
 export type AgentSendFn = (msg: AgentMessage) => void;

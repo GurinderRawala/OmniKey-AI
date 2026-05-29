@@ -88,7 +88,7 @@ final class LicenseWindowController: NSWindowController {
             backing: .buffered,
             defer: false
         )
-        window.title = "OmniKey – Activation"
+        window.title = "OmniKey AI · License & Activation"
         window.center()
         window.isReleasedWhenClosed = false
         window.contentViewController = hostingController

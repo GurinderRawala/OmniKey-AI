@@ -70,7 +70,7 @@ final class ScheduledJobsWindowController: NSWindowController {
             backing: .buffered,
             defer: false
         )
-        window.title = "OmniKey – Scheduled Jobs"
+        window.title = "OmniKey AI · Scheduled Jobs"
         window.minSize = NSSize(width: 1080, height: 738)
         window.center()
         window.isReleasedWhenClosed = false

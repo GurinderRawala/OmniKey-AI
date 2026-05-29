@@ -12,7 +12,7 @@ final class AgentThinkingWindowController: NSWindowController {
             backing: .buffered,
             defer: false
         )
-        window.title = "OmniKey – OmniAgent Session"
+        window.title = "OmniKey AI · OmniAgent — Live Session"
         window.minSize = NSSize(width: 800, height: 620)
         window.center()
         window.isReleasedWhenClosed = false

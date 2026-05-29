@@ -40,7 +40,7 @@ final class MCPServersWindowController: NSWindowController {
             backing: .buffered,
             defer: false
         )
-        window.title = "OmniKey – MCP Servers"
+        window.title = "OmniKey AI · MCP Servers"
         window.minSize = NSSize(width: 1080, height: 738)
         window.center()
         window.isReleasedWhenClosed = false

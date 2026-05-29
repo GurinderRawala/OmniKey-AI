@@ -1,5 +1,6 @@
 import type http from 'http';
 import express, { Response } from 'express';
+import { Op } from 'sequelize';
 import WebSocket, { WebSocketServer } from 'ws';
 import cuid from 'cuid';
 import { config } from '../config';
@@ -24,10 +25,10 @@ import {
   createUserContent,
   sendFinalAnswer,
   pushToSessionHistory,
-  MAX_HISTORY_TOTAL,
   createUserContentForCronJob,
 } from './utils';
-import { aiClient, AITool, AICompletionResult, getDefaultModel } from '../ai-client';
+import { updateSessionGroup } from './sessionGrouping';
+import { aiClient, AITool, AICompletionResult, getDefaultModel, getContextWindowSize } from '../ai-client';
 import type { AgentMessage, AgentSendFn, SessionState } from './types';
 import { Logger } from 'winston';
 
@@ -199,6 +200,7 @@ async function runToolLoop(
 }
 
 const aiModel = getDefaultModel(config.aiProvider, 'smart');
+const contextWindowSize = getContextWindowSize(config.aiProvider);
 
 // ─── DB helpers ───────────────────────────────────────────────────────────────
 
@@ -416,6 +418,27 @@ async function runAgentTurnInternal(
     userContent = `COMMAND ERROR:\n${userContent}`;
   }
 
+  // If the client specified a group_name, look up the stored description
+  // and prepend it as a <project_context> block. The frontend never sends
+  // the description itself — the server is the single source of truth.
+  if (clientMessage.group_name && !isTerminalOutput && !isErrorFlag && !clientMessage.is_web_call) {
+    try {
+      const groupRow = await AgentSession.findOne({
+        where: {
+          subscriptionId: subscription.id,
+          groupName: clientMessage.group_name,
+          groupDescription: { [Op.not]: null },
+        },
+        attributes: ['groupName', 'groupDescription'],
+      });
+      if (groupRow?.groupDescription) {
+        userContent = `<project_context name="${groupRow.groupName}">\n${groupRow.groupDescription}\n</project_context>\n\n${userContent}`;
+      }
+    } catch (err) {
+      log.warn('Failed to fetch group description for context injection', { error: err });
+    }
+  }
+
   log.info('Agent turn received client message', {
     sessionId,
     isTerminalOutput,
@@ -472,6 +495,12 @@ async function runAgentTurnInternal(
           completionTokensUsed: usage.completion_tokens,
           totalTokensUsed: usage.total_tokens,
         },
+        { where: { id: sessionId } },
+      );
+      // Track the most recent prompt size so the UI can show accurate
+      // "tokens remaining" without the cumulative-sum skew of promptTokensUsed.
+      await AgentSession.update(
+        { lastPromptTokens: usage.prompt_tokens },
         { where: { id: sessionId } },
       );
     } catch (err) {
@@ -668,6 +697,7 @@ async function runAgentTurnInternal(
         sender: 'agent',
         content: hasFinalAnswerTag ? content : `<final_answer>\n${content}\n</final_answer>`,
       });
+      void updateSessionGroup(sessionId, subscription.id);
     } else if (content) {
       // Fallback: the LLM returned content without any recognized tag and it
       // is not the final turn (e.g. plain-text conclusion after terminal
@@ -686,6 +716,7 @@ async function runAgentTurnInternal(
         sender: 'agent',
         content: `<final_answer>\n${content}\n</final_answer>`,
       });
+      void updateSessionGroup(sessionId, subscription.id);
     } else {
       log.warn('Agent returned empty content with no recognized tags; sending error', {
         sessionId,
@@ -850,6 +881,7 @@ function cleanUserTranscriptText(text: string): string {
   return text
     .replace(/<user_input>([\s\S]*?)<\/user_input>/gi, '$1')
     .replace(/<stored_instructions>[\s\S]*?<\/stored_instructions>/gi, '')
+    .replace(/<project_context[^>]*>[\s\S]*?<\/project_context>/gi, '')
     .replace(/@omniagent/gi, '')
     .trim();
 }
@@ -1034,6 +1066,9 @@ export function createAgentRouter(): express.Router {
           'totalTokensUsed',
           'promptTokensUsed',
           'completionTokensUsed',
+          'lastPromptTokens',
+          'groupName',
+          'groupDescription',
           'lastActiveAt',
           'createdAt',
           'updatedAt',
@@ -1049,8 +1084,10 @@ export function createAgentRouter(): express.Router {
           totalTokensUsed: Number(s.totalTokensUsed),
           promptTokensUsed: Number(s.promptTokensUsed),
           completionTokensUsed: Number(s.completionTokensUsed),
-          remainingContextTokens: Math.max(0, MAX_HISTORY_TOTAL - Number(s.totalTokensUsed)),
-          contextBudget: MAX_HISTORY_TOTAL,
+          remainingContextTokens: Math.max(0, contextWindowSize - Number(s.lastPromptTokens)),
+          contextBudget: contextWindowSize,
+          groupName: s.groupName ?? null,
+          groupDescription: s.groupDescription ?? null,
           lastActiveAt: s.lastActiveAt,
           createdAt: s.createdAt,
           updatedAt: s.updatedAt,
@@ -1112,6 +1149,7 @@ export function createAgentRouter(): express.Router {
           'totalTokensUsed',
           'promptTokensUsed',
           'completionTokensUsed',
+          'lastPromptTokens',
           'lastActiveAt',
         ],
       });
@@ -1128,8 +1166,8 @@ export function createAgentRouter(): express.Router {
         totalTokensUsed: Number(session.totalTokensUsed),
         promptTokensUsed: Number(session.promptTokensUsed),
         completionTokensUsed: Number(session.completionTokensUsed),
-        remainingContextTokens: Math.max(0, MAX_HISTORY_TOTAL - Number(session.totalTokensUsed)),
-        contextBudget: MAX_HISTORY_TOTAL,
+        remainingContextTokens: Math.max(0, contextWindowSize - Number(session.lastPromptTokens)),
+        contextBudget: contextWindowSize,
         lastActiveAt: session.lastActiveAt,
       });
     } catch (err) {
@@ -1169,6 +1207,38 @@ export function createAgentRouter(): express.Router {
       res.json({ messages });
     } catch (err) {
       log.error('Failed to fetch agent session messages', { sessionId, error: err });
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  // GET /api/agent/groups
+  // Returns distinct group names and descriptions for the authenticated
+  // subscription. The client uses this to populate the project-path dropdown
+  // and to filter the sidebar session list by project.
+  router.get('/groups', async (_req, res: Response<any, AuthLocals>) => {
+    const { subscription, logger: log } = res.locals;
+
+    try {
+      const rows = await AgentSession.findAll({
+        where: {
+          subscriptionId: subscription.id,
+          groupName: { [Op.not]: null },
+        },
+        attributes: ['groupName', 'groupDescription'],
+        group: ['group_name'],
+        order: [['groupName', 'ASC']],
+      });
+
+      const groups = rows
+        .filter((r) => r.groupName)
+        .map((r) => ({
+          groupName: r.groupName!,
+          groupDescription: r.groupDescription ?? null,
+        }));
+
+      res.json({ groups });
+    } catch (err) {
+      log.error('Failed to fetch session groups', { error: err });
       res.status(500).json({ error: 'Internal server error' });
     }
   });

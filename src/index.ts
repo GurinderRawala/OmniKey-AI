@@ -11,6 +11,7 @@ import { taskInstructionRouter } from './taskInstructionRoutes';
 import { scheduledJobRouter } from './scheduledJobRoutes';
 import { mcpServerRouter } from './mcpServerRoutes';
 import { startScheduledJobExecutor } from './scheduledJobExecutor';
+import { startGroupingCronJob } from './agent/sessionGrouping';
 import { config } from './config';
 import { attachAgentWebSocketServer, createAgentRouter } from './agent/agentServer';
 import { AppDownload } from './models/appDownload';
@@ -92,8 +93,8 @@ app.get('/macos/appcast', (req, res) => {
 
   // These should match the values embedded into the macOS app
   // Info.plist in macOS/build_release_dmg.sh.
-  const bundleVersion = '35';
-  const shortVersion = '1.0.34';
+  const bundleVersion = '36';
+  const shortVersion = '1.0.35';
 
   const xml = `<?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0"
@@ -230,6 +231,7 @@ async function start() {
 
     if (config.isSelfHosted) {
       startScheduledJobExecutor();
+      startGroupingCronJob();
     }
   } catch (err) {
     logger.error('Failed to start server due to DB error.', { error: err });

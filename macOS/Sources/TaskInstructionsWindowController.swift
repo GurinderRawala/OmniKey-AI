@@ -74,7 +74,7 @@ final class TaskInstructionsWindowController: NSWindowController {
             backing: .buffered,
             defer: false
         )
-        window.title = "OmniKey – Task Instructions"
+        window.title = "OmniKey AI · Task Instructions"
         window.center()
         window.isReleasedWhenClosed = false
         window.contentViewController = hostingController
