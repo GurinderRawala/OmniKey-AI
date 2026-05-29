@@ -73,7 +73,11 @@
              Auto row above the button, which made it sit ~2-3 px high
              relative to the icon/label baseline. -->
         <DataTemplate x:Key="TimelineRowTemplate" DataType="{x:Type vm:ChatBlockRow}">
-            <Grid Margin="0,0,0,0">
+            <!-- Bottom margin gives each thinking step breathing room
+                 (matches macOS ThinkingSectionView VStack spacing: 10).
+                 Previously rows abutted with 0 gap which read as a
+                 cramped wall. -->
+            <Grid Margin="0,0,0,10">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="22" />
                     <ColumnDefinition Width="*" />
@@ -258,28 +262,145 @@
         <!-- Assistant-message turn: thinking header + timeline + answer -->
         <DataTemplate x:Key="AssistantMessageTemplate" DataType="{x:Type vm:ChatMessageRow}">
             <StackPanel Margin="0,8,0,18">
-                <!-- Typing dots while we wait for first block -->
+                <!-- Animated typing indicator — mirrors macOS
+                     TypingDotsView (sparkle pulse + three staggered
+                     dots). Storyboards live on EventTriggers attached
+                     to the panel itself so no code-behind is needed.
+                     The panel only mounts while IsAwaitingFirstBlock
+                     is true; when the first block arrives the parent
+                     collapses this region and the storyboards stop
+                     with it. -->
                 <StackPanel
-                    Margin="0,6,0,6"
+                    Margin="0,6,0,10"
                     Orientation="Horizontal"
                     Visibility="{Binding IsAwaitingFirstBlock, Converter={StaticResource BooleanToVisibilityConverter}}">
+                    <StackPanel.Resources>
+                        <Storyboard x:Key="TypingPulse" RepeatBehavior="Forever" AutoReverse="True">
+                            <!-- Sparkle icon: subtle 0.94 → 1.08 scale +
+                                 0.75 → 1.0 opacity, 0.9 s round-trip. -->
+                            <DoubleAnimation
+                                Storyboard.TargetName="TypingSparkleScale"
+                                Storyboard.TargetProperty="ScaleX"
+                                From="0.94" To="1.08" Duration="0:0:0.9" />
+                            <DoubleAnimation
+                                Storyboard.TargetName="TypingSparkleScale"
+                                Storyboard.TargetProperty="ScaleY"
+                                From="0.94" To="1.08" Duration="0:0:0.9" />
+                            <DoubleAnimation
+                                Storyboard.TargetName="TypingSparkle"
+                                Storyboard.TargetProperty="Opacity"
+                                From="0.75" To="1.0" Duration="0:0:0.9" />
+
+                            <!-- Three dots: 0.5 s scale+opacity pulse
+                                 with 0.18 s stagger between them. -->
+                            <DoubleAnimation
+                                Storyboard.TargetName="TypingDot1"
+                                Storyboard.TargetProperty="Opacity"
+                                From="0.30" To="1.0" Duration="0:0:0.5"
+                                BeginTime="0:0:0.00" />
+                            <DoubleAnimation
+                                Storyboard.TargetName="TypingDot1Scale"
+                                Storyboard.TargetProperty="ScaleX"
+                                From="0.55" To="1.0" Duration="0:0:0.5"
+                                BeginTime="0:0:0.00" />
+                            <DoubleAnimation
+                                Storyboard.TargetName="TypingDot1Scale"
+                                Storyboard.TargetProperty="ScaleY"
+                                From="0.55" To="1.0" Duration="0:0:0.5"
+                                BeginTime="0:0:0.00" />
+
+                            <DoubleAnimation
+                                Storyboard.TargetName="TypingDot2"
+                                Storyboard.TargetProperty="Opacity"
+                                From="0.30" To="1.0" Duration="0:0:0.5"
+                                BeginTime="0:0:0.18" />
+                            <DoubleAnimation
+                                Storyboard.TargetName="TypingDot2Scale"
+                                Storyboard.TargetProperty="ScaleX"
+                                From="0.55" To="1.0" Duration="0:0:0.5"
+                                BeginTime="0:0:0.18" />
+                            <DoubleAnimation
+                                Storyboard.TargetName="TypingDot2Scale"
+                                Storyboard.TargetProperty="ScaleY"
+                                From="0.55" To="1.0" Duration="0:0:0.5"
+                                BeginTime="0:0:0.18" />
+
+                            <DoubleAnimation
+                                Storyboard.TargetName="TypingDot3"
+                                Storyboard.TargetProperty="Opacity"
+                                From="0.30" To="1.0" Duration="0:0:0.5"
+                                BeginTime="0:0:0.36" />
+                            <DoubleAnimation
+                                Storyboard.TargetName="TypingDot3Scale"
+                                Storyboard.TargetProperty="ScaleX"
+                                From="0.55" To="1.0" Duration="0:0:0.5"
+                                BeginTime="0:0:0.36" />
+                            <DoubleAnimation
+                                Storyboard.TargetName="TypingDot3Scale"
+                                Storyboard.TargetProperty="ScaleY"
+                                From="0.55" To="1.0" Duration="0:0:0.5"
+                                BeginTime="0:0:0.36" />
+                        </Storyboard>
+                    </StackPanel.Resources>
+                    <StackPanel.Triggers>
+                        <EventTrigger RoutedEvent="FrameworkElement.Loaded">
+                            <BeginStoryboard Storyboard="{StaticResource TypingPulse}" />
+                        </EventTrigger>
+                    </StackPanel.Triggers>
+
+                    <!-- Pulsing sparkle (matches the AccentPurple used
+                         by the thinking section header). -->
+                    <ui:SymbolIcon
+                        x:Name="TypingSparkle"
+                        Margin="0,0,8,0"
+                        VerticalAlignment="Center"
+                        FontSize="12"
+                        Foreground="{StaticResource Nord.AccentPurpleBrush}"
+                        RenderTransformOrigin="0.5,0.5"
+                        Symbol="Sparkle24">
+                        <ui:SymbolIcon.RenderTransform>
+                            <ScaleTransform x:Name="TypingSparkleScale" ScaleX="0.94" ScaleY="0.94" />
+                        </ui:SymbolIcon.RenderTransform>
+                    </ui:SymbolIcon>
+
                     <Ellipse
-                        Width="6"
-                        Height="6"
-                        Margin="0,0,4,0"
+                        x:Name="TypingDot1"
+                        Width="5"
+                        Height="5"
+                        Margin="0,0,5,0"
+                        VerticalAlignment="Center"
                         Fill="{StaticResource Nord.SecondaryTextBrush}"
-                        Opacity="0.55" />
+                        Opacity="0.55"
+                        RenderTransformOrigin="0.5,0.5">
+                        <Ellipse.RenderTransform>
+                            <ScaleTransform x:Name="TypingDot1Scale" ScaleX="0.55" ScaleY="0.55" />
+                        </Ellipse.RenderTransform>
+                    </Ellipse>
                     <Ellipse
-                        Width="6"
-                        Height="6"
-                        Margin="0,0,4,0"
+                        x:Name="TypingDot2"
+                        Width="5"
+                        Height="5"
+                        Margin="0,0,5,0"
+                        VerticalAlignment="Center"
                         Fill="{StaticResource Nord.SecondaryTextBrush}"
-                        Opacity="0.40" />
+                        Opacity="0.55"
+                        RenderTransformOrigin="0.5,0.5">
+                        <Ellipse.RenderTransform>
+                            <ScaleTransform x:Name="TypingDot2Scale" ScaleX="0.55" ScaleY="0.55" />
+                        </Ellipse.RenderTransform>
+                    </Ellipse>
                     <Ellipse
-                        Width="6"
-                        Height="6"
+                        x:Name="TypingDot3"
+                        Width="5"
+                        Height="5"
+                        VerticalAlignment="Center"
                         Fill="{StaticResource Nord.SecondaryTextBrush}"
-                        Opacity="0.25" />
+                        Opacity="0.55"
+                        RenderTransformOrigin="0.5,0.5">
+                        <Ellipse.RenderTransform>
+                            <ScaleTransform x:Name="TypingDot3Scale" ScaleX="0.55" ScaleY="0.55" />
+                        </Ellipse.RenderTransform>
+                    </Ellipse>
                 </StackPanel>
 
                 <!-- Collapsible "Thinking" pill -->
