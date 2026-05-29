@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Linq;
 using System.Threading;
 using System.Windows.Media;
@@ -310,6 +311,25 @@ namespace OmniKey.Windows.ViewModels
             var visible = _model.FilteredSessions;
             ReplaceCollection(Sessions, visible);
 
+            // One-shot expand request from the model: when a final answer
+            // lands and the just-refreshed sidebar now carries an updated
+            // group_name for the active session, expand that group so the
+            // newly-classified chat is visible without the user clicking
+            // folders. Must run before RebuildSessionRows so the resolved
+            // group is marked seen (preventing the default-collapse path
+            // below from re-collapsing it).
+            if (_model.PendingExpandSessionId is { Length: > 0 } expandId)
+            {
+                var target = _model.Sessions.Find(s => s.Id == expandId);
+                if (target != null)
+                {
+                    string key = target.GroupName ?? "";
+                    _collapsedGroups[key] = false;
+                    _seenGroups.Add(key);
+                }
+                _model.ClearPendingExpand();
+            }
+
             // Sectioned session rows: when more than one group is visible
             // (i.e. the user hasn't picked a specific group filter and the
             // backend reports multiple) inject uppercase eyebrow headers
@@ -332,7 +352,9 @@ namespace OmniKey.Windows.ViewModels
             {
                 bool streaming = _model.IsRunning && i == lastIndex
                     && _model.Messages[i].Role == ChatMessageRole.Assistant;
-                rows.Add(ChatMessageRow.Create(_model.Messages[i], streaming));
+                var row = ChatMessageRow.Create(_model.Messages[i], streaming);
+                AttachExpansionTracking(row);
+                rows.Add(row);
             }
             ReplaceCollection(Messages, rows);
 
@@ -390,6 +412,46 @@ namespace OmniKey.Windows.ViewModels
         {
             target.Clear();
             foreach (var item in source) target.Add(item);
+        }
+
+        /// <summary>Rehydrate previously-toggled expansion state onto the
+        /// freshly-built row and wire up listeners so future user toggles
+        /// are persisted. Without this the thinking panel snaps closed
+        /// every time a new block streams in.</summary>
+        private void AttachExpansionTracking(ChatMessageRow row)
+        {
+            if (_thinkingExpandedByMessage.TryGetValue(row.Source.Id, out var expanded))
+                row.IsThinkingExpanded = expanded;
+
+            row.PropertyChanged += OnRowPropertyChanged;
+
+            foreach (var block in row.ThinkingBlocks)
+                AttachBlockTracking(block);
+
+            if (row.FinalAnswer != null)
+                AttachBlockTracking(row.FinalAnswer);
+        }
+
+        private void AttachBlockTracking(ChatBlockRow block)
+        {
+            if (_blockExpanded.TryGetValue(block.Source.Id, out var expanded))
+                block.IsExpanded = expanded;
+
+            block.PropertyChanged += OnBlockPropertyChanged;
+        }
+
+        private void OnRowPropertyChanged(object? sender, PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName != nameof(ChatMessageRow.IsThinkingExpanded)) return;
+            if (sender is not ChatMessageRow row) return;
+            _thinkingExpandedByMessage[row.Source.Id] = row.IsThinkingExpanded;
+        }
+
+        private void OnBlockPropertyChanged(object? sender, PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName != nameof(ChatBlockRow.IsExpanded)) return;
+            if (sender is not ChatBlockRow block) return;
+            _blockExpanded[block.Source.Id] = block.IsExpanded;
         }
 
 
@@ -456,6 +518,24 @@ namespace OmniKey.Windows.ViewModels
         /// "Ungrouped") so it matches the macOS grouping behaviour.</summary>
         private readonly Dictionary<string, bool> _collapsedGroups = new(StringComparer.Ordinal);
 
+        /// <summary>Tracks which group keys we've already observed so newly-
+        /// discovered groups can default to collapsed without re-collapsing
+        /// groups the user has explicitly expanded. Mirrors macOS
+        /// <c>seenGroups</c>.</summary>
+        private readonly HashSet<string> _seenGroups = new(StringComparer.Ordinal);
+
+        /// <summary>Per-message persisted "thinking expanded" flag. The row
+        /// objects are rebuilt every time the model publishes (every block
+        /// arrival, every input edit) — without this map the user's
+        /// expanded thinking panel would snap shut on the next streamed
+        /// step. Key is <see cref="ChatMessage.Id"/>.</summary>
+        private readonly Dictionary<Guid, bool> _thinkingExpandedByMessage = new();
+
+        /// <summary>Per-block persisted "expanded" flag. Same rationale as
+        /// <see cref="_thinkingExpandedByMessage"/> but for individual
+        /// reasoning / command / output rows inside the thinking panel.</summary>
+        private readonly Dictionary<Guid, bool> _blockExpanded = new();
+
         private void RebuildSessionRows(IList<AgentSessionInfo> visible)
         {
             SessionRows.Clear();
@@ -489,6 +569,12 @@ namespace OmniKey.Windows.ViewModels
 
                 if (injectHeaders)
                 {
+                    // Newly discovered groups start collapsed (mirrors
+                    // macOS). Groups the user has already toggled keep
+                    // their stored state.
+                    if (_seenGroups.Add(key) && !_collapsedGroups.ContainsKey(key))
+                        _collapsedGroups[key] = true;
+
                     bool collapsed = _collapsedGroups.TryGetValue(key, out var c) && c;
                     var header = new SessionGroupHeaderRow
                     {

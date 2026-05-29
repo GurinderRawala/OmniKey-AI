@@ -43,6 +43,19 @@ namespace OmniKey.Windows
     {
         public string GroupName { get; set; } = "";
         public string? GroupDescription { get; set; }
+
+        /// <summary>
+        /// Display label shown by the composer's project ComboBox.
+        /// Returns the friendly "Select project" sentinel label when
+        /// <see cref="GroupName"/> is empty (i.e. the row is the
+        /// "no project" sentinel) so the closed ComboBox face shows
+        /// that copy instead of an empty cell. Tagged
+        /// <see cref="System.Text.Json.Serialization.JsonIgnoreAttribute"/>
+        /// so it never round-trips back to the server.
+        /// </summary>
+        [System.Text.Json.Serialization.JsonIgnore]
+        public string DisplayName =>
+            string.IsNullOrEmpty(GroupName) ? "Select project" : GroupName;
     }
 
     internal sealed class AgentSessionSelection

@@ -375,24 +375,21 @@
                 <!-- Final Answer block (rendered as markdown, plain card, with copy button) -->
                 <Border
                     Margin="0,10,0,0"
-                    Padding="14,8,14,8"
+                    Padding="16,14,16,8"
                     Background="{StaticResource Nord.PanelBackgroundBrush}"
                     BorderBrush="{StaticResource Nord.BorderBrush}"
                     BorderThickness="1"
-                    CornerRadius="10"
+                    CornerRadius="12"
                     Visibility="{Binding HasFinalAnswer, Converter={StaticResource BooleanToVisibilityConverter}}">
-                    <Grid>
-                        <FlowDocumentScrollViewer
-                            Background="Transparent"
-                            BorderThickness="0"
-                            IsToolBarVisible="False"
-                            PreviewMouseWheel="OnInnerScrollableMouseWheel"
-                            VerticalScrollBarVisibility="Disabled"
-                            md:Markdown.Source="{Binding FinalAnswer.Text}" />
+                    <DockPanel>
+                        <!-- Copy lives at the bottom-right of the surface
+                             (matching macOS) so it never overlaps the
+                             markdown content — long headings were getting
+                             clipped under the previous floating button. -->
                         <Button
-                            Margin="0,6,6,0"
+                            Margin="0,8,0,0"
                             HorizontalAlignment="Right"
-                            VerticalAlignment="Top"
+                            DockPanel.Dock="Bottom"
                             Command="{Binding CopyVisibleTextCommand}"
                             Style="{StaticResource Chat.CopyButtonStyle}">
                             <Grid>
@@ -408,7 +405,14 @@
                                     Visibility="{Binding JustCopied, Converter={StaticResource BooleanToVisibilityConverter}}" />
                             </Grid>
                         </Button>
-                    </Grid>
+                        <FlowDocumentScrollViewer
+                            Background="Transparent"
+                            BorderThickness="0"
+                            IsToolBarVisible="False"
+                            PreviewMouseWheel="OnInnerScrollableMouseWheel"
+                            VerticalScrollBarVisibility="Disabled"
+                            md:Markdown.Source="{Binding FinalAnswer.Text}" />
+                    </DockPanel>
                 </Border>
             </StackPanel>
         </DataTemplate>
@@ -425,7 +429,7 @@
         </DataTemplate>
 
         <!-- Group section header — clickable to collapse/expand the
-             sessions below. Folder icon + uppercase eyebrow + count of
+             sessions below. Folder icon + group name + count of
              grouped sessions + chevron. Hover surfaces a subtle bg.
              Mirrors macOS SessionPickerView headers (which are also
              collapsible). -->
@@ -478,7 +482,7 @@
                         FontWeight="SemiBold"
                         Foreground="{StaticResource Nord.SecondaryTextBrush}"
                         Opacity="0.85"
-                        Text="{Binding GroupName, Converter={StaticResource ToUpper}}"
+                        Text="{Binding GroupName}"
                         TextTrimming="CharacterEllipsis" />
                     <Border Grid.Column="2" />
                     <TextBlock
@@ -1054,21 +1058,6 @@
                             VerticalAlignment="Center"
                             HorizontalAlignment="Left"
                             CornerRadius="999">
-                            <Border.Style>
-                                <Style TargetType="Border">
-                                    <!-- Visible by default; hide when the
-                                         only row in the picker is the
-                                         "Select project" sentinel (i.e.
-                                         the server has not classified any
-                                         sessions into groups yet). -->
-                                    <Setter Property="Visibility" Value="Visible" />
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding AvailableProjectGroups.Count}" Value="1">
-                                            <Setter Property="Visibility" Value="Collapsed" />
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </Border.Style>
                             <StackPanel VerticalAlignment="Center" Orientation="Horizontal">
                                 <ui:SymbolIcon
                                     Margin="4,0,6,0"
@@ -1082,34 +1071,13 @@
                                     VerticalAlignment="Center"
                                     Background="Transparent"
                                     BorderThickness="0"
+                                    DisplayMemberPath="DisplayName"
                                     FontFamily="{StaticResource OK.FontFamily}"
                                     FontSize="12"
                                     ItemsSource="{Binding AvailableProjectGroups}"
                                     SelectedValue="{Binding SelectedProjectGroupName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                     SelectedValuePath="GroupName"
                                     ToolTip="Project this chat belongs to (mirrors macOS)">
-                                    <ComboBox.ItemTemplate>
-                                        <DataTemplate>
-                                            <TextBlock
-                                                FontFamily="{StaticResource OK.FontFamily}"
-                                                FontSize="12"
-                                                ToolTip="{Binding GroupDescription}">
-                                                <TextBlock.Style>
-                                                    <Style TargetType="TextBlock">
-                                                        <Setter Property="Text" Value="{Binding GroupName}" />
-                                                        <Style.Triggers>
-                                                            <!-- Empty GroupName == sentinel → show
-                                                                 friendly "Select project" label. -->
-                                                            <DataTrigger Binding="{Binding GroupName}" Value="">
-                                                                <Setter Property="Text" Value="Select project" />
-                                                                <Setter Property="Foreground" Value="{StaticResource Nord.SecondaryTextBrush}" />
-                                                            </DataTrigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </TextBlock.Style>
-                                            </TextBlock>
-                                        </DataTemplate>
-                                    </ComboBox.ItemTemplate>
                                     <ComboBox.Resources>
                                         <!-- Match the task-instruction chip
                                              chrome: borderless inside the

@@ -30,6 +30,14 @@ namespace OmniKey.Windows
 
     internal sealed class ChatBlock
     {
+        /// <summary>Per-block display cap for non-final-answer text. Long
+        /// terminal dumps were stalling the WPF render loop and causing a
+        /// visible type lag in the composer; we trim at the model boundary
+        /// so every consumer (live stream, history hydration) is covered
+        /// while the full text is still sent back to the agent in
+        /// <see cref="ChatSessionRunner"/>.</summary>
+        public const int MaxDisplayChars = 2000;
+
         public Guid Id { get; } = Guid.NewGuid();
         public ChatBlockKind Kind { get; }
         public string Text { get; set; }
@@ -37,7 +45,13 @@ namespace OmniKey.Windows
         public ChatBlock(ChatBlockKind kind, string text)
         {
             Kind = kind;
-            Text = text;
+            Text = kind == ChatBlockKind.FinalAnswer ? text : TruncateForDisplay(text);
+        }
+
+        private static string TruncateForDisplay(string text)
+        {
+            if (string.IsNullOrEmpty(text) || text.Length <= MaxDisplayChars) return text;
+            return text.Substring(0, MaxDisplayChars) + "\n…[truncated]";
         }
     }
 
@@ -155,6 +169,22 @@ namespace OmniKey.Windows
         public List<ChatMessage> Messages { get; private set; } = new();
         public bool IsLoadingSessionHistory { get; private set; }
         public bool IsRunning { get; private set; }
+
+        /// <summary>One-shot signal consumed by the sidebar: when set, the
+        /// sidebar expands whichever group currently contains this session
+        /// id so the user can see the freshly-classified chat right after
+        /// the backend assigns its <c>group_name</c> (post final answer).
+        /// Cleared by the view-model once it has acted on it. Mirrors
+        /// macOS <c>pendingExpandSessionId</c>.</summary>
+        public string? PendingExpandSessionId { get; private set; }
+
+        public void ClearPendingExpand()
+        {
+            if (PendingExpandSessionId == null) return;
+            PendingExpandSessionId = null;
+            // No NotifyStateChanged — the caller is reacting to the very
+            // state-change event that surfaced the signal.
+        }
 
         public string? LastErrorMessage
         {
@@ -347,7 +377,18 @@ namespace OmniKey.Windows
                     if (ReferenceEquals(_states.GetValueOrDefault(activeStateKey), sessionSt))
                         IsRunning = false;
                     NotifyStateChanged();
-                    RefreshSessions();
+                    // After the backend has persisted the turn (and possibly
+                    // assigned / updated this session's group_name) refresh
+                    // the sidebar list, then ask the view-model to expand
+                    // whichever group the active session now lives in so
+                    // the user sees the newly-classified chat without
+                    // manually opening folders. Mirrors macOS.
+                    string completedSessionId = sessionId;
+                    RefreshSessions(() =>
+                    {
+                        PendingExpandSessionId = completedSessionId;
+                        NotifyStateChanged();
+                    });
                 }),
                 error => RunOnUi(() =>
                 {
