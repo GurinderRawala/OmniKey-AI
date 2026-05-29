@@ -222,9 +222,13 @@
             </Grid>
         </DataTemplate>
 
-        <!-- User-message bubble: right-aligned, muted gray fill, soft corners -->
+        <!-- User-message bubble: right-aligned, muted gray fill,
+             soft corners. Outer Grid stretches to fill the row width
+             so the inner StackPanel actually reaches the right edge
+             of the transcript column on every viewport size. -->
         <DataTemplate x:Key="UserMessageTemplate" DataType="{x:Type vm:ChatMessageRow}">
-            <StackPanel HorizontalAlignment="Right" Margin="0,14,0,14">
+            <Grid HorizontalAlignment="Stretch" Margin="0,14,0,14">
+                <StackPanel HorizontalAlignment="Right">
                 <Border
                     MaxWidth="600"
                     Padding="16,12"
@@ -256,12 +260,18 @@
                             Visibility="{Binding JustCopied, Converter={StaticResource BooleanToVisibilityConverter}}" />
                     </Grid>
                 </Button>
-            </StackPanel>
+                </StackPanel>
+            </Grid>
         </DataTemplate>
 
-        <!-- Assistant-message turn: thinking header + timeline + answer -->
+        <!-- Assistant-message turn: thinking header + timeline + answer.
+             Stretch the outer StackPanel so the Final Answer card and
+             timeline span the full column width (instead of shrinking
+             to their content) — without this, on narrow screens the
+             assistant content drifts toward centre because the parent
+             ContentControl wraps it tight. -->
         <DataTemplate x:Key="AssistantMessageTemplate" DataType="{x:Type vm:ChatMessageRow}">
-            <StackPanel Margin="0,8,0,18">
+            <StackPanel HorizontalAlignment="Stretch" Margin="0,8,0,18">
                 <!-- Animated typing indicator — mirrors macOS
                      TypingDotsView (sparkle pulse + three staggered
                      dots). Storyboards live on EventTriggers attached
@@ -951,7 +961,15 @@
                      is wider than the available space so the column
                      fills the pane; on large monitors the conversation
                      stays a comfortable reading width in the centre. -->
-                <Grid HorizontalAlignment="Center" MaxWidth="820">
+                <!-- HorizontalAlignment=Stretch is critical here: with
+                     Center, WPF sizes the Grid to its content's desired
+                     width, which collapses the conversation column on
+                     narrow windows (user messages drift to centre, etc.).
+                     Stretch + MaxWidth makes the Grid fill the pane up
+                     to 820 DIP and then cap, so the user bubble sticks
+                     to the right edge and the assistant turn sticks
+                     to the left edge on every viewport size. -->
+                <Grid HorizontalAlignment="Stretch" MaxWidth="820">
                     <!-- Empty state (matches macOS copy) -->
                     <StackPanel
                         MaxWidth="320"
@@ -982,10 +1000,26 @@
                             TextWrapping="Wrap" />
                     </StackPanel>
 
-                    <ItemsControl Margin="0,0,0,12" ItemsSource="{Binding Messages}">
+                    <ItemsControl
+                        Margin="0,0,0,12"
+                        HorizontalAlignment="Stretch"
+                        HorizontalContentAlignment="Stretch"
+                        ItemsSource="{Binding Messages}">
+                        <ItemsControl.ItemContainerStyle>
+                            <!-- Force every row to fill the column width
+                                 so HorizontalAlignment inside templates
+                                 (Right for user, Left for assistant)
+                                 actually reaches the column edges. -->
+                            <Style TargetType="ContentPresenter">
+                                <Setter Property="HorizontalAlignment" Value="Stretch" />
+                            </Style>
+                        </ItemsControl.ItemContainerStyle>
                         <ItemsControl.ItemTemplate>
                             <DataTemplate DataType="{x:Type vm:ChatMessageRow}">
-                                <ContentControl Content="{Binding}">
+                                <ContentControl
+                                    HorizontalAlignment="Stretch"
+                                    HorizontalContentAlignment="Stretch"
+                                    Content="{Binding}">
                                     <ContentControl.Style>
                                         <Style TargetType="ContentControl">
                                             <Setter Property="ContentTemplate" Value="{StaticResource SystemMessageTemplate}" />
