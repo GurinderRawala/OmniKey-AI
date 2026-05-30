@@ -1266,6 +1266,19 @@ footer a:hover {
   .nav-download {
     display: none;
   }
+  .nav-github {
+    display: none;
+  }
+  .nav-actions {
+    display: none;
+  }
+  .nav-inner {
+    padding: 0 16px;
+    gap: 12px;
+  }
+  .nav-hamburger {
+    margin-left: auto;
+  }
 
   .how-steps {
     grid-template-columns: 1fr;
@@ -1955,6 +1968,42 @@ footer a:hover {
   box-shadow: 0 6px 22px rgba(91, 33, 182, 0.38);
 }
 
+.mobile-menu-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.mobile-menu-github {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 11px 16px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 0.9rem;
+  font-weight: 600;
+  text-decoration: none;
+  transition:
+    background 0.15s,
+    border-color 0.15s,
+    transform 0.18s cubic-bezier(0.34, 1.4, 0.64, 1);
+}
+
+.mobile-menu-github svg {
+  color: var(--amber);
+  flex-shrink: 0;
+}
+
+.mobile-menu-github:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: var(--border-hover);
+  transform: translateY(-1px);
+}
+
 body.mobile-menu-open {
   overflow: hidden;
 }
@@ -1964,8 +2013,8 @@ body.mobile-menu-open {
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    margin-left: auto;
   }
-  /* Hide Star-on-GitHub on mobile to keep the bar uncluttered (kept in mobile menu? we leave it on top) */
 }
 
 @media (min-width: 861px) {
