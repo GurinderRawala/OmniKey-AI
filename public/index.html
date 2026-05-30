@@ -75,6 +75,9 @@
           <span>OmniKey AI</span>
         </a>
         <div class="nav-links">
+          <a href="#omniagent" class="nav-link-new">
+            OmniAgent
+          </a>
           <a href="#how-it-works">How it works</a>
           <a href="#features">Features</a>
           <a href="#mcp-servers">MCP Servers</a>
@@ -96,6 +99,32 @@
           </a>
           <a href="#download" class="nav-download">Download</a>
         </div>
+        <button
+          type="button"
+          class="nav-hamburger"
+          id="nav-hamburger"
+          aria-label="Open menu"
+          aria-expanded="false"
+          aria-controls="mobile-menu"
+        >
+          <span class="nav-hamburger-bar"></span>
+          <span class="nav-hamburger-bar"></span>
+          <span class="nav-hamburger-bar"></span>
+        </button>
+      </div>
+      <div class="mobile-menu" id="mobile-menu" hidden>
+        <nav class="mobile-menu-links" aria-label="Mobile">
+          <a href="#omniagent" class="mobile-menu-link mobile-menu-link-new">
+            OmniAgent
+          </a>
+          <a href="#how-it-works" class="mobile-menu-link">How it works</a>
+          <a href="#features" class="mobile-menu-link">Features</a>
+          <a href="#mcp-servers" class="mobile-menu-link">MCP Servers</a>
+          <a href="#getting-started" class="mobile-menu-link">Get started</a>
+        </nav>
+        <div class="mobile-menu-actions">
+          <a href="#download" class="mobile-menu-download">Download for macOS / Windows</a>
+        </div>
       </div>
     </nav>
 
@@ -108,8 +137,7 @@
       <div class="hero-content">
         <div class="hero-badge">
           <span class="hero-badge-dot"></span>
-          Free &amp; Open Source &nbsp;·&nbsp; macOS + Windows &nbsp;·&nbsp;
-          <strong style="color: var(--amber)">Authenticated Browser Reading</strong>
+          Free &amp; Open Source &nbsp;·&nbsp; macOS + Windows
         </div>
         <h1 class="hero-title">
           <span class="gradient-text">AI-powered</span> text<br />enhancement, anywhere.
@@ -210,6 +238,119 @@
     </div>
 
     <main>
+      <!-- ── OmniAgent (new) ── -->
+      <section class="how-section" id="omniagent">
+        <div class="section-header">
+          <div class="section-label">OmniAgent</div>
+          <h2>One prompt away from any specialist</h2>
+          <p class="section-desc">
+            OmniAgent is a generalist with terminal access — pair it with the right MCP servers
+            and it transforms into a coder, researcher, ops engineer, or data analyst on demand.
+          </p>
+        </div>
+        <div class="omniagent-grid">
+
+          <!-- Left card: chat page -->
+          <div class="omniagent-card scroll-reveal">
+            <div class="omniagent-card-header">
+              <div class="omniagent-card-icon">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.75"
+                  width="22"
+                  height="22"
+                  aria-hidden="true"
+                >
+                  <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V6a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z" />
+                </svg>
+              </div>
+              <div class="omniagent-card-titles">
+                <div class="omniagent-card-eyebrow">Agent Chat Page</div>
+                <h3>Open the chat and ask anything</h3>
+              </div>
+            </div>
+            <p>
+              Head to the <strong>Agent</strong> page in the desktop app, write a
+              <strong>base prompt</strong> that defines the role, and start chatting. OmniAgent
+              keeps the full conversation context — ask follow-ups, refine, branch off into new
+              tasks without losing the thread.
+            </p>
+            <div class="omniagent-chat-preview" aria-hidden="true">
+              <div class="omniagent-chat-row omniagent-chat-system">
+                <span class="omniagent-chat-tag">BASE PROMPT</span>
+                <span>You are a senior TypeScript engineer working in this repo.</span>
+              </div>
+              <div class="omniagent-chat-row omniagent-chat-user">
+                <span class="omniagent-chat-tag">YOU</span>
+                <span>Refactor sessionGrouping.ts to return detailed descriptions.</span>
+              </div>
+              <div class="omniagent-chat-row omniagent-chat-agent">
+                <span class="omniagent-chat-tag">OMNIAGENT</span>
+                <span>On it — reading the file, then proposing a diff…</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right card: invoke from any screen -->
+          <div class="omniagent-card scroll-reveal delay-1">
+            <div class="omniagent-card-header">
+              <div class="omniagent-card-icon omniagent-card-icon-amber">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.75"
+                  width="22"
+                  height="22"
+                  aria-hidden="true"
+                >
+                  <path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z" stroke-linejoin="round" />
+                </svg>
+              </div>
+              <div class="omniagent-card-titles">
+                <div class="omniagent-card-eyebrow">Invoke from any screen</div>
+                <h3>Run a quick task anywhere</h3>
+              </div>
+            </div>
+            <p>
+              Don&rsquo;t want to leave the app you&rsquo;re in? Trigger OmniAgent inline with a
+              keyword.
+            </p>
+
+            <ol class="omniagent-flow" aria-label="Invocation flow">
+              <li class="omniagent-flow-step">
+                <span class="omniagent-flow-num">1</span>
+                <div class="omniagent-flow-body">
+                  <div class="omniagent-flow-title">Write the prompt</div>
+                  <div class="omniagent-flow-snippet">
+                    <code>@omniAgent</code> find all TODOs in this project and summarise them
+                  </div>
+                </div>
+              </li>
+              <li class="omniagent-flow-step">
+                <span class="omniagent-flow-num">2</span>
+                <div class="omniagent-flow-body">
+                  <div class="omniagent-flow-title">Select the text</div>
+                  <div class="omniagent-flow-meta">Highlight what you just typed in any app.</div>
+                </div>
+              </li>
+              <li class="omniagent-flow-step">
+                <span class="omniagent-flow-num">3</span>
+                <div class="omniagent-flow-body">
+                  <div class="omniagent-flow-title">
+                    Press <span class="key">⌘T</span> / <span class="key">Ctrl+T</span>
+                  </div>
+                  <div class="omniagent-flow-meta">The agent picks up your selection and runs it.</div>
+                </div>
+              </li>
+            </ol>
+          </div>
+
+        </div>
+      </section>
+
       <!-- ── How it works ── -->
       <section class="how-section" id="how-it-works">
         <div class="section-header">
@@ -943,6 +1084,86 @@ omnikey mcp update &lt;id&gt;</code></pre>
       </p>
     </footer>
 
+    <!-- ── Star-on-GitHub modal ── -->
+    <div
+      class="star-modal"
+      id="star-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="star-modal-title"
+      aria-describedby="star-modal-desc"
+      hidden
+    >
+      <div class="star-modal-backdrop" data-star-close></div>
+      <div class="star-modal-card" role="document">
+        <button
+          type="button"
+          class="star-modal-close"
+          aria-label="Close"
+          data-star-close
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            width="16"
+            height="16"
+            aria-hidden="true"
+          >
+            <line x1="6" y1="6" x2="18" y2="18" />
+            <line x1="18" y1="6" x2="6" y2="18" />
+          </svg>
+        </button>
+
+        <div class="star-modal-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="currentColor" width="32" height="32">
+            <path
+              d="M12 .25a.75.75 0 0 1 .673.418l2.823 5.72 6.314.918a.75.75 0 0 1 .416 1.279l-4.568 4.453 1.078 6.288a.75.75 0 0 1-1.088.791L12 17.347l-5.648 2.97a.75.75 0 0 1-1.088-.79l1.078-6.29L1.774 8.586a.75.75 0 0 1 .416-1.28l6.314-.917L11.327.668A.75.75 0 0 1 12 .25Z"
+            />
+          </svg>
+        </div>
+
+        <h2 class="star-modal-title" id="star-modal-title">
+          Enjoying OmniKey? Drop us a star ⭐
+        </h2>
+        <p class="star-modal-desc" id="star-modal-desc">
+          Your download is on its way. OmniKey is <strong>free and open source</strong> —
+          a quick GitHub star helps more people discover it and keeps the project alive.
+        </p>
+
+        <div class="star-modal-stats" id="star-modal-stats" hidden>
+          <span class="star-modal-stats-num" id="star-modal-stats-num">—</span>
+          <span class="star-modal-stats-label">stars and counting</span>
+        </div>
+
+        <div class="star-modal-actions">
+          <a
+            href="https://github.com/GurinderRawala/OmniKey-AI"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="star-modal-btn star-modal-btn-primary"
+            id="star-modal-cta"
+          >
+            <svg viewBox="0 0 16 16" fill="currentColor" width="15" height="15" aria-hidden="true">
+              <path
+                d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.751.751 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z"
+              />
+            </svg>
+            Star on GitHub
+          </a>
+          <button
+            type="button"
+            class="star-modal-btn star-modal-btn-ghost"
+            data-star-close
+          >
+            Maybe later
+          </button>
+        </div>
+      </div>
+    </div>
+
     <script src="app.js"></script>
+
   </body>
 </html>
