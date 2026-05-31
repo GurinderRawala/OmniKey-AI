@@ -10,8 +10,8 @@ import { logger } from './logger';
 import { taskInstructionRouter } from './taskInstructionRoutes';
 import { scheduledJobRouter } from './scheduledJobRoutes';
 import { mcpServerRouter } from './mcpServerRoutes';
-import { startScheduledJobExecutor } from './scheduledJobExecutor';
-import { startGroupingCronJob } from './agent/sessionGrouping';
+import { spawnWorker, type ManagedWorker } from './workers/spawn';
+import { setScheduledJobWorker } from './workers/scheduledJobWorkerClient';
 import { config } from './config';
 import { attachAgentWebSocketServer, createAgentRouter } from './agent/agentServer';
 import { AppDownload } from './models/appDownload';
@@ -214,6 +214,7 @@ app.get('*', (_req, res) => {
 });
 
 let server: import('http').Server | null = null;
+const backgroundWorkers: ManagedWorker[] = [];
 
 async function start() {
   try {
@@ -234,8 +235,15 @@ async function start() {
     }
 
     if (config.isSelfHosted) {
-      startScheduledJobExecutor();
-      startGroupingCronJob();
+      // Run the schedulers in dedicated worker threads so their DB
+      // polling / cron ticks never block the HTTP event loop.
+      const scheduledJobWorker = spawnWorker('scheduledJobWorker');
+      backgroundWorkers.push(scheduledJobWorker);
+      backgroundWorkers.push(spawnWorker('groupingWorker'));
+      // Expose the worker handle so HTTP routes (e.g. POST /:id/run-now)
+      // can dispatch immediate executions into the worker thread instead
+      // of running them in-process and blocking the event loop.
+      setScheduledJobWorker(scheduledJobWorker);
     }
   } catch (err) {
     logger.error('Failed to start server due to DB error.', { error: err });
@@ -245,24 +253,35 @@ async function start() {
 
 start();
 
+async function stopBackgroundWorkers(): Promise<void> {
+  if (!backgroundWorkers.length) return;
+  logger.info('Stopping background workers...', { count: backgroundWorkers.length });
+  setScheduledJobWorker(null);
+  await Promise.allSettled(backgroundWorkers.map((w) => w.stop()));
+}
+
 function gracefulShutdown(signal: NodeJS.Signals) {
   logger.info(`Received ${signal}. Starting graceful shutdown...`);
 
+  const finish = (code: number) => {
+    void stopBackgroundWorkers().finally(() => process.exit(code));
+  };
+
   if (!server) {
     logger.info('Server was not started or already closed. Exiting process.');
-    process.exit(0);
+    finish(0);
     return;
   }
 
   server.close((err) => {
     if (err) {
       logger.error('Error during HTTP server shutdown.', { error: err });
-      process.exitCode = 1;
+      finish(1);
       return;
     }
 
     logger.info('HTTP server closed. Exiting process.');
-    process.exit(0);
+    finish(0);
   });
 }
 

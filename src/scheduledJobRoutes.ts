@@ -3,6 +3,7 @@ import zod from 'zod';
 import { authMiddleware } from './authMiddleware';
 import { ScheduledJob } from './models/scheduledJob';
 import { computeNextRunAt, executeJob } from './scheduledJobExecutor';
+import { triggerJobInWorker } from './workers/scheduledJobWorkerClient';
 
 const CRON_REGEX = /^(\S+\s){4}\S+$/;
 
@@ -188,9 +189,18 @@ export function scheduledJobRouter(): express.Router {
         return res.status(404).json({ error: 'Scheduled job not found.' });
       }
 
-      void executeJob(job).catch((err) => {
-        logger.error('run-now execution failed.', { jobId: job.id, error: err });
-      });
+      // Prefer the background worker (self-hosted) so the execution
+      // doesn't block this HTTP handler or any other request on the main
+      // event loop. Fall back to in-process execution when no worker is
+      // running (e.g. cloud deployments or during shutdown).
+      const dispatched = triggerJobInWorker(job.id);
+      if (!dispatched) {
+        void executeJob(job).catch((err) => {
+          logger.error('run-now execution failed.', { jobId: job.id, error: err });
+        });
+      } else {
+        logger.info('run-now dispatched to scheduledJobWorker.', { jobId: job.id });
+      }
 
       res.json(formatJob(job));
     } catch (err) {
