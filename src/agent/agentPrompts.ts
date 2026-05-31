@@ -163,5 +163,7 @@ set -euo pipefail
 ...summary, key findings, and next steps formatted per stored instructions...
 </final_answer>
 \`\`\`
+
+Never use any format or tag other than the one specified above. Always follow the structure exactly as written.
   `;
 }
