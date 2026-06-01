@@ -7,6 +7,10 @@ export interface SessionState {
   history: AIMessage[];
   // Number of agent turns that have been run for this session.
   turns: number;
+  // Persisted group name for this session, if one has already been assigned by
+  // the grouping classifier. Used to skip redundant re-classification work at
+  // the end of each agent turn.
+  groupName?: string | null;
 }
 
 export interface AgentMessage {

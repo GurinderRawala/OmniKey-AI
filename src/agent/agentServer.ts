@@ -269,6 +269,7 @@ async function getOrCreateSession(
         subscription,
         history,
         turns: dbSession.turns,
+        groupName: dbSession.groupName ?? null,
       };
       log.info('Resumed agent session from DB', {
         sessionId,
@@ -347,6 +348,7 @@ ${prompt}
         subscription,
         history,
         turns: dbSession.turns,
+        groupName: dbSession.groupName ?? null,
       };
 
       log.info('Reused existing agent session row from DB during create path', {
@@ -388,7 +390,7 @@ async function runAgentTurnInternal(
   clientMessage: AgentMessage,
   send: AgentSendFn,
   log: typeof logger,
-  options?: { isCronJob?: boolean },
+  options?: { isCronJob?: boolean; untaggedDepth?: number },
 ) {
   const { sessionState: session, hasStoredPrompt } = await getOrCreateSession(
     sessionId,
@@ -546,6 +548,39 @@ async function runAgentTurnInternal(
 
     await recordUsage(result);
 
+    // When the model's output was cut off mid-generation (hit the provider's
+    // max-token ceiling), it may have produced a partial shell script or plain
+    // reasoning text with no closing tag.  Processing that as-is would either
+    // send a malformed script to the frontend or silently recurse without any
+    // recovery signal.  Instead, push the truncated fragment as an assistant
+    // message and inject a terse directive that forces the model to emit a
+    // valid tag on the very next call.
+    if (result.finish_reason === 'length') {
+      log.warn('Agent response truncated at output limit; injecting recovery directive', {
+        sessionId,
+        contentLength: result.content.length,
+      });
+      if (result.content.trim()) {
+        pushToSessionHistory(logger, session, result.assistantMessage);
+      }
+      pushToSessionHistory(logger, session, {
+        role: 'user',
+        content: [
+          'Your previous response was cut off because it exceeded the output length limit.',
+          'Do NOT repeat or continue what you wrote.',
+          'Respond immediately with exactly one of:',
+          '- <shell_script>...</shell_script>',
+          '- <final_answer>...</final_answer>',
+          'No reasoning. No explanation. Just the tag.',
+        ].join('\n'),
+      });
+      result = await aiClient.complete(aiModel, session.history, {
+        tools: tools?.length ? tools : undefined,
+        temperature: 0.2,
+      });
+      await recordUsage(result);
+    }
+
     let content = result.content.trim();
 
     if (!content && result.finish_reason !== 'tool_calls') {
@@ -699,22 +734,73 @@ async function runAgentTurnInternal(
         sender: 'agent',
         content: hasFinalAnswerTag ? content : `<final_answer>\n${content}\n</final_answer>`,
       });
-      void updateSessionGroup(sessionId, subscription.id);
-    } else if (content) {
-      // Fallback: the LLM returned content without any recognized tag and it
-      // is not the final turn (e.g. plain-text conclusion after terminal
-      // output). Treat it as a final answer so the client is never left
-      // hanging.
-      log.info(
-        'Agent returned untagged content on a non-final turn; treating as assistant response and looping the function again.',
-        {
+      // Only re-classify when the session doesn't already have a group name.
+      // Re-classification is expensive (LLM call) and unnecessary once a group
+      // has been assigned — the cron in sessionGrouping.ts is responsible for
+      // periodic refreshes if descriptions ever need updating.
+      if (!session.groupName) {
+        void updateSessionGroup(sessionId, subscription.id).then(async () => {
+          // Reflect the newly-assigned group back into the in-memory session
+          // so subsequent turns in this same session also skip re-classification.
+          try {
+            const refreshed = await AgentSession.findOne({
+              where: { id: sessionId, subscriptionId: subscription.id },
+              attributes: ['groupName'],
+            });
+            if (refreshed?.groupName) {
+              session.groupName = refreshed.groupName;
+            }
+          } catch (err) {
+            log.warn('Failed to read back groupName after classification', { error: err });
+          }
+        });
+      } else {
+        log.info('Skipping session group classification — group already assigned', {
           sessionId,
-          subscriptionId: subscription.id,
-          turn: session.turns,
-        },
-      );
+          groupName: session.groupName,
+        });
+      }
+    } else if (content) {
+      const untaggedDepth = options?.untaggedDepth ?? 0;
 
-      pushToSessionHistory(log, session, { role: 'assistant', content });
+      // Safety valve: after two consecutive format-correction attempts the
+      // model is clearly stuck.  Abort rather than loop indefinitely.
+      if (untaggedDepth >= 2) {
+        log.warn('Agent stuck in untagged response loop; aborting after max retries', {
+          sessionId,
+          untaggedDepth,
+        });
+        await persistSessionToDB(sessionId, session);
+        sendFinalAnswer(
+          send,
+          sessionId,
+          'The agent failed to produce a structured response after multiple attempts. Please try again.',
+          true,
+        );
+        return;
+      }
+
+      log.info('Agent returned untagged content; injecting format-correction directive', {
+        sessionId,
+        subscriptionId: subscription.id,
+        turn: session.turns,
+        untaggedDepth,
+      });
+
+      // Push the untagged content as an assistant turn so the model sees what
+      // it wrote, then immediately follow with a user message that firmly
+      // redirects it back to the required tag format.
+      pushToSessionHistory(logger, session, { role: 'assistant', content });
+      pushToSessionHistory(logger, session, {
+        role: 'user',
+        content: [
+          'Your response was plain text, which is not a valid format.',
+          'You MUST respond with exactly one of:',
+          '- <shell_script>...</shell_script> — to run terminal commands',
+          '- <final_answer>...</final_answer> — to conclude',
+          'Respond immediately with the tag. No reasoning, no explanation.',
+        ].join('\n'),
+      });
       await persistSessionToDB(sessionId, session);
       await runAgentTurnInternal(
         sessionId,
@@ -727,7 +813,7 @@ async function runAgentTurnInternal(
         },
         send,
         logger,
-        options,
+        { ...options, untaggedDepth: untaggedDepth + 1 },
       );
     } else {
       log.warn('Agent returned empty content with no recognized tags; sending error', {
@@ -757,6 +843,8 @@ export async function runAgentTurn(
   log: typeof logger,
   options?: { isCronJob?: boolean },
 ) {
+  // untaggedDepth always starts at 0 for external callers; it is only threaded
+  // through the internal recursive path.
   await runAgentTurnInternal(sessionId, subscription, clientMessage, send, log, options);
 }
 

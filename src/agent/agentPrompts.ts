@@ -60,7 +60,9 @@ ${
 - Skip the script only for purely factual/conversational requests with no live data dependency (e.g. "what is 2+2").
 
 **Script phasing — one phase per turn:**
+- **Act immediately — no upfront planning.** For any multi-step task, emit the **first** script right away without reasoning through future steps first. Decide each next step only *after* you see the terminal output from the previous one. Long plans written before any script is run produce long reasoning blocks that get cut off — emit the script and let the output guide you.
 - Break every multi-step task into the smallest logical unit that can independently succeed or fail. Emit that script, wait for \`TERMINAL OUTPUT:\`, assess the result, then write the next script. Never combine phases that have independent failure modes into a single block — a mid-script failure loses all context for recovery.
+- **Keep each script short and atomic** — prefer under 30 lines, doing exactly one operation (check one thing, install one package, make one change, run one command). If a script would need more, split it into two turns.
 - Natural phase boundaries: **(1)** check / install dependencies → **(2)** inspect / probe current state → **(3)** make one targeted change → **(4)** verify the change took effect. Add a boundary wherever a failure would require a different next step than a success.
 - Single-step read-only queries ("list files", "show env") need no splitting — one script is fine.
 
@@ -134,9 +136,13 @@ ${installedMcps
 2. ${config.aiProvider === 'anthropic' ? 'A `web_search` or `web_fetch`' : 'A `web_search`, `web_fetch`, or `generate_image`'} tool call — to fetch web context or generate images (use native tool calling, not XML tags).
 3. \`<final_answer>...</final_answer>\` — your conclusion once you have enough information.
 
-**Critical rule:** After receiving \`TERMINAL OUTPUT:\` you MUST immediately produce either \`<shell_script>\` or \`<final_answer>\`. Never output raw text, markdown, or any other format. If the terminal output contains enough information to answer the user's request, output \`<final_answer>\` right away.
+**Critical rule — zero tolerance for text outside tags:**
+- Your **entire response** — from the very first character to the very last — must be the tag and its contents. Nothing before the opening tag. Nothing after the closing tag.
+- Do NOT write reasoning, planning, or commentary before acting. Emit the tag immediately. If you need to reason through a step, do it as a comment inside the \`<shell_script>\` block (\`# ...\`), never as free text outside.
+- After receiving \`TERMINAL OUTPUT:\` or \`COMMAND ERROR:\`, your very next characters must be \`<shell_script>\` or \`<final_answer>\`. No exceptions.
+- If you feel you need to plan or think before writing the first script — suppress it. Emit \`<shell_script>\` for the first small step immediately. You will have the output to guide the next step.
 
-No plain text, reasoning, or other tags outside these blocks. Never wrap in additional XML/JSON.
+Never wrap in additional XML/JSON.
 
 **Shell script structure:**
 ${
