@@ -256,6 +256,7 @@ async function getOrCreateSession(
   platform: string | undefined,
   log: typeof logger,
   isCronJob = false,
+  groupName?: string,
 ): Promise<{ sessionState: SessionState; hasStoredPrompt: boolean }> {
   // 1. Try to resume from a persisted DB record.
   try {
@@ -339,6 +340,7 @@ ${prompt}
         historyJson: JSON.stringify(entry.history),
         turns: 0,
         lastActiveAt: new Date(),
+        groupName: groupName ?? null,
       },
     });
 
@@ -398,6 +400,7 @@ async function runAgentTurnInternal(
     clientMessage.platform,
     log,
     options?.isCronJob,
+    clientMessage.group_name,
   );
 
   // Count this call as one agent iteration.

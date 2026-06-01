@@ -831,6 +831,12 @@ struct ChatConversationView: View {
                             message: message,
                             isStreaming: model.isRunning && message.id == model.messages.last?.id
                         )
+                        // `.equatable()` lets SwiftUI short-circuit body
+                        // evaluation for messages whose content + streaming
+                        // state are unchanged. This avoids re-parsing markdown
+                        // and re-laying out historical rows on every token
+                        // streamed into the current turn.
+                        .equatable()
                         .padding(.top, index == 0 ? 8 : 18)
                         .padding(.bottom, index == model.messages.count - 1 ? 8 : 0)
                     }
@@ -1592,7 +1598,7 @@ private struct FeatureTile: View {
 
 // MARK: - Message View (dispatcher)
 
-struct ChatMessageView: View {
+struct ChatMessageView: View, @MainActor Equatable {
     let message: ChatMessage
     var isStreaming: Bool = false
     @Environment(\.colorScheme) private var colorScheme
@@ -1606,6 +1612,15 @@ struct ChatMessageView: View {
         case .system:
             EmptyView()
         }
+    }
+
+    // SwiftUI uses this when the view is wrapped in `.equatable()`. Skipping
+    // body re-evaluation for unchanged messages is the single biggest win for
+    // long transcripts: ChatModel republishes on every streaming token, but
+    // only the streaming row actually changes — all prior rows can be reused
+    // as-is. `ChatMessage` is itself Equatable (id + role + text + blocks).
+    static func == (lhs: ChatMessageView, rhs: ChatMessageView) -> Bool {
+        return lhs.isStreaming == rhs.isStreaming && lhs.message == rhs.message
     }
 }
 
@@ -2163,14 +2178,23 @@ private struct ChatCopyButton: View {
 /// Renders LLM markdown output. Fenced code blocks get a styled `CodeBlockView`;
 /// all other text is parsed with `AttributedString` for inline formatting (bold,
 /// italic, links, inline code, etc.).
-struct ChatMarkdownView: View {
+struct ChatMarkdownView: View, @MainActor Equatable {
     let text: String
     var baseFontSize: CGFloat = 13
     @Environment(\.colorScheme) private var colorScheme
 
+    // SwiftUI re-evaluates `body` whenever the parent view republishes —
+    // during streaming, that's once per token, for every message in the
+    // transcript. Equatable conformance lets `.equatable()` short-circuit
+    // the work when neither the source text nor the font size has changed.
+    static func == (lhs: ChatMarkdownView, rhs: ChatMarkdownView) -> Bool {
+        return lhs.baseFontSize == rhs.baseFontSize && lhs.text == rhs.text
+    }
+
     var body: some View {
+        let parsed = ChatMarkdownCache.shared.blocks(for: text)
         VStack(alignment: .leading, spacing: 9) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+            ForEach(Array(parsed.enumerated()), id: \.offset) { _, block in
                 switch block {
                 case let .code(language, code):
                     ChatCodeBlockView(language: language, code: code)
@@ -2210,12 +2234,11 @@ struct ChatMarkdownView: View {
         size: CGFloat? = nil,
         weight: Font.Weight = .regular
     ) -> some View {
-        let opts = AttributedString.MarkdownParsingOptions(
-            allowsExtendedAttributes: true,
-            interpretedSyntax: .inlineOnlyPreservingWhitespace,
-            failurePolicy: .returnPartiallyParsedIfPossible
-        )
-        let attributed = (try? AttributedString(markdown: prose, options: opts)) ?? AttributedString(prose)
+        // Inline markdown is parsed via the OS attributed-string parser,
+        // which is non-trivial. Cache the result so repeated body
+        // evaluations for the same prose (extremely common during streaming
+        // — most historical paragraphs never change) reuse the same value.
+        let attributed = ChatMarkdownCache.shared.inlineAttributed(prose)
         Text(attributed)
             .font(.system(size: size ?? baseFontSize, weight: weight))
             .foregroundColor(NordTheme.primaryText(colorScheme))
@@ -2251,7 +2274,7 @@ struct ChatMarkdownView: View {
         }
     }
 
-    private enum MarkdownBlock {
+    fileprivate enum MarkdownBlock {
         case paragraph(String)
         case heading(Int, String)
         case unorderedList([String])
@@ -2262,7 +2285,7 @@ struct ChatMarkdownView: View {
         case table([String], [[String]])
     }
 
-    private var blocks: [MarkdownBlock] {
+    fileprivate static func parseBlocks(from text: String) -> [MarkdownBlock] {
         var result: [MarkdownBlock] = []
         let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         var i = 0
@@ -2370,13 +2393,13 @@ struct ChatMarkdownView: View {
         return result
     }
 
-    private func parseHeading(_ line: String) -> (level: Int, text: String)? {
+    fileprivate static func parseHeading(_ line: String) -> (level: Int, text: String)? {
         let count = line.prefix { $0 == "#" }.count
         guard count > 0, count <= 4, line.dropFirst(count).first == " " else { return nil }
         return (count, String(line.dropFirst(count + 1)).trimmingCharacters(in: .whitespaces))
     }
 
-    private func isDivider(_ line: String) -> Bool {
+    fileprivate static func isDivider(_ line: String) -> Bool {
         line.count >= 3 && (
             line.allSatisfy { $0 == "-" } ||
             line.allSatisfy { $0 == "*" } ||
@@ -2384,11 +2407,11 @@ struct ChatMarkdownView: View {
         )
     }
 
-    private func isUnorderedListLine(_ line: String) -> Bool {
+    fileprivate static func isUnorderedListLine(_ line: String) -> Bool {
         line.hasPrefix("- ") || line.hasPrefix("* ") || line.hasPrefix("• ")
     }
 
-    private func orderedListText(_ line: String) -> String? {
+    fileprivate static func orderedListText(_ line: String) -> String? {
         guard let dotIndex = line.firstIndex(where: { $0 == "." || $0 == ")" }) else { return nil }
         let prefix = line[..<dotIndex]
         guard !prefix.isEmpty, prefix.allSatisfy(\.isNumber) else { return nil }
@@ -2397,14 +2420,14 @@ struct ChatMarkdownView: View {
         return String(line[line.index(after: after)...]).trimmingCharacters(in: .whitespaces)
     }
 
-    private func isTableStart(at index: Int, lines: [String]) -> Bool {
+    fileprivate static func isTableStart(at index: Int, lines: [String]) -> Bool {
         guard index + 1 < lines.count else { return false }
         let header = lines[index].trimmingCharacters(in: .whitespaces)
         let separator = lines[index + 1].trimmingCharacters(in: .whitespaces)
         return header.contains("|") && isMarkdownTableSeparator(separator)
     }
 
-    private func isMarkdownTableSeparator(_ line: String) -> Bool {
+    fileprivate static func isMarkdownTableSeparator(_ line: String) -> Bool {
         let cells = tableCells(line)
         guard !cells.isEmpty else { return false }
         return cells.allSatisfy { cell in
@@ -2413,7 +2436,7 @@ struct ChatMarkdownView: View {
         }
     }
 
-    private func parseTable(
+    fileprivate static func parseTable(
         startingAt index: Int,
         lines: [String]
     ) -> (header: [String], rows: [[String]], nextIndex: Int) {
@@ -2431,7 +2454,7 @@ struct ChatMarkdownView: View {
         return (header, rows, i)
     }
 
-    private func tableCells(_ line: String) -> [String] {
+    fileprivate static func tableCells(_ line: String) -> [String] {
         var trimmed = line.trimmingCharacters(in: .whitespaces)
         if trimmed.hasPrefix("|") { trimmed.removeFirst() }
         if trimmed.hasSuffix("|") { trimmed.removeLast() }
@@ -2808,3 +2831,63 @@ private extension String {
     /// nil-coalescing operator to fall through to a default value.
     var nilIfEmpty: String? { isEmpty ? nil : self }
 }
+
+// MARK: - Markdown Parse Cache
+
+/// Process-wide cache for parsed markdown. Stores both the block list for a
+/// full message body and the per-paragraph `AttributedString` result, keyed
+/// by the source string. `NSCache` evicts entries automatically under memory
+/// pressure, so this never holds onto stale strings beyond the system's
+/// comfort threshold.
+@MainActor
+private final class ChatMarkdownCache {
+    static let shared = ChatMarkdownCache()
+
+    private final class BlockBox {
+        let value: [ChatMarkdownView.MarkdownBlock]
+        init(_ value: [ChatMarkdownView.MarkdownBlock]) { self.value = value }
+    }
+
+    private final class AttrBox {
+        let value: AttributedString
+        init(_ value: AttributedString) { self.value = value }
+    }
+
+    private let blockCache: NSCache<NSString, BlockBox> = {
+        let c = NSCache<NSString, BlockBox>()
+        c.countLimit = 256
+        return c
+    }()
+
+    private let attrCache: NSCache<NSString, AttrBox> = {
+        let c = NSCache<NSString, AttrBox>()
+        c.countLimit = 1024
+        return c
+    }()
+
+    func blocks(for text: String) -> [ChatMarkdownView.MarkdownBlock] {
+        let key = text as NSString
+        if let hit = blockCache.object(forKey: key) {
+            return hit.value
+        }
+        let parsed = ChatMarkdownView.parseBlocks(from: text)
+        blockCache.setObject(BlockBox(parsed), forKey: key)
+        return parsed
+    }
+
+    func inlineAttributed(_ prose: String) -> AttributedString {
+        let key = prose as NSString
+        if let hit = attrCache.object(forKey: key) {
+            return hit.value
+        }
+        let opts = AttributedString.MarkdownParsingOptions(
+            allowsExtendedAttributes: true,
+            interpretedSyntax: .inlineOnlyPreservingWhitespace,
+            failurePolicy: .returnPartiallyParsedIfPossible
+        )
+        let attributed = (try? AttributedString(markdown: prose, options: opts)) ?? AttributedString(prose)
+        attrCache.setObject(AttrBox(attributed), forKey: key)
+        return attributed
+    }
+}
+
