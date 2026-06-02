@@ -121,6 +121,23 @@ async function runToolLoop(
           return { id: tc.id, name: tc.name, result: toolResult };
         }
 
+        // shell_script is not a callable tool — the model should embed commands
+        // in its text response using <shell_script>...</shell_script> XML tags.
+        // Intercept here so we don't fire a misleading "Fetching URL: undefined"
+        // web-call notification and return a clear correction instead.
+        if (tc.name === 'shell_script') {
+          log.warn('Agent attempted to call shell_script as a function; returning format-correction', {
+            sessionId,
+            toolIteration: toolIterations,
+          });
+          return {
+            id: tc.id,
+            name: tc.name,
+            result:
+              'Error: "shell_script" is not a callable tool. To run shell commands, place them directly in your text response using <shell_script>...</shell_script> XML tags — do not use tool/function calling for this.',
+          };
+        }
+
         // Notify the frontend that a web tool call is about to execute.
         const webCallContent =
           tc.name === 'web_search'
@@ -205,6 +222,36 @@ const aiModel = getDefaultModel(config.aiProvider, 'smart');
 const contextWindowSize = getContextWindowSize(config.aiProvider);
 
 // ─── DB helpers ───────────────────────────────────────────────────────────────
+
+/**
+ * Sanitize LLM content before processing or forwarding to the client.
+ *
+ * Two known hallucination patterns are fixed here:
+ *
+ * 1. <shell_function_calls> wrapper — the model sometimes wraps <shell_script>
+ *    in a <shell_function_calls> envelope.  Stored verbatim it compounds on
+ *    every turn (double/triple nesting), so we strip every occurrence.
+ *
+ * 2. Mismatched closing tag — the model opens with <shell_script> but closes
+ *    with a different tag (e.g. </shell_function>, </shell>, </script>).  The
+ *    macOS client's extractor looks for </shell_script> exactly; a wrong tag
+ *    makes it treat the entire script as plain reasoning text and call
+ *    receiveNext(), while the backend waits for terminal output — a deadlock.
+ *    We normalise any </shell…> variant to </shell_script> when the correct
+ *    closing tag is absent.
+ */
+function sanitizeLLMContent(content: string): string {
+  // 1. Strip <shell_function_calls> wrapper tags.
+  let result = content.replace(/<\/?shell_function_calls>/gi, '');
+
+  // 2. If <shell_script> is present but </shell_script> is missing,
+  //    replace any stray </shell…> closing tag with the correct one.
+  if (result.includes('<shell_script>') && !result.includes('</shell_script>')) {
+    result = result.replace(/<\/shell\w*>/gi, '</shell_script>');
+  }
+
+  return result.trim();
+}
 
 async function persistSessionToDB(sessionId: string, state: SessionState): Promise<void> {
   try {
@@ -584,7 +631,7 @@ async function runAgentTurnInternal(
       await recordUsage(result);
     }
 
-    let content = result.content.trim();
+    let content = sanitizeLLMContent(result.content.trim());
 
     if (!content && result.finish_reason !== 'tool_calls') {
       log.warn('Agent LLM returned empty content; sending generic error to client.');
@@ -615,7 +662,7 @@ async function runAgentTurnInternal(
         mcpBundle.dispatch,
         recordUsage,
       );
-      const toolLoopContent = toolLoopResult.content.trim();
+      const toolLoopContent = sanitizeLLMContent(toolLoopResult.content.trim());
 
       const toolLoopHasShell = toolLoopContent.includes('<shell_script>');
       const toolLoopHasFinal = toolLoopContent.includes('<final_answer>');
