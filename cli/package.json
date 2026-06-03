@@ -4,7 +4,7 @@
     "access": "public",
     "registry": "https://registry.npmjs.org/"
   },
-  "version": "1.5.5",
+  "version": "1.5.6",
   "description": "CLI for onboarding users to Omnikey AI and configuring OPENAI_API_KEY. Use Yarn for install/build.",
   "engines": {
     "node": ">=14.0.0",
@@ -17,7 +17,7 @@
     "build": "tsc && npm run copy-backend && npm run build:telegram-client",
     "start": "node dist/index.js",
     "copy-backend": "rm -rf backend-dist && mkdir -p backend-dist && cp -R ../dist/* backend-dist/",
-    "build:telegram-client": "rm -rf telegram-client-dist && mkdir -p telegram-client-dist && cp -R ../telegram/dist/* telegram-client-dist/"
+    "build:telegram-client": "rm -rf telegram-client-dist && mkdir -p telegram-client-dist/dist && cp -R ../telegram/dist/* telegram-client-dist/dist/"
   },
   "keywords": [
     "cli",
