@@ -14,9 +14,10 @@
     "omnikey": "dist/index.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && npm run build:telegram-client",
     "start": "node dist/index.js",
-    "copy-backend": "rm -rf backend-dist && mkdir -p backend-dist && cp -R ../dist/* backend-dist/"
+    "copy-backend": "rm -rf backend-dist && mkdir -p backend-dist && cp -R ../dist/* backend-dist/",
+    "build:telegram-client": "rm -rf ../telegram-client && cp -R ../telegram-bot ../telegram-client && cd ../telegram-client && npx -y -p typescript@5 tsc -p . && cd ../cli && rm -rf telegram-client-dist && mkdir -p telegram-client-dist && cp -R ../telegram-client/dist/* telegram-client-dist/"
   },
   "keywords": [
     "cli",
@@ -62,6 +63,7 @@
     "dist",
     "backend-dist",
     "src",
-    "README.md"
+    "README.md",
+    "telegram-client-dist"
   ]
 }

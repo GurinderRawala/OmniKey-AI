@@ -12,6 +12,11 @@ import { setConfig } from './setConfig';
 import { grantBrowserAccess, reopenBrowserDebugProfile } from './grantBrowserAccess';
 import { scheduleAdd, scheduleList, scheduleRemove, scheduleRunNow } from './scheduleJob';
 import { mcpAdd, mcpList, mcpRemove, mcpToggle, mcpUpdate } from './mcpServer';
+import {
+  ensureTelegramConfig,
+  spawnTelegramClient,
+  startTelegramClientCommand,
+} from './telegramClient';
 
 const program = new Command();
 
@@ -31,9 +36,23 @@ program
   .command('daemon')
   .description('Start the Omnikey API backend as a daemon on a specified port')
   .option('--port <port>', 'Port to run the backend on', '7071')
+  .option('--telegram', 'Also start the telegram-client notification bridge')
+  .option(
+    '--telegram-port <port>',
+    'Port for the telegram-client when --telegram is set',
+    '6666',
+  )
   .action(async (options) => {
     const port = Number(options.port) || 7071;
     await startDaemon(port);
+    if (options.telegram) {
+      const telegramPort = Number(options.telegramPort) || 6666;
+      const cfg = await ensureTelegramConfig();
+      const child = spawnTelegramClient(telegramPort, cfg);
+      console.log(
+        `telegram-client started (pid=${child.pid}) on port ${telegramPort}.`,
+      );
+    }
   });
 
 program
@@ -87,10 +106,24 @@ program
   .command('restart-daemon')
   .description('Restart the Omnikey API backend daemon')
   .option('--port <port>', 'Port to run the backend on', '7071')
+  .option('--telegram', 'Also start the telegram-client notification bridge')
+  .option(
+    '--telegram-port <port>',
+    'Port for the telegram-client when --telegram is set',
+    '6666',
+  )
   .action(async (options) => {
     killDaemon();
     const port = Number(options.port) || 7071;
     await startDaemon(port);
+    if (options.telegram) {
+      const telegramPort = Number(options.telegramPort) || 6666;
+      const cfg = await ensureTelegramConfig();
+      const child = spawnTelegramClient(telegramPort, cfg);
+      console.log(
+        `telegram-client started (pid=${child.pid}) on port ${telegramPort}.`,
+      );
+    }
   });
 
 program
@@ -178,6 +211,17 @@ mcpCmd
   .description('Update an existing MCP server by ID')
   .action(async (id: string) => {
     await mcpUpdate(id);
+  });
+
+program
+  .command('telegram-client')
+  .description(
+    'Run the OmniKey Telegram notification bridge. Listens on --port (default 6666).',
+  )
+  .option('--port <port>', 'Port to run the telegram-client on', '6666')
+  .action(async (options) => {
+    const port = Number(options.port) || 6666;
+    await startTelegramClientCommand(port);
   });
 
 program.parseAsync(process.argv);
