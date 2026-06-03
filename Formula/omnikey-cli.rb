@@ -16,12 +16,12 @@ class OmnikeyCli < Formula
     end
   end
 
-  depends_on "node"
+  depends_on "node@26"
 
   def install
     libexec.install Dir["*"]
 
-    node = Formula["node"].opt_bin/"node"
+    node = Formula["node@26"].opt_bin/"node"
     (bin/"omnikey").write <<~EOS
       #!/bin/bash
       exec "#{node}" "#{libexec}/dist/index.js" "$@"
