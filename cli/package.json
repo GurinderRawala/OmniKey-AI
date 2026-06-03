@@ -4,7 +4,7 @@
     "access": "public",
     "registry": "https://registry.npmjs.org/"
   },
-  "version": "1.5.3",
+  "version": "1.5.4",
   "description": "CLI for onboarding users to Omnikey AI and configuring OPENAI_API_KEY. Use Yarn for install/build.",
   "engines": {
     "node": ">=14.0.0",
@@ -14,10 +14,10 @@
     "omnikey": "dist/index.js"
   },
   "scripts": {
-    "build": "tsc && npm run build:telegram-client",
+    "build": "tsc && npm run copy-backend && npm run build:telegram-client",
     "start": "node dist/index.js",
     "copy-backend": "rm -rf backend-dist && mkdir -p backend-dist && cp -R ../dist/* backend-dist/",
-    "build:telegram-client": "rm -rf ../telegram-client && cp -R ../telegram-bot ../telegram-client && cd ../telegram-client && npm install --no-audit --no-fund --silent && npx tsc -p . && npm prune --omit=dev --silent && cd ../cli && rm -rf telegram-client-dist && mkdir -p telegram-client-dist && cp -R ../telegram-client/dist telegram-client-dist/dist && cp -R ../telegram-client/node_modules telegram-client-dist/node_modules && cp ../telegram-client/package.json telegram-client-dist/package.json && cp ../telegram-client/.env.example telegram-client-dist/.env.example"
+    "build:telegram-client": "rm -rf telegram-client-dist && mkdir -p telegram-client-dist && cp -R ../telegram/dist/* telegram-client-dist/"
   },
   "keywords": [
     "cli",
@@ -33,13 +33,16 @@
     "@google/genai": "^1.46.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "axios": "^1.13.5",
+    "better-sqlite3": "^12.10.0",
     "commander": "^11.0.0",
     "cors": "^2.8.5",
+    "cron-parser": "^4.9.0",
     "cuid": "^3.0.0",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
     "inquirer": "^9.0.0",
     "jsonwebtoken": "^9.0.3",
+    "node-telegram-bot-api": "^0.61.0",
     "openai": "^6.37.0",
     "pg": "^8.18.0",
     "pg-hstore": "^2.3.4",
@@ -48,11 +51,12 @@
     "sqlite3": "^5.1.6",
     "winston": "^3.19.0",
     "ws": "^8.18.0",
-    "zod": "^4.3.6",
-    "cron-parser": "^4.9.0"
+    "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@types/inquirer": "^9.0.9",
+    "@types/node-telegram-bot-api": "^0.64.0",
     "typescript": "^5.0.0"
   },
   "repository": {

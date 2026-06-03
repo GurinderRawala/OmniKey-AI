@@ -1,6 +1,8 @@
 import axios from "axios";
 import WebSocket from "ws";
 import { spawn } from "child_process";
+import { existsSync } from "fs";
+import path from "path";
 import { randomUUID } from "crypto";
 import type { Logger } from "winston";
 import { omnikeyBaseUrl, omnikeyWsUrl } from "./config";
@@ -156,9 +158,54 @@ function cleanReasoning(content: string): string {
 const SHELL_TIMEOUT_MS = 5 * 60 * 1000;
 const SHELL_OUTPUT_MAX = 64 * 1024;
 
+// Mirrors WINDOWS_SHELL_CANDIDATES in src/agent/mcpRuntime.ts
+const WINDOWS_SHELL_CANDIDATES = [
+  "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+  "C:\\Program Files\\PowerShell\\6\\pwsh.exe",
+  "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+  "C:\\Windows\\System32\\cmd.exe",
+  "C:\\Windows\\cmd.exe",
+] as const;
+
+// Resolve the Windows shell: COMSPEC → SystemRoot\System32\cmd.exe → candidate list.
+// Mirrors resolveLoginShell() in src/agent/mcpRuntime.ts, with SystemRoot used to
+// locate cmd.exe from the Win32 system root rather than a hardcoded drive letter.
+function resolveWindowsShell(): string {
+  const comspec = process.env.COMSPEC ?? "";
+  if (comspec && existsSync(comspec)) return comspec;
+  const systemRoot = process.env.SystemRoot ?? "C:\\Windows";
+  const cmdFromRoot = path.join(systemRoot, "System32", "cmd.exe");
+  if (existsSync(cmdFromRoot)) return cmdFromRoot;
+  for (const candidate of WINDOWS_SHELL_CANDIDATES) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return "cmd.exe";
+}
+
+// Build shell args for the resolved shell — mirrors wrapWithLoginShell() in
+// src/agent/mcpRuntime.ts.  PowerShell/pwsh use -NoProfile -Command; cmd uses /c.
+function buildWindowsShellArgs(shell: string, script: string): string[] {
+  const name = path.basename(shell).toLowerCase();
+  if (name === "pwsh.exe" || name === "powershell.exe") {
+    return ["-NoProfile", "-Command", script];
+  }
+  return ["/c", script];
+}
+
+const PLATFORM =
+  process.platform === "win32"
+    ? "windows"
+    : process.platform === "darwin"
+      ? "macos"
+      : "linux";
+
 /**
- * Mirror macOS AgentRunner.runShellCommandWithStatus: invoke the user's
- * login shell with `-l -c <command>` and capture combined stdout+stderr.
+ * Execute a shell script locally and capture combined stdout+stderr.
+ * On macOS/Linux: invoke the login shell with `-l -c <script>` (mirrors the
+ * macOS AgentRunner.runShellCommandWithStatus path).
+ * On Windows: resolve the shell via COMSPEC / SystemRoot / candidate list and
+ * pass the script with the appropriate flags (-NoProfile -Command or /c),
+ * mirroring how the Windows app executes scripts in the terminal.
  * Output is capped so a runaway script can't blow up the WebSocket payload.
  */
 function runShellScript(
@@ -166,14 +213,25 @@ function runShellScript(
   logger: Logger,
 ): Promise<{ output: string; status: number }> {
   return new Promise((resolve) => {
-    const shell = process.env.SHELL || "/bin/zsh";
+    let shell: string;
+    let shellArgs: string[];
+
+    if (process.platform !== "darwin" && process.platform === "win32") {
+      shell = resolveWindowsShell();
+      shellArgs = buildWindowsShellArgs(shell, script);
+    } else {
+      shell = process.env.SHELL || "/bin/zsh";
+      shellArgs = ["-l", "-c", script];
+    }
+
     logger.info("Executing shell script from agent", {
       shell,
+      platform: PLATFORM,
       length: script.length,
     });
 
-    const child = spawn(shell, ["-l", "-c", script], {
-      cwd: process.env.HOME || process.cwd(),
+    const child = spawn(shell, shellArgs, {
+      cwd: process.env.HOME ?? process.env.USERPROFILE ?? process.cwd(),
       env: process.env,
     });
 
@@ -300,7 +358,7 @@ export async function runAgentTurn(
         content: opts.prompt,
         is_terminal_output: false,
         is_error: false,
-        platform: "macos",
+        platform: PLATFORM,
         group_name: opts.groupName,
       });
     });
@@ -364,7 +422,7 @@ export async function runAgentTurn(
             content: output,
             is_terminal_output: true,
             is_error: status !== 0,
-            platform: "macos",
+            platform: PLATFORM,
           });
         } catch (err) {
           const message = (err as Error).message;
@@ -379,7 +437,7 @@ export async function runAgentTurn(
             content: `Failed to execute shell script: ${message}`,
             is_terminal_output: true,
             is_error: true,
-            platform: "macos",
+            platform: PLATFORM,
           });
         }
         return;

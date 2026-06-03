@@ -23,7 +23,7 @@ export const logger = winston.createLogger({
 });
 
 const app = express();
-const port = process.env.PORT ? parseInt(process.env.PORT, 10) : 7072;
+const port = process.env.PORT ? parseInt(process.env.PORT, 10) : 6666;
 
 try {
   initDb(logger);

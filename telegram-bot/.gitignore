@@ -1,5 +1,0 @@
-node_modules
-dist
-.env
-tasks.json
-package-lock.json

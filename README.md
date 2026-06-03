@@ -140,6 +140,37 @@ Follow these steps to set up OmniKey:
 - **@omnikeyai Questions**: Select a question starting with "@omnikeyai" and use a shortcut to get answers in the context of your current text or task.
 - **@omniAgent Tasks**: Select instructions starting with "@omniAgent" and press `⌘T` / `Ctrl+T` to have the agent perform tasks for you, combining your task instructions if configured. OmniKey gathers context from both your **terminal** (by running commands) and the **web** (using your configured search provider, falling back to DuckDuckGo if none is set).
 
+### MCP Servers
+
+OmniKey supports any [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server — giving `@omniAgent` access to custom tools, databases, APIs, and more. Install and manage servers from the **CLI** or directly from the **MCP Servers window** in the macOS menu bar app or Windows system tray app.
+
+```sh
+omnikey mcp add      # install a new server interactively
+omnikey mcp list     # list installed servers
+omnikey mcp toggle <id>  # enable or disable a server
+```
+
+Registered servers are discovered automatically by the agent on every task run. See the [CLI documentation](./cli/README.md#mcp-servers) for the full command reference.
+
+### Telegram Integration
+
+Interact with `@omniAgent` directly from Telegram — run tasks, receive notifications, and get results delivered to your chat from any device.
+
+- Start a task with `/cmd` and follow the guided wizard to pick a session, instructions, and project.
+- Check the status of a running task with `/task`.
+- Abort a running session with `/stop`.
+
+The Telegram bot runs as a persistent background daemon (launchd on macOS, NSSM service on Windows) and is managed entirely through the CLI:
+
+```sh
+omnikey telegram start    # install and start the daemon
+omnikey telegram status   # check if it is running
+omnikey telegram logs     # tail stdout + stderr
+omnikey telegram stop     # stop the daemon
+```
+
+For full setup instructions — creating a bot with @BotFather, finding your chat ID, and configuring credentials — see the [Telegram README](./telegram/README.md).
+
 ### Automation: Scheduled Jobs
 
 OmniKey includes a built-in automation system to run prompts on a schedule.
@@ -159,26 +190,4 @@ Open **Scheduled Jobs** from the menu bar app (macOS) or system tray app (Window
 4. Use **Run Now** for immediate execution.
 5. Use **Last Run** to inspect output/history.
 
-#### Use Scheduled Jobs in the CLI
 
-Manage jobs from terminal with:
-
-```sh
-omnikey schedule add
-omnikey schedule list
-omnikey schedule remove
-omnikey schedule run-now <job-id>
-```
-
-The add flow is interactive and supports multiline prompt input.
-
-#### How OmniKey Works
-
-1. Select text in any app (editor, browser, email, etc.).
-2. Press one of the OmniKey shortcuts (`⌘E`, `⌘G`, or `⌘T` on macOS — `Ctrl+E`, `Ctrl+G`, or `Ctrl+T` on Windows).
-3. OmniKey sends the text securely to the OmniKey AI service.
-4. The result is pasted back in place of your original selection.
-
-You can add or edit your custom task instructions in the **Task Instructions** tab in the menu bar / system tray app.
-
-To learn more about how to use OmniKey, see the **Manual View** in the app.

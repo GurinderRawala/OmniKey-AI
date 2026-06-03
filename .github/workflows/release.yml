@@ -37,6 +37,16 @@ jobs:
           npm ci
           npm run build
 
+      - name: Install telegram dependencies
+        run: npm ci
+        working-directory: ./telegram
+        env:
+          npm_config_arch: ${{ matrix.npm_arch }}
+
+      - name: Build telegram
+        run: npm run build
+        working-directory: ./telegram
+
       - name: Install CLI dependencies
         run: npm ci
         working-directory: ./cli
@@ -46,12 +56,6 @@ jobs:
       - name: Build CLI TypeScript
         run: npm run build
         working-directory: ./cli
-
-      - name: Copy backend dist to CLI
-        run: |
-          rm -rf ./cli/backend-dist
-          mkdir -p ./cli/backend-dist
-          cp -R ./dist/* ./cli/backend-dist/
 
       - name: Prune dev dependencies
         run: npm prune --production
@@ -65,6 +69,7 @@ jobs:
             -C cli \
             dist/ \
             backend-dist/ \
+            telegram-client-dist/ \
             node_modules/ \
             package.json \
             README.md

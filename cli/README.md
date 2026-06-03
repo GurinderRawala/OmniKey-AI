@@ -21,6 +21,7 @@ OmnikeyAI is a productivity tool that helps you quickly rewrite selected text us
 - `omnikey grant-browser-access`: One-time setup to give Omnikey access to authenticated browser tabs for web fetch.
 - Scheduled Jobs commands to create, list, delete, and trigger jobs from the CLI.
 - `omnikey mcp`: manage MCP (Model Context Protocol) servers available to the agent (stdio, HTTP, SSE transports).
+- `omnikey telegram`: run the Telegram client as a persistent background daemon — receive Omnikey notifications in your Telegram chat and interact with the agent from your phone.
 
 ## Usage
 
@@ -93,6 +94,24 @@ omnikey mcp toggle <id>
 
 # Edit an MCP server by ID (interactive, current values as defaults)
 omnikey mcp update <id>
+
+# Install and start the Telegram bot daemon (prompts for credentials on first run)
+omnikey telegram start
+
+# Stop the Telegram bot daemon
+omnikey telegram stop
+
+# Restart the Telegram bot daemon
+omnikey telegram restart
+
+# Show daemon status (launchd/NSSM info + port check)
+omnikey telegram status
+
+# Tail the Telegram bot daemon logs
+omnikey telegram logs
+
+# Stop and fully remove the Telegram bot daemon
+omnikey telegram uninstall
 ```
 
 ### Command reference
@@ -119,6 +138,12 @@ omnikey mcp update <id>
 | `omnikey mcp remove`                  | Remove an MCP server via interactive selection and confirmation            |
 | `omnikey mcp toggle <id>`             | Enable or disable an MCP server by ID                                     |
 | `omnikey mcp update <id>`             | Edit an MCP server by ID (interactive, current values as defaults)        |
+| `omnikey telegram start`              | Install and start the Telegram bot daemon (prompts for credentials)       |
+| `omnikey telegram stop`               | Stop the Telegram bot daemon                                              |
+| `omnikey telegram restart`            | Restart the Telegram bot daemon                                           |
+| `omnikey telegram status`             | Show daemon status (launchd/NSSM info + port check)                       |
+| `omnikey telegram logs`               | Tail the Telegram bot daemon logs                                         |
+| `omnikey telegram uninstall`          | Stop and fully remove the Telegram bot daemon                             |
 
 ## Scheduled Jobs
 
@@ -230,6 +255,45 @@ The CLI automatically enables **"Allow JavaScript from Apple Events"** for every
 - **Safari** — runs `defaults write com.apple.Safari AllowJavaScriptFromAppleEvents -bool YES`.
 
 Both changes are permanent and survive reboots. Restart each browser once after setup for the change to take effect.
+
+## Telegram Bot Daemon
+
+The `omnikey telegram` command group runs a Telegram bot as a persistent background service. Once started, the bot sends Omnikey notifications to your Telegram chat and lets you interact with the agent directly from your phone.
+
+For setup instructions (creating a bot, finding your chat ID, and configuring credentials) see the [Telegram README](../telegram/README.md).
+
+### `omnikey telegram start`
+
+Installs and starts the daemon. If `TELEGRAM_BOT_TOKEN` or `TELEGRAM_CHAT_ID` are not yet saved, the CLI prompts for them, validates the token against the Telegram API, and saves them to `~/.omnikey/config.json` before installing the service. On macOS the bot runs as a **launchd agent**; on Windows as an **NSSM service**. Both auto-restart on crash and start automatically on login.
+
+### `omnikey telegram stop`
+
+Unloads the launchd agent (macOS) or stops the NSSM service (Windows). The service definition is kept so `omnikey telegram start` can bring it back without re-entering credentials.
+
+### `omnikey telegram restart`
+
+Equivalent to `stop` followed by `start`. Useful after updating credentials or rotating the bot token.
+
+### `omnikey telegram status`
+
+Prints:
+
+- Path to the service definition (plist on macOS, service name on Windows)
+- Current launchd / NSSM status including the running PID
+- Whether anything is listening on the bot's HTTP port (default `6666`)
+
+### `omnikey telegram logs`
+
+Tails the last 100 lines of both stdout and stderr logs and follows new output (Ctrl-C to stop).
+
+| Platform | Log files |
+| -------- | --------- |
+| macOS    | `~/Library/Logs/telegram/out.log`, `~/Library/Logs/telegram/err.log` |
+| Windows  | `~/.omnikey/telegram/daemon.log`, `~/.omnikey/telegram/daemon-error.log` |
+
+### `omnikey telegram uninstall`
+
+Stops the daemon and removes the service definition entirely. Run `omnikey telegram start` to reinstall from scratch.
 
 ## Platform notes
 

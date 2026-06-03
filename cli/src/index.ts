@@ -13,17 +13,20 @@ import { grantBrowserAccess, reopenBrowserDebugProfile } from './grantBrowserAcc
 import { scheduleAdd, scheduleList, scheduleRemove, scheduleRunNow } from './scheduleJob';
 import { mcpAdd, mcpList, mcpRemove, mcpToggle, mcpUpdate } from './mcpServer';
 import {
-  ensureTelegramConfig,
-  spawnTelegramClient,
-  startTelegramClientCommand,
-} from './telegramClient';
+  startTelegramDaemon,
+  stopTelegramDaemon,
+  restartTelegramDaemon,
+  statusTelegramDaemon,
+  logsTelegramDaemon,
+  uninstallTelegramDaemon,
+} from './telegramDaemon';
 
 const program = new Command();
 
 program
   .name('omnikey')
   .description('Omnikey CLI for onboarding and configuration')
-  .version('1.0.0');
+  .version('1.5.4');
 
 program
   .command('onboard')
@@ -36,22 +39,12 @@ program
   .command('daemon')
   .description('Start the Omnikey API backend as a daemon on a specified port')
   .option('--port <port>', 'Port to run the backend on', '7071')
-  .option('--telegram', 'Also start the telegram-client notification bridge')
-  .option(
-    '--telegram-port <port>',
-    'Port for the telegram-client when --telegram is set',
-    '6666',
-  )
+  .option('--telegram', 'Also install and start the Telegram bot daemon')
   .action(async (options) => {
     const port = Number(options.port) || 7071;
     await startDaemon(port);
     if (options.telegram) {
-      const telegramPort = Number(options.telegramPort) || 6666;
-      const cfg = await ensureTelegramConfig();
-      const child = spawnTelegramClient(telegramPort, cfg);
-      console.log(
-        `telegram-client started (pid=${child.pid}) on port ${telegramPort}.`,
-      );
+      await startTelegramDaemon();
     }
   });
 
@@ -106,23 +99,13 @@ program
   .command('restart-daemon')
   .description('Restart the Omnikey API backend daemon')
   .option('--port <port>', 'Port to run the backend on', '7071')
-  .option('--telegram', 'Also start the telegram-client notification bridge')
-  .option(
-    '--telegram-port <port>',
-    'Port for the telegram-client when --telegram is set',
-    '6666',
-  )
+  .option('--telegram', 'Also restart the Telegram bot daemon')
   .action(async (options) => {
     killDaemon();
     const port = Number(options.port) || 7071;
     await startDaemon(port);
     if (options.telegram) {
-      const telegramPort = Number(options.telegramPort) || 6666;
-      const cfg = await ensureTelegramConfig();
-      const child = spawnTelegramClient(telegramPort, cfg);
-      console.log(
-        `telegram-client started (pid=${child.pid}) on port ${telegramPort}.`,
-      );
+      await restartTelegramDaemon();
     }
   });
 
@@ -213,15 +196,53 @@ mcpCmd
     await mcpUpdate(id);
   });
 
-program
-  .command('telegram-client')
+const telegramDaemonCmd = program
+  .command('telegram')
   .description(
-    'Run the OmniKey Telegram notification bridge. Listens on --port (default 6666).',
-  )
-  .option('--port <port>', 'Port to run the telegram-client on', '6666')
-  .action(async (options) => {
-    const port = Number(options.port) || 6666;
-    await startTelegramClientCommand(port);
+    'Manage the Telegram bot daemon (launchd on macOS, NSSM on Windows). ' +
+      'Run `omnikey telegram start` to install and start.',
+  );
+
+telegramDaemonCmd
+  .command('start')
+  .description('Install and start the Telegram bot daemon (survives reboots, auto-restarts)')
+  .action(async () => {
+    await startTelegramDaemon();
+  });
+
+telegramDaemonCmd
+  .command('stop')
+  .description('Stop the Telegram bot daemon')
+  .action(() => {
+    stopTelegramDaemon();
+  });
+
+telegramDaemonCmd
+  .command('restart')
+  .description('Restart the Telegram bot daemon')
+  .action(async () => {
+    await restartTelegramDaemon();
+  });
+
+telegramDaemonCmd
+  .command('status')
+  .description('Show the current status of the Telegram bot daemon')
+  .action(() => {
+    statusTelegramDaemon();
+  });
+
+telegramDaemonCmd
+  .command('logs')
+  .description('Tail the Telegram bot daemon logs')
+  .action(() => {
+    logsTelegramDaemon();
+  });
+
+telegramDaemonCmd
+  .command('uninstall')
+  .description('Stop and remove the Telegram bot daemon')
+  .action(() => {
+    uninstallTelegramDaemon();
   });
 
 program.parseAsync(process.argv);

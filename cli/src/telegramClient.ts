@@ -109,7 +109,7 @@ export async function ensureTelegramConfig(
 
   console.log('\nTelegram client configuration required.');
   console.log(
-    'See telegram-bot/README.md for how to create a bot with @BotFather and find your chat id.\n',
+    'See telegram/README.md for how to create a bot with @BotFather and find your chat id.\n',
   );
 
   const toPersist: Record<string, string> = {};
