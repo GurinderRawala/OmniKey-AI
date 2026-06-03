@@ -45,7 +45,7 @@ jobs:
         run: npm run build
 
       - name: Install telegram dependencies
-        run: npm ci
+        run: yarn install --frozen-lockfile
         working-directory: ./telegram
 
       - name: Build telegram

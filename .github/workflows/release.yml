@@ -38,7 +38,7 @@ jobs:
           npm run build
 
       - name: Install telegram dependencies
-        run: npm ci
+        run: yarn install --frozen-lockfile
         working-directory: ./telegram
         env:
           npm_config_arch: ${{ matrix.npm_arch }}
