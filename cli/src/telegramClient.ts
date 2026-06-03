@@ -13,9 +13,18 @@ interface PromptOptions {
   nonInteractive?: boolean;
 }
 
-function resolveBundledClient(): string {
-  // dist/telegramClient.js -> ../telegram-client-dist/server.js
-  return path.resolve(__dirname, '..', 'telegram-client-dist', 'server.js');
+/**
+ * Where the bundled bot lives at runtime. The CLI's `build:telegram-client`
+ * script populates this directory with the bot's compiled output plus its
+ * production `node_modules`.
+ */
+function resolveBundleRoot(): string {
+  // dist/telegramClient.js → ../telegram-client-dist
+  return path.resolve(__dirname, '..', 'telegram-client-dist');
+}
+
+function resolveBundledEntry(): string {
+  return path.join(resolveBundleRoot(), 'dist', 'index.js');
 }
 
 function persistConfig(values: Record<string, string>): void {
@@ -28,7 +37,7 @@ function persistConfig(values: Record<string, string>): void {
 }
 
 /**
- * Verify a Telegram bot token by hitting the Bot API's getMe endpoint.
+ * Verify a Telegram bot token via the Bot API's getMe endpoint.
  * Resolves to the bot's @username on success, throws on failure.
  */
 function verifyToken(token: string): Promise<string> {
@@ -100,7 +109,7 @@ export async function ensureTelegramConfig(
 
   console.log('\nTelegram client configuration required.');
   console.log(
-    'See ./telegram-bot/README.md for how to create a bot with @BotFather and find your chat id.\n',
+    'See telegram-bot/README.md for how to create a bot with @BotFather and find your chat id.\n',
   );
 
   const toPersist: Record<string, string> = {};
@@ -135,7 +144,7 @@ export async function ensureTelegramConfig(
         type: 'input',
         name: 'chatId',
         message:
-          'Enter the chat id to receive notifications (run `node telegram-bot/get-chat-id.js <token>` if you do not know it):',
+          'Enter the chat id to receive notifications (curl https://api.telegram.org/bot<token>/getUpdates):',
         validate: (input: string) =>
           /^-?\d+$/.test(input.trim()) || 'Chat id must be a numeric value (groups are negative)',
       },
@@ -153,11 +162,13 @@ export async function ensureTelegramConfig(
 }
 
 /**
- * Spawn the bundled telegram-client server as a long-lived child process.
- * Used both by `omnikey telegram-client` and by `omnikey daemon --telegram`.
+ * Spawn the bundled telegram-bot server as a long-lived child process.
+ * The bot reads PORT from process.env (defaults to 7072 in the app), so we
+ * inject the CLI's chosen port that way to keep the upstream code untouched.
  */
 export function spawnTelegramClient(port: number, env: Record<string, string>): ChildProcess {
-  const entry = resolveBundledClient();
+  const bundleRoot = resolveBundleRoot();
+  const entry = resolveBundledEntry();
   if (!fs.existsSync(entry)) {
     throw new Error(
       `Bundled telegram-client not found at ${entry}. ` +
@@ -171,13 +182,15 @@ export function spawnTelegramClient(port: number, env: Record<string, string>): 
   const errorLogPath = path.join(configDir, 'telegram-client-error.log');
   const { out, err } = initLogFiles(logPath, errorLogPath);
 
-  const child = spawn(process.execPath, [entry, '--port', String(port)], {
+  const child = spawn(process.execPath, [entry], {
     detached: false,
     stdio: ['ignore', out, err],
+    // cwd = bundle root so the bot's dotenv.config() and relative paths line up
+    cwd: bundleRoot,
     env: {
       ...process.env,
       ...env,
-      TELEGRAM_PORT: String(port),
+      PORT: String(port),
     },
   });
 

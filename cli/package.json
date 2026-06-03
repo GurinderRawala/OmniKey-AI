@@ -17,7 +17,7 @@
     "build": "tsc && npm run build:telegram-client",
     "start": "node dist/index.js",
     "copy-backend": "rm -rf backend-dist && mkdir -p backend-dist && cp -R ../dist/* backend-dist/",
-    "build:telegram-client": "rm -rf ../telegram-client && cp -R ../telegram-bot ../telegram-client && cd ../telegram-client && npx -y -p typescript@5 tsc -p . && cd ../cli && rm -rf telegram-client-dist && mkdir -p telegram-client-dist && cp -R ../telegram-client/dist/* telegram-client-dist/"
+    "build:telegram-client": "rm -rf ../telegram-client && cp -R ../telegram-bot ../telegram-client && cd ../telegram-client && npm install --no-audit --no-fund --silent && npx tsc -p . && npm prune --omit=dev --silent && cd ../cli && rm -rf telegram-client-dist && mkdir -p telegram-client-dist && cp -R ../telegram-client/dist telegram-client-dist/dist && cp -R ../telegram-client/node_modules telegram-client-dist/node_modules && cp ../telegram-client/package.json telegram-client-dist/package.json && cp ../telegram-client/.env.example telegram-client-dist/.env.example"
   },
   "keywords": [
     "cli",
