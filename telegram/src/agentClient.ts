@@ -15,6 +15,43 @@ export interface AgentSessionSummary {
   readonly lastActiveAt: string;
 }
 
+export interface TranscriptBlock {
+  readonly id: string;
+  readonly kind: string;
+  readonly text: string;
+}
+
+export interface TranscriptMessage {
+  readonly id: string;
+  readonly role: "user" | "assistant";
+  readonly text: string;
+  readonly blocks?: TranscriptBlock[];
+}
+
+/**
+ * Fetch the typed message transcript for a session.
+ * Returns null when the session does not exist (404), throws on other errors.
+ */
+export async function getSessionMessages(
+  logger: Logger,
+  sessionId: string,
+): Promise<TranscriptMessage[] | null> {
+  const token = await fetchJwtToken(logger);
+  const url = `${omnikeyBaseUrl()}/api/agent/sessions/${encodeURIComponent(sessionId)}/messages`;
+  try {
+    const resp = await axios.get<{ messages: TranscriptMessage[] }>(url, {
+      timeout: 10_000,
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    return resp.data?.messages ?? [];
+  } catch (err) {
+    if (axios.isAxiosError(err) && err.response?.status === 404) {
+      return null;
+    }
+    throw err;
+  }
+}
+
 export async function listRecentSessions(
   logger: Logger,
   limit = 5,

@@ -2,7 +2,7 @@ import TelegramBot from "node-telegram-bot-api";
 import type { Logger } from "winston";
 import {
   AgentAbortError,
-  extractFinalAnswerFromHistory,
+  getSessionMessages,
   listProjectGroups,
   listRecentSessions,
   listTaskTemplates,
@@ -12,7 +12,6 @@ import {
   type ProjectGroup,
   type TaskTemplate,
 } from "./agentClient";
-import { getMostRecentSession, getSessionById } from "./db";
 
 let bot: TelegramBot | null = null;
 
@@ -570,12 +569,22 @@ async function handleTaskCommand(logger: Logger, chatId: number) {
 
   // 2. Otherwise show final answer from the most recent completed session.
   try {
-    const session = getMostRecentSession();
+    const sessions = await listRecentSessions(logger, 1);
+    const session = sessions[0];
     if (!session) {
       await notify(logger, "🗒️ No sessions found.", { chatId });
       return;
     }
-    const finalAnswer = extractFinalAnswerFromHistory(session.historyJson);
+    const messages = await getSessionMessages(logger, session.id);
+    let finalAnswer: string | null = null;
+    if (messages) {
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const msg = messages[i];
+        if (msg.role !== "assistant") continue;
+        const block = msg.blocks?.find((b) => b.kind === "finalAnswer");
+        if (block) { finalAnswer = block.text; break; }
+      }
+    }
     if (!finalAnswer) {
       await notify(
         logger,
@@ -1085,8 +1094,8 @@ export function setupMessageListener(logger: Logger, bot: TelegramBot) {
         return;
       }
       if (pending.sessionId) {
-        const exists = getSessionById(pending.sessionId);
-        if (!exists) {
+        const messages = await getSessionMessages(logger, pending.sessionId);
+        if (messages === null) {
           pendingPrompts.delete(chatId);
           await notify(logger, "❌ Selected session no longer exists.", {
             chatId,

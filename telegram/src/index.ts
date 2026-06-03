@@ -5,7 +5,6 @@ import { randomUUID } from "crypto";
 import winston from "winston";
 import { z } from "zod";
 import { initTelegram, notify, setupMessageListener } from "./notifyTelegram";
-import { closeDb, initDb } from "./db";
 
 export const logger = winston.createLogger({
   level: process.env.LOG_LEVEL || "info",
@@ -24,12 +23,6 @@ export const logger = winston.createLogger({
 
 const app = express();
 const port = process.env.PORT ? parseInt(process.env.PORT, 10) : 6666;
-
-try {
-  initDb(logger);
-} catch (e) {
-  logger.error("Failed to open omnikey SQLite database:", e);
-}
 
 const botToken = process.env.TELEGRAM_BOT_TOKEN ?? "";
 if (botToken) {
@@ -95,12 +88,10 @@ app.listen(port, () => {
 
 process.on("SIGINT", () => {
   logger.info("Received SIGINT. Exiting...");
-  closeDb(logger);
   process.exit(0);
 });
 
 process.on("SIGTERM", () => {
   logger.info("Received SIGTERM. Exiting...");
-  closeDb(logger);
   process.exit(0);
 });
