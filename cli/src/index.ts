@@ -12,13 +12,21 @@ import { setConfig } from './setConfig';
 import { grantBrowserAccess, reopenBrowserDebugProfile } from './grantBrowserAccess';
 import { scheduleAdd, scheduleList, scheduleRemove, scheduleRunNow } from './scheduleJob';
 import { mcpAdd, mcpList, mcpRemove, mcpToggle, mcpUpdate } from './mcpServer';
+import {
+  startTelegramDaemon,
+  stopTelegramDaemon,
+  restartTelegramDaemon,
+  statusTelegramDaemon,
+  logsTelegramDaemon,
+  uninstallTelegramDaemon,
+} from './telegramDaemon';
 
 const program = new Command();
 
 program
   .name('omnikey')
   .description('Omnikey CLI for onboarding and configuration')
-  .version('1.0.0');
+  .version('1.5.4');
 
 program
   .command('onboard')
@@ -31,9 +39,13 @@ program
   .command('daemon')
   .description('Start the Omnikey API backend as a daemon on a specified port')
   .option('--port <port>', 'Port to run the backend on', '7071')
+  .option('--telegram', 'Also install and start the Telegram bot daemon')
   .action(async (options) => {
     const port = Number(options.port) || 7071;
     await startDaemon(port);
+    if (options.telegram) {
+      await startTelegramDaemon();
+    }
   });
 
 program
@@ -87,10 +99,14 @@ program
   .command('restart-daemon')
   .description('Restart the Omnikey API backend daemon')
   .option('--port <port>', 'Port to run the backend on', '7071')
+  .option('--telegram', 'Also restart the Telegram bot daemon')
   .action(async (options) => {
     killDaemon();
     const port = Number(options.port) || 7071;
     await startDaemon(port);
+    if (options.telegram) {
+      await restartTelegramDaemon();
+    }
   });
 
 program
@@ -178,6 +194,55 @@ mcpCmd
   .description('Update an existing MCP server by ID')
   .action(async (id: string) => {
     await mcpUpdate(id);
+  });
+
+const telegramDaemonCmd = program
+  .command('telegram')
+  .description(
+    'Manage the Telegram bot daemon (launchd on macOS, NSSM on Windows). ' +
+      'Run `omnikey telegram start` to install and start.',
+  );
+
+telegramDaemonCmd
+  .command('start')
+  .description('Install and start the Telegram bot daemon (survives reboots, auto-restarts)')
+  .action(async () => {
+    await startTelegramDaemon();
+  });
+
+telegramDaemonCmd
+  .command('stop')
+  .description('Stop the Telegram bot daemon')
+  .action(() => {
+    stopTelegramDaemon();
+  });
+
+telegramDaemonCmd
+  .command('restart')
+  .description('Restart the Telegram bot daemon')
+  .action(async () => {
+    await restartTelegramDaemon();
+  });
+
+telegramDaemonCmd
+  .command('status')
+  .description('Show the current status of the Telegram bot daemon')
+  .action(() => {
+    statusTelegramDaemon();
+  });
+
+telegramDaemonCmd
+  .command('logs')
+  .description('Tail the Telegram bot daemon logs')
+  .action(() => {
+    logsTelegramDaemon();
+  });
+
+telegramDaemonCmd
+  .command('uninstall')
+  .description('Stop and remove the Telegram bot daemon')
+  .action(() => {
+    uninstallTelegramDaemon();
   });
 
 program.parseAsync(process.argv);

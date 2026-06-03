@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - 'cli/**'
+      - 'telegram/**'
 
 jobs:
   publish:
@@ -37,6 +38,20 @@ jobs:
           npm config get userconfig
           npm config get registry
 
+      - name: Install main app dependencies
+        run: npm ci
+
+      - name: Build main app
+        run: npm run build
+
+      - name: Install telegram dependencies
+        run: npm ci
+        working-directory: ./telegram
+
+      - name: Build telegram
+        run: npm run build
+        working-directory: ./telegram
+
       - name: Install CLI dependencies
         run: npm ci
         working-directory: ./cli
@@ -44,18 +59,6 @@ jobs:
       - name: Build CLI
         run: npm run build
         working-directory: ./cli
-
-      - name: Install main app dependencies
-        run: npm ci
-
-      - name: Build main app
-        run: npm run build
-
-      - name: Copy backend dist to CLI
-        run: |
-          rm -rf ./cli/backend-dist
-          mkdir -p ./cli/backend-dist
-          cp -R ./dist/* ./cli/backend-dist/
 
       - name: Publish to npm
         run: npm publish --access public
