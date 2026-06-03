@@ -1,6 +1,7 @@
 name: Publish Omnikey CLI to npm
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
