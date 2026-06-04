@@ -97,12 +97,13 @@ const DEFAULT_MODELS: Record<AIProvider, { fast: string; smart: string }> = {
   // NVIDIA Nemotron is exposed through the OpenAI-compatible NIM endpoint at
   // https://integrate.api.nvidia.com/v1. The "fast" tier maps to Nemotron Nano
   // for high-throughput sub-agent workloads; the "smart" tier maps to Nemotron
-  // Super for complex multi-agent reasoning and tool use. Swap in Nemotron
-  // Ultra (`nvidia/nemotron-3-ultra-550b-a55b`) here when the highest accuracy
-  // is required.
+  // Ultra — the frontier-level model in the family — for complex multi-agent
+  // reasoning, planning, code generation, and deep research. Drop down to
+  // Nemotron Super (`nvidia/nemotron-3-super-120b-a12b`) here if single-GPU
+  // data-center deployment is required.
   nemotron: {
     fast: 'nvidia/nemotron-3-nano-30b-a3b',
-    smart: 'nvidia/nemotron-3-super-120b-a12b',
+    smart: 'nvidia/nemotron-3-ultra-550b-a55b',
   },
 };
 

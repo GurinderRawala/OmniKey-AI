@@ -131,6 +131,6 @@ describe('NemotronAdapter', () => {
 
   it('exposes fast and smart defaults via getDefaultModel', () => {
     expect(getDefaultModel('nemotron', 'fast')).toBe('nvidia/nemotron-3-nano-30b-a3b');
-    expect(getDefaultModel('nemotron', 'smart')).toBe('nvidia/nemotron-3-super-120b-a12b');
+    expect(getDefaultModel('nemotron', 'smart')).toBe('nvidia/nemotron-3-ultra-550b-a55b');
   });
 });

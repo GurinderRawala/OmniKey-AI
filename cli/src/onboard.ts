@@ -8,7 +8,7 @@ const AI_PROVIDERS = [
   { name: 'Anthropic — Claude (claude-haiku / claude-opus)', value: 'anthropic' },
   { name: 'Google Gemini (gemini-2.5-flash / gemini-2.5-pro)', value: 'gemini' },
   {
-    name: 'NVIDIA Nemotron (nemotron-3-nano / nemotron-3-super) — open weights',
+    name: 'NVIDIA Nemotron (nemotron-3-nano / nemotron-3-ultra) — open weights',
     value: 'nemotron',
   },
 ];
@@ -62,6 +62,37 @@ export async function onboard() {
       validate: (input: string) => input.trim() !== '' || 'API key cannot be empty',
     },
   ]);
+
+  // Provider-specific extras
+  const providerExtras: Record<string, string> = {};
+
+  if (aiProvider === 'nemotron') {
+    // Nemotron is served either via the public NVIDIA NIM gateway or a
+    // self-hosted NIM microservice. Always ask the user for the base URL so
+    // they can point at either. The default value matches the public gateway
+    // so pressing Enter "just works" for build.nvidia.com keys.
+    const DEFAULT_NEMOTRON_URL = 'https://integrate.api.nvidia.com/v1';
+    const { nemotronBaseUrl } = await inquirer.prompt([
+      {
+        type: 'input',
+        name: 'nemotronBaseUrl',
+        message: 'Enter the Nemotron / NVIDIA NIM base URL (press Enter for the public gateway):',
+        default: DEFAULT_NEMOTRON_URL,
+        validate: (input: string) => {
+          const trimmed = input.trim();
+          if (trimmed === '') return 'URL cannot be empty';
+          try {
+            // eslint-disable-next-line no-new
+            new URL(trimmed);
+            return true;
+          } catch {
+            return 'Please enter a valid URL (including the scheme, e.g. https://...)';
+          }
+        },
+      },
+    ]);
+    providerExtras['NEMOTRON_BASE_URL'] = nemotronBaseUrl.trim();
+  }
 
   // Web search provider (optional)
   const { provider } = await inquirer.prompt([
@@ -128,6 +159,7 @@ export async function onboard() {
     [AI_PROVIDER_KEY_ENV[aiProvider]]: apiKey,
     IS_SELF_HOSTED: true,
     SQLITE_PATH: sqlitePath,
+    ...providerExtras,
     ...searchConfig,
   };
   fs.writeFileSync(configPath, JSON.stringify(configVars, null, 2));
