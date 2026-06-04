@@ -2228,3 +2228,21 @@ body.star-modal-open {
     font-size: 1.18rem;
   }
 }
+
+/* ── Telegram section: ensure links are visible against dark background ── */
+#telegram a,
+#telegram .hint a,
+.feature-item-new .auth-setup-box a {
+  color: #fff;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+#telegram a:hover,
+#telegram .hint a:hover,
+.feature-item-new .auth-setup-box a:hover {
+  color: #fff;
+  text-decoration: underline;
+  opacity: 0.85;
+}
+
