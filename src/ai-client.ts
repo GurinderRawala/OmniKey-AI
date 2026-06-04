@@ -8,7 +8,7 @@ import { config } from './config';
 // Common types
 // ---------------------------------------------------------------------------
 
-export type AIProvider = 'openai' | 'gemini' | 'anthropic';
+export type AIProvider = 'openai' | 'gemini' | 'anthropic' | 'nemotron';
 
 export interface AIMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
@@ -94,6 +94,16 @@ const DEFAULT_MODELS: Record<AIProvider, { fast: string; smart: string }> = {
   openai: { fast: 'gpt-4o-mini', smart: 'gpt-5.5' },
   gemini: { fast: 'gemini-2.5-flash', smart: 'gemini-2.5-pro' },
   anthropic: { fast: 'claude-haiku-4-5-20251001', smart: 'claude-opus-4-7' },
+  // NVIDIA Nemotron is exposed through the OpenAI-compatible NIM endpoint at
+  // https://integrate.api.nvidia.com/v1. The "fast" tier maps to Nemotron Nano
+  // for high-throughput sub-agent workloads; the "smart" tier maps to Nemotron
+  // Super for complex multi-agent reasoning and tool use. Swap in Nemotron
+  // Ultra (`nvidia/nemotron-3-ultra-550b-a55b`) here when the highest accuracy
+  // is required.
+  nemotron: {
+    fast: 'nvidia/nemotron-3-nano-30b-a3b',
+    smart: 'nvidia/nemotron-3-super-120b-a12b',
+  },
 };
 
 export function getDefaultModel(provider: AIProvider, tier: 'fast' | 'smart'): string {
@@ -145,6 +155,9 @@ const MAX_MESSAGE_CONTENT_LENGTH_BY_PROVIDER: Record<AIProvider, number> = {
   anthropic: 10_000_000,
   openai: 800_000,
   gemini: 3_500_000,
+  // Nemotron 3 ships a 1M-token context window via NIM; mirror Gemini's
+  // per-string cap (no documented hard limit, bounded by the context window).
+  nemotron: 3_500_000,
 };
 
 /**
@@ -163,6 +176,8 @@ const MAX_HISTORY_LENGTH_BY_PROVIDER: Record<AIProvider, number> = {
   anthropic: 1_800_000,
   openai: 460_000,
   gemini: 1_800_000,
+  // 1M-token context with 100K reserved for output → 900K target × 2 chars
+  nemotron: 1_800_000,
 };
 
 /**
@@ -173,6 +188,8 @@ const CONTEXT_WINDOW_BY_PROVIDER: Record<AIProvider, number> = {
   anthropic: 1_000_000,
   openai: 272_000,
   gemini: 1_000_000,
+  // Nemotron 3 hybrid Mamba-Transformer MoE family ships with 1M-token context.
+  nemotron: 1_000_000,
 };
 
 export function getMaxMessageContentLength(provider: AIProvider): number {
@@ -268,9 +285,7 @@ class OpenAIAdapter {
     const stream = await this.client.chat.completions.create({
       model,
       messages: oaiMessages,
-      ...(modelSupportsTemperature(model)
-        ? { temperature: options.temperature ?? 0.3 }
-        : {}),
+      ...(modelSupportsTemperature(model) ? { temperature: options.temperature ?? 0.3 } : {}),
       stream: true,
       stream_options: { include_usage: true },
     });
@@ -412,9 +427,7 @@ class AnthropicAdapter {
       max_tokens: options.maxTokens ?? 8192,
       ...(system ? { system } : {}),
       messages: anthropicMessages,
-      ...(modelSupportsTemperature(model)
-        ? { temperature: options.temperature ?? 0.3 }
-        : {}),
+      ...(modelSupportsTemperature(model) ? { temperature: options.temperature ?? 0.3 } : {}),
     });
 
     for await (const event of stream) {
@@ -433,6 +446,130 @@ class AnthropicAdapter {
       completion_tokens: finalMsg.usage.output_tokens,
       total_tokens: finalMsg.usage.input_tokens + finalMsg.usage.output_tokens,
     };
+
+    return { usage, model };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Nemotron adapter (NVIDIA NIM — OpenAI-compatible REST API)
+// ---------------------------------------------------------------------------
+
+/**
+ * NVIDIA Nemotron models are served behind an OpenAI-compatible endpoint at
+ * `https://integrate.api.nvidia.com/v1` (the NVIDIA NIM gateway, also used by
+ * self-hosted NIM microservices). Because the wire protocol matches OpenAI's
+ * Chat Completions API, we reuse the `openai` SDK by constructing a client
+ * with a custom `baseURL`. This keeps the message/tool-call conversion logic
+ * identical to OpenAI and avoids pulling in another transport library.
+ *
+ * Notes on Nemotron-specific quirks:
+ *  - The endpoint accepts `temperature`, `top_p`, `max_tokens`, and `tools`
+ *    in the standard OpenAI shape, so no schema translation is needed.
+ *  - Image generation is not exposed for the text-only Nemotron models, so
+ *    `generateImage` is intentionally not implemented (the unified `AIClient`
+ *    surfaces a clear error for unsupported providers).
+ *  - Self-hosted NIM deployments can be targeted by setting the
+ *    `NEMOTRON_BASE_URL` env var (handled in `config.ts`). The API key can be
+ *    any non-empty string for self-hosted NIM.
+ */
+class NemotronAdapter {
+  private client: OpenAI;
+
+  constructor(apiKey: string, baseURL: string) {
+    this.client = new OpenAI({ apiKey, baseURL });
+  }
+
+  async complete(
+    model: string,
+    messages: AIMessage[],
+    options: CompletionOptions,
+  ): Promise<AICompletionResult> {
+    const oaiMessages = toOpenAIMessages(messages);
+    const tools = options.tools?.length ? toOpenAITools(options.tools) : undefined;
+
+    const completion = await this.client.chat.completions.create({
+      model,
+      messages: oaiMessages,
+      tools: tools?.length ? tools : undefined,
+      ...(modelSupportsTemperature(model) ? { temperature: options.temperature ?? 0.2 } : {}),
+      max_tokens: options.maxTokens,
+    });
+
+    const choice = completion.choices[0];
+    const msg = choice.message;
+    const content = (msg.content ?? '').toString().trim();
+
+    const tool_calls: AIToolCall[] | undefined = msg.tool_calls
+      ?.filter(
+        (
+          tc,
+        ): tc is OpenAI.Chat.Completions.ChatCompletionMessageToolCall & {
+          type: 'function';
+          function: { name: string; arguments: string };
+        } => tc.type === 'function' && 'function' in tc,
+      )
+      .map((tc) => ({
+        id: tc.id,
+        name: tc.function.name,
+        arguments: JSON.parse(tc.function.arguments || '{}') as Record<string, unknown>,
+      }));
+
+    const finishReason =
+      choice.finish_reason === 'tool_calls'
+        ? 'tool_calls'
+        : choice.finish_reason === 'length'
+          ? 'length'
+          : 'stop';
+
+    const usage = completion.usage
+      ? {
+          prompt_tokens: completion.usage.prompt_tokens,
+          completion_tokens: completion.usage.completion_tokens,
+          total_tokens: completion.usage.total_tokens,
+        }
+      : undefined;
+
+    const assistantMessage: AIMessage = {
+      role: 'assistant',
+      content,
+      ...(tool_calls?.length ? { tool_calls } : {}),
+    };
+
+    return { content, finish_reason: finishReason, tool_calls, usage, model, assistantMessage };
+  }
+
+  async streamComplete(
+    model: string,
+    messages: AIMessage[],
+    options: CompletionOptions,
+    onDelta: (delta: string) => void,
+  ): Promise<{ usage?: AIUsage; model: string }> {
+    const oaiMessages = toOpenAIMessages(messages);
+
+    const stream = await this.client.chat.completions.create({
+      model,
+      messages: oaiMessages,
+      ...(modelSupportsTemperature(model) ? { temperature: options.temperature ?? 0.3 } : {}),
+      stream: true,
+      stream_options: { include_usage: true },
+    });
+
+    let usage: AIUsage | undefined;
+
+    for await (const part of stream as AsyncIterable<any>) {
+      const delta = part.choices?.[0]?.delta?.content ?? '';
+      if (delta) {
+        onDelta(delta);
+      }
+      if (part.usage) {
+        usage = {
+          prompt_tokens: part.usage.prompt_tokens ?? 0,
+          completion_tokens: part.usage.completion_tokens ?? 0,
+          total_tokens: part.usage.total_tokens ?? 0,
+        };
+      }
+    }
 
     return { usage, model };
   }
@@ -463,9 +600,7 @@ class GeminiAdapter {
       config: {
         ...(systemInstruction ? { systemInstruction } : {}),
         ...(tools?.length ? { tools } : {}),
-        ...(modelSupportsTemperature(model)
-          ? { temperature: options.temperature ?? 0.2 }
-          : {}),
+        ...(modelSupportsTemperature(model) ? { temperature: options.temperature ?? 0.2 } : {}),
       },
     });
 
@@ -531,9 +666,7 @@ class GeminiAdapter {
       contents,
       config: {
         ...(systemInstruction ? { systemInstruction } : {}),
-        ...(modelSupportsTemperature(model)
-          ? { temperature: options.temperature ?? 0.3 }
-          : {}),
+        ...(modelSupportsTemperature(model) ? { temperature: options.temperature ?? 0.3 } : {}),
       },
     });
 
@@ -609,8 +742,9 @@ export class AIClient {
   private openai?: OpenAIAdapter;
   private anthropic?: AnthropicAdapter;
   private gemini?: GeminiAdapter;
+  private nemotron?: NemotronAdapter;
 
-  constructor(provider: AIProvider, apiKey: string) {
+  constructor(provider: AIProvider, apiKey: string, options: { nemotronBaseURL?: string } = {}) {
     this.provider = provider;
     if (provider === 'openai') {
       this.openai = new OpenAIAdapter(apiKey);
@@ -618,6 +752,11 @@ export class AIClient {
       this.anthropic = new AnthropicAdapter(apiKey);
     } else if (provider === 'gemini') {
       this.gemini = new GeminiAdapter(apiKey);
+    } else if (provider === 'nemotron') {
+      // Default to the public NVIDIA NIM gateway. Self-hosted NIM deployments
+      // can override this via `NEMOTRON_BASE_URL` (see config.ts).
+      const baseURL = options.nemotronBaseURL || 'https://integrate.api.nvidia.com/v1';
+      this.nemotron = new NemotronAdapter(apiKey, baseURL);
     }
   }
 
@@ -639,6 +778,9 @@ export class AIClient {
     if (this.provider === 'gemini' && this.gemini) {
       return this.gemini.complete(model, messages, options);
     }
+    if (this.provider === 'nemotron' && this.nemotron) {
+      return this.nemotron.complete(model, messages, options);
+    }
     throw new Error(`AI provider "${this.provider}" is not configured.`);
   }
 
@@ -656,6 +798,9 @@ export class AIClient {
     }
     if (this.provider === 'gemini' && this.gemini) {
       return this.gemini.streamComplete(model, messages, options, onDelta);
+    }
+    if (this.provider === 'nemotron' && this.nemotron) {
+      return this.nemotron.streamComplete(model, messages, options, onDelta);
     }
     throw new Error(`AI provider "${this.provider}" is not configured.`);
   }
@@ -867,4 +1012,6 @@ function toGeminiTools(tools: AITool[]): GeminiTool[] {
 // Shared singleton — import this instead of constructing a new AIClient
 // ---------------------------------------------------------------------------
 
-export const aiClient = new AIClient(config.aiProvider, config.aiApiKey);
+export const aiClient = new AIClient(config.aiProvider, config.aiApiKey, {
+  nemotronBaseURL: config.nemotronBaseUrl,
+});

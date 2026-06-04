@@ -7,6 +7,10 @@ const AI_PROVIDERS = [
   { name: 'OpenAI (gpt-4o-mini / gpt-5.5)', value: 'openai' },
   { name: 'Anthropic — Claude (claude-haiku / claude-opus)', value: 'anthropic' },
   { name: 'Google Gemini (gemini-2.5-flash / gemini-2.5-pro)', value: 'gemini' },
+  {
+    name: 'NVIDIA Nemotron (nemotron-3-nano / nemotron-3-super) — open weights',
+    value: 'nemotron',
+  },
 ];
 
 const SEARCH_PROVIDERS = [
@@ -22,12 +26,14 @@ const AI_PROVIDER_KEY_ENV: Record<string, string> = {
   openai: 'OPENAI_API_KEY',
   anthropic: 'ANTHROPIC_API_KEY',
   gemini: 'GEMINI_API_KEY',
+  nemotron: 'NVIDIA_API_KEY',
 };
 
 const AI_PROVIDER_KEY_LABEL: Record<string, string> = {
   openai: 'OpenAI API key (from platform.openai.com)',
   anthropic: 'Anthropic API key (from console.anthropic.com)',
   gemini: 'Google Gemini API key (from ai.google.dev)',
+  nemotron: 'NVIDIA API key (from build.nvidia.com — used by NIM/Nemotron)',
 };
 
 /**
