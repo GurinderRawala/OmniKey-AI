@@ -807,10 +807,22 @@ export class AIClient {
   }
 
   /**
+   * Reports whether the configured provider can generate images.
+   *
+   * Centralising this check means agent tool registration and system-prompt
+   * builders no longer need to keep a hand-maintained allow/deny list of
+   * providers — they ask the client directly. Currently OpenAI and Gemini
+   * support image generation; Anthropic and Nemotron (text-only) do not.
+   */
+  supportsImageGeneration(): boolean {
+    return this.provider === 'openai' || this.provider === 'gemini';
+  }
+
+  /**
    * Generates an image with the currently configured provider.
    *
-   * Supported providers are OpenAI and Gemini. Anthropic does not currently
-   * expose a text-to-image generation endpoint in this project.
+   * Supported providers are OpenAI and Gemini. Anthropic and Nemotron do not
+   * currently expose a text-to-image generation endpoint in this project.
    *
    * @param options - Unified image-generation options.
    * @returns Provider-normalized image payload.
@@ -824,6 +836,16 @@ export class AIClient {
     }
     throw new Error(`Image generation is not supported for provider "${this.provider}".`);
   }
+}
+
+/**
+ * Returns whether the given provider supports image generation.
+ *
+ * Module-level helper for callers that only have the provider id at hand
+ * (e.g. system-prompt builders) and don't want to construct an `AIClient`.
+ */
+export function providerSupportsImageGeneration(provider: AIProvider): boolean {
+  return provider === 'openai' || provider === 'gemini';
 }
 
 // ---------------------------------------------------------------------------

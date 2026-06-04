@@ -1,5 +1,11 @@
 import { WEB_FETCH_TOOL, WEB_SEARCH_TOOL } from '../web-search/web-search-provider';
-import { AIMessage, AITool, getMaxMessageContentLength, getMaxHistoryLength } from '../ai-client';
+import {
+  AIMessage,
+  AITool,
+  getMaxMessageContentLength,
+  getMaxHistoryLength,
+  providerSupportsImageGeneration,
+} from '../ai-client';
 import { AgentSendFn, SessionState } from './types';
 import { config } from '../config';
 import { Logger } from 'winston';
@@ -11,17 +17,18 @@ import { IMAGE_GENERATE_TOOL } from './imageTool';
  * `web_search` is always included because DuckDuckGo is used as a free
  * fallback when no third-party search key is configured.
  *
- * `generate_image` is omitted for the Anthropic provider because the
- * underlying `aiClient.generateImage()` only supports OpenAI and Gemini —
- * registering an unsupported tool would invite the model to call it and
- * fail at execution time. The system prompt for Anthropic is built without
+ * `generate_image` is omitted for providers without image-generation
+ * support (currently Anthropic and Nemotron) because the underlying
+ * `aiClient.generateImage()` only supports OpenAI and Gemini — registering
+ * an unsupported tool would invite the model to call it and fail at
+ * execution time. The system prompt for those providers is built without
  * the image-tool section to match this tool set.
  *
  * @returns An array of `AITool` definitions ready to pass to the AI client.
  */
 export function buildAvailableTools(extraTools: AITool[] = []): AITool[] {
   const baseTools: AITool[] = [WEB_FETCH_TOOL, WEB_SEARCH_TOOL];
-  if (config.aiProvider !== 'anthropic') {
+  if (providerSupportsImageGeneration(config.aiProvider)) {
     baseTools.push(IMAGE_GENERATE_TOOL);
   }
   return [...baseTools, ...extraTools];

@@ -46,7 +46,7 @@ vi.mock('@google/genai', () => ({
   Tool: class {},
 }));
 
-import { AIClient, getDefaultModel } from '../ai-client';
+import { AIClient, getDefaultModel, providerSupportsImageGeneration } from '../ai-client';
 
 const messages = [{ role: 'user' as const, content: 'hello' }];
 
@@ -132,5 +132,18 @@ describe('NemotronAdapter', () => {
   it('exposes fast and smart defaults via getDefaultModel', () => {
     expect(getDefaultModel('nemotron', 'fast')).toBe('nvidia/nemotron-3-nano-30b-a3b');
     expect(getDefaultModel('nemotron', 'smart')).toBe('nvidia/nemotron-3-ultra-550b-a55b');
+  });
+
+  it('reports image generation as unsupported', () => {
+    const client = new AIClient('nemotron', 'nvapi-test');
+    expect(client.supportsImageGeneration()).toBe(false);
+    expect(providerSupportsImageGeneration('nemotron')).toBe(false);
+  });
+
+  it('generateImage rejects with an unsupported-provider error', async () => {
+    const client = new AIClient('nemotron', 'nvapi-test');
+    await expect(client.generateImage({ prompt: 'a test image' })).rejects.toThrow(
+      /not supported for provider "nemotron"/,
+    );
   });
 });

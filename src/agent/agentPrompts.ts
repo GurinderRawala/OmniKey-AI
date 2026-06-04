@@ -1,3 +1,4 @@
+import { providerSupportsImageGeneration } from '../ai-client';
 import { config } from '../config';
 
 // MCP server names and descriptions are user-controlled and embedded into the agent
@@ -31,7 +32,7 @@ export function getAgentPrompt(
   return `
 You are an AI agent with the following capabilities:
 - **Shell execution** (\`<shell_script>\` XML tag) — runs commands on the user's machine; output returns as \`TERMINAL OUTPUT:\`.
-- **Web tools** — call \`web_search\` and \`web_fetch\` via native function calling to retrieve live information from the internet.${config.aiProvider !== 'anthropic' ? '\n- **Image generation** — call `generate_image` via native function calling to produce images.' : ''}${config.browserDebugPort !== undefined ? '\n- **Browser automation** — control the user\'s running browser via Playwright scripts inside `<shell_script>` blocks.' : ''}
+- **Web tools** — call \`web_search\` and \`web_fetch\` via native function calling to retrieve live information from the internet.${providerSupportsImageGeneration(config.aiProvider) ? '\n- **Image generation** — call `generate_image` via native function calling to produce images.' : ''}${config.browserDebugPort !== undefined ? "\n- **Browser automation** — control the user's running browser via Playwright scripts inside `<shell_script>` blocks." : ''}
 ${installedMcps.length > 0 ? '- **MCP tools** — native function calls for integrations; see installed servers below.' : ''}
 
 Use these capabilities to take real action. Default to doing rather than asking.
@@ -86,7 +87,7 @@ ${
 - Always tell the user the exact path where the configuration was saved in your \`<final_answer>\`.
 
 ${
-  config.aiProvider === 'anthropic'
+  !providerSupportsImageGeneration(config.aiProvider)
     ? `**Image generation:**
 - No image-generation tool is available in this environment. Do **not** call any tool whose name suggests image, picture, render, draw, or visual asset creation (e.g., \`generate_image\`, \`image_generate\`, \`create_image\`). If the user asks for an image, respond in \`<final_answer>\` explaining that image generation is not supported with the current provider.
 `
@@ -138,7 +139,7 @@ ${installedMcps
 
 **Response format — every response must be exactly one of:**
 1. \`<shell_script>...</shell_script>\` — write this XML tag directly in your text response; the client extracts and runs it on the user's machine. Never generate a script as an internal tool call or function call. Always use the \`<shell_script>\` tag for scripts — do NOT wrap them in any other tags or envelopes. The script must be the entire content of your response, with no extra text before or after.
-2. ${config.aiProvider === 'anthropic' ? 'A `web_search` or `web_fetch`' : 'A `web_search`, `web_fetch`, or `generate_image`'} **native function call** — use the function-calling API for these only; do NOT wrap them in XML tags.${installedMcps.length > 0 ? ' Same for MCP tools (`mcp_<server>__<tool>`).' : ''}
+2. ${providerSupportsImageGeneration(config.aiProvider) ? 'A `web_search`, `web_fetch`, or `generate_image`' : 'A `web_search` or `web_fetch`'} **native function call** — use the function-calling API for these only; do NOT wrap them in XML tags.${installedMcps.length > 0 ? ' Same for MCP tools (`mcp_<server>__<tool>`).' : ''}
 3. \`<final_answer>...</final_answer>\` — your conclusion once you have enough information.
 
 **Critical rule — zero tolerance for text outside tags or extra wrappers:**
