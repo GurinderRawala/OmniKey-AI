@@ -17,11 +17,12 @@ RUN corepack prepare yarn@1.22.22 --activate \
   && yarn install --frozen-lockfile
 
 # Copy the api workspace source + shared runtime assets needed at build time.
+# api/public is included in the api/ copy below.
 COPY api ./api
-COPY public ./public
 COPY macOS/OmniKeyAI.dmg ./macOS/OmniKeyAI.dmg
 COPY windows/OmniKeyAI-windows-win-x64.zip ./windows/OmniKeyAI-windows-win-x64.zip
 COPY scripts/install.sh ./install.sh
+COPY scripts/install.ps1 ./install.ps1
 
 # Build the api workspace (compiles api/src -> api/dist).
 RUN yarn workspace omnikey-ai-api run build
@@ -44,10 +45,11 @@ RUN corepack prepare yarn@1.22.22 --activate \
 
 # Copy compiled JS and runtime assets from the build stage.
 COPY --from=build /usr/src/app/api/dist ./api/dist
-COPY --from=build /usr/src/app/public ./public
+COPY --from=build /usr/src/app/api/public ./public
 COPY macOS/OmniKeyAI.dmg ./macOS/OmniKeyAI.dmg
 COPY --from=build /usr/src/app/windows/OmniKeyAI-windows-win-x64.zip ./windows/OmniKeyAI-windows-win-x64.zip
 COPY scripts/install.sh ./install.sh
+COPY scripts/install.ps1 ./install.ps1
 
 # Cloud Run expects the container to listen on this port
 ENV PORT=8080

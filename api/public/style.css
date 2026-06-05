@@ -170,7 +170,7 @@ body {
 /* ── Hero ── */
 .hero {
   position: relative;
-  padding: 140px 32px 96px;
+  padding: 148px 32px 80px;
   text-align: center;
   overflow: hidden;
 }
@@ -207,7 +207,7 @@ body {
 
 .hero-content {
   position: relative;
-  max-width: 820px;
+  max-width: 680px;
   margin: 0 auto;
 }
 
@@ -256,11 +256,11 @@ body {
 }
 
 .hero-desc {
-  font-size: 1.12rem;
+  font-size: 1.1rem;
   color: var(--text-2);
-  max-width: 540px;
-  margin: 0 auto 36px;
-  line-height: 1.7;
+  max-width: 520px;
+  margin: 0 auto 40px;
+  line-height: 1.72;
   animation: fadeUp 0.55s ease 0.12s both;
 }
 
@@ -276,8 +276,30 @@ body {
 .hero-note {
   color: var(--text-3);
   font-size: 0.78rem;
-  margin-bottom: 52px;
-  animation: fadeUp 0.55s ease 0.22s both;
+  margin-top: 0;
+  margin-bottom: 0;
+  animation: fadeUp 0.55s ease 0.24s both;
+}
+
+/* ── Demo showcase (below providers bar) ── */
+.demo-showcase {
+  padding: 56px 32px 64px;
+  text-align: center;
+}
+
+.demo-showcase-eyebrow {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-3);
+  margin-bottom: 20px;
+}
+
+.demo-showcase .demo-card {
+  max-width: 580px;
+  margin: 0 auto;
+  animation: fadeUp 0.55s ease 0.1s both;
 }
 
 /* ── Buttons ── */
@@ -366,9 +388,6 @@ body {
     0 28px 80px rgba(0, 0, 0, 0.55),
     0 0 0 1px rgba(255, 255, 255, 0.04);
   text-align: left;
-  max-width: 580px;
-  margin: 0 auto;
-  animation: fadeUp 0.55s ease 0.28s both;
 }
 
 .demo-header {
@@ -922,27 +941,20 @@ main {
 
 /* ── Code blocks ── */
 pre {
-  background: var(--surface-2);
+  background: rgba(8, 8, 12, 0.95);
   border: 1px solid var(--border);
-  border-left: 3px solid var(--cyan);
   border-radius: 10px;
-  padding: 13px 44px 13px 16px;
+  padding: 14px 48px 14px 18px;
   margin-bottom: 10px;
   width: 100%;
   max-width: 100%;
-  overflow-x: auto;
-  overflow-y: hidden;
-  -webkit-overflow-scrolling: touch;
+  overflow-x: hidden;
   position: relative;
-  transition: border-left-color 0.2s;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
 }
 
 [hidden] {
   display: none !important;
-}
-
-pre:hover {
-  border-left-color: var(--purple);
 }
 
 code {
@@ -952,9 +964,38 @@ code {
 }
 
 pre code {
-  display: inline-block;
-  min-width: max-content;
-  white-space: pre;
+  display: block;
+  min-width: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-size: 0.875rem;
+  color: #e2e8f0;
+  line-height: 1.6;
+}
+
+/* ── Code block (tabbed card) ── */
+.code-block {
+  margin-bottom: 10px;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.35);
+}
+
+.code-block pre {
+  margin-bottom: 0;
+  border-radius: 0;
+  border: none;
+  border-top: 1px solid var(--border);
+  box-shadow: none;
+}
+
+.code-block-header {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.025);
+  padding: 7px 10px;
 }
 
 .hint {
@@ -966,29 +1007,40 @@ pre code {
 /* ── Copy button ── */
 .copy-btn {
   position: absolute;
-  top: 6px;
-  right: 6px;
-  background: transparent;
-  border: none;
+  top: 8px;
+  right: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.09);
   color: var(--text-3);
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: color 0.15s;
+  transition:
+    background 0.15s,
+    border-color 0.15s,
+    color 0.15s,
+    transform 0.15s;
   padding: 0;
-  border-radius: 4px;
+  border-radius: 7px;
 }
 
 .copy-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.18);
   color: var(--text);
+  transform: scale(1.05);
+}
+
+.copy-btn:active {
+  transform: scale(0.95);
 }
 
 .copy-btn svg {
-  width: 14px;
-  height: 14px;
+  width: 13px;
+  height: 13px;
   stroke-width: 2;
 }
 
@@ -1004,25 +1056,6 @@ pre code {
 }
 .steps[hidden] {
   display: none;
-}
-
-.code-block {
-  margin-bottom: 10px;
-}
-.code-block pre {
-  margin-bottom: 0;
-  border-top-left-radius: 0;
-  border-top-right-radius: 0;
-  border-top: none;
-}
-.code-block-header {
-  display: flex;
-  gap: 4px;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid var(--border);
-  border-bottom: none;
-  border-radius: 10px 10px 0 0;
-  padding: 5px 8px;
 }
 .code-tab {
   display: inline-flex;
@@ -1337,12 +1370,6 @@ footer a:hover {
   .hero-title {
     font-size: 2.1rem;
   }
-  .demo-card {
-    display: none;
-  }
-  .hero-note {
-    margin-bottom: 20px;
-  }
 }
 
 /* ── New Feature Banner ── */
@@ -1538,9 +1565,7 @@ footer a:hover {
   }
 
   .auth-tab-panel pre {
-    font-size: 0.74rem;
-    padding: 10px 36px 10px 12px;
-    padding-right: 38px;
+    padding: 10px 38px 10px 12px;
   }
 
   .auth-tab-panel pre code {
@@ -2246,3 +2271,83 @@ body.star-modal-open {
   opacity: 0.85;
 }
 
+
+/* ── Hero install (one-line install command) ── */
+.hero-install {
+  max-width: 560px;
+  margin: 0 auto 20px;
+  animation: fadeUp 0.55s ease 0.18s both;
+  position: relative;
+}
+
+.hero-install::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(167, 139, 250, 0.3), rgba(96, 165, 250, 0.2), rgba(34, 211, 238, 0.15));
+  z-index: 0;
+  filter: blur(0px);
+  opacity: 0.6;
+}
+
+.hero-install > * {
+  position: relative;
+  z-index: 1;
+}
+
+.hero-install-block {
+  margin: 0;
+  text-align: left;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255,255,255,0.04);
+}
+
+.hero-install-block pre {
+  padding: 18px 52px 18px 20px;
+}
+
+.hero-install-block pre code {
+  font-size: 0.9rem;
+}
+
+.hero-install-block .code-block-header {
+  background: rgba(255, 255, 255, 0.03);
+  padding: 8px 12px;
+}
+
+.hero-install-tag {
+  margin-left: auto;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.hero-install-note {
+  color: var(--text-3);
+  font-size: 0.82rem;
+  margin: 10px auto 0;
+  max-width: 540px;
+  line-height: 1.6;
+  text-align: center;
+}
+
+@media (max-width: 640px) {
+  .hero-install {
+    max-width: 100%;
+  }
+  .hero-install::before {
+    display: none;
+  }
+  .hero-install-tag {
+    display: none;
+  }
+  .demo-showcase {
+    padding: 36px 20px 48px;
+  }
+}

@@ -155,82 +155,28 @@
           Select any text, press a shortcut — OmniKey enhances prompts, fixes grammar, and runs
           custom AI tasks in any app, on any screen.
         </p>
-        <div class="download-count-badge" id="download-count-hero" hidden>
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            width="14"
-            height="14"
-            aria-hidden="true"
-          >
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-            <polyline points="7 10 12 15 17 10" />
-            <line x1="12" y1="15" x2="12" y2="3" />
-          </svg>
-          <span id="download-count-hero-text"></span>
-        </div>
-        <div class="hero-actions">
-          <a href="/macos/download" class="btn btn-primary btn-mac">
-            <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18" aria-hidden="true">
-              <path
-                d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"
-              />
-            </svg>
-            Download for macOS
-          </a>
-          <a href="/windows/download" class="btn btn-secondary btn-win">
-            <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18" aria-hidden="true">
-              <path
-                d="M3 12V6.75l6-1.32v6.57H3zm17 0V5.25L11 3.5v8.5h9zM3 13v5.25l6 1.32V13H3zm17 0v6.75L11 21.5V13h9z"
-              />
-            </svg>
-            Download for Windows
-          </a>
+        <div class="hero-install">
+          <div class="code-block hero-install-block">
+            <div class="code-block-header">
+              <button class="code-tab active" data-code-tab="install-mac" type="button">
+                <svg viewBox="0 0 24 24" fill="currentColor" width="13" height="13" aria-hidden="true">
+                  <path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/>
+                </svg>
+                macOS
+              </button>
+              <button class="code-tab" data-code-tab="install-win" type="button">
+                <svg viewBox="0 0 24 24" fill="currentColor" width="13" height="13" aria-hidden="true">
+                  <path d="M0 3.449L9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-12.9-1.801"/>
+                </svg>
+                Windows
+              </button>
+              <span class="hero-install-tag">One-line install</span>
+            </div>
+            <pre data-code-content="install-mac"><code>curl -fsSL https://omnikeyai.ca/install.sh | bash</code></pre>
+            <pre data-code-content="install-win" hidden><code>iwr -useb https://omnikeyai.ca/install.ps1 | iex</code></pre>
+          </div>
         </div>
         <p class="hero-note">macOS 13+ &nbsp;·&nbsp; Windows 10/11 x64 &nbsp;·&nbsp; Free to use</p>
-
-        <!-- Demo card -->
-        <div class="demo-card">
-          <div class="demo-header">
-            <div class="demo-dots">
-              <span class="dot dot-red"></span>
-              <span class="dot dot-yellow"></span>
-              <span class="dot dot-green"></span>
-            </div>
-            <span class="demo-window-title">Any application on your computer</span>
-          </div>
-          <div class="demo-body">
-            <div class="demo-before">
-              <div class="demo-label">Selected text</div>
-              <div class="demo-text demo-selected">fix my code it's not working</div>
-            </div>
-            <div class="demo-transform">
-              <span class="key demo-key">⌘E</span>
-              <svg
-                class="demo-arrow-icon"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                width="16"
-                height="16"
-              >
-                <path d="M5 12h14M13 6l6 6-6 6" />
-              </svg>
-              <span class="demo-transform-label">Enhance Prompt</span>
-            </div>
-            <div class="demo-after">
-              <div class="demo-label demo-label-result">AI Enhanced &amp; pasted back</div>
-              <div class="demo-text demo-result">
-                Please review the provided code and identify the issue causing it to malfunction.
-                Explain what's going wrong, then provide a corrected version with brief comments
-                explaining the key fix.
-              </div>
-            </div>
-          </div>
-        </div>
       </div>
     </section>
 
@@ -245,6 +191,42 @@
         <span class="provider-badge">Google Gemini</span>
         <span class="provider-sep">·</span>
         <span class="provider-badge">NVIDIA Nemotron</span>
+      </div>
+    </div>
+
+    <!-- ── Demo showcase ── -->
+    <div class="demo-showcase">
+      <p class="demo-showcase-eyebrow">See it in action</p>
+      <div class="demo-card">
+        <div class="demo-header">
+          <div class="demo-dots">
+            <span class="dot dot-red"></span>
+            <span class="dot dot-yellow"></span>
+            <span class="dot dot-green"></span>
+          </div>
+          <span class="demo-window-title">Any application on your computer</span>
+        </div>
+        <div class="demo-body">
+          <div class="demo-before">
+            <div class="demo-label">Selected text</div>
+            <div class="demo-text demo-selected">fix my code it's not working</div>
+          </div>
+          <div class="demo-transform">
+            <span class="key demo-key">⌘E</span>
+            <svg class="demo-arrow-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+              <path d="M5 12h14M13 6l6 6-6 6" />
+            </svg>
+            <span class="demo-transform-label">Enhance Prompt</span>
+          </div>
+          <div class="demo-after">
+            <div class="demo-label demo-label-result">AI Enhanced &amp; pasted back</div>
+            <div class="demo-text demo-result">
+              Please review the provided code and identify the issue causing it to malfunction.
+              Explain what's going wrong, then provide a corrected version with brief comments
+              explaining the key fix.
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 

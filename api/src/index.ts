@@ -221,6 +221,16 @@ app.get('/install.sh', (_req, res) => {
   res.sendFile(scriptPath);
 });
 
+app.get('/install.ps1', (_req, res) => {
+  const scriptPath = path.join(process.cwd(), 'install.ps1');
+  if (!fs.existsSync(scriptPath)) {
+    res.status(404).send('Not found.');
+    return;
+  }
+  res.set('Content-Type', 'text/plain; charset=utf-8');
+  res.sendFile(scriptPath);
+});
+
 app.get('*', (_req, res) => {
   res.sendFile(path.join(process.cwd(), 'public', 'index.html'));
 });
