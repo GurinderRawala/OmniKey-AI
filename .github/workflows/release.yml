@@ -26,47 +26,48 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '26'
+          node-version: '22'
+          cache: 'yarn'
 
       - name: Get version from tag
         id: version
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Install and build backend
-        run: |
-          npm ci
-          npm run build
-
-      - name: Install telegram dependencies
+      - name: Install monorepo dependencies
         run: yarn install --frozen-lockfile
-        working-directory: ./telegram
         env:
           npm_config_arch: ${{ matrix.npm_arch }}
 
-      - name: Build telegram
-        run: npm run build
-        working-directory: ./telegram
-
-      - name: Install CLI dependencies
-        run: npm ci
-        working-directory: ./cli
+      - name: Build all workspaces (api, telegram, cli)
+        run: yarn build
         env:
           npm_config_arch: ${{ matrix.npm_arch }}
 
-      - name: Build CLI TypeScript
-        run: npm run build
-        working-directory: ./cli
-
-      - name: Prune dev dependencies
-        run: npm prune --production
-        working-directory: ./cli
+      - name: Stage self-contained CLI bundle
+        run: |
+          VERSION=${{ steps.version.outputs.VERSION }}
+          STAGE="$RUNNER_TEMP/omnikey-cli-stage"
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE"
+          # Copy build artifacts and metadata. node_modules is intentionally omitted —
+          # we re-resolve production-only dependencies inside the staging directory below.
+          cp -R cli/dist "$STAGE/dist"
+          cp -R cli/backend-dist "$STAGE/backend-dist"
+          cp -R cli/telegram-client-dist "$STAGE/telegram-client-dist"
+          cp cli/package.json "$STAGE/package.json"
+          cp cli/README.md "$STAGE/README.md"
+          # Install production dependencies in the staging dir, isolated from the
+          # monorepo's workspaces so `node_modules` is fully resolved under cli/.
+          cd "$STAGE"
+          yarn install --production --no-lockfile --ignore-scripts=false
+          echo "STAGE=$STAGE" >> "$GITHUB_ENV"
 
       - name: Create release tarball
         run: |
           VERSION=${{ steps.version.outputs.VERSION }}
           TARBALL="omnikey-cli-${VERSION}-darwin-${{ matrix.arch }}.tar.gz"
           tar -czf "$TARBALL" \
-            -C cli \
+            -C "$STAGE" \
             dist/ \
             backend-dist/ \
             telegram-client-dist/ \

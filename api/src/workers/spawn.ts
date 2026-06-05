@@ -8,9 +8,7 @@ import { logger } from '../logger';
  * Each worker decides which message types it understands; unknown types are
  * logged and ignored so adding new commands is backwards compatible.
  */
-export type WorkerCommand =
-  | { type: 'runJob'; jobId: string }
-  | { type: 'shutdown' };
+export type WorkerCommand = { type: 'runJob'; jobId: string } | { type: 'shutdown' };
 
 export interface ManagedWorker {
   name: string;

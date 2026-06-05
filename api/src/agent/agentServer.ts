@@ -126,10 +126,13 @@ async function runToolLoop(
         // Intercept here so we don't fire a misleading "Fetching URL: undefined"
         // web-call notification and return a clear correction instead.
         if (tc.name === 'shell_script') {
-          log.warn('Agent attempted to call shell_script as a function; returning format-correction', {
-            sessionId,
-            toolIteration: toolIterations,
-          });
+          log.warn(
+            'Agent attempted to call shell_script as a function; returning format-correction',
+            {
+              sessionId,
+              toolIteration: toolIterations,
+            },
+          );
           return {
             id: tc.id,
             name: tc.name,

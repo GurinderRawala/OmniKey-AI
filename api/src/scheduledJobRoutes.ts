@@ -10,7 +10,10 @@ const CRON_REGEX = /^(\S+\s){4}\S+$/;
 const jobSchema = zod.object({
   label: zod.string().min(1).max(200),
   prompt: zod.string().min(1),
-  cronExpression: zod.string().regex(CRON_REGEX, 'Invalid cron expression (must be 5 fields)').optional(),
+  cronExpression: zod
+    .string()
+    .regex(CRON_REGEX, 'Invalid cron expression (must be 5 fields)')
+    .optional(),
   runAt: zod.string().optional(),
   isActive: zod.boolean().optional(),
   sessionId: zod.string().nullable().optional(),
@@ -117,7 +120,7 @@ export function scheduledJobRouter(): express.Router {
       }
 
       const cronExpression =
-        parsed.cronExpression !== undefined ? parsed.cronExpression ?? null : job.cronExpression;
+        parsed.cronExpression !== undefined ? (parsed.cronExpression ?? null) : job.cronExpression;
 
       let runAt = job.runAt;
       if (parsed.runAt !== undefined) {
