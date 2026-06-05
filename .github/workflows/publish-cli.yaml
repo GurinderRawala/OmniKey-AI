@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write
+      id-token: write # required for npm provenance / trusted publishing
 
     steps:
       - name: Checkout
@@ -32,39 +32,22 @@ jobs:
         run: |
           node -v
           yarn -v
+          npm -v
 
-      - name: Install monorepo dependencies
+      # ── Monorepo install + build use Yarn (single source of truth) ──────────
+      - name: Install monorepo dependencies (yarn workspaces)
         run: yarn install --frozen-lockfile
 
       - name: Build all workspaces (api, telegram, cli)
         run: yarn build
 
-      # Yarn 1's `yarn publish --non-interactive` does NOT honor NODE_AUTH_TOKEN
-      # or the `${NODE_AUTH_TOKEN}` placeholder that `setup-node` writes into
-      # the runner's .npmrc — it tries to run `yarn login` and fails. Write a
-      # literal-token .npmrc (workspace-scoped) so yarn picks the credential
-      # up directly. The file lives in the cli/ working dir and is removed
-      # after publish so the token never leaks into a cached layer.
-      - name: Write npm auth file for yarn publish
-        working-directory: ./cli
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          if [ -z "${NPM_TOKEN}" ]; then
-            echo "::error::NPM_TOKEN secret is empty — set it in repo Settings → Secrets."
-            exit 1
-          fi
-          {
-            echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}"
-            echo "registry=https://registry.npmjs.org/"
-            echo "always-auth=true"
-          } > .npmrc
-
+      # ── Publish the CLI workspace with npm ──────────────────────────────────
+      # Yarn 1's `yarn publish --non-interactive` does not pick up the auth
+      # token that actions/setup-node writes into ~/.npmrc. The repo is set up
+      # for npm publish (trusted publishing / OIDC — no token required), so we
+      # use npm only for the publish step itself. The cli workspace ships its
+      # own package-lock.json so a clean `npm publish` works without yarn's
+      # workspace context.
       - name: Publish CLI to npm
+        run: npm publish --access public --provenance
         working-directory: ./cli
-        run: yarn publish --access public --non-interactive --no-git-tag-version
-
-      - name: Remove npm auth file
-        if: always()
-        working-directory: ./cli
-        run: rm -f .npmrc
