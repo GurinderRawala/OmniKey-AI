@@ -8,6 +8,7 @@ on:
     paths:
       - 'cli/**'
       - 'telegram/**'
+      - 'api/**'
 
 jobs:
   publish:
@@ -23,44 +24,23 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '22.14.0'
+          node-version: '22'
+          cache: 'yarn'
           registry-url: 'https://registry.npmjs.org'
-
-      - name: Upgrade npm to required version
-        run: npm install -g npm@latest
 
       - name: Show versions
         run: |
           node -v
-          npm -v
+          yarn -v
 
-      - name: Show npm config locations
-        run: |
-          npm config get userconfig
-          npm config get registry
-
-      - name: Install main app dependencies
-        run: npm ci
-
-      - name: Build main app
-        run: npm run build
-
-      - name: Install telegram dependencies
+      - name: Install monorepo dependencies
         run: yarn install --frozen-lockfile
-        working-directory: ./telegram
 
-      - name: Build telegram
-        run: npm run build
-        working-directory: ./telegram
+      - name: Build all workspaces (api, telegram, cli)
+        run: yarn build
 
-      - name: Install CLI dependencies
-        run: npm ci
+      - name: Publish CLI to npm
+        run: yarn publish --access public --non-interactive --no-git-tag-version
         working-directory: ./cli
-
-      - name: Build CLI
-        run: npm run build
-        working-directory: ./cli
-
-      - name: Publish to npm
-        run: npm publish --access public
-        working-directory: ./cli
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -201,8 +201,7 @@ Respond with ONLY valid JSON, no markdown:
     );
     if (existingMatch) {
       const stored = existingMatch.groupDescription ?? '';
-      const hasNewShape =
-        /project root/i.test(stored) && /primary language/i.test(stored);
+      const hasNewShape = /project root/i.test(stored) && /primary language/i.test(stored);
       if (hasNewShape) {
         return { groupName: existingMatch.groupName, groupDescription: stored };
       }
@@ -560,7 +559,9 @@ export function startGroupingCronJob(): void {
     try {
       const ungrouped = await AgentSession.count({ where: { groupName: null } });
       const grouped = await AgentSession.count({ where: { groupName: { [Op.not]: null } } });
-      logger.info(`Session grouping backfill check: ${ungrouped} ungrouped sessions, ${grouped} grouped sessions`);
+      logger.info(
+        `Session grouping backfill check: ${ungrouped} ungrouped sessions, ${grouped} grouped sessions`,
+      );
       if (ungrouped > 0 && grouped === 0) {
         logger.info('No sessions have a group yet — running initial grouping backfill', {
           sessionCount: ungrouped,

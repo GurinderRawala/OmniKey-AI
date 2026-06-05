@@ -1,6 +1,6 @@
-import axios from "axios";
-import type { Logger } from "winston";
-import { omnikeyBaseUrl } from "./config";
+import axios from 'axios';
+import type { Logger } from 'winston';
+import { omnikeyBaseUrl } from './config';
 
 interface ActivateResponse {
   token: string;
@@ -19,50 +19,37 @@ let cachedExpiresAtMs: number | null = null;
 const RENEW_BEFORE_MS = 60 * 1000;
 
 function decodeJwtExpiry(token: string): number | null {
-  const parts = token.split(".");
+  const parts = token.split('.');
   if (parts.length < 2) return null;
   try {
     const payload = JSON.parse(
-      Buffer.from(
-        parts[1].replace(/-/g, "+").replace(/_/g, "/"),
-        "base64",
-      ).toString("utf8"),
+      Buffer.from(parts[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'),
     ) as JwtPayload;
-    return typeof payload.exp === "number" ? payload.exp * 1000 : null;
+    return typeof payload.exp === 'number' ? payload.exp * 1000 : null;
   } catch {
     return null;
   }
 }
 
-export async function fetchJwtToken(
-  logger: Logger,
-  force = false,
-): Promise<string> {
+export async function fetchJwtToken(logger: Logger, force = false): Promise<string> {
   const now = Date.now();
-  if (
-    !force &&
-    cachedToken &&
-    cachedExpiresAtMs &&
-    cachedExpiresAtMs - RENEW_BEFORE_MS > now
-  ) {
+  if (!force && cachedToken && cachedExpiresAtMs && cachedExpiresAtMs - RENEW_BEFORE_MS > now) {
     return cachedToken;
   }
 
   const url = `${omnikeyBaseUrl()}/api/subscription/activate`;
-  logger.info("Requesting JWT from omnikey-ai", { url });
+  logger.info('Requesting JWT from omnikey-ai', { url });
 
   const resp = await axios.post<ActivateResponse>(url, {}, { timeout: 10_000 });
   if (!resp.data?.token) {
-    throw new Error("activate endpoint returned no token");
+    throw new Error('activate endpoint returned no token');
   }
 
   cachedToken = resp.data.token;
   cachedExpiresAtMs = decodeJwtExpiry(cachedToken);
-  logger.info("Received JWT from omnikey-ai", {
+  logger.info('Received JWT from omnikey-ai', {
     subscriptionStatus: resp.data.subscriptionStatus,
-    expiresAt: cachedExpiresAtMs
-      ? new Date(cachedExpiresAtMs).toISOString()
-      : null,
+    expiresAt: cachedExpiresAtMs ? new Date(cachedExpiresAtMs).toISOString() : null,
   });
   return cachedToken;
 }

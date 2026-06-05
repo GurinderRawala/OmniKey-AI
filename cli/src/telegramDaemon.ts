@@ -300,11 +300,9 @@ async function startWindows(): Promise<void> {
     execFileSync(nssmPath, ['set', WINDOWS_SERVICE_NAME, 'Start', 'SERVICE_AUTO_START'], {
       stdio: 'pipe',
     });
-    execFileSync(
-      nssmPath,
-      ['set', WINDOWS_SERVICE_NAME, 'DisplayName', 'Omnikey Telegram'],
-      { stdio: 'pipe' },
-    );
+    execFileSync(nssmPath, ['set', WINDOWS_SERVICE_NAME, 'DisplayName', 'Omnikey Telegram'], {
+      stdio: 'pipe',
+    });
     execFileSync(
       nssmPath,
       ['set', WINDOWS_SERVICE_NAME, 'Description', 'Omnikey Telegram Daemon'],

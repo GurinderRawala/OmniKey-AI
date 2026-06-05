@@ -41,14 +41,17 @@ function getSqlitePath() {
   return path.isAbsolute(envPath) ? envPath : path.join(homeDir, '.omnikey', envPath);
 }
 
-export type AIProvider = 'openai' | 'gemini' | 'anthropic';
+export type AIProvider = 'openai' | 'gemini' | 'anthropic' | 'nemotron';
 
 function getAIProvider(): AIProvider {
   const value = getEnv('AI_PROVIDER', false);
-  if (value === 'gemini' || value === 'anthropic' || value === 'openai') return value;
+  if (value === 'gemini' || value === 'anthropic' || value === 'openai' || value === 'nemotron') {
+    return value;
+  }
   // Auto-detect from available keys
   if (getEnv('ANTHROPIC_API_KEY', false)) return 'anthropic';
   if (getEnv('GEMINI_API_KEY', false)) return 'gemini';
+  if (getEnv('NVIDIA_API_KEY', false) || getEnv('NEMOTRON_API_KEY', false)) return 'nemotron';
   return 'openai';
 }
 
@@ -56,6 +59,13 @@ function getActiveApiKey(provider: AIProvider): string {
   if (provider === 'openai') return getEnv('OPENAI_API_KEY', true) as string;
   if (provider === 'anthropic') return getEnv('ANTHROPIC_API_KEY', true) as string;
   if (provider === 'gemini') return getEnv('GEMINI_API_KEY', true) as string;
+  if (provider === 'nemotron') {
+    // Accept either NVIDIA_API_KEY (default name on build.nvidia.com) or
+    // NEMOTRON_API_KEY (more explicit). The latter wins if both are set.
+    const explicit = getEnv('NEMOTRON_API_KEY', false);
+    if (explicit) return explicit;
+    return getEnv('NVIDIA_API_KEY', true) as string;
+  }
   throw new Error(`Unknown AI provider: ${provider}`);
 }
 
@@ -72,6 +82,11 @@ export const config = {
 
   // Legacy — kept for backwards compatibility; may be undefined when using another provider
   openaiApiKey: getEnv('OPENAI_API_KEY', false),
+
+  // Optional override for the NVIDIA NIM endpoint. Defaults to the public
+  // `https://integrate.api.nvidia.com/v1` gateway when unset. Point this at a
+  // self-hosted NIM (e.g. `http://my-nim-host:8000/v1`) to use private weights.
+  nemotronBaseUrl: getEnv('NEMOTRON_BASE_URL', false),
 
   // Database
   databaseUrl: getEnv('DATABASE_URL', getBooleanEnv('IS_SELF_HOSTED', false) ? false : true),

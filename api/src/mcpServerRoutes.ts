@@ -127,7 +127,8 @@ export function mcpServerRouter(): express.Router {
         return res.status(400).json({ error: 'Invalid MCP server data.' });
       }
       if (err?.name === 'SequelizeUniqueConstraintError') {
-        const isNameConflict = err?.fields?.includes('name') || err?.errors?.some((e: any) => e.path === 'name');
+        const isNameConflict =
+          err?.fields?.includes('name') || err?.errors?.some((e: any) => e.path === 'name');
         return res.status(409).json({
           error: isNameConflict
             ? 'An MCP server with that name already exists.'
@@ -169,19 +170,33 @@ export function mcpServerRouter(): express.Router {
       }
 
       const transport = parsed.transport ?? server.transport;
-      const transportChanged = parsed.transport !== undefined && parsed.transport !== server.transport;
+      const transportChanged =
+        parsed.transport !== undefined && parsed.transport !== server.transport;
 
       // When transport changes, clear fields incompatible with the new transport so
       // stale credentials/config never persist across a transport switch.
       const command = transportChanged
-        ? (transport === 'stdio' ? (parsed.command !== undefined ? parsed.command : server.command) : null)
-        : (parsed.command !== undefined ? parsed.command : server.command);
+        ? transport === 'stdio'
+          ? parsed.command !== undefined
+            ? parsed.command
+            : server.command
+          : null
+        : parsed.command !== undefined
+          ? parsed.command
+          : server.command;
       const url = transportChanged
-        ? (transport !== 'stdio' ? (parsed.url !== undefined ? parsed.url : server.url) : null)
-        : (parsed.url !== undefined ? parsed.url : server.url);
+        ? transport !== 'stdio'
+          ? parsed.url !== undefined
+            ? parsed.url
+            : server.url
+          : null
+        : parsed.url !== undefined
+          ? parsed.url
+          : server.url;
       const args = transportChanged && transport !== 'stdio' ? [] : (parsed.args ?? server.args);
       const env = transportChanged && transport !== 'stdio' ? {} : (parsed.env ?? server.env);
-      const headers = transportChanged && transport === 'stdio' ? {} : (parsed.headers ?? server.headers);
+      const headers =
+        transportChanged && transport === 'stdio' ? {} : (parsed.headers ?? server.headers);
 
       const validationError = validateTransportFields(transport, command, url);
       if (validationError) {

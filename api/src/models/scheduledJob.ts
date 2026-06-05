@@ -20,21 +20,20 @@ interface ScheduledJobAttributes {
   updatedAt?: Date;
 }
 
-interface ScheduledJobCreationAttributes
-  extends Optional<
-    ScheduledJobAttributes,
-    | 'id'
-    | 'isActive'
-    | 'cronExpression'
-    | 'runAt'
-    | 'lastRunAt'
-    | 'nextRunAt'
-    | 'sessionId'
-    | 'lastRunSessionId'
-    | 'platform'
-    | 'createdAt'
-    | 'updatedAt'
-  > {}
+interface ScheduledJobCreationAttributes extends Optional<
+  ScheduledJobAttributes,
+  | 'id'
+  | 'isActive'
+  | 'cronExpression'
+  | 'runAt'
+  | 'lastRunAt'
+  | 'nextRunAt'
+  | 'sessionId'
+  | 'lastRunSessionId'
+  | 'platform'
+  | 'createdAt'
+  | 'updatedAt'
+> {}
 
 export class ScheduledJob
   extends Model<ScheduledJobAttributes, ScheduledJobCreationAttributes>

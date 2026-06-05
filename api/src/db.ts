@@ -45,9 +45,13 @@ interface ColumnMigration {
 
 const COLUMN_MIGRATIONS: ColumnMigration[] = [
   // Added: context-window tracking (prompt token count of last API call)
-  { table: 'agent_sessions', column: 'last_prompt_tokens', definition: 'INTEGER NOT NULL DEFAULT 0' },
+  {
+    table: 'agent_sessions',
+    column: 'last_prompt_tokens',
+    definition: 'INTEGER NOT NULL DEFAULT 0',
+  },
   // Added: project grouping
-  { table: 'agent_sessions', column: 'group_name',        definition: 'VARCHAR(255)' },
+  { table: 'agent_sessions', column: 'group_name', definition: 'VARCHAR(255)' },
   { table: 'agent_sessions', column: 'group_description', definition: 'TEXT' },
 ];
 
@@ -72,9 +76,9 @@ async function runSQLiteMigrations(logger: Logger): Promise<void> {
 
 async function migrateMcpServersTableIfNeeded(logger: Logger): Promise<void> {
   // Check if the old schema is still in place by inspecting the CREATE TABLE sql.
-  const rows = (await sequelize.query(
-    `SELECT sql FROM sqlite_master WHERE type='table' AND name='mcp_servers'`
-  ))[0] as Array<{ sql: string }>;
+  const rows = (
+    await sequelize.query(`SELECT sql FROM sqlite_master WHERE type='table' AND name='mcp_servers'`)
+  )[0] as Array<{ sql: string }>;
 
   if (!rows.length) return; // table doesn't exist yet — sync() will create it correctly
 
