@@ -1,0 +1,50 @@
+# Nginx server block for the OmniKey AI installer host.
+# Rendered at container start by nginx's built-in envsubst step
+# (vars listed in NGINX_ENVSUBST_TEMPLATE_DIR are expanded).
+#
+# We listen on $PORT so this works on Cloud Run, Fly.io, Render, etc.
+
+server {
+    listen       ${PORT} default_server;
+    server_name  _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Lock down server header a little.
+    server_tokens off;
+
+    # Light CDN-friendly caching for the install scripts (5 min) so
+    # users always get a fresh script soon after we push a new image,
+    # but `curl | bash` requests don't hammer origin.
+    location = /install.sh {
+        default_type text/x-shellscript;
+        add_header Cache-Control "public, max-age=300";
+        add_header Content-Disposition "inline; filename=\"install.sh\"";
+        try_files /install.sh =404;
+    }
+
+    location = /install.ps1 {
+        default_type text/plain;
+        add_header Cache-Control "public, max-age=300";
+        add_header Content-Disposition "inline; filename=\"install.ps1\"";
+        try_files /install.ps1 =404;
+    }
+
+    # Simple health check for Cloud Run / load balancers.
+    location = /healthz {
+        access_log off;
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
+    # Landing page.
+    location = / {
+        try_files /index.html =404;
+    }
+
+    # Anything else -> 404 (we deliberately don't expose directory listings).
+    location / {
+        return 404;
+    }
+}
