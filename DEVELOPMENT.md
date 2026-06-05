@@ -35,7 +35,7 @@ A successful `yarn build` produces:
 - `telegram/dist/` — compiled Telegram bot
 - `cli/dist/` — compiled CLI
 - `cli/backend-dist/` — copy of `api/dist/` (so the CLI can launch the daemon)
-- `cli/telegram-client-dist/dist/` — copy of `telegram/dist/` (so `omnikey telegram start` works)
+- `cli/telegram-client-dist/` — copy of `telegram/dist/` (so `omnikey telegram start` works)
 
 ## Day-to-day workflow
 
