@@ -59,7 +59,7 @@ jobs:
           # Install production dependencies in the staging dir, isolated from the
           # monorepo's workspaces so `node_modules` is fully resolved under cli/.
           cd "$STAGE"
-          yarn install --production --no-lockfile --ignore-scripts=false
+          yarn install --production --no-lockfile
           echo "STAGE=$STAGE" >> "$GITHUB_ENV"
 
       - name: Create release tarball
