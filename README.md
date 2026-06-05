@@ -28,17 +28,18 @@ matching desktop installer — all in one command.
 **macOS / Linux**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/GurinderRawala/OmniKey-AI/main/scripts/install.sh | bash
+curl -fsSL https://omnikeyai.ca/install.sh | bash
 ```
 
 **Windows (PowerShell)**
 
 ```powershell
-iwr -useb https://raw.githubusercontent.com/GurinderRawala/OmniKey-AI/main/scripts/install.ps1 | iex
+iwr -useb https://omnikeyai.ca/install.ps1 | iex
 ```
 
 Requires Node.js 18+. See [docs/self-hosting.md](docs/self-hosting.md) for the
-manual step-by-step alternative.
+manual step-by-step alternative, or [scripts/installer-host/](scripts/installer-host/)
+for how the short URL is hosted.
 
 ## Setup
 
