@@ -8,13 +8,13 @@
 # drag it into /Applications.
 #
 # Usage (one-liner):
-#   curl -fsSL https://raw.githubusercontent.com/GurinderRawala/OmniKey-AI/main/scripts/install.sh | bash
+#   curl -fsSL https://omnikeyai.ca/install.sh | bash
 #
 set -euo pipefail
 
 # ---------- Configuration ----------
 # macOS download URL is taken from README.md (Getting Started → step 4).
-MACOS_DOWNLOAD_URL="${OMNIKEY_MACOS_URL:-https://omnikeyai-saas-fmytqc3dra-uc.a.run.app/macos/download}"
+MACOS_DOWNLOAD_URL="${OMNIKEY_MACOS_URL:-https://omnikeyai.ca/macos/download}"
 BREW_TAP="GurinderRawala/omnikey-ai"
 BREW_TAP_URL="https://github.com/GurinderRawala/OmniKey-AI.git"
 BREW_FORMULA="omnikey-cli"
@@ -88,12 +88,14 @@ run_onboard() {
 start_daemon() {
   info "Starting OmniKey daemon..."
   mkdir -p "$LOG_DIR"
-  nohup omnikey daemon >"$DAEMON_LOG" 2>&1 &
-  local pid=$!
-  disown "$pid" 2>/dev/null || true
+  # omnikey daemon self-daemonizes via launchctl; the foreground process exits
+  # immediately after registering the LaunchAgent, so we must not check its PID.
+  omnikey daemon >"$DAEMON_LOG" 2>&1 || true
   sleep 2
-  if kill -0 "$pid" 2>/dev/null; then
-    ok "Daemon running (pid $pid). Logs: $DAEMON_LOG"
+  if launchctl list 2>/dev/null | grep -q "com.omnikey.daemon"; then
+    ok "Daemon running (launchctl). Logs: $DAEMON_LOG"
+  elif pgrep -f "omnikey daemon" >/dev/null 2>&1; then
+    ok "Daemon running. Logs: $DAEMON_LOG"
   else
     fail "Daemon failed to start. See $DAEMON_LOG"
   fi

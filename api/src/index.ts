@@ -2,7 +2,6 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import fs from 'fs';
-import zlib from 'zlib';
 import { createSubscriptionRouter } from './subscriptionRoutes';
 import { createFeatureRouter } from './featureRoutes';
 import { initDatabase } from './db';
@@ -51,16 +50,18 @@ app.get('/macos/download', (_req, res) => {
     return;
   }
 
+  let fileSize = 0;
+  try { fileSize = fs.statSync(dmgPath).size; } catch (_) {}
+
   res.set({
     'Content-Type': 'application/octet-stream',
     'Content-Disposition': 'attachment; filename="OmniKeyAI.dmg"',
-    'Content-Encoding': 'gzip',
+    ...(fileSize ? { 'Content-Length': String(fileSize) } : {}),
   });
 
   incrementDownloadCount('macos').catch(() => {});
 
   const fileStream = fs.createReadStream(dmgPath);
-  const gzip = zlib.createGzip();
 
   fileStream.on('error', (err) => {
     logger.error('Failed to send OmniKeyAI.dmg for download.', { error: err });
@@ -69,7 +70,7 @@ app.get('/macos/download', (_req, res) => {
     }
   });
 
-  fileStream.pipe(gzip).pipe(res);
+  fileStream.pipe(res);
 });
 
 // Sparkle appcast feed for macOS updates.
@@ -137,16 +138,18 @@ app.get('/windows/download', (_req, res) => {
     return;
   }
 
+  let fileSize = 0;
+  try { fileSize = fs.statSync(WIN_ZIP_PATH).size; } catch (_) {}
+
   res.set({
     'Content-Type': 'application/zip',
     'Content-Disposition': `attachment; filename="${WIN_ZIP_FILENAME}"`,
-    'Content-Encoding': 'gzip',
+    ...(fileSize ? { 'Content-Length': String(fileSize) } : {}),
   });
 
   incrementDownloadCount('windows').catch(() => {});
 
   const fileStream = fs.createReadStream(WIN_ZIP_PATH);
-  const gzip = zlib.createGzip();
 
   fileStream.on('error', (err) => {
     logger.error('Failed to send Windows ZIP for download.', { error: err });
@@ -155,7 +158,7 @@ app.get('/windows/download', (_req, res) => {
     }
   });
 
-  fileStream.pipe(gzip).pipe(res);
+  fileStream.pipe(res);
 });
 
 // JSON update-check endpoint consumed by UpdateChecker.cs on the Windows client.
