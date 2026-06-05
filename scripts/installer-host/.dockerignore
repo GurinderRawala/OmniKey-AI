@@ -1,0 +1,21 @@
+# NOTE: Docker only honors a .dockerignore at the build-context root.
+# This file is kept here for reference; for a slim build context, run docker
+# build from the repo root and the repo-root .dockerignore (if any) applies.
+#
+# What we ship into the image is fully controlled by the explicit `COPY`
+# directives in the Dockerfile, so the only goal here is to document intent.
+
+node_modules
+dist
+.git
+.github
+.DS_Store
+*.log
+desktop
+src
+cli
+webApp
+stripe
+build-configs
+docs
+package-lock.json
