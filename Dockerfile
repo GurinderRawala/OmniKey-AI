@@ -21,6 +21,7 @@ COPY api ./api
 COPY public ./public
 COPY macOS/OmniKeyAI.dmg ./macOS/OmniKeyAI.dmg
 COPY windows/OmniKeyAI-windows-win-x64.zip ./windows/OmniKeyAI-windows-win-x64.zip
+COPY scripts/install.sh ./install.sh
 
 # Build the api workspace (compiles api/src -> api/dist).
 RUN yarn workspace omnikey-ai-api run build
@@ -46,6 +47,7 @@ COPY --from=build /usr/src/app/api/dist ./api/dist
 COPY --from=build /usr/src/app/public ./public
 COPY macOS/OmniKeyAI.dmg ./macOS/OmniKeyAI.dmg
 COPY --from=build /usr/src/app/windows/OmniKeyAI-windows-win-x64.zip ./windows/OmniKeyAI-windows-win-x64.zip
+COPY scripts/install.sh ./install.sh
 
 # Cloud Run expects the container to listen on this port
 ENV PORT=8080
