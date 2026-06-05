@@ -29,8 +29,8 @@ const UNIX_SHELL_CANDIDATES = [
   // zsh — default on macOS Catalina+
   '/bin/zsh',
   '/usr/bin/zsh',
-  '/usr/local/bin/zsh',     // Homebrew (Intel)
-  '/opt/homebrew/bin/zsh',  // Homebrew (Apple Silicon)
+  '/usr/local/bin/zsh', // Homebrew (Intel)
+  '/opt/homebrew/bin/zsh', // Homebrew (Apple Silicon)
   // bash — default on older macOS / most Linux distros
   '/bin/bash',
   '/usr/bin/bash',
@@ -221,9 +221,7 @@ export function buildStdioChildEnv(
     const currentPath = base[pathKey] ?? '';
     const existing = currentPath.split(';').filter((p: string) => p.length > 0);
     const existingSet = new Set(existing.map((p: string) => p.toLowerCase()));
-    const toPrepend = WINDOWS_EXTRA_PATH_ENTRIES.filter(
-      (p) => !existingSet.has(p.toLowerCase()),
-    );
+    const toPrepend = WINDOWS_EXTRA_PATH_ENTRIES.filter((p) => !existingSet.has(p.toLowerCase()));
     base[pathKey] = [...toPrepend, ...existing].join(';');
   } else {
     const currentPath = base.PATH ?? '';

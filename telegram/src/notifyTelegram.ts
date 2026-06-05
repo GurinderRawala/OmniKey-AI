@@ -1,5 +1,5 @@
-import TelegramBot from "node-telegram-bot-api";
-import type { Logger } from "winston";
+import TelegramBot from 'node-telegram-bot-api';
+import type { Logger } from 'winston';
 import {
   AgentAbortError,
   getSessionMessages,
@@ -11,14 +11,14 @@ import {
   type AgentSessionSummary,
   type ProjectGroup,
   type TaskTemplate,
-} from "./agentClient";
+} from './agentClient';
 
 let bot: TelegramBot | null = null;
 
-export type TelegramParseMode = "Markdown" | "MarkdownV2" | "HTML";
+export type TelegramParseMode = 'Markdown' | 'MarkdownV2' | 'HTML';
 
 export function initTelegram(botToken: string) {
-  if (!botToken) throw new Error("Missing telegram bot token");
+  if (!botToken) throw new Error('Missing telegram bot token');
   bot = new TelegramBot(botToken, { polling: true });
   return bot;
 }
@@ -32,27 +32,27 @@ export async function notify(
   } = {},
 ) {
   if (!bot) {
-    throw new Error("Telegram bot not initialized. Call initTelegram first.");
+    throw new Error('Telegram bot not initialized. Call initTelegram first.');
   }
 
   const chatId = options.chatId ?? process.env.TELEGRAM_CHAT_ID;
   if (!chatId) {
-    throw new Error("Missing chat ID");
+    throw new Error('Missing chat ID');
   }
 
-  const parseMode = options.parseMode ?? "Markdown";
+  const parseMode = options.parseMode ?? 'Markdown';
 
   try {
     return await bot.sendMessage(chatId, message, { parse_mode: parseMode });
   } catch (err) {
-    logger.error("Failed to send Telegram message:", err);
+    logger.error('Failed to send Telegram message:', err);
     throw err;
   }
 }
 
 // ─── /cmd flow state ─────────────────────────────────────────────────────────
 
-type WizardPhase = "selectInstruction" | "selectProject" | "awaitPrompt";
+type WizardPhase = 'selectInstruction' | 'selectProject' | 'awaitPrompt';
 
 interface PendingPromptState {
   phase: WizardPhase;
@@ -85,19 +85,19 @@ const runningSessions = new Map<number, RunningSessionState>();
 
 // Callback-data prefixes. Telegram limits callback_data to 64 bytes — using
 // short prefixes + indices keeps every payload comfortably under the cap.
-const CB_SESSION = "s:"; // session picker; "s:new" or "s:<idx>"
-const CB_INSTRUCTION = "t:"; // instruction picker; "t:skip" or "t:<idx>"
-const CB_PROJECT = "g:"; // project picker;     "g:skip" or "g:<idx>"
-const CB_CANCEL = "x:cancel";
+const CB_SESSION = 's:'; // session picker; "s:new" or "s:<idx>"
+const CB_INSTRUCTION = 't:'; // instruction picker; "t:skip" or "t:<idx>"
+const CB_PROJECT = 'g:'; // project picker;     "g:skip" or "g:<idx>"
+const CB_CANCEL = 'x:cancel';
 
 function isAuthorizedChat(chatId: number): boolean {
-  const allowed = parseInt(process.env.TELEGRAM_CHAT_ID || "0", 10);
+  const allowed = parseInt(process.env.TELEGRAM_CHAT_ID || '0', 10);
   return allowed !== 0 && chatId === allowed;
 }
 
 function truncate(text: string, max: number): string {
   if (text.length <= max) return text;
-  return text.slice(0, max - 1) + "…";
+  return text.slice(0, max - 1) + '…';
 }
 
 /**
@@ -108,15 +108,15 @@ function cleanForTelegram(text: string): string {
   return text
     .replace(
       /<\/?(?:shell_script|final_answer|user_input|stored_instructions|project_context|shell_function_calls)[^>]*>/gi,
-      "",
+      '',
     )
-    .replace(/```[a-zA-Z0-9_-]*\n?/g, "")
-    .replace(/```/g, "")
-    .replace(/\*\*([^*]+)\*\*/g, "$1")
-    .replace(/\*([^*\n]+)\*/g, "$1")
-    .replace(/`([^`\n]+)`/g, "$1")
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
+    .replace(/```[a-zA-Z0-9_-]*\n?/g, '')
+    .replace(/```/g, '')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/\*([^*\n]+)\*/g, '$1')
+    .replace(/`([^`\n]+)`/g, '$1')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
 
@@ -129,14 +129,14 @@ function cleanForTelegram(text: string): string {
  * <pre><code class="language-...">, <a href="...">, <blockquote>.
  */
 function escapeHtml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 function markdownToTelegramHtml(input: string): string {
   // Strip agent envelope tags but preserve the body's markdown.
   let text = input.replace(
     /<\/?(?:shell_script|final_answer|user_input|stored_instructions|project_context|shell_function_calls)[^>]*>/gi,
-    "",
+    '',
   );
 
   // 1. Extract fenced code blocks and inline code into placeholders so
@@ -150,10 +150,8 @@ function markdownToTelegramHtml(input: string): string {
   text = text.replace(
     /```([a-zA-Z0-9_+.-]*)\n?([\s\S]*?)```/g,
     (_m, lang: string, body: string) => {
-      const cls = lang ? ` class="language-${escapeHtml(lang)}"` : "";
-      return stash(
-        `<pre><code${cls}>${escapeHtml(body.replace(/\n$/, ""))}</code></pre>`,
-      );
+      const cls = lang ? ` class="language-${escapeHtml(lang)}"` : '';
+      return stash(`<pre><code${cls}>${escapeHtml(body.replace(/\n$/, ''))}</code></pre>`);
     },
   );
   text = text.replace(/`([^`\n]+)`/g, (_m, body: string) =>
@@ -168,33 +166,30 @@ function markdownToTelegramHtml(input: string): string {
     (_m, lead: string, header: string, body: string) => {
       const splitRow = (row: string): string[] => {
         let r = row.trim();
-        if (r.startsWith("|")) r = r.slice(1);
-        if (r.endsWith("|")) r = r.slice(0, -1);
-        return r.split("|").map((c) => c.trim());
+        if (r.startsWith('|')) r = r.slice(1);
+        if (r.endsWith('|')) r = r.slice(0, -1);
+        return r.split('|').map((c) => c.trim());
       };
       const headerCells = splitRow(header);
       const bodyRows = body
-        .split("\n")
+        .split('\n')
         .map((l) => l.trim())
         .filter((l) => l.length > 0)
         .map(splitRow);
-      const colCount = Math.max(
-        headerCells.length,
-        ...bodyRows.map((r) => r.length),
-      );
+      const colCount = Math.max(headerCells.length, ...bodyRows.map((r) => r.length));
       const pad = (cells: string[]) => {
         const out = cells.slice();
-        while (out.length < colCount) out.push("");
+        while (out.length < colCount) out.push('');
         return out;
       };
       const allRows = [pad(headerCells), ...bodyRows.map(pad)];
       // Strip inline markdown that won't render inside <pre>.
       const cleanCell = (s: string): string =>
         s
-          .replace(/\*\*([^*]+)\*\*/g, "$1")
-          .replace(/__([^_]+)__/g, "$1")
-          .replace(/`([^`]+)`/g, "$1")
-          .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");
+          .replace(/\*\*([^*]+)\*\*/g, '$1')
+          .replace(/__([^_]+)__/g, '$1')
+          .replace(/`([^`]+)`/g, '$1')
+          .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
       const cleaned = allRows.map((row) => row.map(cleanCell));
       const widths: number[] = [];
       for (let c = 0; c < colCount; c++) {
@@ -203,14 +198,13 @@ function markdownToTelegramHtml(input: string): string {
         widths[c] = w;
       }
       const renderRow = (row: string[]) =>
-        row.map((cell, i) => cell.padEnd(widths[i], " ")).join(" │ ");
-      const sep = widths.map((w) => "─".repeat(w)).join("─┼─");
+        row.map((cell, i) => cell.padEnd(widths[i], ' ')).join(' │ ');
+      const sep = widths.map((w) => '─'.repeat(w)).join('─┼─');
       const lines: string[] = [];
       lines.push(renderRow(cleaned[0]));
       lines.push(sep);
-      for (let i = 1; i < cleaned.length; i++)
-        lines.push(renderRow(cleaned[i]));
-      return `${lead}${stash(`<pre>${escapeHtml(lines.join("\n"))}</pre>`)}\n`;
+      for (let i = 1; i < cleaned.length; i++) lines.push(renderRow(cleaned[i]));
+      return `${lead}${stash(`<pre>${escapeHtml(lines.join('\n'))}</pre>`)}\n`;
     },
   );
 
@@ -224,42 +218,36 @@ function markdownToTelegramHtml(input: string): string {
   );
 
   // 4. Bold / italic / strike-through. Order matters — handle ** before *.
-  text = text.replace(/\*\*([^\n*]+)\*\*/g, "<b>$1</b>");
-  text = text.replace(/__([^\n_]+)__/g, "<b>$1</b>");
-  text = text.replace(/(^|[^*])\*([^\n*]+)\*(?!\*)/g, "$1<i>$2</i>");
-  text = text.replace(/(^|[^_])_([^\n_]+)_(?!_)/g, "$1<i>$2</i>");
-  text = text.replace(/~~([^\n~]+)~~/g, "<s>$1</s>");
+  text = text.replace(/\*\*([^\n*]+)\*\*/g, '<b>$1</b>');
+  text = text.replace(/__([^\n_]+)__/g, '<b>$1</b>');
+  text = text.replace(/(^|[^*])\*([^\n*]+)\*(?!\*)/g, '$1<i>$2</i>');
+  text = text.replace(/(^|[^_])_([^\n_]+)_(?!_)/g, '$1<i>$2</i>');
+  text = text.replace(/~~([^\n~]+)~~/g, '<s>$1</s>');
 
   // 5. Headings (#, ##, ###) → bold line. Telegram has no real heading style.
-  text = text.replace(/^[ \t]*#{1,6}[ \t]+(.+)$/gm, "<b>$1</b>");
+  text = text.replace(/^[ \t]*#{1,6}[ \t]+(.+)$/gm, '<b>$1</b>');
 
   // 6. Bullet lists: turn "- " / "* " / "+ " into "• ".
-  text = text.replace(/^[ \t]*[-*+][ \t]+/gm, "• ");
+  text = text.replace(/^[ \t]*[-*+][ \t]+/gm, '• ');
 
   // 7. Block quotes — Telegram supports <blockquote>.
-  text = text.replace(
-    /(^|\n)((?:&gt; .*(?:\n|$))+)/g,
-    (_m, lead: string, block: string) => {
-      const inner = block
-        .split(/\n/)
-        .filter((l) => l.length)
-        .map((l) => l.replace(/^&gt; ?/, ""))
-        .join("\n");
-      return `${lead}<blockquote>${inner}</blockquote>\n`;
-    },
-  );
+  text = text.replace(/(^|\n)((?:&gt; .*(?:\n|$))+)/g, (_m, lead: string, block: string) => {
+    const inner = block
+      .split(/\n/)
+      .filter((l) => l.length)
+      .map((l) => l.replace(/^&gt; ?/, ''))
+      .join('\n');
+    return `${lead}<blockquote>${inner}</blockquote>\n`;
+  });
 
   // 8. Collapse trailing whitespace and excessive blank lines.
   text = text
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
     .trim();
 
   // 9. Restore the stashed code segments.
-  text = text.replace(
-    /\u0000PH(\d+)\u0000/g,
-    (_m, idx: string) => placeholders[Number(idx)] ?? "",
-  );
+  text = text.replace(/\u0000PH(\d+)\u0000/g, (_m, idx: string) => placeholders[Number(idx)] ?? '');
 
   return text;
 }
@@ -274,10 +262,10 @@ function splitForTelegram(html: string, max = 3800): string[] {
 
   const chunks: string[] = [];
   const paragraphs = html.split(/\n\n+/);
-  let current = "";
+  let current = '';
   const flush = () => {
     if (current.trim()) chunks.push(current.trim());
-    current = "";
+    current = '';
   };
   for (const p of paragraphs) {
     if (p.length > max) {
@@ -290,7 +278,7 @@ function splitForTelegram(html: string, max = 3800): string[] {
     if (current.length + p.length + 2 > max) {
       flush();
     }
-    current += (current ? "\n\n" : "") + p;
+    current += (current ? '\n\n' : '') + p;
   }
   flush();
   return chunks;
@@ -302,7 +290,7 @@ function buildSessionKeyboard(
   sessions: AgentSessionSummary[],
 ): TelegramBot.InlineKeyboardButton[][] {
   const rows: TelegramBot.InlineKeyboardButton[][] = [
-    [{ text: "🆕  New session", callback_data: `${CB_SESSION}new` }],
+    [{ text: '🆕  New session', callback_data: `${CB_SESSION}new` }],
   ];
   sessions.forEach((s, idx) => {
     const label = truncate(s.title || s.id, 48);
@@ -313,16 +301,14 @@ function buildSessionKeyboard(
       },
     ]);
   });
-  rows.push([{ text: "✕  Cancel", callback_data: CB_CANCEL }]);
+  rows.push([{ text: '✕  Cancel', callback_data: CB_CANCEL }]);
   return rows;
 }
 
-function buildInstructionKeyboard(
-  templates: TaskTemplate[],
-): TelegramBot.InlineKeyboardButton[][] {
+function buildInstructionKeyboard(templates: TaskTemplate[]): TelegramBot.InlineKeyboardButton[][] {
   const rows: TelegramBot.InlineKeyboardButton[][] = [];
   templates.forEach((t, idx) => {
-    const marker = t.isDefault ? "⭐" : "📝";
+    const marker = t.isDefault ? '⭐' : '📝';
     rows.push([
       {
         text: `${marker}  ${truncate(t.heading, 50)}`,
@@ -330,16 +316,12 @@ function buildInstructionKeyboard(
       },
     ]);
   });
-  rows.push([
-    { text: "⏭  Skip instructions", callback_data: `${CB_INSTRUCTION}skip` },
-  ]);
-  rows.push([{ text: "✕  Cancel", callback_data: CB_CANCEL }]);
+  rows.push([{ text: '⏭  Skip instructions', callback_data: `${CB_INSTRUCTION}skip` }]);
+  rows.push([{ text: '✕  Cancel', callback_data: CB_CANCEL }]);
   return rows;
 }
 
-function buildProjectKeyboard(
-  groups: ProjectGroup[],
-): TelegramBot.InlineKeyboardButton[][] {
+function buildProjectKeyboard(groups: ProjectGroup[]): TelegramBot.InlineKeyboardButton[][] {
   const rows: TelegramBot.InlineKeyboardButton[][] = [];
   groups.forEach((g, idx) => {
     rows.push([
@@ -349,8 +331,8 @@ function buildProjectKeyboard(
       },
     ]);
   });
-  rows.push([{ text: "⏭  Skip project", callback_data: `${CB_PROJECT}skip` }]);
-  rows.push([{ text: "✕  Cancel", callback_data: CB_CANCEL }]);
+  rows.push([{ text: '⏭  Skip project', callback_data: `${CB_PROJECT}skip` }]);
+  rows.push([{ text: '✕  Cancel', callback_data: CB_CANCEL }]);
   return rows;
 }
 
@@ -365,27 +347,27 @@ function renderInstructionStep(state: PendingPromptState): WizardCopy {
   if (state.templates.length === 0) {
     return {
       text: [
-        "*Step 1 of 3 · Task instructions*",
-        "",
-        "_No saved templates. Skip to continue._",
-      ].join("\n"),
+        '*Step 1 of 3 · Task instructions*',
+        '',
+        '_No saved templates. Skip to continue._',
+      ].join('\n'),
       keyboard: [
         [
           {
-            text: "⏭  Skip instructions",
+            text: '⏭  Skip instructions',
             callback_data: `${CB_INSTRUCTION}skip`,
           },
         ],
-        [{ text: "✕  Cancel", callback_data: CB_CANCEL }],
+        [{ text: '✕  Cancel', callback_data: CB_CANCEL }],
       ],
     };
   }
   return {
     text: [
-      "*Step 1 of 3 · Task instructions*",
-      "",
-      "Pick a saved template to prepend to your prompt, or skip.",
-    ].join("\n"),
+      '*Step 1 of 3 · Task instructions*',
+      '',
+      'Pick a saved template to prepend to your prompt, or skip.',
+    ].join('\n'),
     keyboard: buildInstructionKeyboard(state.templates),
   };
 }
@@ -393,67 +375,55 @@ function renderInstructionStep(state: PendingPromptState): WizardCopy {
 function renderProjectStep(state: PendingPromptState): WizardCopy {
   const heading = state.chosenInstructionsHeading
     ? `✓ Instructions: *${state.chosenInstructionsHeading}*`
-    : "✓ Instructions: _skipped_";
+    : '✓ Instructions: _skipped_';
 
   if (state.groups.length === 0) {
     return {
-      text: [
-        "*Step 2 of 3 · Project*",
-        heading,
-        "",
-        "_No projects yet. Skip to continue._",
-      ].join("\n"),
+      text: ['*Step 2 of 3 · Project*', heading, '', '_No projects yet. Skip to continue._'].join(
+        '\n',
+      ),
       keyboard: [
-        [{ text: "⏭  Skip project", callback_data: `${CB_PROJECT}skip` }],
-        [{ text: "✕  Cancel", callback_data: CB_CANCEL }],
+        [{ text: '⏭  Skip project', callback_data: `${CB_PROJECT}skip` }],
+        [{ text: '✕  Cancel', callback_data: CB_CANCEL }],
       ],
     };
   }
   return {
-    text: [
-      "*Step 2 of 3 · Project*",
-      heading,
-      "",
-      "Pick a project for context, or skip.",
-    ].join("\n"),
+    text: ['*Step 2 of 3 · Project*', heading, '', 'Pick a project for context, or skip.'].join(
+      '\n',
+    ),
     keyboard: buildProjectKeyboard(state.groups),
   };
 }
 
 function renderPromptStep(state: PendingPromptState): WizardCopy {
   const lines = [
-    "*Step 3 of 3 · Prompt*",
+    '*Step 3 of 3 · Prompt*',
     state.chosenInstructionsHeading
       ? `✓ Instructions: *${state.chosenInstructionsHeading}*`
-      : "✓ Instructions: _skipped_",
-    state.chosenGroupName
-      ? `✓ Project: *${state.chosenGroupName}*`
-      : "✓ Project: _skipped_",
-    "",
-    "Send your prompt as the next message.",
+      : '✓ Instructions: _skipped_',
+    state.chosenGroupName ? `✓ Project: *${state.chosenGroupName}*` : '✓ Project: _skipped_',
+    '',
+    'Send your prompt as the next message.',
   ];
   return {
-    text: lines.join("\n"),
-    keyboard: [[{ text: "✕  Cancel", callback_data: CB_CANCEL }]],
+    text: lines.join('\n'),
+    keyboard: [[{ text: '✕  Cancel', callback_data: CB_CANCEL }]],
   };
 }
 
-async function showStep(
-  logger: Logger,
-  chatId: number,
-  state: PendingPromptState,
-): Promise<void> {
+async function showStep(logger: Logger, chatId: number, state: PendingPromptState): Promise<void> {
   if (!bot) return;
   const copy =
-    state.phase === "selectInstruction"
+    state.phase === 'selectInstruction'
       ? renderInstructionStep(state)
-      : state.phase === "selectProject"
+      : state.phase === 'selectProject'
         ? renderProjectStep(state)
         : renderPromptStep(state);
 
   if (state.wizardMessageId == null) {
     const sent = await bot.sendMessage(chatId, copy.text, {
-      parse_mode: "Markdown",
+      parse_mode: 'Markdown',
       reply_markup: { inline_keyboard: copy.keyboard },
     });
     state.wizardMessageId = sent.message_id;
@@ -464,16 +434,16 @@ async function showStep(
     await bot.editMessageText(copy.text, {
       chat_id: chatId,
       message_id: state.wizardMessageId,
-      parse_mode: "Markdown",
+      parse_mode: 'Markdown',
       reply_markup: { inline_keyboard: copy.keyboard },
     });
   } catch (err) {
     // Fall back to a fresh message if the previous one is no longer editable.
-    logger.warn("Failed to edit wizard message; sending a new one", {
+    logger.warn('Failed to edit wizard message; sending a new one', {
       error: (err as Error).message,
     });
     const sent = await bot.sendMessage(chatId, copy.text, {
-      parse_mode: "Markdown",
+      parse_mode: 'Markdown',
       reply_markup: { inline_keyboard: copy.keyboard },
     });
     state.wizardMessageId = sent.message_id;
@@ -490,7 +460,7 @@ async function finishWizardMessage(
     await bot.editMessageText(finalText, {
       chat_id: chatId,
       message_id: state.wizardMessageId,
-      parse_mode: "Markdown",
+      parse_mode: 'Markdown',
       reply_markup: { inline_keyboard: [] },
     });
   } catch {
@@ -506,30 +476,26 @@ async function sendSessionPicker(
   sessions: AgentSessionSummary[],
   verbose: boolean,
 ) {
-  if (!bot) throw new Error("Bot not initialized");
+  if (!bot) throw new Error('Bot not initialized');
 
-  const verboseTag = verbose ? " · 🔍 _verbose_" : "";
+  const verboseTag = verbose ? ' · 🔍 _verbose_' : '';
   const text =
     sessions.length === 0
       ? `*OmniKey Agent*${verboseTag}\n\nNo previous sessions. Start a new one?`
       : `*OmniKey Agent*${verboseTag}\n\nResume a recent session or start fresh:`;
 
   await bot.sendMessage(chatId, text, {
-    parse_mode: "Markdown",
+    parse_mode: 'Markdown',
     reply_markup: { inline_keyboard: buildSessionKeyboard(sessions) },
   });
-  logger.info("Sent /cmd session picker", {
+  logger.info('Sent /cmd session picker', {
     chatId,
     count: sessions.length,
     verbose,
   });
 }
 
-async function handleCmdCommand(
-  logger: Logger,
-  chatId: number,
-  verbose: boolean,
-) {
+async function handleCmdCommand(logger: Logger, chatId: number, verbose: boolean) {
   pendingPrompts.delete(chatId);
   pendingVerbose.set(chatId, verbose);
   try {
@@ -538,14 +504,10 @@ async function handleCmdCommand(
     sessionListCache.set(chatId, sessions);
     await sendSessionPicker(logger, chatId, sessions, verbose);
   } catch (err) {
-    logger.error("Failed to list recent sessions", {
+    logger.error('Failed to list recent sessions', {
       error: (err as Error).message,
     });
-    await notify(
-      logger,
-      `❌ Failed to load sessions: ${(err as Error).message}`,
-      { chatId },
-    );
+    await notify(logger, `❌ Failed to load sessions: ${(err as Error).message}`, { chatId });
   }
 }
 
@@ -572,7 +534,7 @@ async function handleTaskCommand(logger: Logger, chatId: number) {
     const sessions = await listRecentSessions(logger, 1);
     const session = sessions[0];
     if (!session) {
-      await notify(logger, "🗒️ No sessions found.", { chatId });
+      await notify(logger, '🗒️ No sessions found.', { chatId });
       return;
     }
     const messages = await getSessionMessages(logger, session.id);
@@ -580,17 +542,18 @@ async function handleTaskCommand(logger: Logger, chatId: number) {
     if (messages) {
       for (let i = messages.length - 1; i >= 0; i--) {
         const msg = messages[i];
-        if (msg.role !== "assistant") continue;
-        const block = msg.blocks?.find((b) => b.kind === "finalAnswer");
-        if (block) { finalAnswer = block.text; break; }
+        if (msg.role !== 'assistant') continue;
+        const block = msg.blocks?.find((b) => b.kind === 'finalAnswer');
+        if (block) {
+          finalAnswer = block.text;
+          break;
+        }
       }
     }
     if (!finalAnswer) {
-      await notify(
-        logger,
-        `🗒️ Most recent session \`${session.id}\` has no final answer yet.`,
-        { chatId },
-      );
+      await notify(logger, `🗒️ Most recent session \`${session.id}\` has no final answer yet.`, {
+        chatId,
+      });
       return;
     }
     const title = session.title || session.id;
@@ -601,18 +564,18 @@ async function handleTaskCommand(logger: Logger, chatId: number) {
     for (const chunk of chunks) {
       try {
         await bot.sendMessage(chatId, chunk, {
-          parse_mode: "HTML",
+          parse_mode: 'HTML',
           disable_web_page_preview: true,
         });
       } catch (err) {
-        logger.warn("HTML render failed for /task; falling back to plain", {
+        logger.warn('HTML render failed for /task; falling back to plain', {
           error: (err as Error).message,
         });
-        await bot.sendMessage(chatId, chunk.replace(/<[^>]+>/g, ""));
+        await bot.sendMessage(chatId, chunk.replace(/<[^>]+>/g, ''));
       }
     }
   } catch (err) {
-    logger.error("Failed to handle /task", { error: (err as Error).message });
+    logger.error('Failed to handle /task', { error: (err as Error).message });
     await notify(logger, `❌ /task failed: ${(err as Error).message}`, {
       chatId,
     });
@@ -626,26 +589,26 @@ async function startNewSessionWizard(logger: Logger, chatId: number) {
   try {
     [templates, groups] = await Promise.all([
       listTaskTemplates(logger).catch((e) => {
-        logger.warn("Failed to load task templates", {
+        logger.warn('Failed to load task templates', {
           error: (e as Error).message,
         });
         return [] as TaskTemplate[];
       }),
       listProjectGroups(logger).catch((e) => {
-        logger.warn("Failed to load project groups", {
+        logger.warn('Failed to load project groups', {
           error: (e as Error).message,
         });
         return [] as ProjectGroup[];
       }),
     ]);
   } catch (err) {
-    logger.error("Failed to load wizard data", {
+    logger.error('Failed to load wizard data', {
       error: (err as Error).message,
     });
   }
 
   const state: PendingPromptState = {
-    phase: "selectInstruction",
+    phase: 'selectInstruction',
     sessionId: null,
     wizardMessageId: null,
     templates,
@@ -659,15 +622,11 @@ async function startNewSessionWizard(logger: Logger, chatId: number) {
   await showStep(logger, chatId, state);
 }
 
-async function startResumeSession(
-  logger: Logger,
-  chatId: number,
-  sessionId: string,
-) {
+async function startResumeSession(logger: Logger, chatId: number, sessionId: string) {
   if (!bot) return;
   const verbose = pendingVerbose.get(chatId) ?? false;
   const state: PendingPromptState = {
-    phase: "awaitPrompt",
+    phase: 'awaitPrompt',
     sessionId,
     wizardMessageId: null,
     templates: [],
@@ -681,28 +640,25 @@ async function startResumeSession(
   await bot.sendMessage(
     chatId,
     [
-      `*Resuming session* \`${sessionId}\`${verbose ? " · 🔍 _verbose_" : ""}`,
-      "",
-      "Send your prompt as the next message.",
-    ].join("\n"),
+      `*Resuming session* \`${sessionId}\`${verbose ? ' · 🔍 _verbose_' : ''}`,
+      '',
+      'Send your prompt as the next message.',
+    ].join('\n'),
     {
-      parse_mode: "Markdown",
+      parse_mode: 'Markdown',
       reply_markup: {
-        inline_keyboard: [[{ text: "✕  Cancel", callback_data: CB_CANCEL }]],
+        inline_keyboard: [[{ text: '✕  Cancel', callback_data: CB_CANCEL }]],
       },
     },
   );
 }
 
-async function handleCallbackQuery(
-  logger: Logger,
-  query: TelegramBot.CallbackQuery,
-) {
+async function handleCallbackQuery(logger: Logger, query: TelegramBot.CallbackQuery) {
   if (!bot) return;
-  const data = query.data || "";
+  const data = query.data || '';
   const chatId = query.message?.chat.id;
   if (!chatId || !isAuthorizedChat(chatId)) {
-    await bot.answerCallbackQuery(query.id, { text: "Unauthorized" });
+    await bot.answerCallbackQuery(query.id, { text: 'Unauthorized' });
     return;
   }
 
@@ -713,16 +669,16 @@ async function handleCallbackQuery(
     sessionListCache.delete(chatId);
     pendingVerbose.delete(chatId);
     if (state?.wizardMessageId) {
-      await finishWizardMessage(chatId, state, "✕  Cancelled.");
+      await finishWizardMessage(chatId, state, '✕  Cancelled.');
     }
-    await bot.answerCallbackQuery(query.id, { text: "Cancelled" });
+    await bot.answerCallbackQuery(query.id, { text: 'Cancelled' });
     return;
   }
 
   // Step 0 — session picker
   if (data.startsWith(CB_SESSION)) {
     const tok = data.slice(CB_SESSION.length);
-    if (tok === "new") {
+    if (tok === 'new') {
       await bot.answerCallbackQuery(query.id);
       await startNewSessionWizard(logger, chatId);
       return;
@@ -732,7 +688,7 @@ async function handleCallbackQuery(
     const chosen = Number.isInteger(idx) ? sessions[idx] : undefined;
     if (!chosen) {
       await bot.answerCallbackQuery(query.id, {
-        text: "Session no longer available",
+        text: 'Session no longer available',
       });
       return;
     }
@@ -744,19 +700,19 @@ async function handleCallbackQuery(
   // Step 1 — instruction picker
   if (data.startsWith(CB_INSTRUCTION)) {
     const state = pendingPrompts.get(chatId);
-    if (!state || state.phase !== "selectInstruction") {
-      await bot.answerCallbackQuery(query.id, { text: "Step expired" });
+    if (!state || state.phase !== 'selectInstruction') {
+      await bot.answerCallbackQuery(query.id, { text: 'Step expired' });
       return;
     }
     const tok = data.slice(CB_INSTRUCTION.length);
-    if (tok === "skip") {
+    if (tok === 'skip') {
       state.chosenInstructions = null;
       state.chosenInstructionsHeading = null;
     } else {
       const idx = Number(tok);
       const t = state.templates[idx];
       if (!t) {
-        await bot.answerCallbackQuery(query.id, { text: "Template not found" });
+        await bot.answerCallbackQuery(query.id, { text: 'Template not found' });
         return;
       }
       // Don't prepend the body to the user prompt — instead promote this
@@ -769,17 +725,17 @@ async function handleCallbackQuery(
         state.chosenInstructions = null;
         state.chosenInstructionsHeading = t.heading;
       } catch (err) {
-        logger.error("Failed to set default task template", {
+        logger.error('Failed to set default task template', {
           templateId: t.id,
           error: (err as Error).message,
         });
         await bot.answerCallbackQuery(query.id, {
-          text: "Failed to set default",
+          text: 'Failed to set default',
         });
         return;
       }
     }
-    state.phase = "selectProject";
+    state.phase = 'selectProject';
     await bot.answerCallbackQuery(query.id);
     await showStep(logger, chatId, state);
     return;
@@ -788,23 +744,23 @@ async function handleCallbackQuery(
   // Step 2 — project picker
   if (data.startsWith(CB_PROJECT)) {
     const state = pendingPrompts.get(chatId);
-    if (!state || state.phase !== "selectProject") {
-      await bot.answerCallbackQuery(query.id, { text: "Step expired" });
+    if (!state || state.phase !== 'selectProject') {
+      await bot.answerCallbackQuery(query.id, { text: 'Step expired' });
       return;
     }
     const tok = data.slice(CB_PROJECT.length);
-    if (tok === "skip") {
+    if (tok === 'skip') {
       state.chosenGroupName = null;
     } else {
       const idx = Number(tok);
       const g = state.groups[idx];
       if (!g) {
-        await bot.answerCallbackQuery(query.id, { text: "Project not found" });
+        await bot.answerCallbackQuery(query.id, { text: 'Project not found' });
         return;
       }
       state.chosenGroupName = g.groupName;
     }
-    state.phase = "awaitPrompt";
+    state.phase = 'awaitPrompt';
     await bot.answerCallbackQuery(query.id);
     await showStep(logger, chatId, state);
     return;
@@ -822,28 +778,22 @@ async function runAgentForChat(
   pendingPrompts.delete(chatId);
 
   if (runningSessions.has(chatId)) {
-    await notify(
-      logger,
-      "⏳ A session is already running. Wait for it to finish.",
-      { chatId },
-    );
+    await notify(logger, '⏳ A session is already running. Wait for it to finish.', { chatId });
     return;
   }
 
   // Mark the wizard as resolved so the user sees a clean trail of choices.
   if (pending.wizardMessageId) {
     const summary = [
-      "✅ *Session started*",
+      '✅ *Session started*',
       pending.chosenInstructionsHeading
         ? `📝 Instructions: *${pending.chosenInstructionsHeading}*`
-        : "📝 Instructions: _none_",
-      pending.chosenGroupName
-        ? `📁 Project: *${pending.chosenGroupName}*`
-        : "📁 Project: _none_",
-      pending.verbose ? "🔍 Verbose: *on*" : "",
+        : '📝 Instructions: _none_',
+      pending.chosenGroupName ? `📁 Project: *${pending.chosenGroupName}*` : '📁 Project: _none_',
+      pending.verbose ? '🔍 Verbose: *on*' : '',
     ]
       .filter(Boolean)
-      .join("\n");
+      .join('\n');
     await finishWizardMessage(chatId, pending, summary);
   }
 
@@ -853,7 +803,7 @@ async function runAgentForChat(
   // verbatim — no preamble injection here.
   const composedPrompt = prompt;
 
-  const placeholderId = pending.sessionId ?? "(new)";
+  const placeholderId = pending.sessionId ?? '(new)';
   const abortController = new AbortController();
   const state: RunningSessionState = {
     sessionId: placeholderId,
@@ -864,7 +814,7 @@ async function runAgentForChat(
   };
   runningSessions.set(chatId, state);
 
-  await notify(logger, "🚀 Starting agent run… (send /stop to cancel)", {
+  await notify(logger, '🚀 Starting agent run… (send /stop to cancel)', {
     chatId,
   });
 
@@ -876,7 +826,7 @@ async function runAgentForChat(
     try {
       await bot.sendMessage(chatId, body);
     } catch (e) {
-      logger.warn("Failed to forward block to telegram", {
+      logger.warn('Failed to forward block to telegram', {
         error: (e as Error).message,
       });
     }
@@ -886,18 +836,18 @@ async function runAgentForChat(
     if (!bot) return;
     try {
       await bot.sendMessage(chatId, body, {
-        parse_mode: "HTML",
+        parse_mode: 'HTML',
         disable_web_page_preview: true,
       });
     } catch (e) {
       // Fall back to plain text if Telegram rejects the HTML payload.
-      logger.warn("HTML render failed; falling back to plain text", {
+      logger.warn('HTML render failed; falling back to plain text', {
         error: (e as Error).message,
       });
       try {
-        await bot.sendMessage(chatId, body.replace(/<[^>]+>/g, ""));
+        await bot.sendMessage(chatId, body.replace(/<[^>]+>/g, ''));
       } catch (e2) {
-        logger.warn("Plain-text fallback also failed", {
+        logger.warn('Plain-text fallback also failed', {
           error: (e2 as Error).message,
         });
       }
@@ -911,18 +861,18 @@ async function runAgentForChat(
       groupName: pending.chosenGroupName ?? undefined,
       signal: abortController.signal,
       onBlock: async (block) => {
-        if (block.kind === "reasoning") {
+        if (block.kind === 'reasoning') {
           const cleaned = cleanForTelegram(block.text);
           if (!cleaned) return;
           state.lastReasoning = cleaned;
           if (cleaned === lastSent) return;
           lastSent = cleaned;
-          const prefix = pending.verbose ? "💭 " : "";
+          const prefix = pending.verbose ? '💭 ' : '';
           await sendPlain(prefix + truncate(cleaned, REASONING_MAX));
           return;
         }
 
-        if (block.kind === "finalAnswer") {
+        if (block.kind === 'finalAnswer') {
           // finalAnswer — render markdown as Telegram HTML and split into
           // 4096-char-safe chunks so long answers are never truncated.
           const html = markdownToTelegramHtml(block.text);
@@ -941,42 +891,31 @@ async function runAgentForChat(
 
         const VERBOSE_MAX = 1500;
         switch (block.kind) {
-          case "shellCommand": {
+          case 'shellCommand': {
             const body = truncate(block.text.trim(), VERBOSE_MAX);
             await sendHtml(
               `🛠 <b>Shell command</b>\n<pre><code class="language-bash">${escapeHtml(body)}</code></pre>`,
             );
             return;
           }
-          case "terminalOutput": {
+          case 'terminalOutput': {
             const body = truncate(block.text.trim(), VERBOSE_MAX);
             if (!body) return;
-            await sendHtml(
-              `📤 <b>Terminal output</b>\n<pre>${escapeHtml(body)}</pre>`,
-            );
+            await sendHtml(`📤 <b>Terminal output</b>\n<pre>${escapeHtml(body)}</pre>`);
             return;
           }
-          case "webCall": {
-            const body = truncate(
-              cleanForTelegram(block.text) || block.text,
-              VERBOSE_MAX,
-            );
+          case 'webCall': {
+            const body = truncate(cleanForTelegram(block.text) || block.text, VERBOSE_MAX);
             await sendHtml(`🌐 <b>Web call</b>\n${escapeHtml(body)}`);
             return;
           }
-          case "mcpCall": {
-            const body = truncate(
-              cleanForTelegram(block.text) || block.text,
-              VERBOSE_MAX,
-            );
+          case 'mcpCall': {
+            const body = truncate(cleanForTelegram(block.text) || block.text, VERBOSE_MAX);
             await sendHtml(`🔌 <b>MCP call</b>\n${escapeHtml(body)}`);
             return;
           }
-          case "imageRendering": {
-            const body = truncate(
-              cleanForTelegram(block.text) || block.text,
-              VERBOSE_MAX,
-            );
+          case 'imageRendering': {
+            const body = truncate(cleanForTelegram(block.text) || block.text, VERBOSE_MAX);
             await sendHtml(`🖼 <b>Image</b>\n${escapeHtml(body)}`);
             return;
           }
@@ -984,23 +923,21 @@ async function runAgentForChat(
       },
     });
     state.sessionId = result.sessionId;
-    logger.info("Agent run completed", {
+    logger.info('Agent run completed', {
       chatId,
       sessionId: result.sessionId,
     });
   } catch (err) {
     if (err instanceof AgentAbortError || state.stoppedByUser) {
-      logger.info("Agent run stopped by user", {
+      logger.info('Agent run stopped by user', {
         chatId,
         sessionId: state.sessionId,
       });
-      await notify(
-        logger,
-        `🛑 Agent run stopped by user (session \`${state.sessionId}\`).`,
-        { chatId },
-      );
+      await notify(logger, `🛑 Agent run stopped by user (session \`${state.sessionId}\`).`, {
+        chatId,
+      });
     } else {
-      logger.error("Agent run failed", { error: (err as Error).message });
+      logger.error('Agent run failed', { error: (err as Error).message });
       await notify(logger, `❌ Agent run failed: ${(err as Error).message}`, {
         chatId,
       });
@@ -1014,90 +951,78 @@ async function runAgentForChat(
 async function handleStopCommand(logger: Logger, chatId: number) {
   const running = runningSessions.get(chatId);
   if (!running) {
-    await notify(logger, "🛑 No agent session is currently running.", {
+    await notify(logger, '🛑 No agent session is currently running.', {
       chatId,
     });
     return;
   }
   if (running.abortController.signal.aborted) {
-    await notify(logger, "⏳ Stop already requested — waiting for shutdown…", {
+    await notify(logger, '⏳ Stop already requested — waiting for shutdown…', {
       chatId,
     });
     return;
   }
   running.stoppedByUser = true;
   running.abortController.abort();
-  logger.info("User requested agent stop", {
+  logger.info('User requested agent stop', {
     chatId,
     sessionId: running.sessionId,
   });
-  await notify(
-    logger,
-    `🛑 Stop requested for session \`${running.sessionId}\`.`,
-    { chatId },
-  );
+  await notify(logger, `🛑 Stop requested for session \`${running.sessionId}\`.`, { chatId });
 }
 
 export function setupMessageListener(logger: Logger, bot: TelegramBot) {
-  bot.on("callback_query", (q) => {
+  bot.on('callback_query', (q) => {
     void handleCallbackQuery(logger, q).catch((err) => {
-      logger.error("callback_query handler crashed", {
+      logger.error('callback_query handler crashed', {
         error: (err as Error).message,
       });
     });
   });
 
-  bot.on("message", async (msg) => {
+  bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
     if (!isAuthorizedChat(chatId)) {
-      logger.warn("Received message from unauthorized chat ID:", chatId);
+      logger.warn('Received message from unauthorized chat ID:', chatId);
       return;
     }
 
-    const text = (msg.text || "").trim();
+    const text = (msg.text || '').trim();
     logger.info(`Received message from chat ID ${chatId}: ${text}`);
 
     const lower = text.toLowerCase();
 
-    if (lower === "/cmd" || lower.startsWith("/cmd ")) {
-      const args = text
-        .slice("/cmd".length)
-        .trim()
-        .split(/\s+/)
-        .filter(Boolean);
-      const verbose = args.some(
-        (a) => a === "--verbose" || a === "-v" || a === "--verbos",
-      );
+    if (lower === '/cmd' || lower.startsWith('/cmd ')) {
+      const args = text.slice('/cmd'.length).trim().split(/\s+/).filter(Boolean);
+      const verbose = args.some((a) => a === '--verbose' || a === '-v' || a === '--verbos');
       await handleCmdCommand(logger, chatId, verbose);
       return;
     }
 
-    if (lower === "/task") {
+    if (lower === '/task') {
       await handleTaskCommand(logger, chatId);
       return;
     }
 
-    if (lower === "/stop") {
+    if (lower === '/stop') {
       await handleStopCommand(logger, chatId);
       return;
     }
 
     // If we are awaiting a prompt for a /cmd selection, treat this message as the prompt.
     const pending = pendingPrompts.get(chatId);
-    if (pending && text && !text.startsWith("/")) {
-      if (pending.phase !== "awaitPrompt") {
-        await notify(
-          logger,
-          "👉 Pick the remaining options on the wizard above first.",
-          { chatId },
-        );
+    if (pending && text && !text.startsWith('/')) {
+      if (pending.phase !== 'awaitPrompt') {
+        await notify(logger, '👉 Pick the remaining options on the wizard above first.', {
+          chatId,
+        });
         return;
       }
       if (pending.sessionId) {
         const messages = await getSessionMessages(logger, pending.sessionId);
         if (messages === null) {
           pendingPrompts.delete(chatId);
-          await notify(logger, "❌ Selected session no longer exists.", {
+          await notify(logger, '❌ Selected session no longer exists.', {
             chatId,
           });
           return;
@@ -1107,6 +1032,6 @@ export function setupMessageListener(logger: Logger, bot: TelegramBot) {
       return;
     }
 
-    logger.info("Ignoring unknown message");
+    logger.info('Ignoring unknown message');
   });
 }

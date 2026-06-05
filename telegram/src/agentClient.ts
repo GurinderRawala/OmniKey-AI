@@ -1,12 +1,12 @@
-import axios from "axios";
-import WebSocket from "ws";
-import { spawn } from "child_process";
-import { existsSync } from "fs";
-import path from "path";
-import { randomUUID } from "crypto";
-import type { Logger } from "winston";
-import { omnikeyBaseUrl, omnikeyWsUrl } from "./config";
-import { fetchJwtToken } from "./omnikeyAuth";
+import axios from 'axios';
+import WebSocket from 'ws';
+import { spawn } from 'child_process';
+import { existsSync } from 'fs';
+import path from 'path';
+import { randomUUID } from 'crypto';
+import type { Logger } from 'winston';
+import { omnikeyBaseUrl, omnikeyWsUrl } from './config';
+import { fetchJwtToken } from './omnikeyAuth';
 
 export interface AgentSessionSummary {
   readonly id: string;
@@ -23,7 +23,7 @@ export interface TranscriptBlock {
 
 export interface TranscriptMessage {
   readonly id: string;
-  readonly role: "user" | "assistant";
+  readonly role: 'user' | 'assistant';
   readonly text: string;
   readonly blocks?: TranscriptBlock[];
 }
@@ -72,9 +72,7 @@ export interface TaskTemplate {
   readonly isDefault: boolean;
 }
 
-export async function listTaskTemplates(
-  logger: Logger,
-): Promise<TaskTemplate[]> {
+export async function listTaskTemplates(logger: Logger): Promise<TaskTemplate[]> {
   const token = await fetchJwtToken(logger);
   const url = `${omnikeyBaseUrl()}/api/instructions/templates`;
   const resp = await axios.get<{ templates: TaskTemplate[] }>(url, {
@@ -89,17 +87,14 @@ export async function listTaskTemplates(
  * agent runs automatically pick it up via stored_instructions — no need
  * to prepend it to the user prompt.
  */
-export async function setDefaultTaskTemplate(
-  logger: Logger,
-  templateId: string,
-): Promise<void> {
+export async function setDefaultTaskTemplate(logger: Logger, templateId: string): Promise<void> {
   const token = await fetchJwtToken(logger);
   const url = `${omnikeyBaseUrl()}/api/instructions/templates/${encodeURIComponent(templateId)}/set-default`;
   await axios.post(url, undefined, {
     timeout: 10_000,
     headers: { Authorization: `Bearer ${token}` },
   });
-  logger.info("Set default task template", { templateId });
+  logger.info('Set default task template', { templateId });
 }
 
 export interface ProjectGroup {
@@ -107,9 +102,7 @@ export interface ProjectGroup {
   readonly groupDescription: string | null;
 }
 
-export async function listProjectGroups(
-  logger: Logger,
-): Promise<ProjectGroup[]> {
+export async function listProjectGroups(logger: Logger): Promise<ProjectGroup[]> {
   const token = await fetchJwtToken(logger);
   const url = `${omnikeyBaseUrl()}/api/agent/groups`;
   const resp = await axios.get<{ groups: ProjectGroup[] }>(url, {
@@ -134,13 +127,13 @@ interface AgentWireMessage {
 }
 
 export type AgentBlockKind =
-  | "reasoning"
-  | "shellCommand"
-  | "terminalOutput"
-  | "webCall"
-  | "mcpCall"
-  | "imageRendering"
-  | "finalAnswer";
+  | 'reasoning'
+  | 'shellCommand'
+  | 'terminalOutput'
+  | 'webCall'
+  | 'mcpCall'
+  | 'imageRendering'
+  | 'finalAnswer';
 
 export interface AgentBlock {
   readonly kind: AgentBlockKind;
@@ -161,9 +154,9 @@ export interface RunAgentOptions {
 }
 
 export class AgentAbortError extends Error {
-  constructor(message = "Agent run aborted") {
+  constructor(message = 'Agent run aborted') {
     super(message);
-    this.name = "AgentAbortError";
+    this.name = 'AgentAbortError';
   }
 }
 
@@ -173,22 +166,19 @@ export interface RunAgentResult {
 }
 
 function extractTagged(content: string, tag: string): string | null {
-  const re = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, "i");
+  const re = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, 'i');
   const m = content.match(re);
   return m?.[1]?.trim() || null;
 }
 
 function stripTagged(content: string, tag: string): string {
-  return content.replace(
-    new RegExp(`<${tag}[^>]*>[\\s\\S]*?<\\/${tag}>`, "gi"),
-    "",
-  );
+  return content.replace(new RegExp(`<${tag}[^>]*>[\\s\\S]*?<\\/${tag}>`, 'gi'), '');
 }
 
 function cleanReasoning(content: string): string {
   return content
-    .replace(/<\/?shell_function_calls>/gi, "")
-    .replace(/<final_answer>([\s\S]*?)<\/final_answer>/gi, "$1")
+    .replace(/<\/?shell_function_calls>/gi, '')
+    .replace(/<final_answer>([\s\S]*?)<\/final_answer>/gi, '$1')
     .trim();
 }
 
@@ -197,44 +187,40 @@ const SHELL_OUTPUT_MAX = 64 * 1024;
 
 // Mirrors WINDOWS_SHELL_CANDIDATES in src/agent/mcpRuntime.ts
 const WINDOWS_SHELL_CANDIDATES = [
-  "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
-  "C:\\Program Files\\PowerShell\\6\\pwsh.exe",
-  "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
-  "C:\\Windows\\System32\\cmd.exe",
-  "C:\\Windows\\cmd.exe",
+  'C:\\Program Files\\PowerShell\\7\\pwsh.exe',
+  'C:\\Program Files\\PowerShell\\6\\pwsh.exe',
+  'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+  'C:\\Windows\\System32\\cmd.exe',
+  'C:\\Windows\\cmd.exe',
 ] as const;
 
 // Resolve the Windows shell: COMSPEC → SystemRoot\System32\cmd.exe → candidate list.
 // Mirrors resolveLoginShell() in src/agent/mcpRuntime.ts, with SystemRoot used to
 // locate cmd.exe from the Win32 system root rather than a hardcoded drive letter.
 function resolveWindowsShell(): string {
-  const comspec = process.env.COMSPEC ?? "";
+  const comspec = process.env.COMSPEC ?? '';
   if (comspec && existsSync(comspec)) return comspec;
-  const systemRoot = process.env.SystemRoot ?? "C:\\Windows";
-  const cmdFromRoot = path.join(systemRoot, "System32", "cmd.exe");
+  const systemRoot = process.env.SystemRoot ?? 'C:\\Windows';
+  const cmdFromRoot = path.join(systemRoot, 'System32', 'cmd.exe');
   if (existsSync(cmdFromRoot)) return cmdFromRoot;
   for (const candidate of WINDOWS_SHELL_CANDIDATES) {
     if (existsSync(candidate)) return candidate;
   }
-  return "cmd.exe";
+  return 'cmd.exe';
 }
 
 // Build shell args for the resolved shell — mirrors wrapWithLoginShell() in
 // src/agent/mcpRuntime.ts.  PowerShell/pwsh use -NoProfile -Command; cmd uses /c.
 function buildWindowsShellArgs(shell: string, script: string): string[] {
   const name = path.basename(shell).toLowerCase();
-  if (name === "pwsh.exe" || name === "powershell.exe") {
-    return ["-NoProfile", "-Command", script];
+  if (name === 'pwsh.exe' || name === 'powershell.exe') {
+    return ['-NoProfile', '-Command', script];
   }
-  return ["/c", script];
+  return ['/c', script];
 }
 
 const PLATFORM =
-  process.platform === "win32"
-    ? "windows"
-    : process.platform === "darwin"
-      ? "macos"
-      : "linux";
+  process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'macos' : 'linux';
 
 /**
  * Execute a shell script locally and capture combined stdout+stderr.
@@ -253,15 +239,15 @@ function runShellScript(
     let shell: string;
     let shellArgs: string[];
 
-    if (process.platform !== "darwin" && process.platform === "win32") {
+    if (process.platform !== 'darwin' && process.platform === 'win32') {
       shell = resolveWindowsShell();
       shellArgs = buildWindowsShellArgs(shell, script);
     } else {
-      shell = process.env.SHELL || "/bin/zsh";
-      shellArgs = ["-l", "-c", script];
+      shell = process.env.SHELL || '/bin/zsh';
+      shellArgs = ['-l', '-c', script];
     }
 
-    logger.info("Executing shell script from agent", {
+    logger.info('Executing shell script from agent', {
       shell,
       platform: PLATFORM,
       length: script.length,
@@ -272,7 +258,7 @@ function runShellScript(
       env: process.env,
     });
 
-    let buf = "";
+    let buf = '';
     let truncated = false;
     const append = (chunk: Buffer) => {
       if (truncated) return;
@@ -281,7 +267,7 @@ function runShellScript(
         truncated = true;
         return;
       }
-      const text = chunk.toString("utf8");
+      const text = chunk.toString('utf8');
       if (text.length <= room) {
         buf += text;
       } else {
@@ -290,21 +276,21 @@ function runShellScript(
       }
     };
 
-    child.stdout.on("data", append);
-    child.stderr.on("data", append);
+    child.stdout.on('data', append);
+    child.stderr.on('data', append);
 
     const timeout = setTimeout(() => {
-      logger.warn("Shell script timed out; sending SIGTERM", {
+      logger.warn('Shell script timed out; sending SIGTERM', {
         timeoutMs: SHELL_TIMEOUT_MS,
       });
       try {
-        child.kill("SIGTERM");
+        child.kill('SIGTERM');
       } catch {
         /* noop */
       }
     }, SHELL_TIMEOUT_MS);
 
-    child.on("error", (err) => {
+    child.on('error', (err) => {
       clearTimeout(timeout);
       resolve({
         output: `${buf}\n[shell spawn error: ${err.message}]`,
@@ -312,13 +298,11 @@ function runShellScript(
       });
     });
 
-    child.on("close", (code, signal) => {
+    child.on('close', (code, signal) => {
       clearTimeout(timeout);
-      const status = typeof code === "number" ? code : signal ? 1 : 0;
-      const finalOutput = truncated
-        ? `${buf}\n... [truncated to ${SHELL_OUTPUT_MAX} bytes]`
-        : buf;
-      logger.info("Shell script finished", {
+      const status = typeof code === 'number' ? code : signal ? 1 : 0;
+      const finalOutput = truncated ? `${buf}\n... [truncated to ${SHELL_OUTPUT_MAX} bytes]` : buf;
+      logger.info('Shell script finished', {
         status,
         signal,
         outputLength: finalOutput.length,
@@ -337,13 +321,10 @@ function runShellScript(
  * the combined stdout+stderr back as the next user turn so the agent can
  * continue reasoning over the result.
  */
-export async function runAgentTurn(
-  logger: Logger,
-  opts: RunAgentOptions,
-): Promise<RunAgentResult> {
+export async function runAgentTurn(logger: Logger, opts: RunAgentOptions): Promise<RunAgentResult> {
   const token = await fetchJwtToken(logger);
   const sessionId = opts.sessionId || randomUUID();
-  const url = omnikeyWsUrl("/ws/omni-agent");
+  const url = omnikeyWsUrl('/ws/omni-agent');
 
   return new Promise<RunAgentResult>((resolve, reject) => {
     if (opts.signal?.aborted) {
@@ -360,7 +341,7 @@ export async function runAgentTurn(
       if (settled) return;
       settled = true;
       if (opts.signal && onAbort) {
-        opts.signal.removeEventListener("abort", onAbort);
+        opts.signal.removeEventListener('abort', onAbort);
       }
       try {
         ws.close();
@@ -373,12 +354,12 @@ export async function runAgentTurn(
 
     const onAbort = opts.signal
       ? () => {
-          logger.info("Agent run aborted by caller", { sessionId });
+          logger.info('Agent run aborted by caller', { sessionId });
           finish(new AgentAbortError());
         }
       : null;
     if (opts.signal && onAbort) {
-      opts.signal.addEventListener("abort", onAbort, { once: true });
+      opts.signal.addEventListener('abort', onAbort, { once: true });
     }
 
     const send = (msg: AgentWireMessage) => {
@@ -387,11 +368,11 @@ export async function runAgentTurn(
       });
     };
 
-    ws.on("open", () => {
-      logger.info("Agent WebSocket open", { sessionId });
+    ws.on('open', () => {
+      logger.info('Agent WebSocket open', { sessionId });
       send({
         session_id: sessionId,
-        sender: "client",
+        sender: 'client',
         content: opts.prompt,
         is_terminal_output: false,
         is_error: false,
@@ -400,62 +381,60 @@ export async function runAgentTurn(
       });
     });
 
-    ws.on("message", async (data) => {
+    ws.on('message', async (data) => {
       let msg: AgentWireMessage;
       try {
         msg = JSON.parse(data.toString()) as AgentWireMessage;
       } catch (e) {
-        logger.warn("Failed to parse agent ws message", {
+        logger.warn('Failed to parse agent ws message', {
           error: (e as Error).message,
         });
         return;
       }
 
-      const content = msg.content || "";
+      const content = msg.content || '';
 
       if (msg.is_error) {
-        finish(new Error(content || "Agent reported an error"));
+        finish(new Error(content || 'Agent reported an error'));
         return;
       }
 
       if (msg.is_web_call) {
-        await opts.onBlock({ kind: "webCall", text: content });
+        await opts.onBlock({ kind: 'webCall', text: content });
         return;
       }
       if (msg.is_image_rendering) {
-        await opts.onBlock({ kind: "imageRendering", text: content });
+        await opts.onBlock({ kind: 'imageRendering', text: content });
         return;
       }
       if (msg.is_mcp_call) {
-        await opts.onBlock({ kind: "mcpCall", text: content });
+        await opts.onBlock({ kind: 'mcpCall', text: content });
         return;
       }
 
-      const finalAnswer = extractTagged(content, "final_answer");
+      const finalAnswer = extractTagged(content, 'final_answer');
       if (finalAnswer) {
-        await opts.onBlock({ kind: "finalAnswer", text: finalAnswer });
+        await opts.onBlock({ kind: 'finalAnswer', text: finalAnswer });
         finish(null, { sessionId, finalAnswer });
         return;
       }
 
-      const shellScript = extractTagged(content, "shell_script");
+      const shellScript = extractTagged(content, 'shell_script');
       if (shellScript) {
-        const reasoning = cleanReasoning(stripTagged(content, "shell_script"));
-        if (reasoning)
-          await opts.onBlock({ kind: "reasoning", text: reasoning });
-        await opts.onBlock({ kind: "shellCommand", text: shellScript });
+        const reasoning = cleanReasoning(stripTagged(content, 'shell_script'));
+        if (reasoning) await opts.onBlock({ kind: 'reasoning', text: reasoning });
+        await opts.onBlock({ kind: 'shellCommand', text: shellScript });
 
         try {
           const { output, status } = await runShellScript(shellScript, logger);
-          const statusLabel =
-            status === 0 ? "success" : `error (exit code: ${status})`;
+          const statusLabel = status === 0 ? 'success' : `error (exit code: ${status})`;
           await opts.onBlock({
-            kind: "terminalOutput",
+            kind: 'terminalOutput',
             text: `[terminal ${statusLabel}]\n${output}`,
           });
           send({
             session_id: sessionId,
-            sender: "client",
+            sender: 'client',
             content: output,
             is_terminal_output: true,
             is_error: status !== 0,
@@ -463,14 +442,14 @@ export async function runAgentTurn(
           });
         } catch (err) {
           const message = (err as Error).message;
-          logger.error("Shell execution failed", { error: message });
+          logger.error('Shell execution failed', { error: message });
           await opts.onBlock({
-            kind: "terminalOutput",
+            kind: 'terminalOutput',
             text: `[terminal error]\n${message}`,
           });
           send({
             session_id: sessionId,
-            sender: "client",
+            sender: 'client',
             content: `Failed to execute shell script: ${message}`,
             is_terminal_output: true,
             is_error: true,
@@ -482,18 +461,17 @@ export async function runAgentTurn(
 
       const reasoning = cleanReasoning(content);
       if (reasoning) {
-        await opts.onBlock({ kind: "reasoning", text: reasoning });
+        await opts.onBlock({ kind: 'reasoning', text: reasoning });
       }
     });
 
-    ws.on("error", (err) => {
-      logger.error("Agent WebSocket error", { error: err.message });
+    ws.on('error', (err) => {
+      logger.error('Agent WebSocket error', { error: err.message });
       finish(err);
     });
 
-    ws.on("close", () => {
-      if (!settled)
-        finish(new Error("Agent WebSocket closed before final answer"));
+    ws.on('close', () => {
+      if (!settled) finish(new Error('Agent WebSocket closed before final answer'));
     });
   });
 }
@@ -501,9 +479,7 @@ export async function runAgentTurn(
 /**
  * Find the most recent `<final_answer>` text in a stored session's history JSON.
  */
-export function extractFinalAnswerFromHistory(
-  historyJson: string,
-): string | null {
+export function extractFinalAnswerFromHistory(historyJson: string): string | null {
   try {
     const history = JSON.parse(historyJson) as Array<{
       role?: string;
@@ -511,9 +487,9 @@ export function extractFinalAnswerFromHistory(
     }>;
     for (let i = history.length - 1; i >= 0; i--) {
       const entry = history[i];
-      if (entry.role !== "assistant") continue;
-      const content = typeof entry.content === "string" ? entry.content : "";
-      const fa = extractTagged(content, "final_answer");
+      if (entry.role !== 'assistant') continue;
+      const content = typeof entry.content === 'string' ? entry.content : '';
+      const fa = extractTagged(content, 'final_answer');
       if (fa) return fa;
     }
   } catch {

@@ -11,12 +11,12 @@ const PLIST_NAME = `${LABEL}.plist`;
 const WINDOWS_SERVICE_NAME = 'OmnikeyTelegram';
 
 // At runtime __dirname is cli/dist/. The bundled telegram app is copied into
-// cli/telegram-client-dist/ by the build:telegram-client script, so one level
-// up from dist/ lands at the package root, then into the bundle directory.
+// cli/telegram-client-dist/ by the build:telegram-client script (flat layout,
+// matching backend-dist/), so one level up from dist/ lands at the package
 // This matches resolveBundleRoot() in telegramClient.ts and works correctly
 // both in the monorepo and after `npm install -g omnikey-cli`.
 const TELEGRAM_BOT_ROOT = path.resolve(__dirname, '..', 'telegram-client-dist');
-const ENTRY_POINT = path.join(TELEGRAM_BOT_ROOT, 'dist', 'index.js');
+const ENTRY_POINT = path.join(TELEGRAM_BOT_ROOT, 'index.js');
 
 const HOME = getHomeDir();
 
@@ -300,11 +300,9 @@ async function startWindows(): Promise<void> {
     execFileSync(nssmPath, ['set', WINDOWS_SERVICE_NAME, 'Start', 'SERVICE_AUTO_START'], {
       stdio: 'pipe',
     });
-    execFileSync(
-      nssmPath,
-      ['set', WINDOWS_SERVICE_NAME, 'DisplayName', 'Omnikey Telegram'],
-      { stdio: 'pipe' },
-    );
+    execFileSync(nssmPath, ['set', WINDOWS_SERVICE_NAME, 'DisplayName', 'Omnikey Telegram'], {
+      stdio: 'pipe',
+    });
     execFileSync(
       nssmPath,
       ['set', WINDOWS_SERVICE_NAME, 'Description', 'Omnikey Telegram Daemon'],

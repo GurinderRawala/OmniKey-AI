@@ -24,7 +24,7 @@ function resolveBundleRoot(): string {
 }
 
 function resolveBundledEntry(): string {
-  return path.join(resolveBundleRoot(), 'dist', 'index.js');
+  return path.join(resolveBundleRoot(), 'index.js');
 }
 
 function persistConfig(values: Record<string, string>): void {
