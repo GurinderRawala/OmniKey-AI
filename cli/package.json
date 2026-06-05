@@ -17,7 +17,7 @@
     "build": "tsc && yarn run copy-backend && yarn run build:telegram-client",
     "start": "node dist/index.js",
     "copy-backend": "rm -rf backend-dist && mkdir -p backend-dist && cp -R ../api/dist/* backend-dist/",
-    "build:telegram-client": "rm -rf telegram-client-dist && mkdir -p telegram-client-dist/dist && cp -R ../telegram/dist/* telegram-client-dist/dist/",
+    "build:telegram-client": "rm -rf telegram-client-dist && mkdir -p telegram-client-dist && cp -R ../telegram/dist/* telegram-client-dist/",
     "clean": "rm -rf dist backend-dist telegram-client-dist",
     "format": "prettier --write \"src/**/*.ts\"",
     "test": "echo \"(no tests in this workspace)\" && exit 0",
