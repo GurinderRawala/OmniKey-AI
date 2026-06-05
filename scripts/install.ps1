@@ -1,7 +1,7 @@
 # OmniKey AI - One-line installer for Windows (PowerShell)
 #
 # Usage:
-#   iwr -useb https://raw.githubusercontent.com/GurinderRawala/OmniKey-AI/main/scripts/install.ps1 | iex
+#   iwr -useb https://omnikeyai.ca/install.ps1 | iex
 #
 # This script will:
 #   1. Verify Node.js (>= 18) is installed.
