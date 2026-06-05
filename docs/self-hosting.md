@@ -20,13 +20,13 @@ platform.
 ### macOS / Linux
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/GurinderRawala/OmniKey-AI/main/scripts/install.sh | bash
+curl -fsSL https://omnikeyai.ca/install.sh | bash
 ```
 
 ### Windows (PowerShell)
 
 ```powershell
-iwr -useb https://raw.githubusercontent.com/GurinderRawala/OmniKey-AI/main/scripts/install.ps1 | iex
+iwr -useb https://omnikeyai.ca/install.ps1 | iex
 ```
 
 The installer requires Node.js 18+ to already be installed. If you don't
@@ -36,6 +36,13 @@ have Node.js, grab it from [nodejs.org](https://nodejs.org/) (or via `nvm`
 > Note: on Linux the desktop app step is skipped — OmniKey AI currently
 > only ships a desktop installer for macOS and Windows. The CLI and daemon
 > work on Linux.
+
+The install scripts themselves live at
+[`scripts/install.sh`](../scripts/install.sh) and
+[`scripts/install.ps1`](../scripts/install.ps1), and are served behind the
+short `omnikeyai.ca` URL by the container in
+[`scripts/installer-host/`](../scripts/installer-host/) (Cloud Run +
+custom domain).
 
 ## Manual steps for Self-Hosting
 
