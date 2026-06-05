@@ -106,12 +106,17 @@ if (Test-Path $DaemonPidFile) {
     $oldPid = Get-Content $DaemonPidFile -ErrorAction SilentlyContinue
     if ($oldPid -and (Get-Process -Id $oldPid -ErrorAction SilentlyContinue)) {
         Write-Warn2 "Stopping previous daemon (pid $oldPid)..."
-        Stop-Process -Id $oldPid -Force -ErrorAction SilentlyContinue
+        # The pid is the cmd.exe wrapper; /T kills the node daemon child too.
+        & taskkill /PID $oldPid /T /F 2>$null | Out-Null
         Start-Sleep -Seconds 1
     }
 }
 
-$daemonProc = Start-Process -FilePath 'omnikey' -ArgumentList 'daemon' `
+# `omnikey` is an npm shim (.cmd/.ps1), not a native .exe. Start-Process with
+# output redirection is forced onto CreateProcess, which can only launch real
+# Win32 executables (otherwise: "%1 is not a valid Win32 application"). Run the
+# shim through the command processor instead.
+$daemonProc = Start-Process -FilePath $env:ComSpec -ArgumentList '/c','omnikey','daemon' `
     -RedirectStandardOutput $DaemonLog -RedirectStandardError $DaemonErrLog `
     -WindowStyle Hidden -PassThru
 
