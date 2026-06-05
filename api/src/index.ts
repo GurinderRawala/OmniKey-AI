@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import fs from 'fs';
+import zlib from 'zlib';
 import { createSubscriptionRouter } from './subscriptionRoutes';
 import { createFeatureRouter } from './featureRoutes';
 import { initDatabase } from './db';
@@ -138,18 +139,16 @@ app.get('/windows/download', (_req, res) => {
     return;
   }
 
-  let fileSize = 0;
-  try { fileSize = fs.statSync(WIN_ZIP_PATH).size; } catch (_) {}
-
   res.set({
     'Content-Type': 'application/zip',
     'Content-Disposition': `attachment; filename="${WIN_ZIP_FILENAME}"`,
-    ...(fileSize ? { 'Content-Length': String(fileSize) } : {}),
+    'Content-Encoding': 'gzip',
   });
 
   incrementDownloadCount('windows').catch(() => {});
 
   const fileStream = fs.createReadStream(WIN_ZIP_PATH);
+  const gzip = zlib.createGzip();
 
   fileStream.on('error', (err) => {
     logger.error('Failed to send Windows ZIP for download.', { error: err });
@@ -158,7 +157,7 @@ app.get('/windows/download', (_req, res) => {
     }
   });
 
-  fileStream.pipe(res);
+  fileStream.pipe(gzip).pipe(res);
 });
 
 // JSON update-check endpoint consumed by UpdateChecker.cs on the Windows client.
@@ -210,6 +209,16 @@ app.get('/downloads/stats', async (_req, res) => {
 
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok' });
+});
+
+app.get('/install.sh', (_req, res) => {
+  const scriptPath = path.join(process.cwd(), 'install.sh');
+  if (!fs.existsSync(scriptPath)) {
+    res.status(404).send('Not found.');
+    return;
+  }
+  res.set('Content-Type', 'text/plain; charset=utf-8');
+  res.sendFile(scriptPath);
 });
 
 app.get('*', (_req, res) => {
