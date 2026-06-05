@@ -15,18 +15,22 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write # REQUIRED for npm trusted publishing
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # `registry-url` makes actions/setup-node write a project-scoped .npmrc
+      # containing  //registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN} .
+      # `always-auth` forces npm to actually use it on publish (without this,
+      # newer npm versions can skip the credential for unscoped packages).
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: 'yarn'
           registry-url: 'https://registry.npmjs.org'
+          always-auth: true
 
       - name: Show versions
         run: |
@@ -42,10 +46,11 @@ jobs:
         run: yarn build
 
       # ── Publish the CLI workspace with npm ──────────────────────────────────
-      # The package is configured for npm trusted publishing — auth is done
-      # via the GitHub OIDC token (id-token: write permission above) and
-      # requires --provenance. This matches the workflow that was working
-      # prior to the monorepo conversion.
-      - name: Publish CLI to npm (trusted publishing)
-        run: npm publish --access public --provenance
+      # NODE_AUTH_TOKEN is read by the .npmrc that actions/setup-node wrote.
+      # No provenance / trusted-publishing — that broke with a 404 because the
+      # package isn't registered as a trusted publisher on npmjs.org.
+      - name: Publish CLI to npm
+        run: npm publish --access public
         working-directory: ./cli
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
