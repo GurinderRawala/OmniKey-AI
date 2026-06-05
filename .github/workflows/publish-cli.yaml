@@ -15,6 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      id-token: write # REQUIRED for npm trusted publishing
 
     steps:
       - name: Checkout
@@ -41,10 +42,10 @@ jobs:
         run: yarn build
 
       # ── Publish the CLI workspace with npm ──────────────────────────────────
-      # Plain `npm publish --access public`, matching the pre-monorepo workflow.
-      # Provenance is intentionally NOT enabled here because the package on
-      # npmjs.org is not configured as a trusted publisher for this repo —
-      # adding `--provenance` made npm reject the upload with a confusing 404.
-      - name: Publish CLI to npm
-        run: npm publish --access public
+      # The package is configured for npm trusted publishing — auth is done
+      # via the GitHub OIDC token (id-token: write permission above) and
+      # requires --provenance. This matches the workflow that was working
+      # prior to the monorepo conversion.
+      - name: Publish CLI to npm (trusted publishing)
+        run: npm publish --access public --provenance
         working-directory: ./cli
