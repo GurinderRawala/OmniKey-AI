@@ -3,7 +3,7 @@
 # OmniKey AI - One-line installer for macOS and Linux
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/GurinderRawala/OmniKey-AI/main/scripts/install.sh | bash
+#   curl -fsSL https://omnikeyai.ca/install.sh | bash
 #
 # This script will:
 #   1. Verify Node.js (>= 18) is installed.
@@ -64,7 +64,7 @@ case "$OS_RAW" in
     ;;
   MINGW*|MSYS*|CYGWIN*)
     err "This script is for macOS/Linux. On Windows, run the PowerShell installer instead:"
-    err "  iwr -useb https://raw.githubusercontent.com/GurinderRawala/OmniKey-AI/main/scripts/install.ps1 | iex"
+    err "  iwr -useb https://omnikeyai.ca/install.ps1 | iex"
     exit 1
     ;;
   *)
