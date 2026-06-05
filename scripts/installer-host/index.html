@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OmniKey AI - One-line installer</title>
+  <meta name="description" content="One-line installer for OmniKey AI on macOS, Linux, and Windows." />
+  <style>
+    :root { color-scheme: light dark; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                   "Helvetica Neue", Arial, sans-serif;
+      max-width: 720px;
+      margin: 4rem auto;
+      padding: 0 1.25rem;
+      line-height: 1.55;
+    }
+    h1 { margin-bottom: 0.25rem; }
+    p.tag { color: #666; margin-top: 0; }
+    pre {
+      background: rgba(127,127,127,0.12);
+      padding: 0.9rem 1rem;
+      border-radius: 8px;
+      overflow-x: auto;
+      font-size: 0.95rem;
+    }
+    code { font-family: "SF Mono", Menlo, Consolas, monospace; }
+    h2 { margin-top: 2rem; }
+    a { color: #2c7be5; }
+    footer { margin-top: 3rem; font-size: 0.85rem; color: #888; }
+  </style>
+</head>
+<body>
+  <h1>OmniKey AI</h1>
+  <p class="tag">Self-hosted bring-your-own-key (BYOK) wrapper for top AI models.</p>
+
+  <h2>Install</h2>
+
+  <p><strong>macOS / Linux</strong></p>
+  <pre><code>curl -fsSL https://omnikeyai.ca/install.sh | bash</code></pre>
+
+  <p><strong>Windows (PowerShell)</strong></p>
+  <pre><code>iwr -useb https://omnikeyai.ca/install.ps1 | iex</code></pre>
+
+  <p>Requires Node.js 18+. The script installs the <code>omnikey-ai</code> CLI,
+  runs onboarding, starts the daemon, and downloads &amp; opens the matching
+  desktop installer for your platform.</p>
+
+  <h2>Links</h2>
+  <ul>
+    <li><a href="https://github.com/GurinderRawala/OmniKey-AI">GitHub repository</a></li>
+    <li><a href="https://github.com/GurinderRawala/OmniKey-AI/blob/main/docs/self-hosting.md">Self-hosting docs</a></li>
+    <li><a href="/install.sh">View install.sh</a></li>
+    <li><a href="/install.ps1">View install.ps1</a></li>
+  </ul>
+
+  <footer>
+    &copy; OmniKey AI
+  </footer>
+</body>
+</html>
