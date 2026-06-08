@@ -17,6 +17,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     private var scheduledJobsMenuItem: NSMenuItem?
     private var mcpServersWindowController: MCPServersWindowController?
     private var mcpServersMenuItem: NSMenuItem?
+    private var settingsWindowController: SettingsWindowController?
+    private var settingsMenuItem: NSMenuItem?
     private var chatWindowController: ChatWindowController?
     private var chatMenuItem: NSMenuItem?
     private var monitoringStarted = false
@@ -151,10 +153,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         mcpServersItem.isEnabled = false
         menu.addItem(mcpServersItem)
         mcpServersMenuItem = mcpServersItem
-        let manualItem = NSMenuItem(title: "Manual", action: #selector(showManualWindowFromMenu), keyEquivalent: "")
-        manualItem.target = self
-        menu.addItem(manualItem)
-        manualMenuItem = manualItem
+        let settingsItem = NSMenuItem(title: "Settings", action: #selector(showSettingsWindowFromMenu), keyEquivalent: ",")
+        settingsItem.target = self
+        settingsItem.isEnabled = true
+        menu.addItem(settingsItem)
+        settingsMenuItem = settingsItem
         let licenseItem = NSMenuItem(title: "Subscription", action: #selector(showLicenseWindowFromMenu), keyEquivalent: "")
         licenseItem.target = self
         // Hide the subscription menu item if self-hosted
@@ -163,9 +166,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         }
         menu.addItem(licenseItem)
         licenseMenuItem = licenseItem
-        let updateItem = NSMenuItem(title: "Check Updates", action: #selector(checkForUpdatesFromMenu), keyEquivalent: "")
-        updateItem.target = self
-        menu.addItem(updateItem)
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q"))
 
         // Attach the menu to the status bar item so clicking the
@@ -175,6 +175,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
 
     @objc private func checkForUpdatesFromMenu() {
         updaterController?.checkForUpdates(nil)
+    }
+
+    /// Public hook so SwiftUI views (e.g. SettingsView) can trigger Sparkle.
+    func checkForUpdates() {
+        updaterController?.checkForUpdates(nil)
+    }
+
+    /// Returns true if a Sparkle updater session can currently be initiated.
+    /// Sparkle returns false while an update is already in progress.
+    func canCheckForUpdates() -> Bool {
+        return updaterController?.updater.canCheckForUpdates ?? false
     }
 
     @objc private func showChatWindowFromMenu() {
@@ -231,6 +242,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         }
         NSApp.activate(ignoringOtherApps: true)
         mcpServersWindowController?.showWindow(nil)
+    }
+
+    @objc private func showSettingsWindowFromMenu() {
+        showSettingsWindow()
+    }
+
+    func showSettingsWindow() {
+        if settingsWindowController == nil {
+            settingsWindowController = SettingsWindowController()
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        settingsWindowController?.showWindow(nil)
     }
 
     @objc private func showAgentThinkingWindowFromMenu() {

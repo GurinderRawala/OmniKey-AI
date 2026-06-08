@@ -971,4 +971,168 @@ final class APIClient: @unchecked Sendable {
         do { completion(.success(try JSONDecoder().decode(MCPServerDTO.self, from: data))) }
         catch { completion(.failure(error)) }
     }
+
+    // MARK: - AI Providers
+
+    private var aiProvidersBaseURL: URL { APIClient.baseURL.appendingPathComponent("api/providers") }
+
+    struct AIProviderDTO: Codable, Identifiable {
+        let provider: String
+        let isConfigured: Bool
+        let apiKeyMasked: String?
+        let baseUrl: String?
+
+        var id: String { provider }
+    }
+
+    struct AIProviderListResponse {
+        let providers: [AIProviderDTO]
+        let activeProvider: String
+        let runtimeProvider: String?
+    }
+
+    struct AIProviderInput {
+        let apiKey: String
+        let baseUrl: String?
+    }
+
+    struct AIProviderMutationResponse: Codable {
+        let provider: String
+        let isConfigured: Bool?
+        let apiKeyMasked: String?
+        let baseUrl: String?
+        let activeProvider: String?
+        let restartScheduled: Bool?
+        let message: String?
+    }
+
+    func fetchAIProviders(completion: @escaping @Sendable (Result<AIProviderListResponse, Error>) -> Void) {
+        var request = URLRequest(url: aiProvidersBaseURL)
+        request.httpMethod = "GET"
+        if let token = SubscriptionManager.shared.jwtToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        let task = URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error = error { completion(.failure(error)); return }
+            guard let httpResponse = response as? HTTPURLResponse else {
+                completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response"])))
+                return
+            }
+            guard (200...299).contains(httpResponse.statusCode) else {
+                completion(.failure(APIClient.makeBackendError(statusCode: httpResponse.statusCode, data: data)))
+                return
+            }
+            guard let data = data, !data.isEmpty else {
+                completion(.success(AIProviderListResponse(providers: [], activeProvider: "openai", runtimeProvider: nil)))
+                return
+            }
+            do {
+                struct Envelope: Codable {
+                    let providers: [AIProviderDTO]
+                    let activeProvider: String
+                    let runtimeProvider: String?
+                }
+                let decoded = try JSONDecoder().decode(Envelope.self, from: data)
+                completion(.success(AIProviderListResponse(
+                    providers: decoded.providers,
+                    activeProvider: decoded.activeProvider,
+                    runtimeProvider: decoded.runtimeProvider
+                )))
+            } catch { completion(.failure(error)) }
+        }
+        task.resume()
+    }
+
+    func saveAIProviderKey(
+        provider: String,
+        input: AIProviderInput,
+        completion: @escaping @Sendable (Result<AIProviderMutationResponse, Error>) -> Void
+    ) {
+        let url = aiProvidersBaseURL.appendingPathComponent(provider)
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = SubscriptionManager.shared.jwtToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        var payload: [String: Any] = ["apiKey": input.apiKey]
+        if let baseUrl = input.baseUrl, !baseUrl.isEmpty {
+            payload["baseUrl"] = baseUrl
+        }
+        guard let body = try? JSONSerialization.data(withJSONObject: payload) else {
+            completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Serialization error"])))
+            return
+        }
+        request.httpBody = body
+        let task = URLSession.shared.dataTask(with: request) { data, response, error in
+            self.handleAIProviderMutationResponse(data: data, response: response, error: error, completion: completion)
+        }
+        task.resume()
+    }
+
+    func deleteAIProviderKey(
+        provider: String,
+        completion: @escaping @Sendable (Result<Void, Error>) -> Void
+    ) {
+        let url = aiProvidersBaseURL.appendingPathComponent(provider)
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        if let token = SubscriptionManager.shared.jwtToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        let task = URLSession.shared.dataTask(with: request) { _, response, error in
+            if let error = error { completion(.failure(error)); return }
+            guard let httpResponse = response as? HTTPURLResponse else {
+                completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response"])))
+                return
+            }
+            if (200...299).contains(httpResponse.statusCode) || httpResponse.statusCode == 204 {
+                completion(.success(()))
+            } else {
+                completion(.failure(APIClient.makeBackendError(statusCode: httpResponse.statusCode, data: nil)))
+            }
+        }
+        task.resume()
+    }
+
+    func activateAIProvider(
+        provider: String,
+        completion: @escaping @Sendable (Result<AIProviderMutationResponse, Error>) -> Void
+    ) {
+        let url = aiProvidersBaseURL.appendingPathComponent(provider).appendingPathComponent("activate")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = SubscriptionManager.shared.jwtToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        let task = URLSession.shared.dataTask(with: request) { data, response, error in
+            self.handleAIProviderMutationResponse(data: data, response: response, error: error, completion: completion)
+        }
+        task.resume()
+    }
+
+    private func handleAIProviderMutationResponse(
+        data: Data?,
+        response: URLResponse?,
+        error: Error?,
+        completion: @escaping @Sendable (Result<AIProviderMutationResponse, Error>) -> Void
+    ) {
+        if let error = error { completion(.failure(error)); return }
+        guard let httpResponse = response as? HTTPURLResponse else {
+            completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response"])))
+            return
+        }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            completion(.failure(APIClient.makeBackendError(statusCode: httpResponse.statusCode, data: data)))
+            return
+        }
+        guard let data = data, !data.isEmpty else {
+            completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No data"])))
+            return
+        }
+        do { completion(.success(try JSONDecoder().decode(AIProviderMutationResponse.self, from: data))) }
+        catch { completion(.failure(error)) }
+    }
+
 }

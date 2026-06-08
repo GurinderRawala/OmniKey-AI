@@ -10,6 +10,7 @@ import { logger } from './logger';
 import { taskInstructionRouter } from './taskInstructionRoutes';
 import { scheduledJobRouter } from './scheduledJobRoutes';
 import { mcpServerRouter } from './mcpServerRoutes';
+import { aiProviderRouter } from './aiProviderRoutes';
 import { spawnWorker, type ManagedWorker } from './workers/spawn';
 import { setScheduledJobWorker } from './workers/scheduledJobWorkerClient';
 import { config } from './config';
@@ -40,6 +41,8 @@ app.use('/api/instructions', taskInstructionRouter());
 app.use('/api/scheduled-jobs', scheduledJobRouter());
 
 app.use('/api/mcp-servers', mcpServerRouter());
+
+app.use('/api/providers', aiProviderRouter());
 
 app.use('/api/agent', createAgentRouter());
 

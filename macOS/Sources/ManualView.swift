@@ -15,7 +15,7 @@ struct ManualView: View {
                         .font(.system(size: 20, weight: .semibold))
                         .foregroundColor(NordTheme.primaryText(colorScheme))
 
-                    Text("Use OmniKey AI anywhere on your Mac. Select text and activate one of the shortcuts below. OmniKey will process your selected text and paste the result back in place.")
+                    Text("Use OmniKey AI anywhere on your Mac. Highlight text in any app, press a shortcut, and OmniKey processes the selection and pastes the result back in place. Powered by your configured LLM provider — OpenAI, Anthropic, Google Gemini, or NVIDIA Nemotron.")
                         .font(.system(size: 13))
                         .foregroundColor(NordTheme.secondaryText(colorScheme))
                 }
@@ -46,7 +46,7 @@ struct ManualView: View {
                             shortcutRow(
                                 keys: ["cmd", "T"],
                                 label: "Run custom task",
-                                description: "Applies your saved task instructions to the selected text. Configure these in Task Instructions from the menu bar."
+                                description: "Applies your saved task instructions, or runs the @omniAgent with real-time web search and terminal access. Configure your prompts under Task Instructions in the menu bar."
                             )
                         }
 
@@ -58,7 +58,7 @@ struct ManualView: View {
                         VStack(alignment: .leading, spacing: 8) {
                             numberedRow(1, text: "Select text in any app (editor, browser, email, etc.).")
                             numberedRow(2, text: "Press one of the OmniKey shortcuts (Cmd+E, Cmd+G, or Cmd+T).")
-                            numberedRow(3, text: "OmniKey sends the text securely to the OmniKey AI service.")
+                            numberedRow(3, text: "OmniKey routes the request to your configured LLM provider — locally, with the API key from Settings → AI Providers.")
                             numberedRow(4, text: "The result is pasted back in place of your original selection.")
                         }
 
@@ -116,17 +116,93 @@ struct ManualView: View {
                         Text("The agent can access your terminal and perform actions through it, browse the web, and fetch content from given URLs. However, it runs with restricted permissions and cannot run commands with \"sudo\" or install additional software needed to complete tasks.")
                             .font(.system(size: 13))
                             .foregroundColor(NordTheme.secondaryText(colorScheme))
+
+                        sectionSpacer()
+
+                        // LLM Providers
+                        sectionTitle("LLM providers", icon: "sparkles")
+
+                        Text("Switch between providers any time from Settings → AI Providers. Saving a key writes it to ~/.omnikey/config.json; activating a provider sets AI_PROVIDER and restarts the local server.")
+                            .font(.system(size: 13))
+                            .foregroundColor(NordTheme.primaryText(colorScheme))
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            bulletRow(text: "OpenAI — GPT family.")
+                            bulletRow(text: "Anthropic — Claude family.")
+                            bulletRow(text: "Google Gemini — Gemini 2.5 Flash / Pro.")
+                            bulletRow(text: "NVIDIA Nemotron — open weights served via NVIDIA NIM (set a custom Base URL to point at a self-hosted gateway).")
+                        }
+
+                        sectionSpacer()
+
+                        // Web Search
+                        sectionTitle("Web search for the agent", icon: "magnifyingglass")
+
+                        Text("@omniAgent can pull live web context. Configure one or more search providers as environment variables; DuckDuckGo is the free fallback if none are set.")
+                            .font(.system(size: 13))
+                            .foregroundColor(NordTheme.primaryText(colorScheme))
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            bulletRow(text: "DuckDuckGo — built-in, no key required.")
+                            bulletRow(text: "Serper — SERPER_API_KEY.")
+                            bulletRow(text: "Brave Search — BRAVE_SEARCH_API_KEY.")
+                            bulletRow(text: "Tavily — TAVILY_API_KEY.")
+                            bulletRow(text: "SearXNG — set SEARXNG_URL to your self-hosted instance.")
+                        }
+
+                        sectionSpacer()
+
+                        // MCP Servers
+                        sectionTitle("MCP servers", icon: "puzzlepiece.extension.fill")
+
+                        Text("Plug in any Model Context Protocol server — via stdio, HTTP, or SSE transport — from the MCP Servers window or the CLI. The agent automatically discovers and calls those tools during task execution.")
+                            .font(.system(size: 13))
+                            .foregroundColor(NordTheme.primaryText(colorScheme))
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            bulletRow(text: "Add or edit servers from MCP Servers in the menu bar (transport, command, args, env, URL, headers).")
+                            bulletRow(text: "Toggle a server on or off without deleting it; disabled servers are hidden from the agent.")
+                            bulletRow(text: "Custom HTTP headers (e.g. Authorization) round-trip through edit so credentials never get lost.")
+                        }
+
+                        sectionSpacer()
+
+                        // Authenticated browser access
+                        sectionTitle("Authenticated browser access", icon: "safari")
+
+                        Text("Let @omniAgent read your live browser tabs — including pages that require login — without copy-paste. The CLI creates a dedicated debug profile so your main browser profile is never touched.")
+                            .font(.system(size: 13))
+                            .foregroundColor(NordTheme.primaryText(colorScheme))
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            bulletRow(text: "Run the guided setup in Terminal:")
+                            examplePill("omnikey grant-browser-access")
+                            bulletRow(text: "Sign in to your accounts once inside the new Omnikey debug profile; the session persists between launches.")
+                            bulletRow(text: "Reopen the debug profile any time:")
+                            examplePill("omnikey browser open")
+                            bulletRow(text: "Works with Chrome, Brave, Edge, Arc, Vivaldi, Opera, Chromium, and Safari on macOS.")
+                        }
+
+                        sectionSpacer()
+
+                        // Telegram
+                        sectionTitle("Telegram integration", icon: "paperplane.fill")
+
+                        Text("Drive @omniAgent and receive notifications from anywhere through Telegram. The bot runs as a persistent daemon (launchd on macOS) managed entirely through the CLI.")
+                            .font(.system(size: 13))
+                            .foregroundColor(NordTheme.primaryText(colorScheme))
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            bulletRow(text: "Install and start the Telegram bot daemon:")
+                            examplePill("omnikey telegram start")
+                            bulletRow(text: "On first run the CLI asks for your bot token (from @BotFather) and chat ID, validates the token, and saves both to ~/.omnikey/config.json.")
+                            bulletRow(text: "/cmd — start or resume a task via a guided wizard.")
+                            bulletRow(text: "/task — check progress or fetch the last result.")
+                            bulletRow(text: "/stop — abort a running session.")
+                        }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-
-                HStack {
-                    Spacer()
-                    Button("Close") {
-                        NSApp.keyWindow?.performClose(nil)
-                    }
-                }
-                .padding(.top, 14)
             }
             .padding(24)
             .frame(maxWidth: 760, maxHeight: .infinity, alignment: .top)
