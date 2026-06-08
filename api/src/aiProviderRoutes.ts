@@ -3,10 +3,10 @@ import zod from 'zod';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { spawn } from 'child_process';
 import { authMiddleware } from './authMiddleware';
 import { config } from './config';
 import { logger } from './logger';
-import { runScript } from './scheduledJobExecutor';
 
 /**
  * Settings endpoint for managing AI provider API keys stored in
@@ -112,19 +112,14 @@ function readActiveProvider(cfg: Record<string, any>): AIProviderType {
 }
 
 /**
- * Triggers a daemon restart by handing off to the shared `runScript` helper
- * (the same one used by the scheduled-job executor). The script invokes the
- * `omnikey restart-daemon --port <port>` CLI, which tears down the
- * launchd / NSSM persistence agent and brings a fresh daemon back up on the
- * same port — picking up the rewritten config.json values from env on the
- * way up.
+ * Triggers a daemon restart by spawning a detached `omnikey restart-daemon`
+ * process. Using spawn with detached:true + unref() instead of a shell script
+ * avoids PATH lookup failures when the daemon runs under launchd/NSSM (which
+ * provide a minimal environment). We resolve the CLI path relative to
+ * __dirname so it works regardless of PATH.
  *
- * Important: `omnikey restart-daemon` calls `killDaemon()` first, which kills
- * *this* Node process. To survive that, we wrap the call in `nohup ... &`
- * with stdio redirected to a log file and `disown` so the actual
- * `omnikey restart-daemon` invocation escapes the shell's process tree
- * before this process is terminated. `runScript` is fire-and-forget: we do
- * not await it because we expect to be killed before it returns.
+ * The API server lives in cli/backend-dist/ and the omnikey CLI lives in
+ * cli/dist/, so path.resolve(__dirname, '../dist/index.js') is always valid.
  */
 function scheduleDaemonRestart(reason: string): void {
   setTimeout(() => {
@@ -134,32 +129,23 @@ function scheduleDaemonRestart(reason: string): void {
       '.omnikey',
       'restart-daemon.log',
     );
-    const script = [
-      '#!/usr/bin/env bash',
-      'set -u',
-      `mkdir -p "$(dirname "${logFile}")"`,
-      `echo "[$(date -Iseconds)] restart-daemon triggered: ${reason}" >> "${logFile}"`,
-      // Detach the actual restart so it survives this daemon's imminent death.
-      `nohup omnikey restart-daemon --port ${port} >> "${logFile}" 2>&1 &`,
-      'disown || true',
-      'exit 0',
-    ].join('\n');
+    const omnikeyCli = path.resolve(__dirname, '../dist/index.js');
 
-    logger.info(`Running \`omnikey restart-daemon --port ${port}\` via runScript (${reason})`);
+    logger.info(`Spawning detached \`omnikey restart-daemon --port ${port}\` (${reason})`);
 
-    // Fire-and-forget: we expect `omnikey restart-daemon` to kill this process
-    // long before runScript's exec promise resolves.
-    void runScript(script)
-      .then((result) => {
-        if (result.isError) {
-          logger.error('runScript reported a non-zero exit for restart-daemon.', {
-            output: result.output,
-          });
-        }
-      })
-      .catch((err) => {
-        logger.error('Unexpected runScript failure while restarting daemon.', { error: err });
-      });
+    try {
+      fs.mkdirSync(path.dirname(logFile), { recursive: true });
+      const out = fs.openSync(logFile, 'a');
+      const child = spawn(
+        process.execPath,
+        [omnikeyCli, 'restart-daemon', '--port', String(port)],
+        { detached: true, stdio: ['ignore', out, out] },
+      );
+      child.unref();
+      fs.closeSync(out);
+    } catch (err) {
+      logger.error('Failed to spawn restart-daemon process.', { error: err });
+    }
   }, 500);
 }
 
