@@ -6,6 +6,7 @@ import os from 'os';
 import { authMiddleware } from './authMiddleware';
 import { config } from './config';
 import { logger } from './logger';
+import { runScript } from './scheduledJobExecutor';
 
 /**
  * Settings endpoint for managing AI provider API keys stored in
@@ -111,14 +112,54 @@ function readActiveProvider(cfg: Record<string, any>): AIProviderType {
 }
 
 /**
- * Triggers a graceful daemon restart. The process is supervised by launchd
- * (macOS) / NSSM (Windows) with auto-restart enabled, so exiting will cause
- * the supervisor to relaunch the API with the freshly written config.json.
+ * Triggers a daemon restart by handing off to the shared `runScript` helper
+ * (the same one used by the scheduled-job executor). The script invokes the
+ * `omnikey restart-daemon --port <port>` CLI, which tears down the
+ * launchd / NSSM persistence agent and brings a fresh daemon back up on the
+ * same port — picking up the rewritten config.json values from env on the
+ * way up.
+ *
+ * Important: `omnikey restart-daemon` calls `killDaemon()` first, which kills
+ * *this* Node process. To survive that, we wrap the call in `nohup ... &`
+ * with stdio redirected to a log file and `disown` so the actual
+ * `omnikey restart-daemon` invocation escapes the shell's process tree
+ * before this process is terminated. `runScript` is fire-and-forget: we do
+ * not await it because we expect to be killed before it returns.
  */
 function scheduleDaemonRestart(reason: string): void {
   setTimeout(() => {
-    logger.info(`Exiting process to trigger supervised restart: ${reason}`);
-    process.exit(0);
+    const port = config.port;
+    const logFile = path.join(
+      process.env.HOME || os.homedir(),
+      '.omnikey',
+      'restart-daemon.log',
+    );
+    const script = [
+      '#!/usr/bin/env bash',
+      'set -u',
+      `mkdir -p "$(dirname "${logFile}")"`,
+      `echo "[$(date -Iseconds)] restart-daemon triggered: ${reason}" >> "${logFile}"`,
+      // Detach the actual restart so it survives this daemon's imminent death.
+      `nohup omnikey restart-daemon --port ${port} >> "${logFile}" 2>&1 &`,
+      'disown || true',
+      'exit 0',
+    ].join('\n');
+
+    logger.info(`Running \`omnikey restart-daemon --port ${port}\` via runScript (${reason})`);
+
+    // Fire-and-forget: we expect `omnikey restart-daemon` to kill this process
+    // long before runScript's exec promise resolves.
+    void runScript(script)
+      .then((result) => {
+        if (result.isError) {
+          logger.error('runScript reported a non-zero exit for restart-daemon.', {
+            output: result.output,
+          });
+        }
+      })
+      .catch((err) => {
+        logger.error('Unexpected runScript failure while restarting daemon.', { error: err });
+      });
   }, 500);
 }
 

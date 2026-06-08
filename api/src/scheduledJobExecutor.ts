@@ -72,7 +72,7 @@ async function executeDueJobs(): Promise<void> {
 // Runs the script in the user's login shell so PATH and profile env-vars are
 // present — identical to how the desktop apps open a terminal. Writing to a
 // temp file avoids quoting/escaping issues with multi-line scripts.
-async function runScript(script: string): Promise<{ output: string; isError: boolean }> {
+export async function runScript(script: string): Promise<{ output: string; isError: boolean }> {
   const isWin = process.platform === 'win32';
   const userHome = process.env.HOME ?? process.env.USERPROFILE ?? process.cwd();
   const userShell = isWin ? (process.env.COMSPEC ?? 'cmd.exe') : (process.env.SHELL ?? '/bin/zsh');

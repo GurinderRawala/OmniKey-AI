@@ -4777,7 +4777,7 @@ obug@^2.1.1:
   integrity sha512-uTqF9MuPraAQ+IsnPf366RG4cP9RtUi7MLO1N3KEc+wb0a6yKpeL0lmk2IB1jY5KHPAlTc6T/JRdC/YqxHNwkQ==
 
 "omnikey-ai-api@file:/Users/gurindersingh/OmniKey-AI/api":
-  version "1.6.1"
+  version "1.6.2"
   resolved "file:api"
   dependencies:
     "@anthropic-ai/sdk" "^0.96.0"
@@ -4802,7 +4802,7 @@ obug@^2.1.1:
     zod "^4.3.6"
 
 "omnikey-cli@file:/Users/gurindersingh/OmniKey-AI/cli":
-  version "1.6.1"
+  version "1.6.2"
   resolved "file:cli"
   dependencies:
     "@anthropic-ai/sdk" "^0.96.0"
