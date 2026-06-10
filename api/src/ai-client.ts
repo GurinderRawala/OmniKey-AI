@@ -1,3 +1,5 @@
+import * as https from 'https';
+import { Readable } from 'stream';
 import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
 import { GoogleGenAI, Content, Tool as GeminiTool } from '@google/genai';
@@ -511,13 +513,32 @@ function toResponsesInput(messages: AIMessage[]): {
         pendingShellCallId = null;
         continue;
       }
-      pendingShellCallId = null;
+      // A shell_script function_call was emitted but terminal output never
+      // arrived (e.g. the client disconnected before executing the script).
+      // Emit a synthetic result so the Responses API input remains valid.
+      if (pendingShellCallId) {
+        input.push({
+          type: 'function_call_output',
+          call_id: pendingShellCallId,
+          output: '(no terminal output received — session was interrupted)',
+        });
+        pendingShellCallId = null;
+      }
       input.push({ role: 'user', content: msg.content });
       continue;
     }
 
     if (msg.role === 'assistant') {
-      pendingShellCallId = null;
+      // Same gap-fill: if the previous shell call never got a terminal result,
+      // plug it before the next assistant message.
+      if (pendingShellCallId) {
+        input.push({
+          type: 'function_call_output',
+          call_id: pendingShellCallId,
+          output: '(no terminal output received — session was interrupted)',
+        });
+        pendingShellCallId = null;
+      }
 
       if (msg.tool_calls?.length) {
         if (msg.content) {
@@ -563,6 +584,16 @@ function toResponsesInput(messages: AIMessage[]): {
       });
       continue;
     }
+  }
+
+  // If the history ends with a shell_script call that never received terminal
+  // output (the session was cut off at the very last turn), close the gap.
+  if (pendingShellCallId) {
+    input.push({
+      type: 'function_call_output',
+      call_id: pendingShellCallId,
+      output: '(no terminal output received — session was interrupted)',
+    });
   }
 
   return { instructions, input };
@@ -706,20 +737,131 @@ function fromResponsesOutput(response: any, modelName: string): AICompletionResu
  */
 const RESPONSES_SHELL_OVERRIDE = `
 ---
-IMPORTANT — you are running via the OpenAI Responses API with live tool-calling.
+IMPORTANT — Responses API adjustment (one change only):
 
-Shell execution override (supersedes any prior instruction about <shell_script> tags):
-- You have an \`execute_shell_script\` tool. Call it with { "script": "..." } to run commands on the user's machine. The output will be returned to you automatically as the tool result.
-- This tool IS real and WILL execute. You MUST use it — do NOT write <shell_script> XML tags and do NOT refuse to run commands.
-- Every time you need to inspect the filesystem, run a program, check state, or make a change, call execute_shell_script.
-- After gathering enough information from tool results, respond with a <final_answer> block (plain text, no XML wrapping needed for the content inside).
+You are running via the OpenAI Responses API. **Only one thing changes** from the instructions above:
+
+- **Shell commands**: instead of writing \`<shell_script>...</shell_script>\` XML tags, call the \`execute_shell_script\` function tool with \`{ "script": "..." }\`. The output is returned to you automatically as a tool result. Every other rule about when and how to run scripts is unchanged.
+
+Everything else in the system prompt applies exactly as written:
+- \`web_search\` / \`web_fetch\` → native function calls (unchanged)
+- MCP tools (\`mcp_<server>__<tool>\`) → native function calls, subject to all MCP rules above (unchanged)
+- \`<final_answer>\` → text response wrapped in \`<final_answer>\` tags (unchanged)
 `;
+
+/**
+ * Fetch wrapper backed by Node's https module (HTTP/1.1 only).
+ *
+ * Node's built-in fetch uses undici which maintains a global HTTP/2 session
+ * pool. When a session is destroyed after an idle period the very next request
+ * on the same pool throws ERR_HTTP2_INVALID_SESSION. Because the pool is
+ * global, creating a new OpenAI() client doesn't help — it still reuses the
+ * stale session. Using https.request forces HTTP/1.1 and bypasses undici
+ * entirely, eliminating the error at its root.
+ */
+async function http1Fetch(
+  input: Parameters<typeof fetch>[0],
+  init?: Parameters<typeof fetch>[1],
+): ReturnType<typeof fetch> {
+  const urlStr =
+    typeof input === 'string'
+      ? input
+      : input instanceof URL
+        ? input.toString()
+        : (input as Request).url;
+  const url = new URL(urlStr);
+
+  const method =
+    init?.method ?? (input instanceof Request ? (input as Request).method : 'GET');
+
+  const rawHeaders: Record<string, string> = {};
+  if (input instanceof Request) {
+    (input as Request).headers.forEach((v: string, k: string) => {
+      rawHeaders[k] = v;
+    });
+  }
+  const ih = init?.headers;
+  if (ih) {
+    if (ih instanceof Headers) {
+      ih.forEach((v, k) => { rawHeaders[k] = v; });
+    } else if (Array.isArray(ih)) {
+      for (const [k, v] of ih) rawHeaders[k] = v;
+    } else {
+      Object.assign(rawHeaders, ih as Record<string, string>);
+    }
+  }
+
+  const bodySource =
+    init?.body ?? (input instanceof Request ? (input as Request).body : null);
+  let bodyBuf: Buffer | null = null;
+  if (bodySource != null) {
+    if (typeof bodySource === 'string') {
+      bodyBuf = Buffer.from(bodySource, 'utf8');
+    } else if (Buffer.isBuffer(bodySource)) {
+      bodyBuf = bodySource as Buffer;
+    } else if (bodySource instanceof Uint8Array) {
+      bodyBuf = Buffer.from(bodySource);
+    } else if (typeof (bodySource as any)[Symbol.asyncIterator] === 'function') {
+      const chunks: Buffer[] = [];
+      for await (const chunk of bodySource as AsyncIterable<Uint8Array>) {
+        chunks.push(Buffer.from(chunk));
+      }
+      bodyBuf = Buffer.concat(chunks);
+    }
+    if (bodyBuf && !rawHeaders['content-length']) {
+      rawHeaders['content-length'] = String(bodyBuf.length);
+    }
+  }
+
+  return new Promise((resolve, reject) => {
+    const req = https.request(
+      {
+        hostname: url.hostname,
+        port: url.port ? Number(url.port) : 443,
+        path: url.pathname + url.search,
+        method,
+        headers: rawHeaders,
+      },
+      (res) => {
+        const responseHeaders = new Headers();
+        for (const [k, v] of Object.entries(res.headers)) {
+          if (v != null) {
+            responseHeaders.set(k, Array.isArray(v) ? v.join(', ') : v);
+          }
+        }
+        resolve(
+          new Response(Readable.toWeb(res) as ReadableStream<Uint8Array>, {
+            status: res.statusCode ?? 200,
+            statusText: res.statusMessage ?? '',
+            headers: responseHeaders,
+          }),
+        );
+      },
+    );
+
+    req.on('error', reject);
+
+    const signal = init?.signal as AbortSignal | undefined;
+    if (signal?.aborted) {
+      req.destroy();
+      reject(new DOMException('The operation was aborted', 'AbortError'));
+      return;
+    }
+    signal?.addEventListener('abort', () => {
+      req.destroy();
+      reject(new DOMException('The operation was aborted', 'AbortError'));
+    });
+
+    if (bodyBuf) req.write(bodyBuf);
+    req.end();
+  });
+}
 
 class OpenAIResponsesAdapter {
   private client: OpenAI;
 
   constructor(apiKey: string) {
-    this.client = new OpenAI({ apiKey });
+    this.client = new OpenAI({ apiKey, fetch: http1Fetch as unknown as typeof fetch });
   }
 
   private buildInstructions(base: string | null): string {
@@ -743,7 +885,6 @@ class OpenAIResponsesAdapter {
       input,
       tools,
     });
-
     return fromResponsesOutput(response, model);
   }
 

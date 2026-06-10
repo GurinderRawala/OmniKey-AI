@@ -999,6 +999,9 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
       }
     };
 
+    // Track session IDs touched by this connection so we can clean up on close.
+    const connectionSessionIds = new Set<string>();
+
     ws.on('message', (data) => {
       void (async () => {
         const ok = await ensureAuthenticated();
@@ -1033,6 +1036,7 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
         }
 
         const sessionId = message.session_id || 'default';
+        connectionSessionIds.add(sessionId);
         log.debug('Received AgentMessage from client (WebSocket)', {
           sessionId,
           sender: message.sender,
@@ -1077,6 +1081,25 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
       log.info('Agent WebSocket connection closed', {
         hadAuthenticatedSubscription: Boolean(getSubscription()),
       });
+
+      // When the client disconnects, sessions that were shell_pending (waiting
+      // for terminal output that will never arrive) stay stuck in activeSessions
+      // indefinitely, causing all follow-up messages to queue forever. Clean
+      // them up so a reconnecting client can resume without being stuck.
+      for (const sid of connectionSessionIds) {
+        const wasActive = activeSessions.has(sid);
+        const queueLength = sessionQueues.get(sid)?.length ?? 0;
+
+        if (wasActive || queueLength > 0) {
+          activeSessions.delete(sid);
+          sessionQueues.delete(sid);
+          log.info('Cleaned up stuck session state after WebSocket disconnect', {
+            sessionId: sid,
+            wasActive,
+            drainedQueueLength: queueLength,
+          });
+        }
+      }
     });
   });
 
