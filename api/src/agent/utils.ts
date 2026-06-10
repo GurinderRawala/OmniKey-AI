@@ -150,7 +150,14 @@ export function pushToSessionHistory(
     limitHit = true;
   }
 
-  if (content.length > 0) {
+  // Always push messages that carry function-call data even when their text
+  // content is empty (e.g. Responses API assistant messages whose only output
+  // is a function_call item). Skipping them leaves an orphaned
+  // function_call_output on the next turn, which the API rejects with
+  // "No tool call found for function call output with call_id ...".
+  const hasFunctionData =
+    (message.tool_calls?.length ?? 0) > 0 || message.role === 'tool';
+  if (content.length > 0 || hasFunctionData) {
     session.history.push({ ...message, content });
   }
 
