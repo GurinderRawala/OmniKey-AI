@@ -67,9 +67,14 @@ struct ChatMessage: Identifiable, Equatable {
 final class ChatSessionState: @unchecked Sendable {
     var messages: [ChatMessage] = []
     var trimmedOlderMessageCount: Int = 0
-    var isRunning: Bool = false
-    var runHandle: ChatSessionRunHandle? = nil
+    /// Number of turns currently in flight (including queued turns waiting for a previous one).
+    var runCount: Int = 0
+    var isRunning: Bool { runCount > 0 }
+    /// All active run handles for this session — kept so "Stop" cancels all of them.
+    var runHandles: [ChatSessionRunHandle] = []
     /// Index of the assistant `ChatMessage` currently receiving streamed blocks.
+    /// Updated each time a new turn starts so the header "Running" indicator
+    /// tracks the latest streaming turn.
     var streamingAssistantIndex: Int? = nil
 }
 
@@ -473,8 +478,8 @@ final class ChatModel: ObservableObject {
     /// Delete a session from the backend. Cancels any in-flight turn for that
     /// session so its WebSocket closes cleanly.
     func deleteSession(_ session: AgentSessionInfo) {
-        // Optimistically cancel any running turn for this session.
-        states[session.id]?.runHandle?.cancel()
+        // Optimistically cancel all running turns for this session.
+        states[session.id]?.runHandles.forEach { $0.cancel() }
 
         guard let token = SubscriptionManager.shared.jwtToken, !token.isEmpty else { return }
         let url = APIClient.baseURL
@@ -509,10 +514,7 @@ final class ChatModel: ObservableObject {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
 
-        // Guard against double-sends on the active session.
         let currentState = sessionState(for: activeStateKey)
-        guard !currentState.isRunning else { return }
-
         inputText = ""
         lastErrorMessage = nil
 
@@ -535,8 +537,12 @@ final class ChatModel: ObservableObject {
         sessionSt.messages.append(ChatMessage.user(text))
         sessionSt.messages.append(ChatMessage.assistant())
         enforceMessageCap(on: sessionSt)
-        sessionSt.streamingAssistantIndex = sessionSt.messages.count - 1
-        sessionSt.isRunning = true
+
+        // Capture the index for *this* turn's assistant bubble so concurrent
+        // turns each stream into their own row rather than fighting over one index.
+        let capturedAssistantIndex = sessionSt.messages.count - 1
+        sessionSt.streamingAssistantIndex = capturedAssistantIndex
+        sessionSt.runCount += 1
 
         // Sync published properties so the view reflects the new messages.
         messages = sessionSt.messages
@@ -571,26 +577,23 @@ final class ChatModel: ObservableObject {
             groupName: selectedGroup?.groupName,
             onBlock: { [weak self] block in
                 guard let self else { return }
-                self.appendBlock(block, toSession: sessionSt)
+                self.appendBlock(block, toSession: sessionSt, at: capturedAssistantIndex)
             },
             onFinal: { [weak self] finalText in
                 guard let self else { return }
                 self.appendBlock(
                     ChatBlock(kind: .finalAnswer, text: finalText),
-                    toSession: sessionSt
+                    toSession: sessionSt,
+                    at: capturedAssistantIndex
                 )
-                sessionSt.isRunning = false
-                sessionSt.runHandle = nil
-                sessionSt.streamingAssistantIndex = nil
-                // Only clear the published flag when this is still the active session.
-                if self.states[self.activeStateKey] === sessionSt {
-                    self.isRunning = false
+                sessionSt.runCount = max(0, sessionSt.runCount - 1)
+                if sessionSt.runCount == 0 {
+                    sessionSt.runHandles = []
+                    sessionSt.streamingAssistantIndex = nil
+                    if self.states[self.activeStateKey] === sessionSt {
+                        self.isRunning = false
+                    }
                 }
-                // After the backend has persisted the turn (and possibly
-                // assigned / updated this session's `group_name`) refresh
-                // the sidebar list, then ask it to expand whichever group
-                // the active session now lives in so the user sees the
-                // newly-categorised chat without manually opening folders.
                 let activeId = self.activeSessionId
                 self.refreshSessions {
                     DispatchQueue.main.async {
@@ -605,17 +608,17 @@ final class ChatModel: ObservableObject {
                 guard let self else { return }
                 self.appendBlock(
                     ChatBlock(kind: .finalAnswer, text: "**Error:** \(error.localizedDescription)"),
-                    toSession: sessionSt
+                    toSession: sessionSt,
+                    at: capturedAssistantIndex
                 )
-                sessionSt.isRunning = false
-                sessionSt.runHandle = nil
-                sessionSt.streamingAssistantIndex = nil
-                if self.states[self.activeStateKey] === sessionSt {
-                    self.isRunning = false
+                sessionSt.runCount = max(0, sessionSt.runCount - 1)
+                if sessionSt.runCount == 0 {
+                    sessionSt.runHandles = []
+                    sessionSt.streamingAssistantIndex = nil
+                    if self.states[self.activeStateKey] === sessionSt {
+                        self.isRunning = false
+                    }
                 }
-                // Even on error the backend may have persisted a partial
-                // session row (e.g. the user message). Refresh the sidebar
-                // so it stays in sync with the server.
                 let activeId = self.activeSessionId
                 self.refreshSessions {
                     DispatchQueue.main.async {
@@ -628,15 +631,16 @@ final class ChatModel: ObservableObject {
             }
         )
 
-        sessionSt.runHandle = handle
+        sessionSt.runHandles.append(handle)
     }
 
     /// Append `block` to the assistant message being streamed in `sessionSt`.
-    /// If `sessionSt` is the currently active session, also syncs the published
-    /// `messages` array so the view updates.
-    private func appendBlock(_ block: ChatBlock, toSession sessionSt: ChatSessionState) {
-        guard let index = sessionSt.streamingAssistantIndex,
-              index >= 0, index < sessionSt.messages.count else { return }
+    /// Append `block` to the assistant message at `index` in `sessionSt`.
+    /// Each turn captures its own index at send time so concurrent turns write
+    /// to separate bubbles. If `sessionSt` is the active session the published
+    /// `messages` array is also updated so the view refreshes.
+    private func appendBlock(_ block: ChatBlock, toSession sessionSt: ChatSessionState, at index: Int) {
+        guard index >= 0, index < sessionSt.messages.count else { return }
         var message = sessionSt.messages[index]
         guard message.role == .assistant else { return }
         message.blocks.append(block)
@@ -668,12 +672,12 @@ final class ChatModel: ObservableObject {
         return true
     }
 
-    /// Cancel the active session's running turn. Other background turns are unaffected.
+    /// Cancel all running turns for the active session.
     func cancelCurrentTurn() {
         let s = states[activeStateKey]
-        s?.runHandle?.cancel()
-        s?.isRunning = false
-        s?.runHandle = nil
+        s?.runHandles.forEach { $0.cancel() }
+        s?.runCount = 0
+        s?.runHandles = []
         s?.streamingAssistantIndex = nil
         isRunning = false
     }

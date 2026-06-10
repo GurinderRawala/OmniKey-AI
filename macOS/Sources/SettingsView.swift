@@ -1,5 +1,12 @@
 import SwiftUI
 
+/// Smart-tier model choices for OpenAI. The fast model (gpt-4o-mini) is fixed.
+/// gpt-5.5 uses the Responses API; gpt-5.1 uses Chat Completions.
+private let openAISmartModels: [(id: String, label: String)] = [
+    ("gpt-5.5", "gpt-5.5"),
+    ("gpt-5.1", "gpt-5.1"),
+]
+
 private enum ProviderKind: String, CaseIterable, Identifiable {
     case openai, anthropic, gemini, nemotron
     var id: String { rawValue }
@@ -47,6 +54,10 @@ struct AIProvidersSettingsView: View {
     // Dialog state
     @State private var pendingDelete: ProviderRowState? = nil
     @State private var pendingActivate: ProviderRowState? = nil
+
+    // OpenAI model picker state
+    @State private var openaiModelSelected: String = openAISmartModels[0].id
+    @State private var pendingModelChange: String? = nil
 
     private let apiClient = APIClient()
 
@@ -114,6 +125,21 @@ struct AIProvidersSettingsView: View {
             Button("Cancel", role: .cancel) { pendingActivate = nil }
         } message: {
             Text("AI_PROVIDER will be set to \(pendingActivate?.kind.rawValue ?? "") in ~/.omnikey/config.json and the OmniKey daemon will restart. In-flight agent sessions will be interrupted.")
+        }
+        .confirmationDialog(
+            "Apply model \"\(pendingModelChange ?? "")\"?",
+            isPresented: Binding(
+                get: { pendingModelChange != nil },
+                set: { if !$0 { pendingModelChange = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Apply & Restart Server") {
+                if let model = pendingModelChange { pendingModelChange = nil; applyModel(model) }
+            }
+            Button("Cancel", role: .cancel) { pendingModelChange = nil }
+        } message: {
+            Text("OPENAI_MODEL will be set to \"\(pendingModelChange ?? "")\" in ~/.omnikey/config.json and the server will restart to apply the change.")
         }
     }
 
@@ -199,6 +225,26 @@ struct AIProvidersSettingsView: View {
                     .background(Capsule().stroke(NordTheme.border(colorScheme), lineWidth: 1))
 
                 Spacer()
+
+                // OpenAI-only: compact model picker in the card header
+                if row.kind == .openai {
+                    Picker("", selection: $openaiModelSelected) {
+                        ForEach(openAISmartModels, id: \.id) { m in
+                            Text(m.label).tag(m.id)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .font(.system(size: 12))
+
+                    let currentModel = dto.model ?? openAISmartModels[0].id
+                    if openaiModelSelected != currentModel {
+                        Button("Apply") { pendingModelChange = openaiModelSelected }
+                            .buttonStyle(.borderedProminent)
+                            .tint(NordTheme.accentBlue(colorScheme))
+                            .controlSize(.mini)
+                    }
+                }
 
                 if isActive {
                     Text("Active")
@@ -348,12 +394,19 @@ struct AIProvidersSettingsView: View {
                             provider: kind.rawValue,
                             isConfigured: false,
                             apiKeyMasked: nil,
-                            baseUrl: nil
+                            baseUrl: nil,
+                            model: nil
                         )
                         return ProviderRowState(kind: kind, dto: dto)
                     }
                     activeProvider = response.activeProvider
                     runtimeProvider = response.runtimeProvider
+                    // Sync the model picker to whatever the server reports.
+                    if let openaiRow = byKind["openai"], let m = openaiRow.model {
+                        openaiModelSelected = m
+                    } else {
+                        openaiModelSelected = openAISmartModels[0].id
+                    }
                 case .failure(let error):
                     statusMessage = "Failed to load providers: \(error.localizedDescription)"
                 }
@@ -407,6 +460,23 @@ struct AIProvidersSettingsView: View {
                     loadProviders()
                 case .failure(let error):
                     statusMessage = "Failed to remove: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    private func applyModel(_ model: String) {
+        isLoading = true
+        statusMessage = "Applying model \"\(model)\" — server will restart…"
+        apiClient.updateProviderModel(provider: "openai", model: model) { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success:
+                    statusMessage = "Model set to \"\(model)\". Waiting for daemon restart…"
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { loadProviders() }
+                case .failure(let error):
+                    isLoading = false
+                    statusMessage = "Failed to apply model: \(error.localizedDescription)"
                 }
             }
         }

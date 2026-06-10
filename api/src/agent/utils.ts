@@ -141,16 +141,28 @@ export function pushToSessionHistory(
   }, 0);
   const remaining = MAX_HISTORY_TOTAL - currentTotal;
   if (content.length > remaining) {
-    content = content.slice(0, Math.max(0, remaining - FINAL_ANSWER_REQUEST.content.length));
+    // Truncate to whatever space is left, but never to a zero-length string —
+    // empty messages break the Responses API and confuse other models. If there
+    // is no room at all, skip the message entirely and just inject the
+    // final-answer prompt.
+    const trimmed = Math.max(0, remaining);
+    content = trimmed > 0 ? content.slice(0, trimmed) : '';
     limitHit = true;
   }
 
-  session.history.push({ ...message, content });
+  if (content.length > 0) {
+    session.history.push({ ...message, content });
+  }
 
   if (limitHit) {
-    logger.warn(
-      `History limits exceeded. Message truncated to ${content.length} chars, total history is now ${currentTotal + content.length} chars.`,
-    );
-    session.history.push(FINAL_ANSWER_REQUEST);
+    // Avoid pushing duplicate final-answer prompts when successive messages
+    // are all being dropped (remaining has been 0 for several turns).
+    const lastMsg = session.history[session.history.length - 1];
+    if (lastMsg?.content !== FINAL_ANSWER_REQUEST.content) {
+      logger.warn(
+        `History limits exceeded. Message truncated to ${content.length} chars, total history is now ${currentTotal + content.length} chars.`,
+      );
+      session.history.push(FINAL_ANSWER_REQUEST);
+    }
   }
 }

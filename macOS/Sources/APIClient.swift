@@ -981,6 +981,9 @@ final class APIClient: @unchecked Sendable {
         let isConfigured: Bool
         let apiKeyMasked: String?
         let baseUrl: String?
+        /// OpenAI only: the model currently configured in OPENAI_MODEL.
+        /// nil means the server default (gpt-5.5) is in use.
+        let model: String?
 
         var id: String { provider }
     }
@@ -1106,6 +1109,29 @@ final class APIClient: @unchecked Sendable {
         if let token = SubscriptionManager.shared.jwtToken {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
+        let task = URLSession.shared.dataTask(with: request) { data, response, error in
+            self.handleAIProviderMutationResponse(data: data, response: response, error: error, completion: completion)
+        }
+        task.resume()
+    }
+
+    func updateProviderModel(
+        provider: String,
+        model: String,
+        completion: @escaping @Sendable (Result<AIProviderMutationResponse, Error>) -> Void
+    ) {
+        let url = aiProvidersBaseURL.appendingPathComponent(provider).appendingPathComponent("model")
+        var request = URLRequest(url: url)
+        request.httpMethod = "PATCH"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = SubscriptionManager.shared.jwtToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        guard let body = try? JSONSerialization.data(withJSONObject: ["model": model]) else {
+            completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Serialization error"])))
+            return
+        }
+        request.httpBody = body
         let task = URLSession.shared.dataTask(with: request) { data, response, error in
             self.handleAIProviderMutationResponse(data: data, response: response, error: error, completion: completion)
         }

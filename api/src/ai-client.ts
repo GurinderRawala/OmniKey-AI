@@ -108,6 +108,11 @@ const DEFAULT_MODELS: Record<AIProvider, { fast: string; smart: string }> = {
 };
 
 export function getDefaultModel(provider: AIProvider, tier: 'fast' | 'smart'): string {
+  // For the OpenAI smart tier, honour the user's OPENAI_MODEL selection from
+  // config.json / env. The fast tier (gpt-4o-mini) is always fixed.
+  if (tier === 'smart' && provider === 'openai' && config.openaiModel) {
+    return config.openaiModel;
+  }
   return DEFAULT_MODELS[provider][tier];
 }
 
@@ -147,14 +152,14 @@ export function modelSupportsTemperature(model: string): boolean {
  *
  * - anthropic: hard API-enforced string limit of 10,485,760 chars; we stay
  *              just below it with a small safety buffer.
- * - openai:    no documented per-string limit; bounded by the context window
- *              (~272K tokens for GPT-5.5 ≈ ~1M chars). Use the history cap.
+ * - openai:    no documented per-string limit; gpt-5.5 (Responses API) has a
+ *              1M-token context window. Use the history cap.
  * - gemini:    no documented per-string limit; bounded by the 1M-token
  *              context window (~4M chars). Use the history cap.
  */
 const MAX_MESSAGE_CONTENT_LENGTH_BY_PROVIDER: Record<AIProvider, number> = {
   anthropic: 10_000_000,
-  openai: 800_000,
+  openai: 3_500_000,
   gemini: 3_500_000,
   // Nemotron 3 ships a 1M-token context window via NIM; mirror Gemini's
   // per-string cap (no documented hard limit, bounded by the context window).
@@ -168,14 +173,14 @@ const MAX_MESSAGE_CONTENT_LENGTH_BY_PROVIDER: Record<AIProvider, number> = {
  *
  * - anthropic: 1M token ctx, reserve 100K for output + system prompt
  *              → 900K target tokens × 2 chars ≈ 1.8M chars
- * - openai:    ~272K token ctx, reserve 40K
- *              → 230K target tokens × 2 chars ≈ 460K chars
+ * - openai:    1M token ctx (gpt-5.5 Responses API), reserve 100K
+ *              → 900K target tokens × 2 chars ≈ 1.8M chars
  * - gemini:    1M token ctx, reserve 100K
  *              → 900K target tokens × 2 chars ≈ 1.8M chars
  */
 const MAX_HISTORY_LENGTH_BY_PROVIDER: Record<AIProvider, number> = {
   anthropic: 1_800_000,
-  openai: 460_000,
+  openai: 1_800_000,
   gemini: 1_800_000,
   // 1M-token context with 100K reserved for output → 900K target × 2 chars
   nemotron: 1_800_000,
@@ -187,7 +192,7 @@ const MAX_HISTORY_LENGTH_BY_PROVIDER: Record<AIProvider, number> = {
  */
 const CONTEXT_WINDOW_BY_PROVIDER: Record<AIProvider, number> = {
   anthropic: 1_000_000,
-  openai: 272_000,
+  openai: 1_000_000,
   gemini: 1_000_000,
   // Nemotron 3 hybrid Mamba-Transformer MoE family ships with 1M-token context.
   nemotron: 1_000_000,
@@ -447,6 +452,334 @@ class AnthropicAdapter {
       completion_tokens: finalMsg.usage.output_tokens,
       total_tokens: finalMsg.usage.input_tokens + finalMsg.usage.output_tokens,
     };
+
+    return { usage, model };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// OpenAI Responses API adapter
+// ---------------------------------------------------------------------------
+
+/**
+ * GPT-5.5 should be routed through OpenAI's Responses API rather than Chat
+ * Completions so it can use native function-calling semantics.
+ */
+export const RESPONSES_API_MODEL = 'gpt-5.5';
+
+/**
+ * Translates our generic AIMessage[] history into the Responses API input
+ * format.
+ *
+ * Key translation rules:
+ * - system  → top-level `instructions` string (concatenated if multiple)
+ * - user    → EasyInputMessage { role:'user', content }
+ *   - "TERMINAL OUTPUT:" / "COMMAND ERROR:" messages that follow a shell call
+ *     are re-emitted as function_call_output items so the model sees the result
+ *     against the correct call_id.
+ * - assistant with tool_calls → text part (if any) + one function_call per tool
+ * - assistant with <shell_script> tag → synthetic function_call for
+ *   execute_shell_script (so history from prior turns round-trips correctly)
+ * - tool role → function_call_output
+ */
+function toResponsesInput(messages: AIMessage[]): {
+  instructions: string | null;
+  input: any[];
+} {
+  let instructions: string | null = null;
+  const input: any[] = [];
+  let pendingShellCallId: string | null = null;
+  let syntheticCounter = 0;
+
+  for (const msg of messages) {
+    if (msg.role === 'system') {
+      instructions = instructions ? `${instructions}\n${msg.content}` : msg.content;
+      continue;
+    }
+
+    if (msg.role === 'user') {
+      const isTerminalFeedback = /^(TERMINAL OUTPUT:|COMMAND ERROR:)/i.test(
+        msg.content.trimStart(),
+      );
+      if (pendingShellCallId && isTerminalFeedback) {
+        const output = msg.content.replace(/^(TERMINAL OUTPUT:|COMMAND ERROR:)\s*/i, '').trim();
+        input.push({
+          type: 'function_call_output',
+          call_id: pendingShellCallId,
+          output: output || '(no output)',
+        });
+        pendingShellCallId = null;
+        continue;
+      }
+      pendingShellCallId = null;
+      input.push({ role: 'user', content: msg.content });
+      continue;
+    }
+
+    if (msg.role === 'assistant') {
+      pendingShellCallId = null;
+
+      if (msg.tool_calls?.length) {
+        if (msg.content) {
+          input.push({ role: 'assistant', content: msg.content });
+        }
+        for (const tc of msg.tool_calls) {
+          input.push({
+            type: 'function_call',
+            call_id: tc.id,
+            name: tc.name,
+            arguments: JSON.stringify(tc.arguments),
+          });
+        }
+      } else if (msg.content.includes('<shell_script>')) {
+        // Round-trip: a prior <shell_script> turn becomes a native function_call
+        // so the model sees it as a proper tool invocation in the history.
+        const scriptMatch = msg.content.match(/<shell_script>([\s\S]*?)<\/shell_script>/i);
+        const script = scriptMatch?.[1]?.trim() ?? msg.content;
+        const beforeShell = msg.content.split('<shell_script>')[0].trim();
+        if (beforeShell) {
+          input.push({ role: 'assistant', content: beforeShell });
+        }
+        const callId = `synth_shell_${++syntheticCounter}`;
+        pendingShellCallId = callId;
+        input.push({
+          type: 'function_call',
+          call_id: callId,
+          name: 'execute_shell_script',
+          arguments: JSON.stringify({ script }),
+        });
+      } else {
+        input.push({ role: 'assistant', content: msg.content });
+      }
+      continue;
+    }
+
+    if (msg.role === 'tool' && msg.tool_call_id) {
+      pendingShellCallId = null;
+      input.push({
+        type: 'function_call_output',
+        call_id: msg.tool_call_id,
+        output: msg.content,
+      });
+      continue;
+    }
+  }
+
+  return { instructions, input };
+}
+
+/**
+ * Translates our AITool[] definition list into the Responses API FunctionTool
+ * format. The outer shape differs from Chat Completions: here `name`,
+ * `description`, and `parameters` sit at the top level (not nested under
+ * `function`).
+ */
+function toResponsesTools(tools: AITool[]): any[] {
+  return tools.map((t) => ({
+    type: 'function' as const,
+    name: t.name,
+    description: t.description,
+    parameters: t.parameters as { [key: string]: unknown },
+    strict: false,
+  }));
+}
+
+/**
+ * Native function tool exposed to gpt-5.5 / Responses API so the model can
+ * run shell commands using tool-call syntax instead of XML tags. The adapter
+ * intercepts calls to this tool and converts them to the <shell_script> tag
+ * format that the rest of the agent pipeline expects.
+ */
+const RESPONSES_SHELL_TOOL = {
+  type: 'function' as const,
+  name: 'execute_shell_script',
+  description:
+    'Execute shell commands to accomplish the task. Use this to run terminal commands, read or write files, install packages, or perform system operations. The output will be returned to you automatically.',
+  parameters: {
+    type: 'object',
+    properties: {
+      script: { type: 'string', description: 'The shell script to execute' },
+    },
+    required: ['script'],
+  },
+  strict: false,
+};
+
+/**
+ * Translates a Responses API response object into our normalised
+ * AICompletionResult.
+ *
+ * Priority order for output classification:
+ * 1. execute_shell_script function_call → wrap script in <shell_script> tags,
+ *    return finish_reason:'stop' so agentServer sends it to the client.
+ * 2. Other function_calls → return as tool_calls (MCP/web-search loop).
+ * 3. Text that already contains <shell_script> or <final_answer> tags → pass through.
+ * 4. Plain text with no recognized tags → auto-wrap in <final_answer> tags so
+ *    the agent loop does not spin trying to coerce the model into using tags.
+ */
+function fromResponsesOutput(response: any, modelName: string): AICompletionResult {
+  const output: any[] = response.output ?? [];
+
+  const textContent: string = output
+    .filter((item: any) => item.type === 'message')
+    .flatMap((item: any) => item.content ?? [])
+    .filter((c: any) => c.type === 'output_text')
+    .map((c: any) => (c.text ?? '') as string)
+    .join('');
+
+  const functionCalls: any[] = output.filter((item: any) => item.type === 'function_call');
+
+  // 1. Shell tool call → convert to <shell_script> content
+  const shellCall = functionCalls.find((f) => f.name === 'execute_shell_script');
+  if (shellCall) {
+    let script = '';
+    try {
+      script = JSON.parse(shellCall.arguments || '{}').script ?? '';
+    } catch {
+      script = shellCall.arguments ?? '';
+    }
+    const shellContent = `<shell_script>\n${script}\n</shell_script>`;
+    const usage: AIUsage | undefined = response.usage
+      ? {
+          prompt_tokens: response.usage.input_tokens ?? 0,
+          completion_tokens: response.usage.output_tokens ?? 0,
+          total_tokens: response.usage.total_tokens ?? 0,
+        }
+      : undefined;
+    return {
+      content: shellContent,
+      finish_reason: 'stop',
+      usage,
+      model: response.model ?? modelName,
+      assistantMessage: { role: 'assistant', content: shellContent },
+    };
+  }
+
+  // 2. Other function calls (MCP tools, web search, etc.)
+  const tool_calls: AIToolCall[] = functionCalls.map((item: any) => ({
+    id: item.call_id as string,
+    name: item.name as string,
+    arguments: JSON.parse(item.arguments || '{}') as Record<string, unknown>,
+  }));
+
+  const hasRecognizedTags =
+    /<shell_script>/i.test(textContent) || /<final_answer>/i.test(textContent);
+
+  // 4. Auto-wrap plain text that has no recognized tags
+  const normalizedContent =
+    tool_calls.length === 0 && textContent && !hasRecognizedTags
+      ? `<final_answer>\n${textContent}\n</final_answer>`
+      : textContent;
+
+  const finishReason: 'stop' | 'tool_calls' | 'length' =
+    tool_calls.length > 0 ? 'tool_calls' : response.status === 'incomplete' ? 'length' : 'stop';
+
+  const usage: AIUsage | undefined = response.usage
+    ? {
+        prompt_tokens: response.usage.input_tokens ?? 0,
+        completion_tokens: response.usage.output_tokens ?? 0,
+        total_tokens: response.usage.total_tokens ?? 0,
+      }
+    : undefined;
+
+  const assistantMessage: AIMessage = {
+    role: 'assistant',
+    content: normalizedContent,
+    ...(tool_calls.length ? { tool_calls } : {}),
+  };
+
+  return {
+    content: normalizedContent,
+    finish_reason: finishReason,
+    tool_calls: tool_calls.length ? tool_calls : undefined,
+    usage,
+    model: response.model ?? modelName,
+    assistantMessage,
+  };
+}
+
+/**
+ * Appended to the system instructions when using the Responses API so that
+ * gpt-5.5 (a reasoning model) understands it must call execute_shell_script
+ * rather than trying to emit <shell_script> XML tags, which it treats as
+ * placeholder text it cannot act on.
+ */
+const RESPONSES_SHELL_OVERRIDE = `
+---
+IMPORTANT — you are running via the OpenAI Responses API with live tool-calling.
+
+Shell execution override (supersedes any prior instruction about <shell_script> tags):
+- You have an \`execute_shell_script\` tool. Call it with { "script": "..." } to run commands on the user's machine. The output will be returned to you automatically as the tool result.
+- This tool IS real and WILL execute. You MUST use it — do NOT write <shell_script> XML tags and do NOT refuse to run commands.
+- Every time you need to inspect the filesystem, run a program, check state, or make a change, call execute_shell_script.
+- After gathering enough information from tool results, respond with a <final_answer> block (plain text, no XML wrapping needed for the content inside).
+`;
+
+class OpenAIResponsesAdapter {
+  private client: OpenAI;
+
+  constructor(apiKey: string) {
+    this.client = new OpenAI({ apiKey });
+  }
+
+  private buildInstructions(base: string | null): string {
+    return (base ?? '') + RESPONSES_SHELL_OVERRIDE;
+  }
+
+  async complete(
+    model: string,
+    messages: AIMessage[],
+    options: CompletionOptions,
+  ): Promise<AICompletionResult> {
+    const { instructions, input } = toResponsesInput(messages);
+    // Always inject the shell tool so gpt-5.5 can call execute_shell_script
+    // natively; the adapter converts those calls back to <shell_script> tags.
+    const userTools = options.tools?.length ? toResponsesTools(options.tools) : [];
+    const tools = [RESPONSES_SHELL_TOOL, ...userTools];
+
+    const response = await (this.client.responses as any).create({
+      model,
+      instructions: this.buildInstructions(instructions),
+      input,
+      tools,
+    });
+
+    return fromResponsesOutput(response, model);
+  }
+
+  async streamComplete(
+    model: string,
+    messages: AIMessage[],
+    _options: CompletionOptions,
+    onDelta: (delta: string) => void,
+  ): Promise<{ usage?: AIUsage; model: string }> {
+    const { instructions, input } = toResponsesInput(messages);
+
+    const stream = (this.client.responses as any).stream({
+      model,
+      instructions: this.buildInstructions(instructions),
+      input,
+    });
+
+    for await (const event of stream as AsyncIterable<any>) {
+      if (event.type === 'response.output_text.delta' && event.delta) {
+        onDelta(event.delta as string);
+      }
+    }
+
+    let usage: AIUsage | undefined;
+    try {
+      const finalResponse = await stream.finalResponse();
+      if (finalResponse?.usage) {
+        usage = {
+          prompt_tokens: finalResponse.usage.input_tokens ?? 0,
+          completion_tokens: finalResponse.usage.output_tokens ?? 0,
+          total_tokens: finalResponse.usage.total_tokens ?? 0,
+        };
+      }
+    } catch {
+      // finalResponse may throw if the stream was already consumed
+    }
 
     return { usage, model };
   }
@@ -741,6 +1074,7 @@ class GeminiAdapter {
 export class AIClient {
   private provider: AIProvider;
   private openai?: OpenAIAdapter;
+  private openaiResponses?: OpenAIResponsesAdapter;
   private anthropic?: AnthropicAdapter;
   private gemini?: GeminiAdapter;
   private nemotron?: NemotronAdapter;
@@ -748,6 +1082,10 @@ export class AIClient {
   constructor(provider: AIProvider, apiKey: string, options: { nemotronBaseURL?: string } = {}) {
     this.provider = provider;
     if (provider === 'openai') {
+      // Instantiate both adapters so routing can be selected per request. GPT-5.5
+      // must use Responses API, while GPT-5.1 and older chat models continue to
+      // use Chat Completions.
+      this.openaiResponses = new OpenAIResponsesAdapter(apiKey);
       this.openai = new OpenAIAdapter(apiKey);
     } else if (provider === 'anthropic') {
       this.anthropic = new AnthropicAdapter(apiKey);
@@ -770,6 +1108,9 @@ export class AIClient {
     messages: AIMessage[],
     options: CompletionOptions = {},
   ): Promise<AICompletionResult> {
+    if (this.provider === 'openai' && model === RESPONSES_API_MODEL && this.openaiResponses) {
+      return this.openaiResponses.complete(model, messages, options);
+    }
     if (this.provider === 'openai' && this.openai) {
       return this.openai.complete(model, messages, options);
     }
@@ -791,6 +1132,9 @@ export class AIClient {
     options: CompletionOptions = {},
     onDelta: (delta: string) => void,
   ): Promise<{ usage?: AIUsage; model: string }> {
+    if (this.provider === 'openai' && model === RESPONSES_API_MODEL && this.openaiResponses) {
+      return this.openaiResponses.streamComplete(model, messages, options, onDelta);
+    }
     if (this.provider === 'openai' && this.openai) {
       return this.openai.streamComplete(model, messages, options, onDelta);
     }

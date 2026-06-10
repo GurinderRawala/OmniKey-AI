@@ -9,6 +9,22 @@ import { logger } from '../logger';
 const aiModel = getDefaultModel(config.aiProvider, 'fast');
 
 // ---------------------------------------------------------------------------
+// Strip response wrappers before JSON.parse
+// ---------------------------------------------------------------------------
+
+/** Remove <final_answer> tags and markdown code fences that some models wrap
+ *  around JSON responses, leaving only the raw JSON text. */
+function stripResponseWrappers(text: string): string {
+  return text
+    .trim()
+    .replace(/^<final_answer>\s*/i, '')
+    .replace(/\s*<\/final_answer>$/i, '')
+    .replace(/^```(?:json)?\n?/, '')
+    .replace(/\n?```$/, '')
+    .trim();
+}
+
+// ---------------------------------------------------------------------------
 // Extract user_input text from persisted session history
 // ---------------------------------------------------------------------------
 
@@ -174,11 +190,7 @@ Respond with ONLY valid JSON, no markdown:
       { temperature: 0 },
     );
 
-    const raw = result.content
-      .trim()
-      .replace(/^```(?:json)?\n?/, '')
-      .replace(/\n?```$/, '')
-      .trim();
+    const raw = stripResponseWrappers(result.content);
 
     const parsed: unknown = JSON.parse(raw);
     const response = z
@@ -335,11 +347,7 @@ Respond with ONLY valid JSON: {"groupDescription":"..."}`;
       { temperature: 0 },
     );
 
-    const raw = result.content
-      .trim()
-      .replace(/^```(?:json)?\n?/, '')
-      .replace(/\n?```$/, '')
-      .trim();
+    const raw = stripResponseWrappers(result.content);
 
     const parsed: unknown = JSON.parse(raw);
     const response = z.object({ groupDescription: z.string() }).parse(parsed);

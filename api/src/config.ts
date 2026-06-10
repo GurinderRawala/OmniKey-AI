@@ -88,6 +88,11 @@ export const config = {
   // self-hosted NIM (e.g. `http://my-nim-host:8000/v1`) to use private weights.
   nemotronBaseUrl: getEnv('NEMOTRON_BASE_URL', false),
 
+  // Optional OpenAI model override. When set, the agent uses this model instead
+  // of the default smart-tier model (gpt-5.5). Useful for switching to Codex
+  // (codex-mini-latest) or pinning a specific GPT version.
+  openaiModel: getEnv('OPENAI_MODEL', false),
+
   // Database
   databaseUrl: getEnv('DATABASE_URL', getBooleanEnv('IS_SELF_HOSTED', false) ? false : true),
   dbLogging: getBooleanEnv('DB_LOGGING', false),

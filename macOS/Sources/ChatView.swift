@@ -66,24 +66,32 @@ struct ChatSidebarView: View {
     /// out collapsed without forcing previously expanded groups closed.
     @State private var collapsedGroups: Set<String> = []
     @State private var seenGroups: Set<String> = []
+    @State private var isRefreshing: Bool = false
 
-    /// Fallback group name used when a session has no `group_name` from
-    /// the backend. Surfaced in the sidebar as a regular collapsible
-    /// section so unassigned chats remain easy to find.
     private static let ungroupedName = "Other"
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Header row: app name + compose + collapse. Anchored to
-            // `.center` so the icon buttons (28×28) line up vertically
-            // with the title baseline instead of drifting when the
-            // accompanying SF Symbols have asymmetric metrics.
+            // ── Sidebar header ───────────────────────────────────────────
             HStack(alignment: .center, spacing: 4) {
                 Text("OmniAgent")
                     .font(OKFont.bodyEmphasized)
                     .okTighten(-0.15)
                     .foregroundColor(NordTheme.primaryText(colorScheme))
                 Spacer()
+                // Refresh — spinner replaces the icon while the fetch is in flight.
+                // Fixed 28×28 frame keeps all three buttons on the same baseline.
+                if isRefreshing {
+                    ProgressView()
+                        .scaleEffect(0.55)
+                        .frame(width: 28, height: 28)
+                } else {
+                    SidebarIconButton(icon: "arrow.clockwise", help: "Refresh chats") {
+                        isRefreshing = true
+                        model.refreshSessions { isRefreshing = false }
+                        model.fetchGroups()
+                    }
+                }
                 SidebarIconButton(icon: "square.and.pencil", help: "New Chat") {
                     model.startNewChat()
                 }
@@ -91,8 +99,9 @@ struct ChatSidebarView: View {
                     onCollapse()
                 }
             }
+            .animation(.easeInOut(duration: 0.15), value: isRefreshing)
             .padding(.horizontal, 12)
-            .padding(.top, 16)
+            .padding(.top, 14)
             .padding(.bottom, 8)
 
             // Search field — filters sessions by their title, which the
@@ -197,14 +206,19 @@ struct ChatSidebarView: View {
                             }
                             return order.map { ($0, map[$0]!) }
                         }()
+                        // Keyed by group name so SwiftUI tracks group views by
+                        // content rather than position — prevents incorrect view
+                        // reuse when a new group is inserted and existing groups
+                        // shift positions.
+                        let groupedByName: [String: [AgentSessionInfo]] = Dictionary(
+                            uniqueKeysWithValues: grouped
+                        )
+                        let groupNames = grouped.map { $0.0 }
 
-                        ForEach(Array(grouped.enumerated()), id: \.offset) { _, pair in
-                            let (name, sessions) = pair
+                        ForEach(groupNames, id: \.self) { name in
+                            let sessions = groupedByName[name, default: []]
                             let isCollapsed = collapsedGroups.contains(name)
 
-                            // Section header — always rendered so every
-                            // group (including "Other") gets its own
-                            // collapsible heading and starts collapsed.
                             Button {
                                 withAnimation(.easeInOut(duration: 0.18)) {
                                     if collapsedGroups.contains(name) {
@@ -214,24 +228,23 @@ struct ChatSidebarView: View {
                                     }
                                 }
                             } label: {
-                                HStack(spacing: 6) {
+                                HStack(spacing: 5) {
                                     Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
-                                        .font(.system(size: 10, weight: .semibold))
-                                    Image(systemName: "folder.fill")
-                                        .font(.system(size: 11, weight: .semibold))
+                                        .font(.system(size: 9, weight: .bold))
                                     Text(name)
-                                        .font(.system(size: 13, weight: .semibold))
+                                        .font(.system(size: 11, weight: .semibold))
+                                        .tracking(0.1)
                                         .lineLimit(1)
                                     Spacer()
                                     Text("\(sessions.count)")
-                                        .font(.system(size: 12, weight: .medium))
-                                        .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.35))
+                                        .font(.system(size: 10, weight: .medium))
+                                        .monospacedDigit()
                                 }
-                                .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.5))
+                                .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.45))
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(.horizontal, 14)
-                                .padding(.top, 10)
-                                .padding(.bottom, 2)
+                                .padding(.top, 12)
+                                .padding(.bottom, 3)
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
@@ -260,8 +273,11 @@ struct ChatSidebarView: View {
                         // clear the signal so it can fire again later.
                         .onChange(of: model.pendingExpandSessionId) { _, sessionId in
                             guard let sessionId else { return }
-                            let resolved = visibleSessions.first(where: { $0.id == sessionId })
-                                ?? model.sessions.first(where: { $0.id == sessionId })
+                            // Always read the group name from the live sessions array,
+                            // not from visibleSessions (a local let that may have been
+                            // captured from the previous render before the refresh that
+                            // assigned the group completed).
+                            let resolved = model.sessions.first(where: { $0.id == sessionId })
                             let groupName = resolved?.groupName?
                                 .trimmingCharacters(in: .whitespacesAndNewlines)
                                 .nilIfEmpty
@@ -622,52 +638,54 @@ struct ChatSessionRowView: View {
         Button(action: onTap) {
             HStack(spacing: 0) {
                 // Active indicator bar
-                Rectangle()
+                RoundedRectangle(cornerRadius: 1.5)
                     .fill(isActive ? NordTheme.accent(colorScheme) : Color.clear)
-                    .frame(width: 2.5)
-                    .clipShape(Capsule())
-                    .padding(.vertical, 6)
+                    .frame(width: 3)
+                    .padding(.vertical, 8)
 
                 Text(session.title)
-                    .font(.system(size: 13, weight: isActive ? .medium : .regular, design: .default))
+                    .font(.system(size: 13, weight: isActive ? .medium : .regular))
                     .foregroundColor(
                         isActive
                             ? NordTheme.primaryText(colorScheme)
-                            : NordTheme.secondaryText(colorScheme)
+                            : isHovered
+                                ? NordTheme.primaryText(colorScheme).opacity(0.8)
+                                : NordTheme.secondaryText(colorScheme)
                     )
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.leading, 8)
+                    .padding(.leading, 9)
 
                 if isHovered {
                     Button(action: onDelete) {
                         Image(systemName: "xmark")
-                            .font(.system(size: 9, weight: .medium))
-                            .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.6))
-                            .frame(width: 18, height: 18)
+                            .font(.system(size: 8.5, weight: .semibold))
+                            .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.55))
+                            .frame(width: 17, height: 17)
                             .background(Circle().fill(NordTheme.badgeFill(colorScheme)))
                     }
                     .buttonStyle(.plain)
                     .transition(.opacity.combined(with: .scale(scale: 0.85)))
-                    .padding(.trailing, 6)
+                    .padding(.trailing, 7)
                 }
             }
-            .frame(height: 32)
+            .frame(height: 34)
             .padding(.leading, 8)
             .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
                     .fill(
                         isActive
-                            ? NordTheme.accent(colorScheme).opacity(colorScheme == .dark ? 0.10 : 0.07)
-                            : isHovered ? NordTheme.badgeFill(colorScheme)
-                            : Color.clear
+                            ? NordTheme.accent(colorScheme).opacity(colorScheme == .dark ? 0.12 : 0.08)
+                            : isHovered
+                                ? NordTheme.badgeFill(colorScheme)
+                                : Color.clear
                     )
             )
-            .padding(.horizontal, 6)
+            .padding(.horizontal, 7)
         }
         .buttonStyle(.plain)
-        .animation(.easeInOut(duration: 0.12), value: isHovered)
+        .animation(.easeInOut(duration: 0.1), value: isHovered)
         .onHover { isHovered = $0 }
     }
 }
@@ -689,13 +707,10 @@ struct ChatPendingSessionRowView: View {
     var body: some View {
         Button(action: onTap) {
             HStack(spacing: 0) {
-                // Active indicator bar — matches ChatSessionRowView so
-                // the placeholder visually aligns with real session rows.
-                Rectangle()
+                RoundedRectangle(cornerRadius: 1.5)
                     .fill(isActive ? NordTheme.accent(colorScheme) : Color.clear)
-                    .frame(width: 2.5)
-                    .clipShape(Capsule())
-                    .padding(.vertical, 6)
+                    .frame(width: 3)
+                    .padding(.vertical, 8)
 
                 HStack(spacing: 6) {
                     Image(systemName: "square.and.pencil")
@@ -703,7 +718,7 @@ struct ChatPendingSessionRowView: View {
                         .foregroundColor(
                             isActive
                                 ? NordTheme.accent(colorScheme)
-                                : NordTheme.secondaryText(colorScheme).opacity(0.7)
+                                : NordTheme.secondaryText(colorScheme).opacity(0.6)
                         )
                     Text("New Chat")
                         .font(.system(size: 13, weight: isActive ? .medium : .regular))
@@ -715,23 +730,24 @@ struct ChatPendingSessionRowView: View {
                         .lineLimit(1)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.leading, 8)
+                .padding(.leading, 9)
             }
-            .frame(height: 32)
+            .frame(height: 34)
             .padding(.leading, 8)
             .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
                     .fill(
                         isActive
-                            ? NordTheme.accent(colorScheme).opacity(colorScheme == .dark ? 0.10 : 0.07)
-                            : isHovered ? NordTheme.badgeFill(colorScheme)
-                            : Color.clear
+                            ? NordTheme.accent(colorScheme).opacity(colorScheme == .dark ? 0.12 : 0.08)
+                            : isHovered
+                                ? NordTheme.badgeFill(colorScheme)
+                                : Color.clear
                     )
             )
-            .padding(.horizontal, 6)
+            .padding(.horizontal, 7)
         }
         .buttonStyle(.plain)
-        .animation(.easeInOut(duration: 0.12), value: isHovered)
+        .animation(.easeInOut(duration: 0.1), value: isHovered)
         .onHover { isHovered = $0 }
         .accessibilityLabel("New chat (unsaved)")
     }
@@ -885,20 +901,19 @@ struct ChatHeaderBar: View {
     @State private var pulse = false
 
     var body: some View {
-        HStack(spacing: 10) {
-            Button(action: onToggleSidebar) {
-                Image(systemName: "sidebar.left")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(NordTheme.secondaryText(colorScheme))
+        HStack(spacing: 8) {
+            Button(action: { model.startNewChat() }) {
+                Image(systemName: "square.and.pencil")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.75))
                     .frame(width: 30, height: 30)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help("Toggle sidebar")
+            .help("New Chat")
 
             Text(model.activeSessionTitle)
-                .font(OKFont.headline)
-                .okTighten(-0.15)
+                .font(.system(size: 14, weight: .semibold))
                 .foregroundColor(NordTheme.primaryText(colorScheme))
                 .lineLimit(1)
                 .truncationMode(.tail)
@@ -906,43 +921,66 @@ struct ChatHeaderBar: View {
             Spacer()
 
             if model.isRunning {
-                HStack(spacing: 6) {
+                // Pulsing dot + label
+                HStack(spacing: 5) {
                     Circle()
                         .fill(NordTheme.accentGreen(colorScheme))
-                        .frame(width: 7, height: 7)
-                        .scaleEffect(pulse ? 1.35 : 1.0)
-                        .opacity(pulse ? 0.55 : 1.0)
-                        .animation(.easeInOut(duration: 0.85).repeatForever(autoreverses: true), value: pulse)
+                        .frame(width: 6, height: 6)
+                        .scaleEffect(pulse ? 1.4 : 1.0)
+                        .opacity(pulse ? 0.5 : 1.0)
+                        .animation(
+                            .easeInOut(duration: 0.9).repeatForever(autoreverses: true),
+                            value: pulse
+                        )
                         .onAppear { pulse = true }
                         .onDisappear { pulse = false }
                     Text("Running")
-                        .font(OKFont.captionSmall)
+                        .font(.system(size: 11, weight: .medium))
                         .foregroundColor(NordTheme.accentGreen(colorScheme))
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .background(Capsule().fill(NordTheme.badgeFill(colorScheme)))
-                .overlay(Capsule().strokeBorder(NordTheme.border(colorScheme), lineWidth: 1))
+                .padding(.horizontal, 9)
+                .padding(.vertical, 4)
+                .background(
+                    Capsule()
+                        .fill(NordTheme.accentGreen(colorScheme).opacity(
+                            colorScheme == .dark ? 0.10 : 0.08
+                        ))
+                )
+                .overlay(
+                    Capsule().strokeBorder(
+                        NordTheme.accentGreen(colorScheme).opacity(0.25),
+                        lineWidth: 1
+                    )
+                )
+                .transition(.opacity.combined(with: .scale(scale: 0.92)))
 
+                // Stop button
                 Button(action: model.cancelCurrentTurn) {
                     HStack(spacing: 4) {
-                        Image(systemName: "stop.circle.fill")
-                            .font(.system(size: 11))
+                        Image(systemName: "stop.fill")
+                            .font(.system(size: 9, weight: .bold))
                         Text("Stop")
-                            .font(OKFont.captionSmall)
+                            .font(.system(size: 11, weight: .medium))
                     }
-                    .foregroundColor(.red.opacity(0.9))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(Capsule().fill(Color.red.opacity(colorScheme == .dark ? 0.10 : 0.07)))
-                    .overlay(Capsule().strokeBorder(Color.red.opacity(0.25), lineWidth: 1))
+                    .foregroundColor(.red.opacity(0.85))
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 4)
+                    .background(
+                        Capsule()
+                            .fill(Color.red.opacity(colorScheme == .dark ? 0.10 : 0.07))
+                    )
+                    .overlay(
+                        Capsule().strokeBorder(Color.red.opacity(0.22), lineWidth: 1)
+                    )
                 }
                 .buttonStyle(.plain)
+                .transition(.opacity.combined(with: .scale(scale: 0.92)))
             }
         }
-        .padding(.horizontal, 22)
-        .padding(.vertical, 14)
-        .frame(minHeight: 56)
+        .animation(.easeInOut(duration: 0.18), value: model.isRunning)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
+        .frame(minHeight: 52)
     }
 }
 
@@ -1203,7 +1241,7 @@ private struct LandingInputComposer: View {
                     isFocused: $isFocused,
                     colorScheme: colorScheme,
                     onSend: {
-                        guard !model.isRunning, !inputIsEmpty else { return }
+                        guard !inputIsEmpty else { return }
                         model.sendCurrentInput()
                     },
                     onRecallHistory: { model.recallLastUserMessage() }
@@ -1362,28 +1400,31 @@ private struct LandingInputComposer: View {
                 }
 
                 // Send / Stop
+                // • Has text → always send (even mid-run; server queues it)
+                // • No text + running → stop button
+                // • No text + idle → disabled send button
                 Button {
-                    if model.isRunning { model.cancelCurrentTurn() }
-                    else { model.sendCurrentInput() }
+                    if !inputIsEmpty { model.sendCurrentInput() }
+                    else if model.isRunning { model.cancelCurrentTurn() }
                 } label: {
                     ZStack {
                         Circle()
                             .fill(
-                                model.isRunning
+                                model.isRunning && inputIsEmpty
                                     ? Color.red
                                     : inputIsEmpty
                                         ? NordTheme.border(colorScheme).opacity(2.5)
                                         : NordTheme.accent(colorScheme)
                             )
                             .frame(width: 30, height: 30)
-                        Image(systemName: model.isRunning ? "stop.fill" : "arrow.up")
+                        Image(systemName: model.isRunning && inputIsEmpty ? "stop.fill" : "arrow.up")
                             .font(.system(size: 12, weight: .bold))
                             .foregroundColor(inputIsEmpty && !model.isRunning ? NordTheme.secondaryText(colorScheme).opacity(0.4) : .white)
                     }
                     .animation(.easeInOut(duration: 0.14), value: model.isRunning)
                 }
                 .buttonStyle(.plain)
-                .disabled(!model.isRunning && inputIsEmpty)
+                .disabled(inputIsEmpty && !model.isRunning)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 9)

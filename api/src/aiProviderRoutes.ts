@@ -98,6 +98,11 @@ function describeProvider(provider: AIProviderType, cfg: Record<string, any>) {
     baseUrl: provider === 'nemotron'
       ? (typeof cfg.NEMOTRON_BASE_URL === 'string' ? cfg.NEMOTRON_BASE_URL : null)
       : null,
+    // OpenAI only: the currently selected model (OPENAI_MODEL in config.json).
+    // null means the server will use the default smart-tier model (gpt-5.5).
+    model: provider === 'openai'
+      ? (typeof cfg.OPENAI_MODEL === 'string' && cfg.OPENAI_MODEL ? cfg.OPENAI_MODEL : null)
+      : null,
   };
 }
 
@@ -259,6 +264,41 @@ export function aiProviderRouter(): express.Router {
     } catch (err) {
       reqLogger.error('Error removing provider key.', { error: err });
       res.status(500).json({ error: 'Failed to remove provider key.' });
+    }
+  });
+
+  /** PATCH /api/providers/:provider/model — update the model for a provider (OpenAI only). */
+  router.patch('/:provider/model', authMiddleware, async (req, res) => {
+    const { logger: reqLogger } = res.locals;
+    const providerParam = providerEnum.safeParse(req.params.provider);
+    if (!providerParam.success) {
+      return res.status(400).json({ error: 'Unknown provider.' });
+    }
+    const provider = providerParam.data;
+    if (provider !== 'openai') {
+      return res.status(400).json({ error: 'Model selection is only supported for the OpenAI provider.' });
+    }
+
+    const model = req.body?.model;
+    if (!model || typeof model !== 'string' || model.trim().length === 0 || model.length > 200) {
+      return res.status(400).json({ error: 'Invalid model name.' });
+    }
+
+    try {
+      const cfg = readConfigFile();
+      cfg.OPENAI_MODEL = model.trim();
+      writeConfigFile(cfg);
+
+      res.json({
+        ...describeProvider(provider, cfg),
+        restartScheduled: true,
+        message: 'Model updated. Server will restart shortly to apply the change.',
+      });
+
+      scheduleDaemonRestart(`updated OpenAI model to ${model.trim()}`);
+    } catch (err) {
+      reqLogger.error('Error updating provider model.', { error: err });
+      res.status(500).json({ error: 'Failed to update model.' });
     }
   });
 

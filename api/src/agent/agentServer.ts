@@ -34,6 +34,20 @@ import {
 import type { AgentMessage, AgentSendFn, SessionState } from './types';
 import { Logger } from 'winston';
 
+type TurnOutcome = 'shell_pending' | 'complete';
+
+interface QueuedMessage {
+  message: AgentMessage;
+  send: AgentSendFn;
+  subscription: Subscription;
+  log: Logger;
+}
+
+// Per-session queuing so user messages sent during an active turn are processed
+// in order after the current turn completes rather than running concurrently.
+const activeSessions = new Set<string>();
+const sessionQueues = new Map<string, QueuedMessage[]>();
+
 async function runToolLoop(
   initialResult: AICompletionResult,
   session: SessionState,
@@ -224,6 +238,28 @@ async function runToolLoop(
 const aiModel = getDefaultModel(config.aiProvider, 'smart');
 const contextWindowSize = getContextWindowSize(config.aiProvider);
 
+// ─── Terminal output helpers ──────────────────────────────────────────────────
+
+const TERMINAL_OUTPUT_MAX = 80_000;   // max chars kept per terminal message
+const TERMINAL_OUTPUT_HEAD = 30_000;  // chars kept from the beginning
+const TERMINAL_OUTPUT_TAIL = 50_000;  // chars kept from the end (errors land here)
+
+/**
+ * Caps large terminal outputs so they don't consume the entire history budget.
+ * Keeps the first TERMINAL_OUTPUT_HEAD chars and the last TERMINAL_OUTPUT_TAIL
+ * chars, inserting a truncation notice in the middle. The tail is larger because
+ * errors and final results appear at the end.
+ */
+function truncateTerminalOutput(output: string): string {
+  if (output.length <= TERMINAL_OUTPUT_MAX) return output;
+  const dropped = output.length - TERMINAL_OUTPUT_HEAD - TERMINAL_OUTPUT_TAIL;
+  return (
+    output.slice(0, TERMINAL_OUTPUT_HEAD) +
+    `\n\n[... ${dropped.toLocaleString()} chars of output omitted — showing first ${TERMINAL_OUTPUT_HEAD.toLocaleString()} and last ${TERMINAL_OUTPUT_TAIL.toLocaleString()} chars ...]\n\n` +
+    output.slice(output.length - TERMINAL_OUTPUT_TAIL)
+  );
+}
+
 // ─── DB helpers ───────────────────────────────────────────────────────────────
 
 /**
@@ -307,7 +343,7 @@ async function getOrCreateSession(
   log: typeof logger,
   isCronJob = false,
   groupName?: string,
-): Promise<{ sessionState: SessionState; hasStoredPrompt: boolean }> {
+): Promise<{ sessionState: SessionState; hasStoredPrompt: boolean; resumedSession: boolean }> {
   // 1. Try to resume from a persisted DB record.
   try {
     const dbSession = await AgentSession.findOne({
@@ -334,6 +370,7 @@ async function getOrCreateSession(
           .some(
             (h) => typeof h.content === 'string' && h.content.includes('<stored_instructions>'),
           ),
+        resumedSession: true,
       };
     }
   } catch (err) {
@@ -416,6 +453,7 @@ ${prompt}
           .some(
             (h) => typeof h.content === 'string' && h.content.includes('<stored_instructions>'),
           ),
+        resumedSession: true,
       };
     }
 
@@ -433,6 +471,7 @@ ${prompt}
   return {
     sessionState: entry,
     hasStoredPrompt: !!prompt,
+    resumedSession: false,
   };
 }
 
@@ -443,8 +482,12 @@ async function runAgentTurnInternal(
   send: AgentSendFn,
   log: typeof logger,
   options?: { isCronJob?: boolean; untaggedDepth?: number },
-) {
-  const { sessionState: session, hasStoredPrompt } = await getOrCreateSession(
+): Promise<TurnOutcome> {
+  const {
+    sessionState: session,
+    hasStoredPrompt,
+    resumedSession,
+  } = await getOrCreateSession(
     sessionId,
     subscription,
     clientMessage.platform,
@@ -460,6 +503,7 @@ async function runAgentTurnInternal(
     sessionId,
     subscriptionId: subscription.id,
     turn: session.turns,
+    resumedSession,
   });
 
   // Append the client message as user content, marking terminal
@@ -469,16 +513,22 @@ async function runAgentTurnInternal(
   const isErrorFlag = Boolean(clientMessage.is_error);
 
   if (isTerminalOutput) {
-    userContent = `TERMINAL OUTPUT:\n${userContent}`;
+    userContent = `TERMINAL OUTPUT:\n${truncateTerminalOutput(userContent)}`;
   }
   if (isErrorFlag) {
-    userContent = `COMMAND ERROR:\n${userContent}`;
+    userContent = `COMMAND ERROR:\n${truncateTerminalOutput(userContent)}`;
   }
 
   // If the client specified a group_name, look up the stored description
   // and prepend it as a <project_context> block. The frontend never sends
   // the description itself — the server is the single source of truth.
-  if (clientMessage.group_name && !isTerminalOutput && !isErrorFlag && !clientMessage.is_web_call) {
+  if (
+    clientMessage.group_name &&
+    !isTerminalOutput &&
+    !isErrorFlag &&
+    !clientMessage.is_web_call &&
+    !resumedSession
+  ) {
     try {
       const groupRow = await AgentSession.findOne({
         where: {
@@ -643,7 +693,7 @@ async function runAgentTurnInternal(
 
       await persistSessionToDB(sessionId, session);
       sendFinalAnswer(send, sessionId, errorMessage, true);
-      return;
+      return 'complete';
     }
 
     // If the model requested web tool calls, execute them and get a follow-up
@@ -723,7 +773,7 @@ async function runAgentTurnInternal(
         // follow-up turn reads the latest history and turn count.
         await persistSessionToDB(sessionId, session);
 
-        await runAgentTurnInternal(
+        return await runAgentTurnInternal(
           sessionId,
           subscription,
           {
@@ -736,8 +786,6 @@ async function runAgentTurnInternal(
           logger,
           options,
         );
-
-        return;
       }
     }
 
@@ -769,7 +817,7 @@ async function runAgentTurnInternal(
         is_terminal_output: false,
         is_error: false,
       });
-      return;
+      return 'shell_pending';
     }
 
     if (hasFinalAnswerTag) {
@@ -830,7 +878,7 @@ async function runAgentTurnInternal(
           'The agent failed to produce a structured response after multiple attempts. Please try again.',
           true,
         );
-        return;
+        return 'complete';
       }
 
       log.info('Agent returned untagged content; injecting format-correction directive', {
@@ -855,7 +903,7 @@ async function runAgentTurnInternal(
         ].join('\n'),
       });
       await persistSessionToDB(sessionId, session);
-      await runAgentTurnInternal(
+      return await runAgentTurnInternal(
         sessionId,
         subscription,
         {
@@ -886,6 +934,7 @@ async function runAgentTurnInternal(
     await persistSessionToDB(sessionId, session);
     sendFinalAnswer(send, sessionId, errorMessage, true);
   }
+  return 'complete';
 }
 
 export async function runAgentTurn(
@@ -895,10 +944,37 @@ export async function runAgentTurn(
   send: AgentSendFn,
   log: typeof logger,
   options?: { isCronJob?: boolean },
-) {
+): Promise<TurnOutcome> {
   // untaggedDepth always starts at 0 for external callers; it is only threaded
   // through the internal recursive path.
-  await runAgentTurnInternal(sessionId, subscription, clientMessage, send, log, options);
+  return runAgentTurnInternal(sessionId, subscription, clientMessage, send, log, options);
+}
+
+async function processNextInQueue(sessionId: string): Promise<void> {
+  const queue = sessionQueues.get(sessionId);
+  if (!queue?.length) return;
+
+  const next = queue.shift()!;
+  if (!queue.length) sessionQueues.delete(sessionId);
+
+  activeSessions.add(sessionId);
+  try {
+    const outcome = await runAgentTurn(
+      sessionId,
+      next.subscription,
+      next.message,
+      next.send,
+      next.log,
+    );
+    if (outcome === 'complete') {
+      activeSessions.delete(sessionId);
+      void processNextInQueue(sessionId);
+    }
+    // 'shell_pending': keep active; terminal output arriving later will complete the turn
+  } catch {
+    activeSessions.delete(sessionId);
+    void processNextInQueue(sessionId);
+  }
 }
 
 export function attachAgentWebSocketServer(server: http.Server): WebSocketServer {
@@ -964,7 +1040,32 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
           isError: message.is_error,
         });
 
-        void runAgentTurn(sessionId, subscription, message, send, log);
+        // Terminal feedback (shell output / errors) and internal recursive calls
+        // always bypass the queue — they are part of the currently active turn.
+        const isTerminalFeedback =
+          Boolean(message.is_terminal_output) || Boolean(message.is_error);
+        const isInternalCall = Boolean(message.is_web_call);
+
+        if (!isTerminalFeedback && !isInternalCall && activeSessions.has(sessionId)) {
+          // A turn is already running for this session. Queue the message so it
+          // is processed in order once the current turn completes.
+          const queue = sessionQueues.get(sessionId) ?? [];
+          queue.push({ message, send, subscription, log });
+          sessionQueues.set(sessionId, queue);
+          log.info('Queued user message for active session', {
+            sessionId,
+            queueLength: queue.length,
+          });
+          return;
+        }
+
+        activeSessions.add(sessionId);
+        const outcome = await runAgentTurn(sessionId, subscription, message, send, log);
+        if (outcome === 'complete') {
+          activeSessions.delete(sessionId);
+          void processNextInQueue(sessionId);
+        }
+        // 'shell_pending': keep active; terminal output will eventually unlock it
       })();
     });
 
