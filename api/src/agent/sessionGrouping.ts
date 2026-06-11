@@ -28,6 +28,26 @@ function stripResponseWrappers(text: string): string {
 // Extract user_input text from persisted session history
 // ---------------------------------------------------------------------------
 
+// Strip server-injected wrappers from inside a user message so we don't
+// re-feed them to the classifier on subsequent turns. The agent server
+// prepends <project_context name="..."> ... </project_context> (carrying the
+// previously-classified group's absolute path) to every user turn for an
+// already-grouped session. If we leave that block in the text we send to the
+// LLM and to extractProjectPath, the classifier keeps "seeing" the old
+// project's path inside the user's words and sticks the session to the wrong
+// (often the parent) group forever — even after the user has clearly moved
+// on to a different project. We also strip <stored_instructions> defensively
+// (some clients embed them inline rather than as a separate message) and the
+// outer <user_input> wrapper.
+function stripInjectedWrappers(text: string): string {
+  return text
+    .replace(/<project_context[^>]*>[\s\S]*?<\/project_context>/gi, '')
+    .replace(/<stored_instructions>[\s\S]*?<\/stored_instructions>/gi, '')
+    .replace(/<user_input>([\s\S]*?)<\/user_input>/gi, '$1')
+    .replace(/@omniagent/gi, '')
+    .trim();
+}
+
 function extractUserInputs(historyJson: string): string[] {
   try {
     const history = JSON.parse(historyJson) as Array<{ role: string; content: unknown }>;
@@ -44,13 +64,13 @@ function extractUserInputs(historyJson: string): string[] {
       if (raw.startsWith('Web research is complete')) continue;
       if (raw.startsWith('IMPORTANT: The web search tool failed')) continue;
       if (raw.startsWith('Content was truncated')) continue;
-      if (raw.includes('<stored_instructions>')) continue;
 
-      // Extract the inner text from <user_input> wrapper if present
+      // Extract the inner text from <user_input> wrapper if present, then
+      // strip any server-injected blocks (project_context, stored_instructions)
+      // so the classifier only sees what the user actually typed this turn.
       const match = /<user_input>([\s\S]*?)<\/user_input>/i.exec(raw);
-      const text = match ? match[1].trim() : raw.trim();
-
-      const cleaned = text.replace(/@omniagent\s*/gi, '').trim();
+      const inner = match ? match[1] : raw;
+      const cleaned = stripInjectedWrappers(inner);
       if (cleaned.length > 5) {
         inputs.push(cleaned.slice(0, 400));
       }
@@ -68,40 +88,164 @@ function extractUserInputs(historyJson: string): string[] {
 // root (stops at depth 4 from /, so ~/projects/foo/src/bar → ~/projects/foo).
 // ---------------------------------------------------------------------------
 
+// Path segments that are never a project root on their own — when the deepest
+// scored candidate ends in one of these, we walk up one level. Kept lower-case;
+// matched case-insensitively against the final segment.
+const NON_ROOT_SEGMENTS = new Set([
+  'src',
+  'lib',
+  'libs',
+  'dist',
+  'build',
+  'out',
+  'bin',
+  'obj',
+  'target',
+  'pkg',
+  'cmd',
+  'public',
+  'assets',
+  'static',
+  'node_modules',
+  'test',
+  'tests',
+  '__tests__',
+  'spec',
+  'specs',
+  'docs',
+  'doc',
+  'scripts',
+  'tmp',
+  'temp',
+  'vendor',
+  'third_party',
+  'internal',
+  'pages',
+  'components',
+  'utils',
+  'util',
+  'helpers',
+  'types',
+  '.git',
+  '.github',
+  '.vscode',
+  'node',
+]);
+
+// Top-level OS roots that contain user home directories. The segment
+// immediately after one of these is a username, NOT a project — so we always
+// skip both segments when computing the shallowest legitimate project depth.
+// e.g. /Users/alice/... and /home/alice/... both contribute a project only at
+// depth >= 3.
+const HOME_ROOT_SEGMENTS = new Set(['users', 'home']);
+
+// Generic container directories that sit between a username and the project
+// root and therefore can never themselves BE the project. We walk through any
+// chain of these when determining startDepth.
+// e.g. /Users/alice/Documents/projects/MyApp → /Users/alice/Documents/projects
+// are containers, /MyApp is the first legitimate project segment.
+const HOME_CONTAINER_SEGMENTS = new Set([
+  'documents',
+  'desktop',
+  'downloads',
+  'projects',
+  'workspace',
+  'workspaces',
+  'repos',
+  'code',
+  'dev',
+  'work',
+  'github',
+]);
+
+function looksLikeFile(segment: string): boolean {
+  // Treat a trailing dotted extension (e.g. index.ts, package.json, README.md)
+  // as a file, not a directory. Dotfiles like .gitignore are also files.
+  if (!segment) return false;
+  if (segment.startsWith('.') && segment.length > 1 && !segment.includes('/')) {
+    // .git, .github, .vscode are directories handled by NON_ROOT_SEGMENTS;
+    // .env, .gitignore, .prettierrc are files.
+    const known = new Set(['.git', '.github', '.vscode', '.idea', '.next', '.cache']);
+    return !known.has(segment.toLowerCase());
+  }
+  return /\.[A-Za-z0-9]{1,8}$/.test(segment);
+}
+
+function trimToProjectRoot(path: string): string | null {
+  let parts = path.split('/').filter(Boolean);
+  // Strip a trailing file segment, if any.
+  if (parts.length && looksLikeFile(parts[parts.length - 1])) {
+    parts = parts.slice(0, -1);
+  }
+  // Walk up while the deepest segment is a non-root folder (src, lib, dist, ...).
+  while (parts.length > 1 && NON_ROOT_SEGMENTS.has(parts[parts.length - 1].toLowerCase())) {
+    parts = parts.slice(0, -1);
+  }
+  // A bare /Users/<name> or /home/<name> is not a project — neither is
+  // /Users/<name>/Documents. Require at least one segment past the home
+  // root + username + container chain.
+  let firstProjectIdx = 0;
+  // Skip the OS home-root + its username (e.g. /Users/alice or /home/bob).
+  if (parts.length > 0 && HOME_ROOT_SEGMENTS.has(parts[0].toLowerCase())) {
+    firstProjectIdx = Math.min(2, parts.length);
+  }
+  // Then skip any further generic container segments (Documents, projects, ...).
+  while (
+    firstProjectIdx < parts.length &&
+    HOME_CONTAINER_SEGMENTS.has(parts[firstProjectIdx].toLowerCase())
+  ) {
+    firstProjectIdx++;
+  }
+  if (firstProjectIdx >= parts.length) return null;
+  if (parts.length < 2) return null;
+  return '/' + parts.join('/');
+}
+
 function extractProjectPath(texts: string[]): string | null {
   const combined = texts.join(' ');
 
-  // Match absolute paths (Unix) — capture up to 5 path segments
-  const pathRe = /(\/(?:[^\s/<>"'`]+\/){1,5}[^\s/<>"'`]*)/g;
-  const matches = Array.from(combined.matchAll(pathRe), (m) => m[1]);
+  // Match absolute paths (Unix) — capture up to 6 path segments.
+  const pathRe = /(\/(?:[^\s/<>"'`]+\/){1,6}[^\s/<>"'`]*)/g;
+  const rawMatches = Array.from(combined.matchAll(pathRe), (m) => m[1])
+    // Strip trailing sentence punctuation that the regex greedily included
+    // (e.g. "see /Users/x/MyApp/cli, please edit ..." → /Users/x/MyApp/cli).
+    .map((raw) => raw.replace(/[.,;:!?)\]]+$/, ''))
+    .filter((raw) => raw.length > 1);
+  if (!rawMatches.length) return null;
 
-  if (!matches.length) return null;
+  // Normalise each match to its likely project root (drop trailing file
+  // segment, drop non-root subdirs like src/dist/tests, and bail out on bare
+  // home directories). Each match contributes one vote.
+  const normalised: string[] = [];
+  for (const raw of rawMatches) {
+    const trimmed = trimToProjectRoot(raw);
+    if (trimmed) normalised.push(trimmed);
+  }
+  if (!normalised.length) return null;
 
-  // Score candidate roots by frequency: walk up each path up to depth 5
-  // counting how many times each ancestor appears across all matches.
-  const score = new Map<string, number>();
-  for (const p of matches) {
-    const parts = p.split('/').filter(Boolean);
-    // Build ancestors from depth 2 up to depth 5 (skip / and single-segment)
-    for (let depth = 2; depth <= Math.min(5, parts.length); depth++) {
-      const candidate = '/' + parts.slice(0, depth).join('/');
-      score.set(candidate, (score.get(candidate) ?? 0) + 1);
-    }
+  // Count direct votes for each candidate project root. We deliberately do
+  // NOT roll up votes to ancestors here: the previous implementation did, and
+  // that's exactly how the user's home directory (or a parent project that
+  // happened to enclose every referenced file) was scoring higher than the
+  // actual project the user was working in. Each path votes for exactly one
+  // candidate: its own trimmed project root.
+  const directVotes = new Map<string, number>();
+  for (const path of normalised) {
+    directVotes.set(path, (directVotes.get(path) ?? 0) + 1);
   }
 
-  // Prefer the deepest path that still has a frequency >= half the top score
-  const entries = Array.from(score.entries()).sort((a, b) => b[1] - a[1]);
-  if (!entries.length) return null;
+  // Pick the candidate with the most direct votes. Ties are broken by
+  // preferring the DEEPER path — when two siblings tie, the longer one is the
+  // most-specific common reference and is more likely the project root the
+  // user actually means. If two unrelated paths tie at the top, fall through
+  // and pick the one mentioned first (stable insertion order).
+  const entries = Array.from(directVotes.entries()).sort((a, b) => {
+    if (b[1] !== a[1]) return b[1] - a[1];
+    return b[0].split('/').length - a[0].split('/').length;
+  });
 
-  const topScore = entries[0][1];
-  const threshold = Math.max(1, Math.floor(topScore / 2));
-
-  // Among candidates meeting the threshold, pick the deepest (most segments)
-  const qualified = entries
-    .filter(([, s]) => s >= threshold)
-    .sort((a, b) => b[0].split('/').length - a[0].split('/').length);
-
-  return qualified[0]?.[0] ?? null;
+  const winner = entries[0][0];
+  return trimToProjectRoot(winner) ?? winner;
 }
 
 // ---------------------------------------------------------------------------
@@ -581,3 +725,17 @@ export function startGroupingCronJob(): void {
     }
   })();
 }
+
+// ---------------------------------------------------------------------------
+// Test-only exports. Kept at the bottom of the file and prefixed with __ so
+// they are obviously not part of the public API. The session grouping
+// pipeline runs in a worker process and exercises the LLM, but the path
+// extraction and input cleaning helpers are pure functions that we want
+// thorough unit coverage on — they are the entire defence against the
+// "session grouped under the wrong (often the parent) project" bug.
+export const __testing__ = {
+  extractUserInputs,
+  extractProjectPath,
+  stripInjectedWrappers,
+  trimToProjectRoot,
+};
