@@ -621,7 +621,7 @@ function toResponsesTools(tools: AITool[]): any[] {
  * intercepts calls to this tool and converts them to the <shell_script> tag
  * format that the rest of the agent pipeline expects.
  */
-const RESPONSES_SHELL_TOOL = {
+const RESPONSES_SHELL_TOOL_FULL = {
   type: 'function' as const,
   name: 'execute_shell_script',
   description:
@@ -635,6 +635,38 @@ const RESPONSES_SHELL_TOOL = {
   },
   strict: false,
 };
+
+/**
+ * Limited variant of the gpt-5.5 shell tool. Same wire format as
+ * RESPONSES_SHELL_TOOL_FULL, but the description tells the model that
+ * terminal access is restricted to read-only inspection commands. Selected
+ * at request time based on `config.terminalAccess`, which the macOS Settings
+ * UI writes to ~/.omnikey/config.json.
+ */
+const RESPONSES_SHELL_TOOL_LIMITED = {
+  type: 'function' as const,
+  name: 'execute_shell_script',
+  description:
+    'Execute a READ-ONLY shell script on the user\'s machine. Terminal access is set to LIMITED — restrict yourself to inspection commands (ls, cat, grep, ps, env, which, stat, head, tail, df, du, uname, echo, printenv) and never write to the filesystem, install packages, change configuration, kill processes, or perform mutating network calls. If the task needs mutation, return a <final_answer> telling the user to enable full terminal access in Settings.',
+  parameters: {
+    type: 'object',
+    properties: {
+      script: {
+        type: 'string',
+        description:
+          'Read-only shell script. Restrict yourself to inspection commands; do not write, delete, install, configure, or otherwise mutate state.',
+      },
+    },
+    required: ['script'],
+  },
+  strict: false,
+};
+
+function getResponsesShellTool() {
+  return config.terminalAccess === 'limited'
+    ? RESPONSES_SHELL_TOOL_LIMITED
+    : RESPONSES_SHELL_TOOL_FULL;
+}
 
 /**
  * Translates a Responses API response object into our normalised
@@ -878,7 +910,7 @@ class OpenAIResponsesAdapter {
     // Always inject the shell tool so gpt-5.5 can call execute_shell_script
     // natively; the adapter converts those calls back to <shell_script> tags.
     const userTools = options.tools?.length ? toResponsesTools(options.tools) : [];
-    const tools = [RESPONSES_SHELL_TOOL, ...userTools];
+    const tools = [getResponsesShellTool(), ...userTools];
 
     const response = await (this.client.responses as any).create({
       model,

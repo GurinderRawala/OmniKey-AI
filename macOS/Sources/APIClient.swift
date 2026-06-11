@@ -1161,4 +1161,171 @@ final class APIClient: @unchecked Sendable {
         catch { completion(.failure(error)) }
     }
 
+    // MARK: - Agent Access (terminal / web search / browser access)
+
+    private var appSettingsBaseURL: URL { APIClient.baseURL.appendingPathComponent("api/app-settings") }
+
+    /// Terminal access mode, mirroring the backend's TerminalAccessMode type.
+    /// Persisted to TERMINAL_ACCESS in ~/.omnikey/config.json.
+    enum TerminalAccessMode: String, Codable, CaseIterable, Identifiable {
+        case full
+        case limited
+        var id: String { rawValue }
+    }
+
+    /// Snapshot returned by GET /api/app-settings.
+    struct AppSettingsResponse: Codable {
+        let terminalAccess: TerminalAccessMode
+        let webSearchEnabled: Bool
+        let browserAccessEnabled: Bool
+        let browserDebugBrowserName: String?
+        let browserDebugPort: Int?
+    }
+
+    /// Server response shape for the GET endpoint. The "runtime" object is
+    /// available but currently unused in the UI; kept here as a CodingKey
+    /// so it does not surface as a JSON-decode error.
+    private struct AppSettingsEnvelope: Codable {
+        let terminalAccess: TerminalAccessMode
+        let webSearchEnabled: Bool
+        let browserAccessEnabled: Bool
+        let browserDebugBrowserName: String?
+        let browserDebugPort: Int?
+    }
+
+    /// Response from the PATCH endpoint and the browser-access POST endpoint.
+    struct AppSettingsMutationResponse: Codable {
+        let terminalAccess: TerminalAccessMode
+        let webSearchEnabled: Bool
+        let browserAccessEnabled: Bool
+        let restartScheduled: Bool?
+        let message: String?
+    }
+
+    /// Response from POST /api/app-settings/browser-access.
+    struct BrowserAccessMutationResponse: Codable {
+        let browserAccessEnabled: Bool
+        let launched: Bool?
+        let message: String?
+        let restartScheduled: Bool?
+    }
+
+    func fetchAppSettings(completion: @escaping @Sendable (Result<AppSettingsResponse, Error>) -> Void) {
+        var request = URLRequest(url: appSettingsBaseURL)
+        request.httpMethod = "GET"
+        if let token = SubscriptionManager.shared.jwtToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        let task = URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error = error { completion(.failure(error)); return }
+            guard let httpResponse = response as? HTTPURLResponse else {
+                completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response"])))
+                return
+            }
+            guard (200...299).contains(httpResponse.statusCode) else {
+                completion(.failure(APIClient.makeBackendError(statusCode: httpResponse.statusCode, data: data)))
+                return
+            }
+            guard let data = data, !data.isEmpty else {
+                completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No data"])))
+                return
+            }
+            do {
+                let decoded = try JSONDecoder().decode(AppSettingsEnvelope.self, from: data)
+                completion(.success(AppSettingsResponse(
+                    terminalAccess: decoded.terminalAccess,
+                    webSearchEnabled: decoded.webSearchEnabled,
+                    browserAccessEnabled: decoded.browserAccessEnabled,
+                    browserDebugBrowserName: decoded.browserDebugBrowserName,
+                    browserDebugPort: decoded.browserDebugPort
+                )))
+            } catch { completion(.failure(error)) }
+        }
+        task.resume()
+    }
+
+    /// Partial update of the simple settings (terminal access and web search).
+    /// Each parameter is independently nullable; pass nil to leave that value
+    /// untouched. The backend rejects an empty payload with 400.
+    func updateAppSettings(
+        terminalAccess: TerminalAccessMode?,
+        webSearchEnabled: Bool?,
+        completion: @escaping @Sendable (Result<AppSettingsMutationResponse, Error>) -> Void
+    ) {
+        var request = URLRequest(url: appSettingsBaseURL)
+        request.httpMethod = "PATCH"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = SubscriptionManager.shared.jwtToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        var payload: [String: Any] = [:]
+        if let mode = terminalAccess { payload["terminalAccess"] = mode.rawValue }
+        if let webSearch = webSearchEnabled { payload["webSearchEnabled"] = webSearch }
+        guard !payload.isEmpty,
+              let body = try? JSONSerialization.data(withJSONObject: payload) else {
+            completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Nothing to update"])))
+            return
+        }
+        request.httpBody = body
+        let task = URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error = error { completion(.failure(error)); return }
+            guard let httpResponse = response as? HTTPURLResponse else {
+                completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response"])))
+                return
+            }
+            guard (200...299).contains(httpResponse.statusCode) else {
+                completion(.failure(APIClient.makeBackendError(statusCode: httpResponse.statusCode, data: data)))
+                return
+            }
+            guard let data = data, !data.isEmpty else {
+                completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No data"])))
+                return
+            }
+            do { completion(.success(try JSONDecoder().decode(AppSettingsMutationResponse.self, from: data))) }
+            catch { completion(.failure(error)) }
+        }
+        task.resume()
+    }
+
+    /// Toggle authenticated browser session access. Enabling spawns
+    /// `omnikey grant-browser-access` inside a new Terminal window so the
+    /// existing interactive prompts (browser pick, profile name, etc.) work
+    /// unchanged. Disabling clears the saved BROWSER_DEBUG_* config and
+    /// removes the macOS LaunchAgent.
+    func setBrowserAccessEnabled(
+        _ enabled: Bool,
+        completion: @escaping @Sendable (Result<BrowserAccessMutationResponse, Error>) -> Void
+    ) {
+        let url = appSettingsBaseURL.appendingPathComponent("browser-access")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = SubscriptionManager.shared.jwtToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        guard let body = try? JSONSerialization.data(withJSONObject: ["enabled": enabled]) else {
+            completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Serialization error"])))
+            return
+        }
+        request.httpBody = body
+        let task = URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error = error { completion(.failure(error)); return }
+            guard let httpResponse = response as? HTTPURLResponse else {
+                completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response"])))
+                return
+            }
+            guard (200...299).contains(httpResponse.statusCode) else {
+                completion(.failure(APIClient.makeBackendError(statusCode: httpResponse.statusCode, data: data)))
+                return
+            }
+            guard let data = data, !data.isEmpty else {
+                completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No data"])))
+                return
+            }
+            do { completion(.success(try JSONDecoder().decode(BrowserAccessMutationResponse.self, from: data))) }
+            catch { completion(.failure(error)) }
+        }
+        task.resume()
+    }
+
 }

@@ -2,31 +2,34 @@ import AppKit
 import SwiftUI
 
 private enum SettingsTab: String, CaseIterable, Identifiable {
-    case providers, updates, manual
+    case providers, agentAccess, updates, manual
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .providers: return "AI Providers"
-        case .updates:   return "Check for Updates"
-        case .manual:    return "Manual"
+        case .providers:    return "AI Providers"
+        case .agentAccess:  return "Agent Access"
+        case .updates:      return "Check for Updates"
+        case .manual:       return "Manual"
         }
     }
 
     var iconName: String {
         switch self {
-        case .providers: return "key.fill"
-        case .updates:   return "arrow.down.circle.fill"
-        case .manual:    return "book.fill"
+        case .providers:    return "key.fill"
+        case .agentAccess:  return "lock.shield.fill"
+        case .updates:      return "arrow.down.circle.fill"
+        case .manual:       return "book.fill"
         }
     }
 
     var subtitle: String {
         switch self {
-        case .providers: return "Manage API keys"
-        case .updates:   return "App version & updates"
-        case .manual:    return "Shortcuts & usage"
+        case .providers:    return "Manage API keys"
+        case .agentAccess:  return "Terminal, web & browser"
+        case .updates:      return "App version & updates"
+        case .manual:       return "Shortcuts & usage"
         }
     }
 }
@@ -127,6 +130,8 @@ struct SettingsView: View {
         switch selection {
         case .providers:
             AIProvidersSettingsView()
+        case .agentAccess:
+            AgentAccessSettingsView()
         case .updates:
             UpdatesSettingsView()
         case .manual:

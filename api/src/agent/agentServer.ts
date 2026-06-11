@@ -19,6 +19,7 @@ import { executeImageGenerationTool } from './imageTool';
 import {
   buildAvailableTools,
   SHELL_SCRIPT_TOOL,
+  SHELL_SCRIPT_TOOL_LIMITED,
   createUserContent,
   sendFinalAnswer,
   pushToSessionHistory,
@@ -569,7 +570,16 @@ async function runAgentTurnInternal(
   // gpt-5.5 (Responses API) already has execute_shell_script wired internally;
   // all other providers get shell_script as a native function tool so the model
   // can call it directly instead of emitting XML tags.
-  const shellTools: AITool[] = aiModel !== RESPONSES_API_MODEL ? [SHELL_SCRIPT_TOOL] : [];
+  //
+  // When the user has set TERMINAL_ACCESS=limited via Settings → Agent Access,
+  // we expose the same tool name but with a description that tells the model
+  // to stay within read-only / inspection commands. The Responses API path
+  // injects its equivalent restriction inside ai-client.ts (see
+  // shellScriptToolDescriptionForMode there).
+  const shellTool = config.terminalAccess === 'limited'
+    ? SHELL_SCRIPT_TOOL_LIMITED
+    : SHELL_SCRIPT_TOOL;
+  const shellTools: AITool[] = aiModel !== RESPONSES_API_MODEL ? [shellTool] : [];
   const tools = buildAvailableTools([...shellTools, ...mcpBundle.aiTools]);
 
   const recordUsage = async (result: AICompletionResult) => {
