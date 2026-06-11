@@ -273,6 +273,49 @@ function buildDescription(projectPath: string | null, groupName: string): string
 }
 
 // ---------------------------------------------------------------------------
+// Helpers for matching existing groups by project path. Name-based matching
+// alone is unreliable: the LLM may pick "CLI" for two unrelated /cli dirs in
+// different repos, or rename the same project ("OmniKey AI" vs "OmniKey-AI").
+// Path matching is much stronger — when the deterministic project path
+// extracted from the current session equals an existing group's stored path,
+// we know with high confidence they are the same project.
+// ---------------------------------------------------------------------------
+
+/** Pull the project root path back out of a previously-stored group
+ *  description. Descriptions written by this module start with
+ *  "Project root: <absolute path>." so we just need to grab that span. */
+function extractStoredProjectPath(description: string | null | undefined): string | null {
+  if (!description) return null;
+  const match = /Project root:\s*(\/[^\s.,;:!?)<>"'`]+)/i.exec(description);
+  if (!match) return null;
+  const trimmed = trimToProjectRoot(match[1]);
+  return trimmed ?? match[1];
+}
+
+/** Pick the existing group whose stored project root EXACTLY equals the
+ *  current session's extracted project root. Equality is intentional — we do
+ *  NOT treat an ancestor match as a hit, because the original user complaint
+ *  was that a parent project was being chosen as the group for a child
+ *  project. /Users/me/OmniKey-AI/cli must not auto-merge into a group whose
+ *  stored path is /Users/me/OmniKey-AI. */
+function findGroupByExactPath(
+  currentPath: string | null,
+  existingGroups: Array<{ groupName: string; groupDescription: string | null }>,
+): { groupName: string; groupDescription: string } | null {
+  if (!currentPath) return null;
+  for (const g of existingGroups) {
+    const stored = extractStoredProjectPath(g.groupDescription);
+    if (stored && stored === currentPath) {
+      return {
+        groupName: g.groupName,
+        groupDescription: g.groupDescription ?? '',
+      };
+    }
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // LLM: classify group name AND generate a 3-4 sentence description for new
 // groups. For existing groups the stored description is always reused — the
 // LLM only writes a description when this is a genuinely new group. The
@@ -291,28 +334,79 @@ async function classifyGroup(
 ): Promise<GroupResult | null> {
   if (!userInputs.length) return null;
 
+  // Deterministically extract the project path from the current session. This
+  // is the single most reliable signal we have — far more reliable than the
+  // LLM's interpretation — so we use it both to short-circuit and to anchor
+  // the LLM's reasoning.
+  const currentPath = extractProjectPath(userInputs);
+
+  // 1) Path-first short-circuit. If any existing group already has the EXACT
+  //    same stored project root, that is the group. Skip the LLM entirely —
+  //    no name to invent, no chance of mis-matching to a parent repo.
+  if (currentPath) {
+    const exactMatch = findGroupByExactPath(currentPath, existingGroups);
+    if (exactMatch) {
+      logger.info('Session group matched by exact project path', {
+        groupName: exactMatch.groupName,
+        path: currentPath,
+      });
+      return {
+        groupName: exactMatch.groupName,
+        groupDescription: exactMatch.groupDescription,
+      };
+    }
+  }
+
+  // 2) Build the existing-groups list for the LLM, INCLUDING each group's
+  //    stored project root path when we can recover it. Without this the LLM
+  //    only sees group NAMES and has no way to disambiguate two projects that
+  //    happen to share a generic name (e.g. "CLI") or to avoid re-using the
+  //    parent repo's name when the user has moved on to a child project.
   const existingText = existingGroups.length
-    ? existingGroups.map((g) => `- "${g.groupName}"`).join('\n')
+    ? existingGroups
+        .map((g) => {
+          const storedPath = extractStoredProjectPath(g.groupDescription);
+          return storedPath
+            ? `- "${g.groupName}" (root: ${storedPath})`
+            : `- "${g.groupName}" (root: unknown)`;
+        })
+        .join('\n')
     : 'None.';
+
+  const currentPathLine = currentPath
+    ? `Project root detected in messages: ${currentPath}`
+    : 'No absolute project path was detected in the messages.';
 
   const prompt = `Analyze these chat messages and assign a project group.
 
 Messages:
 ${userInputs.map((m, i) => `${i + 1}. ${m}`).join('\n')}
 
-Existing groups:
+${currentPathLine}
+
+Existing groups (each shown with its stored project root):
 ${existingText}
 
-Rules for the group name:
-1. Look for file system paths, repository names, or project names in the messages.
-2. Identify the root project — if "/Users/john/projects/my-app/src/file.ts" appears, the group is "my-app".
-3. If an existing group clearly matches, return its EXACT name.
-4. Otherwise create a concise group name: 2-4 words, Title Case (e.g. "OmniKey AI", "Music Video Editor", "Client Website").
-5. If the session is purely general/conversational with no project signal, use "General".
+Rules for the group name (in priority order):
+1. If "Project root detected in messages" above is non-empty AND it is an
+   EXACT match for an existing group's stored root, return that existing
+   group's EXACT name verbatim. Do not modify the casing or punctuation.
+2. If "Project root detected in messages" is a STRICT ANCESTOR or
+   DESCENDANT of an existing group's stored root (e.g. detected is
+   /Users/me/Repo/cli and an existing group's root is /Users/me/Repo), they
+   are DIFFERENT projects — create a new group name for the detected path.
+   Do NOT re-use the ancestor or descendant group's name.
+3. If no path is detected but an existing group's NAME clearly matches the
+   subject of the messages, return that existing name.
+4. Otherwise create a concise NEW group name: 2-4 words, Title Case, derived
+   from the deepest meaningful path segment (e.g. /Users/john/projects/my-app
+   → "My App") or from the topic when no path is present.
+5. If the session is purely general/conversational with no project signal,
+   use "General".
 
 Rules for the description (CRITICAL):
 The description is appended to user input as <project_context> whenever the user picks this project, so it must be short, factual, and load-bearing. Write a SINGLE paragraph of 3-4 sentences (max 4 sentences, no markdown, no bullet points, no newlines) that answers these three questions in order:
-   1. Where is the project root located? Quote the exact absolute path verbatim when one is present in the messages (e.g. "Project root: /Users/john/projects/my-app."). If no path is present, say so explicitly.
+   1. Where is the project root located? Use the EXACT "Project root detected in messages" path above when it is non-empty — do not invent, abbreviate, or guess a different path. If it is empty, say "Project root: not specified."
    2. What is the purpose of this project? One sentence summarising what the project / group is for, inferred from the messages.
    3. If it is a coding project, what is the primary programming language? Name the language (e.g. TypeScript, Python, Go, Rust) when it can be inferred from file extensions, framework names, package files, or explicit mentions. If it is not a coding project, say "Not a coding project." If the language cannot be inferred, say "Primary language not identified from the available context."
 Keep the whole description under ~500 characters. Do NOT add extra commentary, tech-stack lists, workflow notes, or session summaries beyond what the three questions require.
@@ -340,7 +434,7 @@ Respond with ONLY valid JSON, no markdown:
     const response = z
       .object({ groupName: z.string(), groupDescription: z.string() })
       .parse(parsed);
-    const groupName = response.groupName.trim().slice(0, 100);
+    let groupName = response.groupName.trim().slice(0, 100);
     if (!groupName) return null;
 
     // When we fall through from the existingMatch branch to regenerate a stale
@@ -348,13 +442,41 @@ Respond with ONLY valid JSON, no markdown:
     // fragment groups by re-casing the name.
     let canonicalName: string | null = null;
 
-    // If this matches an existing group, reuse the stored description ONLY when it
-    // already follows the new shape (must mention "Project root" and "Primary
-    // language"). Otherwise fall through and let the LLM-generated description
-    // replace it, so old verbose descriptions are upgraded in place.
-    const existingMatch = existingGroups.find(
+    // Locate the LLM-chosen existing group, if any. We then VALIDATE the
+    // match against project paths — the LLM's name-based pick may be wrong:
+    // it might re-use a parent project's name even when the user is in a
+    // child project, or vice versa.
+    let existingMatch = existingGroups.find(
       (g) => g.groupName.toLowerCase() === groupName.toLowerCase(),
     );
+
+    if (existingMatch && currentPath) {
+      const storedPath = extractStoredProjectPath(existingMatch.groupDescription);
+      if (storedPath && storedPath !== currentPath) {
+        // The LLM picked an existing name but the stored path for that group
+        // does not match the path the user is actually in. Treat this as a
+        // NEW group and drop the existing-match so we don't merge unrelated
+        // projects (or, worse, the parent of the current project).
+        logger.info('Rejecting LLM existing-group match: project paths differ', {
+          groupName,
+          storedPath,
+          currentPath,
+        });
+        existingMatch = undefined;
+        // Derive a sensible new name from the current path instead of
+        // re-using the LLM's name (which is already taken by the other
+        // project). Title-case the last segment.
+        const segs = currentPath.split('/').filter(Boolean);
+        const last = segs[segs.length - 1] ?? groupName;
+        const derived = last
+          .replace(/[_-]+/g, ' ')
+          .replace(/\b\w/g, (c) => c.toUpperCase())
+          .trim()
+          .slice(0, 100);
+        if (derived) groupName = derived;
+      }
+    }
+
     if (existingMatch) {
       const stored = existingMatch.groupDescription ?? '';
       const hasNewShape = /project root/i.test(stored) && /primary language/i.test(stored);
@@ -366,20 +488,56 @@ Respond with ONLY valid JSON, no markdown:
       canonicalName = existingMatch.groupName;
     }
 
+    // Final safety net: if currentPath EXACTLY matches some other existing
+    // group's stored path (different name than the LLM picked), prefer that
+    // group. The LLM is allowed to invent a name, but path equality is
+    // ground truth.
+    if (currentPath) {
+      const pathMatch = findGroupByExactPath(currentPath, existingGroups);
+      if (pathMatch && pathMatch.groupName.toLowerCase() !== groupName.toLowerCase()) {
+        logger.info('Overriding LLM group choice with exact-path match', {
+          llmGroup: groupName,
+          matchedGroup: pathMatch.groupName,
+          path: currentPath,
+        });
+        return {
+          groupName: pathMatch.groupName,
+          groupDescription: pathMatch.groupDescription,
+        };
+      }
+    }
+
     // New group: prefer the LLM description but fall back to the deterministic builder.
     // Description is a single 3-4 sentence paragraph (no newlines, capped at 800 chars
     // to leave headroom over the ~500 char target while still bounding storage).
     const rawDesc = response.groupDescription.trim();
-    const projectPath = extractProjectPath(userInputs);
-    let groupDescription = (rawDesc || buildDescription(projectPath, groupName))
+    let groupDescription = (rawDesc || buildDescription(currentPath, groupName))
       .replace(/\s*\n+\s*/g, ' ')
       .replace(/\s{2,}/g, ' ')
       .trim();
 
-    // Safety net: if the LLM ignored the rule and a path exists in the messages
-    // but is missing from the description, append it so the contract holds.
-    if (projectPath && !groupDescription.includes(projectPath)) {
-      groupDescription = `Project root: ${projectPath}. ${groupDescription}`.trim();
+    // Safety net 1: if the LLM hallucinated a different absolute path in its
+    // "Project root:" sentence, replace it with the deterministically
+    // extracted currentPath. This is the description the agent server will
+    // inject as <project_context> on every future turn, so a wrong path here
+    // poisons the session forever.
+    if (currentPath) {
+      groupDescription = groupDescription.replace(
+        /Project root:\s*(\/[^\s.,;:!?)<>"'`]+)/i,
+        (_m, llmPath: string) => {
+          if (llmPath === currentPath) return `Project root: ${currentPath}`;
+          logger.info('Replacing hallucinated description path with extracted path', {
+            llmPath,
+            currentPath,
+          });
+          return `Project root: ${currentPath}`;
+        },
+      );
+      // Safety net 2: if the description never mentioned a path at all,
+      // prepend the extracted one so the contract holds.
+      if (!groupDescription.includes(currentPath)) {
+        groupDescription = `Project root: ${currentPath}. ${groupDescription}`.trim();
+      }
     }
 
     groupDescription = groupDescription.slice(0, 800);
@@ -502,8 +660,26 @@ Respond with ONLY valid JSON: {"groupDescription":"..."}`;
       .replace(/\s{2,}/g, ' ')
       .trim();
 
-    if (projectPath && !description.includes(projectPath)) {
-      description = `Project root: ${projectPath}. ${description}`.trim();
+    // If the LLM wrote a "Project root: <path>" sentence with a path that
+    // doesn't match the path we deterministically extracted, override it.
+    // The description is injected verbatim into every future user turn, so
+    // a wrong path here is what makes a mis-grouped session sticky.
+    if (projectPath) {
+      description = description.replace(
+        /Project root:\s*(\/[^\s.,;:!?)<>"'`]+)/i,
+        (_m, llmPath: string) => {
+          if (llmPath === projectPath) return `Project root: ${projectPath}`;
+          logger.info('enrichGroupDescription: replacing hallucinated path', {
+            groupName,
+            llmPath,
+            projectPath,
+          });
+          return `Project root: ${projectPath}`;
+        },
+      );
+      if (!description.includes(projectPath)) {
+        description = `Project root: ${projectPath}. ${description}`.trim();
+      }
     }
 
     return description.slice(0, 800);
@@ -738,4 +914,7 @@ export const __testing__ = {
   extractProjectPath,
   stripInjectedWrappers,
   trimToProjectRoot,
+  extractStoredProjectPath,
+  findGroupByExactPath,
+  classifyGroup,
 };

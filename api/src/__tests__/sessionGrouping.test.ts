@@ -278,3 +278,195 @@ describe('extractProjectPath', () => {
     expect(got).toBe('/Users/me/OmniKey-AI/cli');
   });
 });
+
+// ---------------------------------------------------------------------------
+// extractStoredProjectPath
+// ---------------------------------------------------------------------------
+describe('extractStoredProjectPath', () => {
+  const { extractStoredProjectPath } = __testing__;
+
+  it('returns null for empty / missing descriptions', () => {
+    expect(extractStoredProjectPath(null)).toBeNull();
+    expect(extractStoredProjectPath(undefined)).toBeNull();
+    expect(extractStoredProjectPath('')).toBeNull();
+  });
+
+  it('returns null when description has no "Project root:" sentence', () => {
+    expect(extractStoredProjectPath('Some general group about chatting.')).toBeNull();
+  });
+
+  it('extracts an absolute path from a standard description', () => {
+    const desc =
+      'Project root: /Users/me/MyApp. Purpose: build a thing. Primary language: TypeScript.';
+    expect(extractStoredProjectPath(desc)).toBe('/Users/me/MyApp');
+  });
+
+  it('walks the extracted path up through src/ subdirs', () => {
+    const desc = 'Project root: /Users/me/MyApp/src. Purpose: thing. Primary language: TS.';
+    expect(extractStoredProjectPath(desc)).toBe('/Users/me/MyApp');
+  });
+
+  it('is case-insensitive on the label', () => {
+    expect(
+      extractStoredProjectPath('project root: /opt/thing. Purpose: x. Primary language: Go.'),
+    ).toBe('/opt/thing');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// findGroupByExactPath
+// ---------------------------------------------------------------------------
+describe('findGroupByExactPath', () => {
+  const { findGroupByExactPath } = __testing__;
+
+  const groups = [
+    {
+      groupName: 'OmniKey AI',
+      groupDescription:
+        'Project root: /Users/me/OmniKey-AI. Purpose: parent. Primary language: TypeScript.',
+    },
+    {
+      groupName: 'OmniKey CLI',
+      groupDescription:
+        'Project root: /Users/me/OmniKey-AI/cli. Purpose: cli. Primary language: TypeScript.',
+    },
+    {
+      groupName: 'General',
+      groupDescription:
+        'Project root: not specified. Purpose: misc. Primary language: not applicable.',
+    },
+  ];
+
+  it('returns null when currentPath is null', () => {
+    expect(findGroupByExactPath(null, groups)).toBeNull();
+  });
+
+  it('returns the group whose stored path matches exactly', () => {
+    const got = findGroupByExactPath('/Users/me/OmniKey-AI/cli', groups);
+    expect(got?.groupName).toBe('OmniKey CLI');
+  });
+
+  it('does NOT return the ancestor group when current is a child', () => {
+    // The original regression: matching /Users/me/OmniKey-AI/cli against the
+    // OmniKey-AI parent group must be a miss, not a hit.
+    const got = findGroupByExactPath('/Users/me/OmniKey-AI/cli/src/x.ts', [groups[0]]);
+    expect(got).toBeNull();
+  });
+
+  it('returns null when no stored path matches', () => {
+    expect(findGroupByExactPath('/Users/me/Unrelated', groups)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// classifyGroup (LLM pipeline)
+// ---------------------------------------------------------------------------
+describe('classifyGroup', () => {
+  const { classifyGroup } = __testing__;
+
+  // Helper to grab the mocked aiClient.complete and configure it per test.
+  // The module is mocked at the top of this file, so we reach into the mock
+  // dynamically here to avoid a stale reference across describe blocks.
+  async function withMockedLLM<T>(
+    response: { groupName: string; groupDescription: string },
+    run: () => Promise<T>,
+  ): Promise<T> {
+    const aiClientMod = await import('../ai-client');
+    const complete = (
+      aiClientMod as unknown as { aiClient: { complete: ReturnType<typeof vi.fn> } }
+    ).aiClient.complete;
+    complete.mockResolvedValueOnce({ content: JSON.stringify(response) });
+    return run();
+  }
+
+  it('short-circuits on exact path match without calling the LLM', async () => {
+    const aiClientMod = await import('../ai-client');
+    const complete = (
+      aiClientMod as unknown as { aiClient: { complete: ReturnType<typeof vi.fn> } }
+    ).aiClient.complete;
+    complete.mockClear();
+
+    const existing = [
+      {
+        groupName: 'My App',
+        groupDescription:
+          'Project root: /Users/me/MyApp. Purpose: ship it. Primary language: TypeScript.',
+      },
+    ];
+    const inputs = ['fix /Users/me/MyApp/src/index.ts'];
+
+    const result = await classifyGroup(inputs, existing);
+    expect(result?.groupName).toBe('My App');
+    expect(result?.groupDescription).toContain('/Users/me/MyApp');
+    expect(complete).not.toHaveBeenCalled();
+  });
+
+  it('does NOT short-circuit to the parent project when user is in a child', async () => {
+    // The original user-reported bug. Parent group exists with root
+    // /Users/me/Repo. User is in /Users/me/Repo/cli. The LLM should be
+    // consulted (no exact-path match) and must NOT re-use the parent's name.
+    const existing = [
+      {
+        groupName: 'Repo',
+        groupDescription:
+          'Project root: /Users/me/Repo. Purpose: parent. Primary language: TypeScript.',
+      },
+    ];
+    const inputs = ['edit /Users/me/Repo/cli/src/main.ts', 'and /Users/me/Repo/cli/package.json'];
+
+    const result = await withMockedLLM(
+      // Even if the LLM hallucinated the parent name, the post-validation
+      // step should reject it because stored path != current path.
+      {
+        groupName: 'Repo',
+        groupDescription:
+          'Project root: /Users/me/Repo/cli. Purpose: cli. Primary language: TypeScript.',
+      },
+      () => classifyGroup(inputs, existing),
+    );
+
+    expect(result?.groupName).not.toBe('Repo');
+    // The derived name should come from the deepest path segment.
+    expect(result?.groupName?.toLowerCase()).toContain('cli');
+    expect(result?.groupDescription).toContain('/Users/me/Repo/cli');
+    expect(result?.groupDescription).not.toMatch(/Project root:\s*\/Users\/me\/Repo\b(?!\/cli)/);
+  });
+
+  it('overrides LLM choice with exact-path match to a different existing group', async () => {
+    // The LLM invents a fresh name ("Brand New") but the deterministic path
+    // already belongs to an existing group. Path equality must win.
+    const existing = [
+      {
+        groupName: 'Canonical Name',
+        groupDescription:
+          'Project root: /Users/me/Real. Purpose: thing. Primary language: TypeScript.',
+      },
+    ];
+    const inputs = ['fix /Users/me/Real/src/a.ts', 'and /Users/me/Real/src/b.ts'];
+
+    // Because the exact-path short-circuit fires BEFORE the LLM, this test
+    // also implicitly proves the short-circuit beats LLM hallucination.
+    const result = await classifyGroup(inputs, existing);
+    expect(result?.groupName).toBe('Canonical Name');
+  });
+
+  it('replaces a hallucinated path in the LLM description with the extracted path', async () => {
+    const inputs = ['work in /Users/me/Actual/src/index.ts'];
+    const result = await withMockedLLM(
+      {
+        groupName: 'Actual',
+        groupDescription:
+          'Project root: /Users/me/SomethingElse. Purpose: x. Primary language: TypeScript.',
+      },
+      () => classifyGroup(inputs, []),
+    );
+
+    expect(result?.groupDescription).toContain('/Users/me/Actual');
+    expect(result?.groupDescription).not.toContain('/Users/me/SomethingElse');
+  });
+
+  it('returns null when there are no user inputs', async () => {
+    const result = await classifyGroup([], []);
+    expect(result).toBeNull();
+  });
+});
