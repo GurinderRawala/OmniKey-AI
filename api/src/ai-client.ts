@@ -220,7 +220,7 @@ class OpenAIAdapter {
   private client: OpenAI;
 
   constructor(apiKey: string) {
-    this.client = new OpenAI({ apiKey });
+    this.client = new OpenAI({ apiKey, fetch: http1Fetch as unknown as typeof fetch });
   }
 
   async complete(
@@ -357,7 +357,7 @@ class AnthropicAdapter {
   private client: Anthropic;
 
   constructor(apiKey: string) {
-    this.client = new Anthropic({ apiKey });
+    this.client = new Anthropic({ apiKey, fetch: http1Fetch as unknown as typeof fetch });
   }
 
   async complete(
@@ -786,11 +786,12 @@ Everything else in the system prompt applies exactly as written:
  * Fetch wrapper backed by Node's https module (HTTP/1.1 only).
  *
  * Node's built-in fetch uses undici which maintains a global HTTP/2 session
- * pool. When a session is destroyed after an idle period the very next request
- * on the same pool throws ERR_HTTP2_INVALID_SESSION. Because the pool is
- * global, creating a new OpenAI() client doesn't help — it still reuses the
- * stale session. Using https.request forces HTTP/1.1 and bypasses undici
- * entirely, eliminating the error at its root.
+ * pool. When a session is destroyed after an idle period (common on long-running
+ * tasks) the very next request on the same pool throws ERR_HTTP2_INVALID_SESSION
+ * which the SDKs surface as "Connection error.". Because the pool is global,
+ * creating a new client instance does NOT help — it still reuses the stale
+ * session. Using https.request forces HTTP/1.1 and bypasses undici entirely,
+ * eliminating the error at its root. Applied to all AI provider adapters.
  */
 async function http1Fetch(
   input: Parameters<typeof fetch>[0],
@@ -985,7 +986,7 @@ class NemotronAdapter {
   private client: OpenAI;
 
   constructor(apiKey: string, baseURL: string) {
-    this.client = new OpenAI({ apiKey, baseURL });
+    this.client = new OpenAI({ apiKey, baseURL, fetch: http1Fetch as unknown as typeof fetch });
   }
 
   async complete(
