@@ -37,6 +37,34 @@ export const SHELL_SCRIPT_TOOL: AITool = {
 };
 
 /**
+ * Limited variant of the shell tool used when the user has set
+ * `TERMINAL_ACCESS=limited` in `~/.omnikey/config.json` (Settings → Agent Access).
+ * The functional surface area is identical (the script still runs on the user's
+ * machine through the same WebSocket pipeline), but the description tells the
+ * model to stay within read-only / inspection commands and never perform
+ * destructive or system-altering operations. This is a soft, prompt-level
+ * restriction — there is no kernel-level sandbox — but it is the same model
+ * the rest of the agent uses to scope behaviour (system prompt + tool
+ * description).
+ */
+export const SHELL_SCRIPT_TOOL_LIMITED: AITool = {
+  name: 'shell_script',
+  description:
+    "Execute a READ-ONLY shell script on the user's machine. Terminal access is set to LIMITED — the script must only inspect state (ls, cat, grep, ps, env, which, stat, head, tail, df, du, uname, echo, printenv, etc.) and MUST NOT modify the filesystem, install packages, change configuration, kill processes, write/delete files, or make outbound mutating network calls. If a task requires mutation, respond with <final_answer> explaining that terminal access is limited and ask the user to enable full access in Settings.",
+  parameters: {
+    type: 'object',
+    properties: {
+      script: {
+        type: 'string',
+        description:
+          "Read-only shell script. Restrict yourself to inspection commands; do not write, delete, install, configure, or otherwise mutate state.",
+      },
+    },
+    required: ['script'],
+  },
+};
+
+/**
  * Returns the set of web tools available to the agent for every turn.
  *
  * `web_search` is always included because DuckDuckGo is used as a free
@@ -52,7 +80,14 @@ export const SHELL_SCRIPT_TOOL: AITool = {
  * @returns An array of `AITool` definitions ready to pass to the AI client.
  */
 export function buildAvailableTools(extraTools: AITool[] = []): AITool[] {
-  const baseTools: AITool[] = [WEB_FETCH_TOOL, WEB_SEARCH_TOOL];
+  // Web tools are registered only when the user has not opted out via the
+  // Settings UI (WEB_SEARCH_ENABLED in ~/.omnikey/config.json). Removing the
+  // tool definitions outright — rather than keeping them and refusing at the
+  // dispatch layer — keeps the model from being tempted to call them and
+  // matches how MCP-only tools are gated elsewhere in the agent.
+  const baseTools: AITool[] = config.webSearchEnabled
+    ? [WEB_FETCH_TOOL, WEB_SEARCH_TOOL]
+    : [];
   if (providerSupportsImageGeneration(config.aiProvider)) {
     baseTools.push(IMAGE_GENERATE_TOOL);
   }

@@ -19,6 +19,7 @@ import { executeImageGenerationTool } from './imageTool';
 import {
   buildAvailableTools,
   SHELL_SCRIPT_TOOL,
+  SHELL_SCRIPT_TOOL_LIMITED,
   createUserContent,
   sendFinalAnswer,
   pushToSessionHistory,
@@ -66,6 +67,14 @@ async function runToolLoop(
   mcpDispatch: Map<string, { serverId: string; mcpToolName: string }>,
   onUsage: (result: AICompletionResult) => Promise<void>,
 ): Promise<AICompletionResult> {
+  // Tools the model is allowed to invoke on this turn. Built from the same
+  // list we hand to the AI client, so flipping `WEB_SEARCH_ENABLED` (or any
+  // future capability toggle) actually disables the tool at the execution
+  // boundary, not just at registration. Without this set, a model that
+  // already saw web_search/web_fetch on a previous turn — or one that
+  // hallucinates a tool name — could still slip a call through to
+  // executeTool(). See CodeRabbit PR #18 review.
+  const allowedToolNames = new Set(tools.map((tool) => tool.name));
   let toolIterations = 0;
   let result = initialResult;
 
@@ -163,6 +172,34 @@ async function runToolLoop(
             pendingShellScripts.set(sessionId, resolve);
           });
           return { id: tc.id, name: tc.name, result: terminalOutput };
+        }
+
+        // If the tool is not in the per-turn allowed list (e.g. the user
+        // disabled web search via Settings → Agent Access, or the model
+        // hallucinated a tool name), refuse the call instead of forwarding
+        // it to executeTool. Returning a structured error lets the model
+        // recover on its own turn without us silently running a disabled
+        // capability. See CodeRabbit PR #18 review.
+        if (!allowedToolNames.has(tc.name)) {
+          log.warn('Refusing tool call: tool is not enabled for this session', {
+            sessionId,
+            tool: tc.name,
+            allowed: Array.from(allowedToolNames),
+          });
+          send({
+            session_id: sessionId,
+            sender: 'agent',
+            content: `Tool "${tc.name}" is not enabled for this session.`,
+            is_terminal_output: false,
+            is_error: true,
+          });
+          return {
+            id: tc.id,
+            name: tc.name,
+            result:
+              `Error: Tool "${tc.name}" is not enabled for this session. ` +
+              `Available tools: ${Array.from(allowedToolNames).join(', ') || '(none)'}.`,
+          };
         }
 
         // Notify the frontend that a web tool call is about to execute.
@@ -569,7 +606,16 @@ async function runAgentTurnInternal(
   // gpt-5.5 (Responses API) already has execute_shell_script wired internally;
   // all other providers get shell_script as a native function tool so the model
   // can call it directly instead of emitting XML tags.
-  const shellTools: AITool[] = aiModel !== RESPONSES_API_MODEL ? [SHELL_SCRIPT_TOOL] : [];
+  //
+  // When the user has set TERMINAL_ACCESS=limited via Settings → Agent Access,
+  // we expose the same tool name but with a description that tells the model
+  // to stay within read-only / inspection commands. The Responses API path
+  // injects its equivalent restriction inside ai-client.ts (see
+  // shellScriptToolDescriptionForMode there).
+  const shellTool = config.terminalAccess === 'limited'
+    ? SHELL_SCRIPT_TOOL_LIMITED
+    : SHELL_SCRIPT_TOOL;
+  const shellTools: AITool[] = aiModel !== RESPONSES_API_MODEL ? [shellTool] : [];
   const tools = buildAvailableTools([...shellTools, ...mcpBundle.aiTools]);
 
   const recordUsage = async (result: AICompletionResult) => {

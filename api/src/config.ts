@@ -43,6 +43,14 @@ function getSqlitePath() {
 
 export type AIProvider = 'openai' | 'gemini' | 'anthropic' | 'nemotron';
 
+export type TerminalAccessMode = 'full' | 'limited';
+
+function getTerminalAccessMode(): TerminalAccessMode {
+  const value = getEnv('TERMINAL_ACCESS', false);
+  if (value === 'limited') return 'limited';
+  return 'full';
+}
+
 function getAIProvider(): AIProvider {
   const value = getEnv('AI_PROVIDER', false);
   if (value === 'gemini' || value === 'anthropic' || value === 'openai' || value === 'nemotron') {
@@ -127,6 +135,20 @@ export const config = {
   browserDebugBrowserName: getEnv('BROWSER_DEBUG_BROWSER_NAME', false),
   browserDebugExecutable: getEnv('BROWSER_DEBUG_EXECUTABLE', false),
   browserDebugUserDataDir: getEnv('BROWSER_DEBUG_USER_DATA_DIR', false),
+
+  // Agent capability toggles, surfaced in the macOS Settings UI.
+  // terminalAccess controls how broad the shell tool is — 'full' exposes the
+  // shell_script tool as-is; 'limited' restricts the tool description so the
+  // model only runs read-only / safe commands and the prompts discourage
+  // mutating operations.
+  terminalAccess: getTerminalAccessMode(),
+  // webSearchEnabled controls whether web_search / web_fetch tools are
+  // registered with the agent at all. Defaults to true.
+  webSearchEnabled: getBooleanEnv('WEB_SEARCH_ENABLED', true),
+  // browserAccessEnabled toggles authenticated browser session reading.
+  // Setting it to true triggers `omnikey grant-browser-access` from the
+  // settings endpoint (similar to `restart-daemon`).
+  browserAccessEnabled: getBooleanEnv('BROWSER_ACCESS_ENABLED', false),
 
   // GCS download-count tracking (both must be set to enable counting)
   gcsBucketName: getEnv('GCS_BUCKET_NAME', false),

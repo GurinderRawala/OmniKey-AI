@@ -11,6 +11,7 @@ import { taskInstructionRouter } from './taskInstructionRoutes';
 import { scheduledJobRouter } from './scheduledJobRoutes';
 import { mcpServerRouter } from './mcpServerRoutes';
 import { aiProviderRouter } from './aiProviderRoutes';
+import { appSettingsRouter } from './appSettingsRoutes';
 import { spawnWorker, type ManagedWorker } from './workers/spawn';
 import { setScheduledJobWorker } from './workers/scheduledJobWorkerClient';
 import { config } from './config';
@@ -43,6 +44,8 @@ app.use('/api/scheduled-jobs', scheduledJobRouter());
 app.use('/api/mcp-servers', mcpServerRouter());
 
 app.use('/api/providers', aiProviderRouter());
+
+app.use('/api/app-settings', appSettingsRouter());
 
 app.use('/api/agent', createAgentRouter());
 
@@ -98,8 +101,8 @@ app.get('/macos/appcast', (req, res) => {
 
   // These should match the values embedded into the macOS app
   // Info.plist in macOS/build_release_dmg.sh.
-  const bundleVersion = '40';
-  const shortVersion = '1.0.39';
+  const bundleVersion = '41';
+  const shortVersion = '1.0.40';
 
   const xml = `<?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0"
