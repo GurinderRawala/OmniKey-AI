@@ -66,11 +66,10 @@ async function runToolLoop(
   mcpDispatch: Map<string, { serverId: string; mcpToolName: string }>,
   onUsage: (result: AICompletionResult) => Promise<void>,
 ): Promise<AICompletionResult> {
-  const MAX_TOOL_ITERATIONS = 10;
   let toolIterations = 0;
   let result = initialResult;
 
-  while (result.finish_reason === 'tool_calls' && toolIterations < MAX_TOOL_ITERATIONS) {
+  while (result.finish_reason === 'tool_calls') {
     toolIterations++;
 
     const toolCalls = result.tool_calls ?? [];
@@ -202,38 +201,6 @@ async function runToolLoop(
     // Call the AI again with the tool results in history to get the next response.
     result = await aiClient.complete(aiModel, session.history, {
       tools: tools.length ? tools : undefined,
-      temperature: 0.2,
-    });
-    await onUsage(result);
-  }
-
-  // If we exhausted the iteration cap and the model still wants to call tools,
-  // force a final text response by calling again without tools.
-  if (result.finish_reason === 'tool_calls') {
-    log.warn('Tool loop hit MAX_TOOL_ITERATIONS; forcing final conclusion', { sessionId });
-
-    pushToSessionHistory(logger, session, result.assistantMessage);
-
-    // The API requires a tool_result for every tool_use in the preceding
-    // assistant message. Add synthetic results for any unexecuted calls so
-    // the history remains valid before we send the follow-up user message.
-    for (const tc of result.tool_calls ?? []) {
-      pushToSessionHistory(logger, session, {
-        role: 'tool',
-        tool_call_id: tc.id,
-        tool_name: tc.name,
-        content: 'Tool call limit reached. Result unavailable.',
-      });
-    }
-
-    pushToSessionHistory(logger, session, {
-      role: 'user',
-      content:
-        'You have reached the maximum number of tool calls. Do NOT make any further tool calls or web searches. You MUST now provide a final answer directly. If you still need to gather information from the system, generate a `<shell_scripts>` block instead of making tool calls.',
-    });
-
-    result = await aiClient.complete(aiModel, session.history, {
-      tools: undefined,
       temperature: 0.2,
     });
     await onUsage(result);
