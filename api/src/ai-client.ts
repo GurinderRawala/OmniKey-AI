@@ -731,9 +731,10 @@ function fromResponsesOutput(response: any, modelName: string): AICompletionResu
 
 /**
  * Appended to the system instructions when using the Responses API so that
- * gpt-5.5 (a reasoning model) understands it must call execute_shell_script
- * rather than trying to emit <shell_script> XML tags, which it treats as
- * placeholder text it cannot act on.
+ * gpt-5.5 (a reasoning model) calls execute_shell_script rather than the
+ * shell_script tool used by other providers. The Responses API adapter
+ * translates execute_shell_script calls back to the standard shell_script
+ * format understood by the rest of the agent pipeline.
  */
 const RESPONSES_SHELL_OVERRIDE = `
 ---
@@ -741,7 +742,7 @@ IMPORTANT — Responses API adjustment (one change only):
 
 You are running via the OpenAI Responses API. **Only one thing changes** from the instructions above:
 
-- **Shell commands**: instead of writing \`<shell_script>...</shell_script>\` XML tags, call the \`execute_shell_script\` function tool with \`{ "script": "..." }\`. The output is returned to you automatically as a tool result. Every other rule about when and how to run scripts is unchanged.
+- **Shell commands**: instead of calling the \`shell_script\` tool, call the \`execute_shell_script\` function tool with \`{ "script": "..." }\`. The interface is identical — the output is returned to you automatically as a tool result. Every other rule about when and how to run scripts is unchanged.
 
 Everything else in the system prompt applies exactly as written:
 - \`web_search\` / \`web_fetch\` → native function calls (unchanged)

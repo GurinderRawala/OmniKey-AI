@@ -12,6 +12,31 @@ import { Logger } from 'winston';
 import { IMAGE_GENERATE_TOOL } from './imageTool';
 
 /**
+ * Tool definition for shell script execution. Registered as a native function
+ * tool so the model invokes it via function calling rather than emitting XML
+ * tags. agentServer intercepts the call, forwards the script to the frontend,
+ * and resolves the tool result with the terminal output.
+ *
+ * Not registered for the gpt-5.5 Responses API path — that adapter has its
+ * own `execute_shell_script` tool and handles the conversion internally.
+ */
+export const SHELL_SCRIPT_TOOL: AITool = {
+  name: 'shell_script',
+  description:
+    "Execute a shell script on the user's machine. The terminal output is returned to you automatically as the tool result. Use this for any machine, file, process, network, or environment operation.",
+  parameters: {
+    type: 'object',
+    properties: {
+      script: {
+        type: 'string',
+        description: 'The shell script to execute on the user\'s machine.',
+      },
+    },
+    required: ['script'],
+  },
+};
+
+/**
  * Returns the set of web tools available to the agent for every turn.
  *
  * `web_search` is always included because DuckDuckGo is used as a free

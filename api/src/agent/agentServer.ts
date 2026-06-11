@@ -18,6 +18,7 @@ import { authMiddleware, AuthLocals } from '../authMiddleware';
 import { executeImageGenerationTool } from './imageTool';
 import {
   buildAvailableTools,
+  SHELL_SCRIPT_TOOL,
   createUserContent,
   sendFinalAnswer,
   pushToSessionHistory,
@@ -30,6 +31,7 @@ import {
   AICompletionResult,
   getDefaultModel,
   getContextWindowSize,
+  RESPONSES_API_MODEL,
 } from '../ai-client';
 import type { AgentMessage, AgentSendFn, SessionState } from './types';
 import { Logger } from 'winston';
@@ -47,6 +49,12 @@ interface QueuedMessage {
 // in order after the current turn completes rather than running concurrently.
 const activeSessions = new Set<string>();
 const sessionQueues = new Map<string, QueuedMessage[]>();
+
+// When the model calls the shell_script tool the tool loop suspends here,
+// waiting for the frontend to send back terminal output over the WebSocket.
+// The WebSocket message handler resolves the promise rather than starting a
+// new agent turn.
+const pendingShellScripts = new Map<string, (output: string) => void>();
 
 async function runToolLoop(
   initialResult: AICompletionResult,
@@ -135,24 +143,27 @@ async function runToolLoop(
           return { id: tc.id, name: tc.name, result: toolResult };
         }
 
-        // shell_script is not a callable tool — the model should embed commands
-        // in its text response using <shell_script>...</shell_script> XML tags.
-        // Intercept here so we don't fire a misleading "Fetching URL: undefined"
-        // web-call notification and return a clear correction instead.
+        // shell_script is a real tool: send the script to the frontend and
+        // suspend until the WebSocket handler resolves the pending promise
+        // with the terminal output (or an error string).
         if (tc.name === 'shell_script') {
-          log.warn(
-            'Agent attempted to call shell_script as a function; returning format-correction',
-            {
-              sessionId,
-              toolIteration: toolIterations,
-            },
-          );
-          return {
-            id: tc.id,
-            name: tc.name,
-            result:
-              'Error: "shell_script" is not a callable tool. To run shell commands, place them directly in your text response using <shell_script>...</shell_script> XML tags — do not use tool/function calling for this.',
-          };
+          const script = typeof args.script === 'string' ? args.script : '';
+          log.info('Agent invoking shell_script tool; forwarding to frontend', {
+            sessionId,
+            toolIteration: toolIterations,
+            scriptLength: script.length,
+          });
+          send({
+            session_id: sessionId,
+            sender: 'agent',
+            content: `<shell_script>\n${script}\n</shell_script>`,
+            is_terminal_output: false,
+            is_error: false,
+          });
+          const terminalOutput = await new Promise<string>((resolve) => {
+            pendingShellScripts.set(sessionId, resolve);
+          });
+          return { id: tc.id, name: tc.name, result: terminalOutput };
         }
 
         // Notify the frontend that a web tool call is about to execute.
@@ -588,7 +599,11 @@ async function runAgentTurnInternal(
   }
 
   const mcpBundle = await getMcpToolsForSubscription(subscription.id, log);
-  const tools = buildAvailableTools(mcpBundle.aiTools);
+  // gpt-5.5 (Responses API) already has execute_shell_script wired internally;
+  // all other providers get shell_script as a native function tool so the model
+  // can call it directly instead of emitting XML tags.
+  const shellTools: AITool[] = aiModel !== RESPONSES_API_MODEL ? [SHELL_SCRIPT_TOOL] : [];
+  const tools = buildAvailableTools([...shellTools, ...mcpBundle.aiTools]);
 
   const recordUsage = async (result: AICompletionResult) => {
     const usage = result.usage;
@@ -929,7 +944,15 @@ async function runAgentTurnInternal(
       );
     }
   } catch (err) {
-    log.error('Agent LLM call failed', { error: err });
+    log.error('Agent LLM call failed', {
+      error: {
+        message: err instanceof Error ? err.message : String(err),
+        status: (err as any).status,
+        type: (err as any).error?.type ?? (err as any).type,
+        code: (err as any).code,
+        stack: err instanceof Error ? err.stack?.split('\n').slice(0, 5).join('\n') : undefined,
+      },
+    });
     const errorMessage = 'Agent failed to call language model. Please try again later.';
     await persistSessionToDB(sessionId, session);
     sendFinalAnswer(send, sessionId, errorMessage, true);
@@ -1063,6 +1086,22 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
           return;
         }
 
+        // If the tool loop is awaiting shell_script terminal output, resolve
+        // the pending promise instead of starting a new agent turn.
+        const shellResolver = pendingShellScripts.get(sessionId);
+        if (shellResolver && isTerminalFeedback) {
+          pendingShellScripts.delete(sessionId);
+          const content = message.is_error
+            ? `COMMAND ERROR:\n${message.content ?? ''}`
+            : `TERMINAL OUTPUT:\n${message.content ?? ''}`;
+          log.info('Resolving pending shell_script tool result from terminal output', {
+            sessionId,
+            isError: Boolean(message.is_error),
+          });
+          shellResolver(content);
+          return;
+        }
+
         activeSessions.add(sessionId);
         const outcome = await runAgentTurn(sessionId, subscription, message, send, log);
         if (outcome === 'complete') {
@@ -1082,10 +1121,22 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
         hadAuthenticatedSubscription: Boolean(getSubscription()),
       });
 
-      // When the client disconnects, sessions that were shell_pending (waiting
-      // for terminal output that will never arrive) stay stuck in activeSessions
-      // indefinitely, causing all follow-up messages to queue forever. Clean
-      // them up so a reconnecting client can resume without being stuck.
+      // When the client disconnects, resolve any shell_script tool call that
+      // is suspended waiting for terminal output — otherwise runToolLoop hangs
+      // indefinitely. Deliver a COMMAND ERROR so the model can conclude gracefully.
+      for (const sid of connectionSessionIds) {
+        const shellResolver = pendingShellScripts.get(sid);
+        if (shellResolver) {
+          pendingShellScripts.delete(sid);
+          shellResolver('COMMAND ERROR:\nWebSocket connection closed before script output was received.');
+          log.info('Resolved pending shell_script with disconnect error', { sessionId: sid });
+        }
+      }
+
+      // Sessions that were shell_pending (waiting for terminal output that will
+      // never arrive) stay stuck in activeSessions indefinitely, causing all
+      // follow-up messages to queue forever. Clean them up so a reconnecting
+      // client can resume without being stuck.
       for (const sid of connectionSessionIds) {
         const wasActive = activeSessions.has(sid);
         const queueLength = sessionQueues.get(sid)?.length ?? 0;
