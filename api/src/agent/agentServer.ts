@@ -67,6 +67,14 @@ async function runToolLoop(
   mcpDispatch: Map<string, { serverId: string; mcpToolName: string }>,
   onUsage: (result: AICompletionResult) => Promise<void>,
 ): Promise<AICompletionResult> {
+  // Tools the model is allowed to invoke on this turn. Built from the same
+  // list we hand to the AI client, so flipping `WEB_SEARCH_ENABLED` (or any
+  // future capability toggle) actually disables the tool at the execution
+  // boundary, not just at registration. Without this set, a model that
+  // already saw web_search/web_fetch on a previous turn — or one that
+  // hallucinates a tool name — could still slip a call through to
+  // executeTool(). See CodeRabbit PR #18 review.
+  const allowedToolNames = new Set(tools.map((tool) => tool.name));
   let toolIterations = 0;
   let result = initialResult;
 
@@ -164,6 +172,34 @@ async function runToolLoop(
             pendingShellScripts.set(sessionId, resolve);
           });
           return { id: tc.id, name: tc.name, result: terminalOutput };
+        }
+
+        // If the tool is not in the per-turn allowed list (e.g. the user
+        // disabled web search via Settings → Agent Access, or the model
+        // hallucinated a tool name), refuse the call instead of forwarding
+        // it to executeTool. Returning a structured error lets the model
+        // recover on its own turn without us silently running a disabled
+        // capability. See CodeRabbit PR #18 review.
+        if (!allowedToolNames.has(tc.name)) {
+          log.warn('Refusing tool call: tool is not enabled for this session', {
+            sessionId,
+            tool: tc.name,
+            allowed: Array.from(allowedToolNames),
+          });
+          send({
+            session_id: sessionId,
+            sender: 'agent',
+            content: `Tool "${tc.name}" is not enabled for this session.`,
+            is_terminal_output: false,
+            is_error: true,
+          });
+          return {
+            id: tc.id,
+            name: tc.name,
+            result:
+              `Error: Tool "${tc.name}" is not enabled for this session. ` +
+              `Available tools: ${Array.from(allowedToolNames).join(', ') || '(none)'}.`,
+          };
         }
 
         // Notify the frontend that a web tool call is about to execute.

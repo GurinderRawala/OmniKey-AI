@@ -48,18 +48,41 @@ function getConfigPath(): string {
 
 function readConfigFile(): Record<string, any> {
   const configPath = getConfigPath();
-  try {
-    if (fs.existsSync(configPath)) {
-      const raw = fs.readFileSync(configPath, 'utf-8');
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        return parsed;
-      }
-    }
-  } catch (err) {
-    logger.warn('Could not read ~/.omnikey/config.json — treating as empty.', { error: err });
+  // Missing file is the only safe "empty config" case. A truncated or
+  // malformed file must abort the request — otherwise a PATCH/POST would
+  // silently overwrite the rest of the user's saved keys with the few
+  // fields the handler is touching. See CodeRabbit PR #18 review.
+  if (!fs.existsSync(configPath)) {
+    return {};
   }
-  return {};
+  let raw: string;
+  try {
+    raw = fs.readFileSync(configPath, 'utf-8');
+  } catch (err) {
+    logger.error('Failed to read ~/.omnikey/config.json.', { error: err, configPath });
+    throw new Error(
+      `Could not read config file at ${configPath}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    logger.error('Failed to parse ~/.omnikey/config.json — refusing to mutate.', {
+      error: err,
+      configPath,
+    });
+    throw new Error(
+      `Config file at ${configPath} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    logger.error('~/.omnikey/config.json is not a JSON object — refusing to mutate.', {
+      configPath,
+    });
+    throw new Error(`Config file at ${configPath} is not a JSON object.`);
+  }
+  return parsed as Record<string, any>;
 }
 
 function writeConfigFile(data: Record<string, any>): void {
@@ -82,12 +105,17 @@ function readWebSearchEnabled(cfg: Record<string, any>): boolean {
 }
 
 function readBrowserAccessEnabled(cfg: Record<string, any>): boolean {
-  // A browser-access setup writes BROWSER_DEBUG_EXECUTABLE (alongside the
-  // port and user-data dir) — treat the presence of those keys as the truth
-  // even if BROWSER_ACCESS_ENABLED is not explicitly set.
+  // BROWSER_ACCESS_ENABLED, when explicitly set, is the source of truth. This
+  // matters during the enable flow: we write BROWSER_ACCESS_ENABLED=true the
+  // moment the user toggles the switch, but the CLI does not write the
+  // BROWSER_DEBUG_* keys until the user finishes the Terminal prompts. Without
+  // the explicit-true short-circuit, a GET refresh during that window would
+  // report `browserAccessEnabled: false` and bounce the UI toggle back off.
+  // Falls back to "do the debug keys exist?" when the flag is not set.
   if (cfg.BROWSER_ACCESS_ENABLED !== undefined) {
     const v = String(cfg.BROWSER_ACCESS_ENABLED).toLowerCase();
     if (v === 'false' || v === '0') return false;
+    if (v === 'true' || v === '1') return true;
   }
   return Boolean(cfg.BROWSER_DEBUG_EXECUTABLE);
 }
@@ -306,14 +334,21 @@ export function appSettingsRouter(): express.Router {
           });
         }
 
+        // NOTE: We deliberately do NOT call scheduleDaemonRestart() here. The
+        // user has not yet finished the interactive prompts in Terminal, so
+        // BROWSER_DEBUG_* keys are not in config.json yet — restarting now
+        // would just bounce the daemon against the pre-setup config. The
+        // omnikey grant-browser-access flow itself schedules a daemon restart
+        // once it has successfully written the debug-profile fields, so the
+        // running process picks up the new browser config without a second
+        // round-trip through this endpoint. See CodeRabbit PR #18 review.
         res.json({
           browserAccessEnabled: true,
           launched: true,
           message:
-            'Follow the prompts in the Terminal window to finish setting up authenticated browser access.',
-          restartScheduled: true,
+            'Follow the prompts in the Terminal window to finish setting up authenticated browser access. The daemon will restart automatically once setup is complete.',
+          restartScheduled: false,
         });
-        scheduleDaemonRestart('enabled browser access');
         return;
       }
 

@@ -5,7 +5,7 @@ import net from 'net';
 import http from 'http';
 import os from 'os';
 import { execSync, spawn } from 'child_process';
-import { getConfigDir, getConfigPath, readConfig, isWindows } from './utils';
+import { getConfigDir, getConfigPath, readConfig, isWindows, getPort } from './utils';
 
 interface BrowserEntry {
   name: string;
@@ -137,6 +137,44 @@ function getInstalledBrowsers(catalogue: BrowserEntry[]): InstalledBrowser[] {
       return executablePath ? { ...b, executablePath } : null;
     })
     .filter((b): b is InstalledBrowser => b !== null);
+}
+
+/**
+ * Best-effort daemon restart trigger. Used by the macOS Settings UI's
+ * "Authenticated browser access" toggle: enabling fires
+ * `omnikey grant-browser-access` in a new Terminal window, and the daemon
+ * cannot restart until *after* the user has finished the interactive prompts
+ * (because that's when BROWSER_DEBUG_* finally lands in config.json). To keep
+ * the running daemon in sync without forcing a second manual step, we
+ * schedule a detached `omnikey restart-daemon` on successful completion of
+ * the setup flow. The spawn is detached + unrefed so the CLI process can
+ * exit cleanly. Failures are swallowed — the user can always restart by hand.
+ */
+function scheduleDaemonRestart(reason: string): void {
+  try {
+    const omnikeyCli = path.resolve(__dirname, 'index.js');
+    const node = process.execPath;
+    const port = getPort();
+    const home = process.env.HOME || process.env.USERPROFILE || os.homedir();
+    const logFile = path.join(home, '.omnikey', 'restart-daemon.log');
+    fs.mkdirSync(path.dirname(logFile), { recursive: true });
+    const out = fs.openSync(logFile, 'a');
+    const child = spawn(node, [omnikeyCli, 'restart-daemon', '--port', String(port)], {
+      detached: true,
+      stdio: ['ignore', out, out],
+    });
+    child.unref();
+    fs.closeSync(out);
+    console.log(`
+Restarting Omnikey daemon to pick up the new browser config (${reason}).`);
+  } catch (err) {
+    console.warn(
+      `
+Could not auto-restart Omnikey daemon: ${err instanceof Error ? err.message : String(err)}
+` +
+        `Run \`omnikey restart-daemon\` manually so the new browser config takes effect.`,
+    );
+  }
 }
 
 function isPortAvailable(port: number): Promise<boolean> {
@@ -471,6 +509,7 @@ async function setupDebuggingPort(browser: InstalledBrowser): Promise<void> {
         `Omnikey can now access tabs opened in the Omnikey-managed ${browser.name} debug profile.\n` +
         `${browser.name} will start automatically on every future login using this debug profile.`,
     );
+    scheduleDaemonRestart('grant-browser-access completed');
   } else {
     console.error(
       `\nCould not reach localhost:${port} after 15 s.\n` +
