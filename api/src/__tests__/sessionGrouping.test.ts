@@ -1011,3 +1011,68 @@ describe('refreshGroupDescription ancestor/descendant collapse', () => {
     expect(onlyCall[0]).not.toHaveProperty('groupName');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Local-path allow-list + URL pre-stripping — only paths that look like real
+// local-computer paths are considered project roots. Everything URL-shaped is
+// stripped before path extraction runs.
+// ---------------------------------------------------------------------------
+describe('local-path-only filter', () => {
+  const { extractProjectPath, trimToProjectRoot, extractAllProjectRoots } = __testing__;
+
+  it('strips full URLs (http, https, ftp, file, ws, ssh, git+...) before path extraction', () => {
+    // None of these URL substrings should contribute a project root candidate.
+    const inputs = [
+      'see https://github.com/coderabbitai/grafana/pull/220',
+      'and http://localhost:5173/dashboard/summary',
+      'plus ftp://example.com/files/x.zip',
+      'also file:///etc/hosts',
+      'streaming wss://realtime.example.com/v1/events',
+      'and ssh://git@example.com/owner/repo.git',
+      'and git+https://github.com/foo/bar.git',
+    ];
+    expect(extractProjectPath(inputs)).toBeNull();
+    expect(extractAllProjectRoots(inputs)).toEqual([]);
+  });
+
+  it('strips scheme-relative URLs (//host.tld/path)', () => {
+    expect(extractProjectPath(['see //example.com/path/here'])).toBeNull();
+  });
+
+  it('strips bare host.tld/path URLs without a scheme', () => {
+    expect(extractProjectPath(['github.com/coderabbitai/grafana/pull/220'])).toBeNull();
+    expect(extractProjectPath(['localhost:5173/dashboard/summary'])).toBeNull();
+  });
+
+  it('strips git@host:owner/repo and mailto: addresses', () => {
+    expect(extractProjectPath(['cloned git@github.com:owner/repo.git'])).toBeNull();
+    expect(extractProjectPath(['email mailto:foo@example.com please'])).toBeNull();
+  });
+
+  it('extracts only the real local path when a URL and a path appear together', () => {
+    const got = extractProjectPath([
+      'see https://github.com/me/Repo and edit /Users/me/Real/src/x.ts',
+      'and /Users/me/Real/package.json',
+    ]);
+    expect(got).toBe('/Users/me/Real');
+  });
+
+  it('rejects paths that do not start with a recognised local prefix', () => {
+    // These look like absolute paths to a naive regex but are actually URL
+    // route fragments or top-level pseudo-roots that should never be a
+    // project root in their own right.
+    expect(trimToProjectRoot('/db-api-server/src/routers/pending-learnings')).toBeNull();
+    expect(trimToProjectRoot('/src/chat')).toBeNull();
+    expect(trimToProjectRoot('/work/coderabbitai/mono')).toBeNull();
+    expect(trimToProjectRoot('/api/v1/users')).toBeNull();
+  });
+
+  it('accepts the standard local-computer prefixes', () => {
+    expect(trimToProjectRoot('/Users/me/MyApp/src/x.ts')).toBe('/Users/me/MyApp');
+    expect(trimToProjectRoot('/home/alice/MyApp/src/x.ts')).toBe('/home/alice/MyApp');
+    expect(trimToProjectRoot('/opt/myapp/src/x.ts')).toBe('/opt/myapp');
+    expect(trimToProjectRoot('/Volumes/Data/MyRepo/src/x.ts')).toBe('/Volumes/Data/MyRepo');
+    expect(trimToProjectRoot('/mnt/drive/MyApp/src/x.ts')).toBe('/mnt/drive/MyApp');
+    expect(trimToProjectRoot('/private/Users/me/MyApp/src/x.ts')).toBe('/private/Users/me/MyApp');
+  });
+});

@@ -184,6 +184,72 @@ const HOME_CONTAINER_SEGMENTS = new Set([
   'github',
 ]);
 
+// Strip every URL-shaped token from the input BEFORE the path regex runs.
+// We accept that real filesystem paths NEVER contain a scheme prefix
+// (http://, https://, ftp://, ssh://, git+, file://, mailto:, etc.) and we
+// also strip bare git remotes (git@host:owner/repo.git), scheme-relative
+// URLs (//host.tld/path) and unprefixed host-with-TLD references
+// (github.com/foo/bar). After this pass the input only contains real
+// filesystem candidate paths and prose, so the downstream path regex never
+// has to wonder "is this a URL?". We replace with a single space rather
+// than empty string so adjacent path tokens stay separated.
+const URL_LIKE_REGEXES: readonly RegExp[] = [
+  // Full URLs with scheme: http(s)://, ftp(s)://, ssh://, git://, git+...://,
+  // file://, ws(s)://, etc. Anything up to the next whitespace / quote / >.
+  /\b(?:https?|ftps?|sftp|ssh|git|git\+ssh|git\+https?|file|ws|wss|chrome|chrome-extension|vscode|data)(?::\/\/|:)[^\s<>"'`]+/gi,
+  // Scheme-relative URLs (//host.tld/path).
+  /(?<![A-Za-z0-9_])\/\/[a-z0-9-]+(?:\.[a-z0-9-]+)+(?::\d+)?(?:\/[^\s<>"'`]*)?/gi,
+  // git remotes: git@host:owner/repo(.git).
+  /\bgit@[a-z0-9.-]+:[^\s<>"'`]+/gi,
+  // mailto:user@host.
+  /\bmailto:[^\s<>"'`]+/gi,
+  // Bare URL with TLD but no scheme: github.com/foo, example.com:8080/path,
+  // localhost:port/path. Requires the host to contain at least one dot OR
+  // to be a port-bearing localhost — without that constraint we would eat
+  // every "foo.bar" token in regular prose.
+  /\b(?:[a-z0-9-]+\.[a-z0-9-]+(?:\.[a-z0-9-]+)*(?::\d+)?|localhost:\d+)\/[^\s<>"'`]*/gi,
+];
+
+function stripUrls(text: string): string {
+  let out = text;
+  for (const re of URL_LIKE_REGEXES) out = out.replace(re, ' ');
+  return out;
+}
+
+// Positive filter: only accept paths whose leading segments look like
+// real local-computer roots. This is intentionally an allow-list — the
+// classifier's job is to identify the user's PROJECT, and real projects
+// live somewhere predictable on disk. Anything that doesn't start with
+// one of these prefixes is almost certainly a URL fragment, a route, or
+// some other path-shaped noise; we drop it rather than guess.
+//
+// Macs and most Linux installs: /Users/<x>/..., /home/<x>/..., /opt/...,
+// /usr/local/..., /var/..., /tmp/..., /private/Users/<x>/...,
+// /Volumes/<vol>/..., /mnt/<vol>/..., /srv/..., /etc/..., /root/...
+// Tilde paths (~/foo) are pre-expanded to /Users/<x>/foo before this
+// filter runs, so they go through the /Users branch.
+const LOCAL_PATH_PREFIXES: ReadonlyArray<RegExp> = [
+  /^\/Users\/[^/]+(?:\/|$)/,
+  /^\/home\/[^/]+(?:\/|$)/,
+  /^\/private\/var\/folders\//,
+  /^\/private\/tmp(?:\/|$)/,
+  /^\/private\/Users\/[^/]+(?:\/|$)/,
+  /^\/Volumes\/[^/]+(?:\/|$)/,
+  /^\/mnt\/[^/]+(?:\/|$)/,
+  /^\/opt\/[^/]+(?:\/|$)/,
+  /^\/usr\/local(?:\/|$)/,
+  /^\/usr\/share(?:\/|$)/,
+  /^\/srv\/[^/]+(?:\/|$)/,
+  /^\/var\/[^/]+(?:\/|$)/,
+  /^\/tmp\/[^/]+(?:\/|$)/,
+  /^\/etc\/[^/]+(?:\/|$)/,
+  /^\/root(?:\/|$)/,
+];
+
+function isLocalLookingPath(path: string): boolean {
+  return LOCAL_PATH_PREFIXES.some((re) => re.test(path));
+}
+
 // First-segment patterns that mean a string starting with "/" is a URL or
 // domain that the agent server / a copy-paste accidentally turned into a
 // path-shaped token, NOT a real filesystem root. We reject these entirely
@@ -220,6 +286,16 @@ function trimToProjectRoot(path: string): string | null {
   // is exactly how stale descriptions ended up storing things like
   // "Project root: /github.com/coderabbitai/grafana/pull/220".
   if (parts.length > 0 && firstSegmentLooksLikeDomain(parts[0])) {
+    return null;
+  }
+  // Allow-list: only paths rooted under a known local-computer prefix
+  // (/Users/<x>/, /home/<x>/, /opt/, /Volumes/<vol>/, ...) are treated as
+  // real project roots. Anything else — top-level pseudo-roots like
+  // /work/coderabbitai/mono or /db-api-server/src/routers, route paths
+  // bleeding out of URLs the stripper missed, the macOS volume root — is
+  // dropped rather than guessed at. This is the "only consider paths
+  // that look like paths from a local computer" rule.
+  if (!isLocalLookingPath('/' + parts.join('/'))) {
     return null;
   }
   // Strip a trailing file segment, if any.
@@ -262,7 +338,7 @@ function extractProjectPath(texts: string[]): string | null {
     (typeof process !== 'undefined' && (process.env.HOME || process.env.USERPROFILE)) || '';
   const tildeExpand = (text: string): string =>
     homeDir ? text.replace(/(^|[\s(\["'`])~\//g, (_m, pre: string) => `${pre}${homeDir}/`) : text;
-  const combined = tildeExpand(texts.join(' '));
+  const combined = stripUrls(tildeExpand(texts.join(' ')));
 
   // Match absolute paths (Unix) — capture up to 6 path segments.
   // Path segments cannot contain whitespace, /, <>, quotes, or regex
@@ -320,7 +396,7 @@ function extractAllProjectRoots(texts: string[]): Array<{ root: string; votes: n
     (typeof process !== 'undefined' && (process.env.HOME || process.env.USERPROFILE)) || '';
   const tildeExpand = (text: string): string =>
     homeDir ? text.replace(/(^|[\s(\["'`])~\//g, (_m, pre: string) => `${pre}${homeDir}/`) : text;
-  const combined = tildeExpand(texts.join(' '));
+  const combined = stripUrls(tildeExpand(texts.join(' ')));
   // Path segments cannot contain whitespace, /, <>, quotes, or regex
   // metacharacters that show up in source code and config but are never
   // valid in real filesystem paths: ?, ^, $, {, }, [, ], (, ), |, \\, *, +.
@@ -350,7 +426,7 @@ function extractKeySubdirectories(texts: string[], projectRoot: string, limit: n
     (typeof process !== 'undefined' && (process.env.HOME || process.env.USERPROFILE)) || '';
   const tildeExpand = (text: string): string =>
     homeDir ? text.replace(/(^|[\s(\["'`])~\//g, (_m, pre: string) => `${pre}${homeDir}/`) : text;
-  const combined = tildeExpand(texts.join(' '));
+  const combined = stripUrls(tildeExpand(texts.join(' ')));
   const pathRe = /(\/(?:[^\s/<>"'`?^${}\[\]()|\\*+]+\/){1,8}[^\s/<>"'`?^${}\[\]()|\\*+]*)/g;
   const prefix = projectRoot.endsWith('/') ? projectRoot : projectRoot + '/';
   const votes = new Map<string, number>();
