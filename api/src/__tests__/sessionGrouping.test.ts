@@ -53,7 +53,14 @@ const { extractUserInputs, extractProjectPath, stripInjectedWrappers, trimToProj
 // stripInjectedWrappers
 // ---------------------------------------------------------------------------
 describe('stripInjectedWrappers', () => {
-  it('removes <project_context> blocks injected by the agent server', () => {
+  it('strips <project_context> tags but preserves the Project root: path as a [context root] line', () => {
+    // The <project_context> block must not be re-fed verbatim (its prose
+    // about purpose/language would bias the LLM), but its declared project
+    // root is the only deterministic signal we have when the user types a
+    // path-free message like "continue" or "what about the cron?". So we
+    // keep the path as a single tagged line that contributes exactly one
+    // vote to extractProjectPath but never appears in the LLM prompt as if
+    // the user typed it.
     const input = `<project_context name="OmniKey AI">
 Project root: /Users/me/OmniKey-AI.
 </project_context>
@@ -61,8 +68,16 @@ Project root: /Users/me/OmniKey-AI.
 Hey, please look at /Users/me/NewProj/src/index.ts`;
     const out = stripInjectedWrappers(input);
     expect(out).not.toContain('project_context');
-    expect(out).not.toContain('/Users/me/OmniKey-AI');
+    expect(out).not.toContain('Project root:');
+    expect(out).toContain('[context root] /Users/me/OmniKey-AI');
     expect(out).toContain('/Users/me/NewProj/src/index.ts');
+  });
+
+  it('drops the context-root line entirely when the block has no Project root: sentence', () => {
+    const out = stripInjectedWrappers(
+      '<project_context name="Misc">Just some prose.</project_context>\nhello',
+    );
+    expect(out).toBe('hello');
   });
 
   it('removes <stored_instructions> blocks', () => {
@@ -108,12 +123,11 @@ describe('extractUserInputs', () => {
     expect(extractUserInputs(history)).toEqual(['fix /Users/me/AppA/index.ts']);
   });
 
-  it('strips <project_context> from inside <user_input> so old paths do not leak', () => {
-    // This is the regression: on turn 2 of a grouped session, the server
-    // prepends a <project_context> block (with the OLD group's path) inside
-    // <user_input>. extractUserInputs must not treat that injected text as
-    // user-typed content, otherwise the classifier keeps re-picking the old
-    // group.
+  it('extracts <project_context> Project root: as a low-weight [context root] line', () => {
+    // On turn 2 of a grouped session, the server prepends a <project_context>
+    // block (with the previously stored group's path) inside <user_input>.
+    // We keep that path as a low-weight "[context root]" line — one vote —
+    // and let any path the user actually types this turn outvote it.
     const history = JSON.stringify([
       {
         role: 'user',
@@ -132,7 +146,7 @@ describe('extractUserInputs', () => {
     const inputs = extractUserInputs(history);
     expect(inputs).toHaveLength(1);
     expect(inputs[0]).not.toContain('project_context');
-    expect(inputs[0]).not.toContain('/Users/me/OldParent');
+    expect(inputs[0]).toContain('[context root] /Users/me/OldParent');
     expect(inputs[0]).toContain('/Users/me/NewProj');
   });
 
@@ -280,6 +294,89 @@ describe('extractProjectPath', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Production-observed bug scenarios — these mirror the actual session
+// histories we found in sqlite after the cron rewrote descriptions with
+// hallucinated paths. They pin two specific protections:
+//   (a) URL-shaped "absolute paths" never become a project root.
+//   (b) When the user's typed turn has no path, the <project_context>
+//       fallback prevents the LLM from being fed an empty path slate.
+// ---------------------------------------------------------------------------
+describe('production-observed regressions', () => {
+  const { trimToProjectRoot, extractProjectPath, extractUserInputs } = __testing__;
+
+  it('rejects URL-shaped pseudo-paths (github.com, linear.app, console.cloud.google.com)', () => {
+    expect(trimToProjectRoot('/github.com/coderabbitai/grafana/pull/220')).toBeNull();
+    expect(trimToProjectRoot('/linear.app/coderabbit/issue/REV-19/programmable-access')).toBeNull();
+    expect(
+      trimToProjectRoot('/console.cloud.google.com/run/worker-pools/details/us-central1'),
+    ).toBeNull();
+    expect(trimToProjectRoot('/localhost:5173/dashboard/summary')).toBeNull();
+    expect(trimToProjectRoot('/apps.apple.com/ca/app/bhabi/id6475659322')).toBeNull();
+  });
+
+  it('still accepts legitimate filesystem paths next to URL-shaped tokens', () => {
+    // Mixed text with both a URL-shaped pseudo-path and a real path — only
+    // the real path should win.
+    const got = extractProjectPath([
+      'see https://github.com/coderabbitai/grafana/pull/220 (rendered as /github.com/coderabbitai/grafana/pull/220)',
+      'and edit /Users/me/RealRepo/src/main.ts',
+      'and /Users/me/RealRepo/package.json',
+    ]);
+    expect(got).toBe('/Users/me/RealRepo');
+  });
+
+  it('falls back to <project_context> path when the user types nothing path-shaped', () => {
+    // Simulates: turn 1 grouped the session under "My App" with stored path
+    // /Users/me/MyApp. On turn 2 the user types a path-free question like
+    // "continue working". Without the fallback, extractProjectPath would
+    // return null and the LLM would be free to invent. With the fallback,
+    // it returns the previously stored path so safety nets can compare.
+    const history = JSON.stringify([
+      {
+        role: 'user',
+        content: [
+          '<user_input>',
+          '<project_context name="My App">',
+          'Project root: /Users/me/MyApp. Purpose: x. Primary language: TypeScript.',
+          '</project_context>',
+          '',
+          'continue working on the task',
+          '</user_input>',
+        ].join('\n'),
+      },
+    ]);
+    const inputs = extractUserInputs(history);
+    const got = extractProjectPath(inputs);
+    expect(got).toBe('/Users/me/MyApp');
+  });
+
+  it('user-typed path still beats a stale <project_context> fallback path', () => {
+    // The original parent/child regression, expressed at the extractProjectPath
+    // layer end-to-end: <project_context> claims /Users/me/OldParent (one
+    // [context root] vote), user types /Users/me/NewProj three times.
+    const history = JSON.stringify([
+      {
+        role: 'user',
+        content: [
+          '<user_input>',
+          '<project_context name="OldParent">',
+          'Project root: /Users/me/OldParent. Purpose: x. Primary language: y.',
+          '</project_context>',
+          '',
+          'fix /Users/me/NewProj/a.ts',
+          'and /Users/me/NewProj/b.ts',
+          'and /Users/me/NewProj/c.ts',
+          '</user_input>',
+        ].join('\n'),
+      },
+    ]);
+    const inputs = extractUserInputs(history);
+    const got = extractProjectPath(inputs);
+    expect(got).toBe('/Users/me/NewProj');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // extractStoredProjectPath
 // ---------------------------------------------------------------------------
 describe('extractStoredProjectPath', () => {
@@ -310,6 +407,22 @@ describe('extractStoredProjectPath', () => {
     expect(
       extractStoredProjectPath('project root: /opt/thing. Purpose: x. Primary language: Go.'),
     ).toBe('/opt/thing');
+  });
+
+  it('returns null when the stored "path" is actually a URL', () => {
+    // Existing descriptions in production were written before URL rejection.
+    // We must treat them as "no stored path" so the LLM gets a chance to
+    // rewrite the description with a real root instead of locking the
+    // session forever to a bad URL-shaped pseudo-root.
+    expect(
+      extractStoredProjectPath(
+        'Project root: /github.com/coderabbitai/grafana/pull/220. Purpose: x.',
+      ),
+    ).toBeNull();
+    expect(
+      extractStoredProjectPath('Project root: /linear.app/coderabbit/issue/REV-19. Purpose: x.'),
+    ).toBeNull();
+    expect(extractStoredProjectPath('Project root: /localhost:5173/dashboard.')).toBeNull();
   });
 });
 

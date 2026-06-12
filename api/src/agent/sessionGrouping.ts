@@ -32,20 +32,46 @@ function stripResponseWrappers(text: string): string {
 // re-feed them to the classifier on subsequent turns. The agent server
 // prepends <project_context name="..."> ... </project_context> (carrying the
 // previously-classified group's absolute path) to every user turn for an
-// already-grouped session. If we leave that block in the text we send to the
-// LLM and to extractProjectPath, the classifier keeps "seeing" the old
-// project's path inside the user's words and sticks the session to the wrong
-// (often the parent) group forever — even after the user has clearly moved
-// on to a different project. We also strip <stored_instructions> defensively
-// (some clients embed them inline rather than as a separate message) and the
-// outer <user_input> wrapper.
+// already-grouped session. Leaving the WHOLE block in the text we send to
+// the LLM and to extractProjectPath would cause the classifier to keep
+// "seeing" the old project's path inside the user's own words — that is
+// what made wrong groupings sticky forever.
+//
+// But naively stripping the entire block has its own failure mode: when the
+// user types a path-free message like "continue working" or "what about
+// the cron job?", removing <project_context> leaves NO path at all and the
+// LLM is free to hallucinate a new one (we saw it produce things like
+// "/linear.app/coderabbit/issue/..." and "/Users/.../OmniKey-AI/macOS/Sources"
+// after the cron ran). So we now do something more conservative:
+//
+//   1. Pull the "Project root: <abs path>" sentence out of every
+//      <project_context> block before stripping the rest.
+//   2. Append each extracted path back as a plain line. It contributes only
+//      ONE vote to extractProjectPath's frequency count, so any path the user
+//      actually types still wins, but when the user typed nothing path-shaped
+//      we have a deterministic fallback instead of a hallucination.
+//   3. Strip <stored_instructions>, the outer <user_input>, and @omniAgent
+//      the same as before.
 function stripInjectedWrappers(text: string): string {
-  return text
-    .replace(/<project_context[^>]*>[\s\S]*?<\/project_context>/gi, '')
+  const contextPaths: string[] = [];
+  const withContextPathsExtracted = text.replace(
+    /<project_context[^>]*>([\s\S]*?)<\/project_context>/gi,
+    (_full, inner: string) => {
+      const m = /Project root:\s*(\/[^\s.,;:!?)<>"'`]+)/i.exec(inner);
+      if (m) contextPaths.push(m[1]);
+      return '';
+    },
+  );
+  const cleaned = withContextPathsExtracted
     .replace(/<stored_instructions>[\s\S]*?<\/stored_instructions>/gi, '')
     .replace(/<user_input>([\s\S]*?)<\/user_input>/gi, '$1')
     .replace(/@omniagent/gi, '')
     .trim();
+  if (!contextPaths.length) return cleaned;
+  // Re-append context paths as a single low-weight line. Each path appears
+  // once, prefixed so it does not look like the user typed prose.
+  const pathsLine = contextPaths.map((p) => `[context root] ${p}`).join('\n');
+  return cleaned ? `${cleaned}\n${pathsLine}` : pathsLine;
 }
 
 function extractUserInputs(historyJson: string): string[] {
@@ -158,6 +184,21 @@ const HOME_CONTAINER_SEGMENTS = new Set([
   'github',
 ]);
 
+// First-segment patterns that mean a string starting with "/" is a URL or
+// domain that the agent server / a copy-paste accidentally turned into a
+// path-shaped token, NOT a real filesystem root. We reject these entirely
+// from project-root candidacy. Examples seen in the wild:
+//   /github.com/owner/repo/pull/220
+//   /linear.app/coderabbit/issue/REV-19/...
+//   /console.cloud.google.com/run/worker-pools/...
+//   /localhost:5173/dashboard/summary
+//   /apps.apple.com/ca/app/bhabi/id6475659322
+const DOMAINY_FIRST_SEGMENT = /^(?:localhost(?::\d+)?$|[a-z0-9-]+\.[a-z]{2,}(?:\.[a-z]{2,})*$)/i;
+
+function firstSegmentLooksLikeDomain(segment: string): boolean {
+  return DOMAINY_FIRST_SEGMENT.test(segment);
+}
+
 function looksLikeFile(segment: string): boolean {
   // Treat a trailing dotted extension (e.g. index.ts, package.json, README.md)
   // as a file, not a directory. Dotfiles like .gitignore are also files.
@@ -173,6 +214,14 @@ function looksLikeFile(segment: string): boolean {
 
 function trimToProjectRoot(path: string): string | null {
   let parts = path.split('/').filter(Boolean);
+  // Reject URL-shaped pseudo-paths up front. "/github.com/owner/repo" looks
+  // like an absolute path to the regex but it is actually a URL with the
+  // scheme stripped, and we must never treat it as a project root — doing so
+  // is exactly how stale descriptions ended up storing things like
+  // "Project root: /github.com/coderabbitai/grafana/pull/220".
+  if (parts.length > 0 && firstSegmentLooksLikeDomain(parts[0])) {
+    return null;
+  }
   // Strip a trailing file segment, if any.
   if (parts.length && looksLikeFile(parts[parts.length - 1])) {
     parts = parts.slice(0, -1);
@@ -288,8 +337,14 @@ function extractStoredProjectPath(description: string | null | undefined): strin
   if (!description) return null;
   const match = /Project root:\s*(\/[^\s.,;:!?)<>"'`]+)/i.exec(description);
   if (!match) return null;
-  const trimmed = trimToProjectRoot(match[1]);
-  return trimmed ?? match[1];
+  // Only return paths that pass full normalisation. A previously-stored
+  // description may carry a URL-shaped pseudo-path ("/github.com/..." or
+  // "/linear.app/...") from before the URL rejection was added; treating
+  // that as a valid project root would keep mis-merging unrelated sessions.
+  // When the stored path fails normalisation we report "no stored path" so
+  // the path-match short-circuit cannot fire and the LLM/safety nets get a
+  // chance to rewrite the description with a real root.
+  return trimToProjectRoot(match[1]);
 }
 
 /** Pick the existing group whose stored project root EXACTLY equals the
@@ -603,6 +658,18 @@ async function enrichGroupDescription(
   const projectPath = extractProjectPath(allInputs);
   const messagesText = allInputs.map((m, i) => `${i + 1}. ${m}`).join('\n');
 
+  // Hand the LLM the deterministically extracted root explicitly. Before
+  // this, the prompt only said "quote the exact absolute path verbatim when
+  // present" and trusted the LLM to find it in the messages, which is how
+  // we ended up with hallucinated paths like "/linear.app/coderabbit/..."
+  // and "/Users/.../OmniKey-AI/macOS/Sources" surviving multiple cron
+  // refreshes. The downstream safety net still rewrites mismatches, but
+  // giving the LLM the path up front means most calls produce the right
+  // text the first time.
+  const projectPathLine = projectPath
+    ? `Deterministically extracted project root for this group: ${projectPath}\n(Use this EXACT path in the "Project root:" sentence. Do not abbreviate, do not paraphrase, do not substitute a URL for it.)`
+    : 'No absolute project root could be deterministically extracted from the messages. Say "Project root: not specified." in the description.';
+
   const prompt =
     isUpdateMode && existingDescription
       ? `Update the project group description for "${groupName}" based on new session data.
@@ -610,11 +677,13 @@ async function enrichGroupDescription(
 Current description:
 "${existingDescription}"
 
+${projectPathLine}
+
 Recent user messages from sessions in this group:
 ${messagesText}
 
 Update the description to incorporate any new findings. Keep the same 3-4 sentence structure answering in order:
-1. Where is the project root? (Quote the exact absolute path verbatim when present.)
+1. Where is the project root? Use the deterministically extracted path above when one was provided. Never use a URL (github.com/..., linear.app/..., console.cloud.google.com/...) as the project root.
 2. What is the purpose of this project?
 3. What is the primary programming language?
 
@@ -623,11 +692,13 @@ Rules: single paragraph, under ~500 characters, no markdown, no bullet points, n
 Respond with ONLY valid JSON: {"groupDescription":"..."}`
       : `Generate a description for the project group "${groupName}" based on these session messages.
 
+${projectPathLine}
+
 Messages:
 ${messagesText}
 
 Write a SINGLE paragraph of 3-4 sentences (no markdown, no bullet points, no newlines) answering in order:
-1. Where is the project root? (Quote the exact absolute path verbatim when present, or say so if absent.)
+1. Where is the project root? Use the deterministically extracted path above when one was provided; never use a URL.
 2. What is the purpose of this project?
 3. What is the primary programming language? (Name it when inferable; "Primary language not identified." if not.)
 
