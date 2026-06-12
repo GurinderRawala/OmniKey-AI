@@ -772,78 +772,6 @@ describe('truncateOnSentenceBoundary', () => {
     expect(got.endsWith('.')).toBe(true);
   });
 });
-
-// ---------------------------------------------------------------------------
-// extractAllProjectRoots — surface every distinct root referenced in the inputs
-// ---------------------------------------------------------------------------
-describe('extractAllProjectRoots', () => {
-  const { extractAllProjectRoots } = __testing__;
-
-  it('returns one entry per distinct normalised root, ordered by votes', () => {
-    const got = extractAllProjectRoots([
-      'fix /Users/me/AppA/src/a.ts',
-      'fix /Users/me/AppA/src/b.ts',
-      'fix /Users/me/AppA/package.json',
-      'and one file in /Users/me/AppB/main.go',
-    ]);
-    expect(got).toEqual([
-      { root: '/Users/me/AppA', votes: 3 },
-      { root: '/Users/me/AppB', votes: 1 },
-    ]);
-  });
-
-  it('returns [] when no real paths are referenced', () => {
-    expect(extractAllProjectRoots(['hello world'])).toEqual([]);
-  });
-
-  it('ignores URL-shaped pseudo-paths', () => {
-    const got = extractAllProjectRoots([
-      'see /github.com/foo/bar/pull/1',
-      'and edit /Users/me/Real/src/x.ts',
-    ]);
-    expect(got).toEqual([{ root: '/Users/me/Real', votes: 1 }]);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// extractKeySubdirectories — the directories worked on inside one project root
-// ---------------------------------------------------------------------------
-describe('extractKeySubdirectories', () => {
-  const { extractKeySubdirectories } = __testing__;
-
-  it('returns the most-referenced subdirs under the given root, ordered by votes', () => {
-    const got = extractKeySubdirectories(
-      [
-        'fix /Users/me/Repo/api/src/agent/x.ts',
-        'fix /Users/me/Repo/api/src/agent/y.ts',
-        'fix /Users/me/Repo/api/src/routes/z.ts',
-        'fix /Users/me/Repo/cli/main.ts',
-      ],
-      '/Users/me/Repo',
-      4,
-    );
-    // /Users/me/Repo/api appears in three of the four file paths, so it
-    // wins the top spot. The cli sub-dir only appears once, but with a
-    // limit of 4 it should still surface alongside the api sub-tree.
-    expect(got[0]).toBe('/Users/me/Repo/api');
-    expect(got).toContain('/Users/me/Repo/cli');
-  });
-
-  it('returns [] when no paths are under the root', () => {
-    const got = extractKeySubdirectories(['fix /Users/me/OtherRepo/main.ts'], '/Users/me/Repo', 3);
-    expect(got).toEqual([]);
-  });
-
-  it('respects the limit', () => {
-    const got = extractKeySubdirectories(
-      ['/Users/me/Repo/a/x.ts /Users/me/Repo/b/x.ts /Users/me/Repo/c/x.ts /Users/me/Repo/d/x.ts'],
-      '/Users/me/Repo',
-      2,
-    );
-    expect(got).toHaveLength(2);
-  });
-});
-
 // ---------------------------------------------------------------------------
 // refreshGroupDescription — group splitting (one project = one group)
 // ---------------------------------------------------------------------------
@@ -1016,7 +944,7 @@ describe('refreshGroupDescription ancestor/descendant collapse', () => {
 // stripped before path extraction runs.
 // ---------------------------------------------------------------------------
 describe('local-path-only filter', () => {
-  const { extractProjectPath, trimToProjectRoot, extractAllProjectRoots } = __testing__;
+  const { extractProjectPath, trimToProjectRoot } = __testing__;
 
   it('strips full URLs (http, https, ftp, file, ws, ssh, git+...) before path extraction', () => {
     // None of these URL substrings should contribute a project root candidate.
@@ -1030,7 +958,6 @@ describe('local-path-only filter', () => {
       'and git+https://github.com/foo/bar.git',
     ];
     expect(extractProjectPath(inputs)).toBeNull();
-    expect(extractAllProjectRoots(inputs)).toEqual([]);
   });
 
   it('strips scheme-relative URLs (//host.tld/path)', () => {
