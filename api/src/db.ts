@@ -53,6 +53,14 @@ const COLUMN_MIGRATIONS: ColumnMigration[] = [
   // Added: project grouping
   { table: 'agent_sessions', column: 'group_name', definition: 'VARCHAR(255)' },
   { table: 'agent_sessions', column: 'group_description', definition: 'TEXT' },
+  // Added: per-session summary used to assemble <project_context> at runtime.
+  // The 1-2 sentence summary describes what the user worked on in THIS
+  // session; the agent server prepends the most recent N (currently 5)
+  // summaries from the same group as recent-activity context. This replaces
+  // the previous behaviour where the group's single rolling description got
+  // rewritten by every new session's LLM enrichment, wiping out accumulated
+  // context from older sessions.
+  { table: 'agent_sessions', column: 'session_summary', definition: 'TEXT' },
 ];
 
 async function runSQLiteMigrations(logger: Logger): Promise<void> {

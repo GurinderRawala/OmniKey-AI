@@ -72,7 +72,7 @@ function stripInjectedWrappersRich(text: string): StrippedInput {
   const withContextPathsExtracted = text.replace(
     /<project_context[^>]*>([\s\S]*?)<\/project_context>/gi,
     (_full, inner: string) => {
-      const m = /Project root:\s*(\/[^\s.,;:!?)<>"'`]+)/i.exec(inner);
+      const m = /(?:Project root|Working directory):\s*(\/[^\s.,;:!?)<>"'`]+)/i.exec(inner);
       if (m) contextPaths.push(m[1]);
       return '';
     },
@@ -1016,6 +1016,220 @@ Respond with ONLY valid JSON: {"groupDescription":"..."}`;
 }
 
 // ---------------------------------------------------------------------------
+// LLM: produce a one-to-two sentence summary of what the user worked on in a
+// single session. Used to populate AgentSession.sessionSummary, which is then
+// pulled into the <project_context> block at injection time so the agent
+// always sees recent activity context WITHOUT having to rewrite the
+// group-level description on every new session (which used to overwrite
+// the group's accumulated context with whatever the latest session was
+// about — the exact bug this change fixes).
+// ---------------------------------------------------------------------------
+async function generateSessionSummary(userInputs: string[]): Promise<string | null> {
+  if (!userInputs.length) return null;
+  const messagesText = userInputs.map((m, i) => `${i + 1}. ${m}`).join('\n');
+
+  const prompt = `Summarise what the user worked on in this single session in 1-2 short sentences (max 240 characters total).
+
+Messages:
+${messagesText}
+
+Rules:
+- No markdown, no bullet points, no newlines, no quotes around the summary.
+- Focus on the TASK the user was working on ("refactored the auth flow",
+  "investigated a sqlite locking bug", "shipped a new settings pane").
+- Do not include the project name or the project root path — those are
+  stored separately in the group context.
+- Do not include any URLs or absolute filesystem paths.
+- If the session looks like exploration or general conversation with no
+  concrete task, summarise the topic in one short clause.
+
+Respond with ONLY valid JSON: {"summary":"..."}`;
+
+  try {
+    const result = await aiClient.complete(
+      aiModel,
+      [
+        {
+          role: 'system',
+          content:
+            'You are a session summarisation assistant. Respond only with the requested JSON object, no extra text.',
+        },
+        { role: 'user', content: prompt },
+      ],
+      { temperature: 0 },
+    );
+    const raw = stripResponseWrappers(result.content);
+    const parsed: unknown = JSON.parse(raw);
+    const response = z.object({ summary: z.string() }).parse(parsed);
+    const summary = response.summary
+      .trim()
+      .replace(/\s*\n+\s*/g, ' ')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+    if (!summary) return null;
+    // Hard cap so a verbose LLM cannot blow out the context block. We aim
+    // for ~240 chars but truncate on a sentence boundary up to 320.
+    return truncateOnSentenceBoundary(summary, 320);
+  } catch (err) {
+    logger.warn('Session summary generation failed', { error: err });
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Assemble the <project_context> block that gets prepended to every user
+// turn for an already-grouped session. The block now contains:
+//
+//   <project_context name="...">
+//   Working directory: /Users/me/MyApp
+//   Confidence: high
+//   Purpose: [1 sentence from the group-level description]
+//   Primary language: [1 sentence from the group-level description]
+//
+//   Recent sessions in this project:
+//   - 2026-06-11 18:32 — refactored the chat scroll behaviour
+//   - 2026-06-10 14:05 — fixed a sqlite locking bug in the worker
+//   ...
+//   </project_context>
+//
+// Working directory + confidence come from the group's stored project root
+// matched against the CURRENT session's deterministic root extraction.
+// Confidence:
+//   high   — group's stored path exactly matches the path the user is
+//            currently typing about, or no fresh path was detected (so we
+//            trust the stored one);
+//   medium — current path is an ancestor or descendant of the stored path
+//            (same project, different reference depth — the LLM should
+//            confirm before assuming);
+//   low    — current path is disjoint from the stored path, or no working
+//            directory could be determined at all.
+// ---------------------------------------------------------------------------
+export type ProjectContextConfidence = 'high' | 'medium' | 'low';
+
+export interface BuildProjectContextResult {
+  text: string;
+  workingDirectory: string | null;
+  confidence: ProjectContextConfidence;
+}
+
+function isAncestorOrEqualPath(a: string, b: string): boolean {
+  return a === b || b.startsWith(a.endsWith('/') ? a : a + '/');
+}
+
+function pathsRelated(a: string | null, b: string | null): boolean {
+  if (!a || !b) return false;
+  return isAncestorOrEqualPath(a, b) || isAncestorOrEqualPath(b, a);
+}
+
+function formatSessionTimestamp(d: Date | string | null | undefined): string {
+  if (!d) return 'unknown time';
+  const date = typeof d === 'string' ? new Date(d) : d;
+  if (Number.isNaN(date.getTime())) return 'unknown time';
+  // YYYY-MM-DD HH:MM in UTC — concise and timezone-stable for context.
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())} ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())} UTC`;
+}
+
+export async function buildProjectContext(
+  subscriptionId: string,
+  groupName: string,
+  currentSessionInputs: string[] | null,
+  excludeSessionId?: string,
+): Promise<BuildProjectContextResult | null> {
+  // Fetch the group's most recent description (purpose + language sentences)
+  // and the last 5 session summaries from sibling sessions in the same group.
+  // We deliberately include the EXCLUDED session's recent siblings rather
+  // than the session itself — the current turn is what the user is typing
+  // RIGHT NOW, so re-feeding its summary as "recent context" is redundant.
+  const groupRow = await AgentSession.findOne({
+    where: {
+      subscriptionId,
+      groupName,
+      groupDescription: { [Op.not]: null },
+    },
+    attributes: ['groupName', 'groupDescription'],
+    order: [['last_active_at', 'DESC']],
+  });
+  if (!groupRow?.groupDescription) return null;
+
+  const storedPath = extractStoredProjectPath(groupRow.groupDescription);
+  const currentPath =
+    currentSessionInputs && currentSessionInputs.length
+      ? extractProjectPath(currentSessionInputs)
+      : null;
+
+  let confidence: ProjectContextConfidence;
+  if (!currentPath) {
+    // No fresh signal from this turn → trust the stored path (if any).
+    confidence = storedPath ? 'high' : 'low';
+  } else if (!storedPath) {
+    confidence = 'low';
+  } else if (storedPath === currentPath) {
+    confidence = 'high';
+  } else if (pathsRelated(storedPath, currentPath)) {
+    confidence = 'medium';
+  } else {
+    confidence = 'low';
+  }
+
+  // Recent sibling summaries. Filter out the current session so the agent
+  // doesn't see its own (probably still-empty) summary as "recent activity".
+  const siblingWhere: Record<string, unknown> = {
+    subscriptionId,
+    groupName,
+    sessionSummary: { [Op.not]: null },
+  };
+  if (excludeSessionId) siblingWhere.id = { [Op.ne]: excludeSessionId };
+
+  const recentSessions = await AgentSession.findAll({
+    where: siblingWhere,
+    order: [['last_active_at', 'DESC']],
+    limit: 5,
+    attributes: ['sessionSummary', 'lastActiveAt'],
+  });
+
+  // Trim the group-level description down to just the project-meta parts
+  // (purpose + primary language). The deterministic shape we now write is
+  // "Project root: ... . Purpose: ... . Primary language: ..." so we drop
+  // the leading "Project root: ..." sentence and keep the rest.
+  const projectMeta = groupRow.groupDescription.replace(/^Project root:\s*\S+\.\s*/i, '').trim();
+
+  const lines: string[] = [];
+  lines.push(`<project_context name="${groupRow.groupName}">`);
+  if (storedPath || currentPath) {
+    lines.push(`Working directory: ${currentPath ?? storedPath ?? '(unknown)'}`);
+  } else {
+    lines.push('Working directory: (not yet known)');
+  }
+  lines.push(
+    `Confidence: ${confidence}` +
+      (confidence === 'high'
+        ? ''
+        : ' (the path above may not be where this turn applies — confirm before running file operations)'),
+  );
+  if (projectMeta) {
+    lines.push('');
+    lines.push(projectMeta);
+  }
+  if (recentSessions.length > 0) {
+    lines.push('');
+    lines.push(`Recent sessions in this project (most recent first):`);
+    for (const s of recentSessions) {
+      const ts = formatSessionTimestamp(s.lastActiveAt);
+      const summary = (s.sessionSummary ?? '').trim();
+      if (summary) lines.push(`- ${ts} — ${summary}`);
+    }
+  }
+  lines.push('</project_context>');
+
+  return {
+    text: lines.join('\n'),
+    workingDirectory: currentPath ?? storedPath,
+    confidence,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Public: update one session's group
 // ---------------------------------------------------------------------------
 
@@ -1049,39 +1263,46 @@ export async function updateSessionGroup(sessionId: string, subscriptionId: stri
         groupDescription: s.groupDescription ?? null,
       }));
 
-    // Step 1: classify to determine the group name and an initial description
+    // Step 1: classify to determine the group name. classifyGroup also
+    // returns a description proposal, but for an EXISTING group we now
+    // ignore that proposal — the group already has a description and we
+    // do not want a new session's first turn to rewrite it. The cron
+    // refreshes group-level descriptions on its own cadence.
     const result = await classifyGroup(inputs, existingGroups);
     if (!result) return;
 
-    // Step 2: if the session was matched to an existing group, fetch sibling
-    // inputs to enrich the description with broader project context.
     const isExistingGroup = existingGroups.some(
       (g) => g.groupName.toLowerCase() === result.groupName.toLowerCase(),
     );
 
-    let finalDescription = result.groupDescription;
+    // For an existing group: do NOT overwrite the group description. Just
+    // attach this session to the group. Recent-activity context is now
+    // surfaced via per-session summaries (see Step 2) which buildProjectContext
+    // pulls into the <project_context> block at injection time.
+    //
+    // For a brand-new group: use the description classifyGroup just produced.
+    // No enrichment from siblings (there aren't any yet by definition).
+    const descriptionToWrite = isExistingGroup ? undefined : result.groupDescription;
 
-    if (isExistingGroup) {
-      const siblingInputs = await fetchSiblingInputs(subscriptionId, result.groupName, sessionId);
-      if (siblingInputs.length > 0) {
-        // Combine current session inputs with recent sibling inputs (cap at 18).
-        const combinedInputs = [...inputs, ...siblingInputs].slice(0, 18);
-        const enriched = await enrichGroupDescription(
-          result.groupName,
-          combinedInputs,
-          result.groupDescription,
-          true,
-        );
-        if (enriched) finalDescription = enriched;
-      }
-    }
+    // Step 2: generate a 1-2 sentence summary of THIS session's user inputs.
+    // This per-session summary is the unit of "recent activity" surfaced in
+    // future turns' <project_context>, replacing the old behaviour where
+    // every new session's first turn rewrote the group-wide description.
+    const sessionSummary = await generateSessionSummary(inputs);
 
-    await AgentSession.update(
-      { groupName: result.groupName, groupDescription: finalDescription },
-      { where: { id: sessionId } },
-    );
+    const update: Record<string, unknown> = { groupName: result.groupName };
+    if (descriptionToWrite !== undefined) update.groupDescription = descriptionToWrite;
+    if (sessionSummary !== null) update.sessionSummary = sessionSummary;
 
-    logger.info('Session group updated', { sessionId, groupName: result.groupName });
+    await AgentSession.update(update, { where: { id: sessionId } });
+
+    logger.info('Session group updated', {
+      sessionId,
+      groupName: result.groupName,
+      isExistingGroup,
+      wroteGroupDescription: descriptionToWrite !== undefined,
+      wroteSessionSummary: sessionSummary !== null,
+    });
   } catch (err) {
     logger.error('Failed to update session group', { sessionId, error: err });
   }
@@ -1334,16 +1555,42 @@ export async function refreshAllSessionGroups(subscriptionId: string): Promise<v
       ungroupedCount: ungroupedSessions.length,
     });
 
-    // Refresh + backfill run in parallel (each with bounded concurrency) so
-    // that a slow refresh doesn't delay backfill for the same subscription.
-    // Concurrency is intentionally low (3) to avoid bursting the upstream
-    // LLM provider when a subscription has many groups.
+    // Backfill session_summary for already-grouped sessions that don't yet
+    // have one. This is a one-shot cost per session that lets older
+    // sessions appear in buildProjectContext's "recent sessions" listing.
+    // Capped at 10 per tick to bound LLM cost.
+    const sessionsMissingSummary = await AgentSession.findAll({
+      where: {
+        subscriptionId,
+        groupName: { [Op.not]: null },
+        sessionSummary: null,
+      },
+      order: [['last_active_at', 'DESC']],
+      limit: 10,
+      attributes: ['id', 'historyJson'],
+    });
+
+    // Refresh + backfill ungrouped + backfill summaries run in parallel (each
+    // with bounded concurrency) so that a slow refresh doesn't delay
+    // backfill for the same subscription. Concurrency is intentionally low
+    // (3) to avoid bursting the upstream LLM provider.
     await Promise.allSettled([
       runWithConcurrency(groupRows, 3, async (row) => {
         await refreshGroupDescription(subscriptionId, row.groupName!, row.groupDescription ?? null);
       }),
       runWithConcurrency(ungroupedSessions, 3, async (session) => {
         await updateSessionGroup(session.id, subscriptionId);
+      }),
+      runWithConcurrency(sessionsMissingSummary, 3, async (session) => {
+        try {
+          const inputs = extractUserInputs(session.historyJson);
+          if (!inputs.length) return;
+          const summary = await generateSessionSummary(inputs);
+          if (!summary) return;
+          await AgentSession.update({ sessionSummary: summary }, { where: { id: session.id } });
+        } catch (err) {
+          logger.warn('Session summary backfill failed', { sessionId: session.id, error: err });
+        }
       }),
     ]);
   } catch (err) {
@@ -1429,6 +1676,8 @@ export function startGroupingCronJob(): void {
 // thorough unit coverage on — they are the entire defence against the
 // "session grouped under the wrong (often the parent) project" bug.
 export const __testing__ = {
+  generateSessionSummary,
+  buildProjectContext,
   extractUserInputs,
   extractProjectPath,
   extractAllProjectRoots,

@@ -25,7 +25,7 @@ import {
   pushToSessionHistory,
   createUserContentForCronJob,
 } from './utils';
-import { updateSessionGroup } from './sessionGrouping';
+import { updateSessionGroup, buildProjectContext } from './sessionGrouping';
 import {
   aiClient,
   AITool,
@@ -255,9 +255,9 @@ const contextWindowSize = getContextWindowSize(config.aiProvider);
 
 // ─── Terminal output helpers ──────────────────────────────────────────────────
 
-const TERMINAL_OUTPUT_MAX = 80_000;   // max chars kept per terminal message
-const TERMINAL_OUTPUT_HEAD = 30_000;  // chars kept from the beginning
-const TERMINAL_OUTPUT_TAIL = 50_000;  // chars kept from the end (errors land here)
+const TERMINAL_OUTPUT_MAX = 80_000; // max chars kept per terminal message
+const TERMINAL_OUTPUT_HEAD = 30_000; // chars kept from the beginning
+const TERMINAL_OUTPUT_TAIL = 50_000; // chars kept from the end (errors land here)
 
 /**
  * Caps large terminal outputs so they don't consume the entire history budget.
@@ -545,19 +545,32 @@ async function runAgentTurnInternal(
     !resumedSession
   ) {
     try {
-      const groupRow = await AgentSession.findOne({
-        where: {
-          subscriptionId: subscription.id,
-          groupName: clientMessage.group_name,
-          groupDescription: { [Op.not]: null },
-        },
-        attributes: ['groupName', 'groupDescription'],
-      });
-      if (groupRow?.groupDescription) {
-        userContent = `<project_context name="${groupRow.groupName}">\n${groupRow.groupDescription}\n</project_context>\n\n${userContent}`;
+      // The <project_context> block is now assembled from (a) the group's
+      // stored project root + a confidence signal vs the path the user is
+      // typing about, (b) the group's slow-changing purpose/language meta,
+      // and (c) the last 5 sibling sessions' per-session summaries with
+      // timestamps. This replaces the previous behaviour where the block
+      // was just the group's single rolling description — a description
+      // that got rewritten by every new session's first turn, wiping out
+      // accumulated context.
+      //
+      // We pass the CURRENT turn's text as the only "input" so confidence
+      // can compare the stored project root against any path the user just
+      // typed. We do NOT include older messages from this session because
+      // they have already been re-injected as their own <project_context>
+      // on previous turns and re-extracting them now would just amplify
+      // any prior path-detection error.
+      const ctx = await buildProjectContext(
+        subscription.id,
+        clientMessage.group_name,
+        [clientMessage.content || ''],
+        sessionId,
+      );
+      if (ctx?.text) {
+        userContent = `${ctx.text}\n\n${userContent}`;
       }
     } catch (err) {
-      log.warn('Failed to fetch group description for context injection', { error: err });
+      log.warn('Failed to build <project_context> block', { error: err });
     }
   }
 
@@ -612,9 +625,8 @@ async function runAgentTurnInternal(
   // to stay within read-only / inspection commands. The Responses API path
   // injects its equivalent restriction inside ai-client.ts (see
   // shellScriptToolDescriptionForMode there).
-  const shellTool = config.terminalAccess === 'limited'
-    ? SHELL_SCRIPT_TOOL_LIMITED
-    : SHELL_SCRIPT_TOOL;
+  const shellTool =
+    config.terminalAccess === 'limited' ? SHELL_SCRIPT_TOOL_LIMITED : SHELL_SCRIPT_TOOL;
   const shellTools: AITool[] = aiModel !== RESPONSES_API_MODEL ? [shellTool] : [];
   const tools = buildAvailableTools([...shellTools, ...mcpBundle.aiTools]);
 
@@ -1082,8 +1094,7 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
 
         // Terminal feedback (shell output / errors) and internal recursive calls
         // always bypass the queue — they are part of the currently active turn.
-        const isTerminalFeedback =
-          Boolean(message.is_terminal_output) || Boolean(message.is_error);
+        const isTerminalFeedback = Boolean(message.is_terminal_output) || Boolean(message.is_error);
         const isInternalCall = Boolean(message.is_web_call);
 
         if (!isTerminalFeedback && !isInternalCall && activeSessions.has(sessionId)) {
@@ -1141,7 +1152,9 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
         const shellResolver = pendingShellScripts.get(sid);
         if (shellResolver) {
           pendingShellScripts.delete(sid);
-          shellResolver('COMMAND ERROR:\nWebSocket connection closed before script output was received.');
+          shellResolver(
+            'COMMAND ERROR:\nWebSocket connection closed before script output was received.',
+          );
           log.info('Resolved pending shell_script with disconnect error', { sessionId: sid });
         }
       }

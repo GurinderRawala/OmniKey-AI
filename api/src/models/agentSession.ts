@@ -16,6 +16,7 @@ export interface AgentSessionAttributes {
   lastPromptTokens: number;
   groupName?: string | null;
   groupDescription?: string | null;
+  sessionSummary?: string | null;
   lastActiveAt: Date;
   createdAt?: Date;
   updatedAt?: Date;
@@ -34,6 +35,7 @@ interface AgentSessionCreationAttributes extends Optional<
   | 'lastPromptTokens'
   | 'groupName'
   | 'groupDescription'
+  | 'sessionSummary'
   | 'lastActiveAt'
   | 'createdAt'
   | 'updatedAt'
@@ -55,6 +57,7 @@ export class AgentSession
   public lastPromptTokens!: number;
   public groupName?: string | null;
   public groupDescription?: string | null;
+  public sessionSummary?: string | null;
   public lastActiveAt!: Date;
   public readonly createdAt!: Date;
   public readonly updatedAt!: Date;
@@ -132,6 +135,11 @@ AgentSession.init(
       type: DataTypes.TEXT,
       allowNull: true,
       field: 'group_description',
+    },
+    sessionSummary: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      field: 'session_summary',
     },
     lastActiveAt: {
       type: DataTypes.DATE,

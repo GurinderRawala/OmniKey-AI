@@ -1142,3 +1142,187 @@ describe('CodeRabbit follow-ups', () => {
     expect(got).toBe('/Users/me/Documents/projects/org/monorepo/packages/api');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Per-session summaries + buildProjectContext — the new architecture where
+// each session carries its own 1-2 sentence summary and the agent server
+// assembles the <project_context> block from the group's stored project
+// root + the most recent N session summaries at injection time. This
+// replaces the previous behaviour where every new session's first turn
+// rewrote the group's single rolling description.
+// ---------------------------------------------------------------------------
+describe('generateSessionSummary', () => {
+  const { generateSessionSummary } = __testing__;
+
+  async function getMocks() {
+    const aiClientMod = await import('../ai-client');
+    return {
+      complete: (aiClientMod as unknown as { aiClient: { complete: ReturnType<typeof vi.fn> } })
+        .aiClient.complete,
+    };
+  }
+
+  it('returns null when no user inputs are provided', async () => {
+    const { complete } = await getMocks();
+    complete.mockClear();
+    expect(await generateSessionSummary([])).toBeNull();
+    expect(complete).not.toHaveBeenCalled();
+  });
+
+  it('returns the LLM-produced summary on the happy path', async () => {
+    const { complete } = await getMocks();
+    complete.mockResolvedValueOnce({
+      content: JSON.stringify({ summary: 'Investigated a sqlite locking bug in the worker.' }),
+    });
+    const got = await generateSessionSummary(['edit /Users/me/Repo/api/src/worker.ts']);
+    expect(got).toBe('Investigated a sqlite locking bug in the worker.');
+  });
+
+  it('truncates absurdly long summaries on a sentence boundary at ~320 chars', async () => {
+    const { complete } = await getMocks();
+    const huge = 'A'.repeat(500) + '. Second sentence.';
+    complete.mockResolvedValueOnce({ content: JSON.stringify({ summary: huge }) });
+    const got = (await generateSessionSummary(['anything'])) ?? '';
+    // truncateOnSentenceBoundary may append a synthetic period to land on
+    // a sentence boundary, taking length up to maxLen + 1.
+    expect(got.length).toBeLessThanOrEqual(321);
+  });
+
+  it('returns null when the LLM throws or returns garbage', async () => {
+    const { complete } = await getMocks();
+    complete.mockResolvedValueOnce({ content: 'not json at all' });
+    expect(await generateSessionSummary(['hello'])).toBeNull();
+  });
+});
+
+describe('buildProjectContext', () => {
+  const { buildProjectContext } = __testing__;
+
+  async function getMocks() {
+    const agentSessionMod = await import('../models/agentSession');
+    return {
+      findOne: (
+        agentSessionMod as unknown as { AgentSession: { findOne: ReturnType<typeof vi.fn> } }
+      ).AgentSession.findOne,
+      findAll: (
+        agentSessionMod as unknown as { AgentSession: { findAll: ReturnType<typeof vi.fn> } }
+      ).AgentSession.findAll,
+    };
+  }
+
+  it('returns null when no description is stored for the group', async () => {
+    const { findOne } = await getMocks();
+    findOne.mockResolvedValueOnce(null);
+    expect(await buildProjectContext('sub-1', 'Some Group', null)).toBeNull();
+  });
+
+  it('builds a high-confidence block when the stored path matches the current input', async () => {
+    const { findOne, findAll } = await getMocks();
+    findOne.mockResolvedValueOnce({
+      groupName: 'My App',
+      groupDescription:
+        'Project root: /Users/me/MyApp. Purpose: ship a chat feature. Primary language: TypeScript.',
+    });
+    findAll.mockResolvedValueOnce([
+      {
+        sessionSummary: 'Refactored the chat scroll behaviour.',
+        lastActiveAt: new Date('2026-06-11T18:32:00Z'),
+      },
+      {
+        sessionSummary: 'Fixed a sqlite locking bug in the worker.',
+        lastActiveAt: new Date('2026-06-10T14:05:00Z'),
+      },
+    ]);
+
+    const got = await buildProjectContext(
+      'sub-1',
+      'My App',
+      ['edit /Users/me/MyApp/src/x.ts'],
+      'current-session',
+    );
+
+    expect(got).not.toBeNull();
+    expect(got!.confidence).toBe('high');
+    expect(got!.workingDirectory).toBe('/Users/me/MyApp');
+    expect(got!.text).toContain('<project_context name="My App">');
+    expect(got!.text).toContain('Working directory: /Users/me/MyApp');
+    expect(got!.text).toContain('Confidence: high');
+    expect(got!.text).toContain('Purpose: ship a chat feature');
+    expect(got!.text).toContain('Recent sessions in this project');
+    expect(got!.text).toContain('- 2026-06-11 18:32 UTC — Refactored the chat scroll behaviour.');
+    expect(got!.text).toContain(
+      '- 2026-06-10 14:05 UTC — Fixed a sqlite locking bug in the worker.',
+    );
+  });
+
+  it('marks confidence as medium when current path is an ancestor of the stored path', async () => {
+    const { findOne, findAll } = await getMocks();
+    findOne.mockResolvedValueOnce({
+      groupName: 'My App',
+      groupDescription:
+        'Project root: /Users/me/MyApp/api. Purpose: x. Primary language: TypeScript.',
+    });
+    findAll.mockResolvedValueOnce([]);
+
+    const got = await buildProjectContext(
+      'sub-1',
+      'My App',
+      ['edit /Users/me/MyApp/README.md'],
+      'current-session',
+    );
+
+    expect(got!.confidence).toBe('medium');
+    expect(got!.text).toContain('Confidence: medium');
+    expect(got!.text).toContain('confirm before running file operations');
+  });
+
+  it('marks confidence as low when current path is disjoint from the stored path', async () => {
+    const { findOne, findAll } = await getMocks();
+    findOne.mockResolvedValueOnce({
+      groupName: 'My App',
+      groupDescription: 'Project root: /Users/me/MyApp. Purpose: x. Primary language: TypeScript.',
+    });
+    findAll.mockResolvedValueOnce([]);
+
+    const got = await buildProjectContext(
+      'sub-1',
+      'My App',
+      ['edit /Users/me/SomeOtherProject/index.ts'],
+      'current-session',
+    );
+
+    expect(got!.confidence).toBe('low');
+    expect(got!.text).toContain('Confidence: low');
+  });
+
+  it('marks confidence as high when no fresh path is in the current turn but the group has a stored path', async () => {
+    const { findOne, findAll } = await getMocks();
+    findOne.mockResolvedValueOnce({
+      groupName: 'My App',
+      groupDescription: 'Project root: /Users/me/MyApp. Purpose: x. Primary language: TypeScript.',
+    });
+    findAll.mockResolvedValueOnce([]);
+
+    const got = await buildProjectContext(
+      'sub-1',
+      'My App',
+      ['continue working on the task'],
+      'current-session',
+    );
+
+    expect(got!.confidence).toBe('high');
+    expect(got!.workingDirectory).toBe('/Users/me/MyApp');
+  });
+
+  it('omits the recent-sessions section when there are no sibling summaries', async () => {
+    const { findOne, findAll } = await getMocks();
+    findOne.mockResolvedValueOnce({
+      groupName: 'My App',
+      groupDescription: 'Project root: /Users/me/MyApp. Purpose: x. Primary language: TypeScript.',
+    });
+    findAll.mockResolvedValueOnce([]);
+
+    const got = await buildProjectContext('sub-1', 'My App', null, 'current-session');
+    expect(got!.text).not.toContain('Recent sessions in this project');
+  });
+});
