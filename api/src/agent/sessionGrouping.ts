@@ -52,7 +52,22 @@ function stripResponseWrappers(text: string): string {
 //      we have a deterministic fallback instead of a hallucination.
 //   3. Strip <stored_instructions>, the outer <user_input>, and @omniAgent
 //      the same as before.
+// Result of stripping injected wrappers. We keep the user-typed body and the
+// extracted context-root fallback lines as separate fields so the caller can
+// truncate the body alone — the fallback line is small and must always
+// survive truncation (otherwise we lose the only deterministic project-path
+// signal on long path-free turns).
+interface StrippedInput {
+  body: string;
+  contextPathsLine: string;
+}
+
 function stripInjectedWrappers(text: string): string {
+  const r = stripInjectedWrappersRich(text);
+  return r.contextPathsLine ? `${r.body}\n${r.contextPathsLine}`.trim() : r.body;
+}
+
+function stripInjectedWrappersRich(text: string): StrippedInput {
   const contextPaths: string[] = [];
   const withContextPathsExtracted = text.replace(
     /<project_context[^>]*>([\s\S]*?)<\/project_context>/gi,
@@ -62,16 +77,15 @@ function stripInjectedWrappers(text: string): string {
       return '';
     },
   );
-  const cleaned = withContextPathsExtracted
+  const body = withContextPathsExtracted
     .replace(/<stored_instructions>[\s\S]*?<\/stored_instructions>/gi, '')
     .replace(/<user_input>([\s\S]*?)<\/user_input>/gi, '$1')
     .replace(/@omniagent/gi, '')
     .trim();
-  if (!contextPaths.length) return cleaned;
-  // Re-append context paths as a single low-weight line. Each path appears
-  // once, prefixed so it does not look like the user typed prose.
-  const pathsLine = contextPaths.map((p) => `[context root] ${p}`).join('\n');
-  return cleaned ? `${cleaned}\n${pathsLine}` : pathsLine;
+  const contextPathsLine = contextPaths.length
+    ? contextPaths.map((p) => `[context root] ${p}`).join('\n')
+    : '';
+  return { body, contextPathsLine };
 }
 
 function extractUserInputs(historyJson: string): string[] {
@@ -94,11 +108,21 @@ function extractUserInputs(historyJson: string): string[] {
       // Extract the inner text from <user_input> wrapper if present, then
       // strip any server-injected blocks (project_context, stored_instructions)
       // so the classifier only sees what the user actually typed this turn.
+      // We truncate the user-typed BODY alone (cap at 400 chars) and then
+      // re-append the [context root] fallback line in full — the fallback is
+      // the only deterministic path signal we have on long path-free turns
+      // and must never be sliced off the end.
       const match = /<user_input>([\s\S]*?)<\/user_input>/i.exec(raw);
       const inner = match ? match[1] : raw;
-      const cleaned = stripInjectedWrappers(inner);
-      if (cleaned.length > 5) {
-        inputs.push(cleaned.slice(0, 400));
+      const { body, contextPathsLine } = stripInjectedWrappersRich(inner);
+      const truncatedBody = body.slice(0, 400);
+      const combined = contextPathsLine
+        ? truncatedBody
+          ? `${truncatedBody}\n${contextPathsLine}`
+          : contextPathsLine
+        : truncatedBody;
+      if (combined.length > 5) {
+        inputs.push(combined);
       }
     }
 
@@ -250,6 +274,27 @@ function isLocalLookingPath(path: string): boolean {
   return LOCAL_PATH_PREFIXES.some((re) => re.test(path));
 }
 
+// Centralised path matcher used by every absolute-path extractor in this
+// file. Returns a fresh /g RegExp on every call because /g RegExps carry
+// mutable lastIndex state between matchAll calls and would otherwise
+// silently desync across call sites.
+//
+// The matcher is intentionally UNBOUNDED on the number of trailing path
+// segments — a deep monorepo file like
+//   /Users/me/Documents/projects/org/monorepo/packages/api/src/index.ts
+// has 10 segments and we want to capture the full path so the downstream
+// trimToProjectRoot can walk it up to the real project root. A previous
+// hard cap of {1,6} truncated such paths into two halves and let the
+// shallower (".../packages") win the vote, classifying every deep
+// monorepo session under the wrong project.
+//
+// Path segments cannot contain whitespace, /, <>, quotes, or regex
+// metacharacters (?, ^, $, {, }, [, ], (, ), |, \\, *, +) that show up
+// in source code and config but are never valid in real filesystem paths.
+function buildAbsolutePathRegex(): RegExp {
+  return /(\/(?:[^\s/<>"'`?^${}\[\]()|\\*+]+\/)+[^\s/<>"'`?^${}\[\]()|\\*+]*)/g;
+}
+
 // First-segment patterns that mean a string starting with "/" is a URL or
 // domain that the agent server / a copy-paste accidentally turned into a
 // path-shaped token, NOT a real filesystem root. We reject these entirely
@@ -340,11 +385,7 @@ function extractProjectPath(texts: string[]): string | null {
     homeDir ? text.replace(/(^|[\s(\["'`])~\//g, (_m, pre: string) => `${pre}${homeDir}/`) : text;
   const combined = stripUrls(tildeExpand(texts.join(' ')));
 
-  // Match absolute paths (Unix) — capture up to 6 path segments.
-  // Path segments cannot contain whitespace, /, <>, quotes, or regex
-  // metacharacters that show up in source code and config but are never
-  // valid in real filesystem paths: ?, ^, $, {, }, [, ], (, ), |, \\, *, +.
-  const pathRe = /(\/(?:[^\s/<>"'`?^${}\[\]()|\\*+]+\/){1,6}[^\s/<>"'`?^${}\[\]()|\\*+]*)/g;
+  const pathRe = buildAbsolutePathRegex();
   const rawMatches = Array.from(combined.matchAll(pathRe), (m) => m[1])
     // Strip trailing sentence punctuation that the regex greedily included
     // (e.g. "see /Users/x/MyApp/cli, please edit ..." → /Users/x/MyApp/cli).
@@ -383,8 +424,10 @@ function extractProjectPath(texts: string[]): string | null {
     return b[0].split('/').length - a[0].split('/').length;
   });
 
-  const winner = entries[0][0];
-  return trimToProjectRoot(winner) ?? winner;
+  // winner came from `normalised`, which is itself a list of
+  // trimToProjectRoot outputs, so the path is already in its canonical
+  // trimmed form — no second pass needed here.
+  return entries[0][0];
 }
 
 // Return ALL normalised project roots referenced in the given texts together
@@ -397,10 +440,7 @@ function extractAllProjectRoots(texts: string[]): Array<{ root: string; votes: n
   const tildeExpand = (text: string): string =>
     homeDir ? text.replace(/(^|[\s(\["'`])~\//g, (_m, pre: string) => `${pre}${homeDir}/`) : text;
   const combined = stripUrls(tildeExpand(texts.join(' ')));
-  // Path segments cannot contain whitespace, /, <>, quotes, or regex
-  // metacharacters that show up in source code and config but are never
-  // valid in real filesystem paths: ?, ^, $, {, }, [, ], (, ), |, \\, *, +.
-  const pathRe = /(\/(?:[^\s/<>"'`?^${}\[\]()|\\*+]+\/){1,6}[^\s/<>"'`?^${}\[\]()|\\*+]*)/g;
+  const pathRe = buildAbsolutePathRegex();
   const rawMatches = Array.from(combined.matchAll(pathRe), (m) => m[1])
     .map((raw) => raw.replace(/[.,;:!?)\]]+$/, ''))
     .filter((raw) => raw.length > 1);
@@ -427,7 +467,7 @@ function extractKeySubdirectories(texts: string[], projectRoot: string, limit: n
   const tildeExpand = (text: string): string =>
     homeDir ? text.replace(/(^|[\s(\["'`])~\//g, (_m, pre: string) => `${pre}${homeDir}/`) : text;
   const combined = stripUrls(tildeExpand(texts.join(' ')));
-  const pathRe = /(\/(?:[^\s/<>"'`?^${}\[\]()|\\*+]+\/){1,8}[^\s/<>"'`?^${}\[\]()|\\*+]*)/g;
+  const pathRe = buildAbsolutePathRegex();
   const prefix = projectRoot.endsWith('/') ? projectRoot : projectRoot + '/';
   const votes = new Map<string, number>();
   for (const m of combined.matchAll(pathRe)) {

@@ -389,7 +389,12 @@ describe('production-observed regressions', () => {
       ]);
       expect(got).toBe('/Users/me/work/coderabbitai/grafana');
     } finally {
-      process.env.HOME = originalHome;
+      // Node's process.env coerces every assignment to a string, so writing
+      // back an undefined originalHome would set HOME to the literal
+      // 'undefined'. Delete the key when it was unset to genuinely restore
+      // the original state.
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
     }
   });
 });
@@ -1074,5 +1079,66 @@ describe('local-path-only filter', () => {
     expect(trimToProjectRoot('/Volumes/Data/MyRepo/src/x.ts')).toBe('/Volumes/Data/MyRepo');
     expect(trimToProjectRoot('/mnt/drive/MyApp/src/x.ts')).toBe('/mnt/drive/MyApp');
     expect(trimToProjectRoot('/private/Users/me/MyApp/src/x.ts')).toBe('/private/Users/me/MyApp');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CodeRabbit review follow-ups. These pin two regressions the bot caught:
+//   1) the [context root] fallback used to be sliced off the end of long
+//      user turns by the 400-char truncation in extractUserInputs;
+//   2) the path-extraction regex used to cap at 6 trailing segments, so deep
+//      monorepo paths got split into two halves and the shallower half
+//      ("/.../packages") won the project-root vote.
+// ---------------------------------------------------------------------------
+describe('CodeRabbit follow-ups', () => {
+  const { extractUserInputs, extractProjectPath, trimToProjectRoot } = __testing__;
+
+  it('preserves the [context root] fallback even when the user body is longer than the 400-char truncation budget', () => {
+    // 600 chars of path-free prose followed by no typed path; the only path
+    // signal is the <project_context> root. The cap on the user body must
+    // be applied to the body alone so the appended fallback line survives.
+    const longProse = 'a'.repeat(600);
+    const history = JSON.stringify([
+      {
+        role: 'user',
+        content: [
+          '<user_input>',
+          '<project_context name="My App">',
+          'Project root: /Users/me/MyApp. Purpose: x. Primary language: TypeScript.',
+          '</project_context>',
+          '',
+          longProse,
+          '</user_input>',
+        ].join('\n'),
+      },
+    ]);
+
+    const inputs = extractUserInputs(history);
+    expect(inputs).toHaveLength(1);
+    expect(inputs[0]).toContain('[context root] /Users/me/MyApp');
+    // And the fallback still drives the deterministic extraction.
+    expect(extractProjectPath(inputs)).toBe('/Users/me/MyApp');
+  });
+
+  it('captures full deep monorepo paths without truncating segments', () => {
+    // The path here has 10 segments after the leading slash; pre-fix the
+    // regex capped at 6 and we ended up classifying the project as
+    // /Users/me/Documents/projects/org/monorepo/packages (the wrong root).
+    const got = trimToProjectRoot(
+      '/Users/me/Documents/projects/org/monorepo/packages/api/src/index.ts',
+    );
+    // With the home-container chain (Documents, projects) skipped, "org" is
+    // the first project-eligible segment. With src/index.ts stripped and
+    // src walked up, we expect the deepest meaningful root the matcher
+    // can find.
+    expect(got).toBe('/Users/me/Documents/projects/org/monorepo/packages/api');
+  });
+
+  it('extracts the deep root end-to-end from realistic monorepo input', () => {
+    const got = extractProjectPath([
+      'fix /Users/me/Documents/projects/org/monorepo/packages/api/src/index.ts',
+      'and /Users/me/Documents/projects/org/monorepo/packages/api/src/util.ts',
+    ]);
+    expect(got).toBe('/Users/me/Documents/projects/org/monorepo/packages/api');
   });
 });
