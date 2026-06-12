@@ -1326,3 +1326,208 @@ describe('buildProjectContext', () => {
     expect(got!.text).not.toContain('Recent sessions in this project');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Session-end driven summary + group description from summaries + freshness
+// timestamp. Pins the architecture:
+//
+//   * summariseSession() is the public entry point invoked from the agent
+//     server's WebSocket close handler. No in-memory marker required —
+//     the caller already knows the session ended.
+//   * generateGroupDescriptionFromSummaries() is the cron's only LLM call
+//     for descriptions. It sees ONLY per-session summaries + the existing
+//     description, never raw session history.
+//   * buildProjectContext() emits a "Group description last updated: ..."
+//     line so the agent can decide how much to trust the project meta.
+// ---------------------------------------------------------------------------
+describe('summariseSession (session-end hook)', () => {
+  const { summariseSession } = __testing__;
+
+  async function getMocks() {
+    const aiClientMod = await import('../ai-client');
+    const agentSessionMod = await import('../models/agentSession');
+    return {
+      complete: (aiClientMod as unknown as { aiClient: { complete: ReturnType<typeof vi.fn> } })
+        .aiClient.complete,
+      findOne: (
+        agentSessionMod as unknown as { AgentSession: { findOne: ReturnType<typeof vi.fn> } }
+      ).AgentSession.findOne,
+      update: (agentSessionMod as unknown as { AgentSession: { update: ReturnType<typeof vi.fn> } })
+        .AgentSession.update,
+    };
+  }
+
+  function userTurn(content: string) {
+    return { role: 'user', content: `<user_input>${content}</user_input>` };
+  }
+
+  it('writes a session summary when the session has real user inputs', async () => {
+    const { complete, findOne, update } = await getMocks();
+    complete.mockClear();
+    update.mockClear();
+
+    findOne.mockResolvedValueOnce({
+      id: 'sess-1',
+      historyJson: JSON.stringify([userTurn('refactored the agent tool loop')]),
+    });
+    complete.mockResolvedValueOnce({
+      content: JSON.stringify({ summary: 'Refactored the agent tool loop.' }),
+    });
+
+    await summariseSession('sess-1', 'sub-1');
+
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(update).toHaveBeenCalledWith(
+      { sessionSummary: 'Refactored the agent tool loop.' },
+      { where: { id: 'sess-1' } },
+    );
+  });
+
+  it('bails silently when the session has only terminal output / no real user inputs', async () => {
+    const { complete, findOne, update } = await getMocks();
+    complete.mockClear();
+    update.mockClear();
+
+    findOne.mockResolvedValueOnce({
+      id: 'sess-2',
+      historyJson: JSON.stringify([{ role: 'user', content: 'TERMINAL OUTPUT:\nfoo bar' }]),
+    });
+
+    await summariseSession('sess-2', 'sub-1');
+
+    expect(complete).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('does nothing when the session does not exist', async () => {
+    const { complete, findOne, update } = await getMocks();
+    complete.mockClear();
+    update.mockClear();
+
+    findOne.mockResolvedValueOnce(null);
+    await summariseSession('missing-session', 'sub-1');
+
+    expect(complete).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+  });
+});
+
+describe('generateGroupDescriptionFromSummaries (cron LLM call)', () => {
+  const { generateGroupDescriptionFromSummaries } = __testing__;
+
+  async function getMocks() {
+    const aiClientMod = await import('../ai-client');
+    return {
+      complete: (aiClientMod as unknown as { aiClient: { complete: ReturnType<typeof vi.fn> } })
+        .aiClient.complete,
+    };
+  }
+
+  it('returns null when there are no summaries AND no existing description', async () => {
+    const { complete } = await getMocks();
+    complete.mockClear();
+    const got = await generateGroupDescriptionFromSummaries('My App', '/Users/me/MyApp', [], null);
+    expect(got).toBeNull();
+    expect(complete).not.toHaveBeenCalled();
+  });
+
+  it('returns a description built only from summaries, never from raw history', async () => {
+    const { complete } = await getMocks();
+    complete.mockClear();
+    complete.mockResolvedValueOnce({
+      content: JSON.stringify({
+        groupDescription:
+          'Project root: /Users/me/MyApp. Purpose: ship a chat feature. Primary language: TypeScript. Recent work touched the message timestamps and search.',
+      }),
+    });
+
+    const got = await generateGroupDescriptionFromSummaries(
+      'My App',
+      '/Users/me/MyApp',
+      [
+        {
+          summary: 'Refactored the chat scroll behaviour.',
+          lastActiveAt: new Date('2030-01-02T00:00:00Z'),
+        },
+        {
+          summary: 'Added timestamps to messages.',
+          lastActiveAt: new Date('2030-01-01T00:00:00Z'),
+        },
+      ],
+      'Project root: /Users/me/MyApp. Purpose: ship a chat feature. Primary language: TypeScript.',
+    );
+
+    expect(got).not.toBeNull();
+    expect(got).toContain('/Users/me/MyApp');
+    // The function should pass the summaries into the prompt. We confirm by
+    // looking at the rendered prompt (second message arg).
+    const promptUser = complete.mock.calls[0][1][1].content as string;
+    expect(promptUser).toContain('Refactored the chat scroll behaviour.');
+    expect(promptUser).toContain('Added timestamps to messages.');
+  });
+
+  it('rewrites a hallucinated Project root: path back to the deterministic dominantRoot', async () => {
+    const { complete } = await getMocks();
+    complete.mockClear();
+    complete.mockResolvedValueOnce({
+      content: JSON.stringify({
+        groupDescription:
+          'Project root: /Users/me/SomethingElse. Purpose: x. Primary language: TypeScript.',
+      }),
+    });
+
+    const got = await generateGroupDescriptionFromSummaries(
+      'My App',
+      '/Users/me/MyApp',
+      [{ summary: 'Did stuff.', lastActiveAt: new Date('2030-01-02T00:00:00Z') }],
+      null,
+    );
+
+    expect(got).toContain('/Users/me/MyApp');
+    expect(got).not.toContain('/Users/me/SomethingElse');
+  });
+});
+
+describe('buildProjectContext: Group description last updated', () => {
+  const { buildProjectContext } = __testing__;
+
+  async function getMocks() {
+    const agentSessionMod = await import('../models/agentSession');
+    return {
+      findOne: (
+        agentSessionMod as unknown as { AgentSession: { findOne: ReturnType<typeof vi.fn> } }
+      ).AgentSession.findOne,
+      findAll: (
+        agentSessionMod as unknown as { AgentSession: { findAll: ReturnType<typeof vi.fn> } }
+      ).AgentSession.findAll,
+    };
+  }
+
+  it('renders a "Group description last updated: ..." line when the timestamp is known', async () => {
+    const { findOne, findAll } = await getMocks();
+    findOne.mockResolvedValueOnce({
+      groupName: 'My App',
+      groupDescription: 'Project root: /Users/me/MyApp. Purpose: x. Primary language: TypeScript.',
+      groupDescriptionUpdatedAt: new Date('2030-03-15T10:42:00Z'),
+    });
+    findAll.mockResolvedValueOnce([]);
+
+    const got = await buildProjectContext('sub-1', 'My App', null, 'current-session');
+    expect(got!.text).toContain('Group description last updated: 2030-03-15 10:42 UTC');
+    expect(got!.groupDescriptionUpdatedAt?.toISOString()).toBe('2030-03-15T10:42:00.000Z');
+  });
+
+  it('falls back to a clear "unknown" hint when the timestamp is missing (legacy rows)', async () => {
+    const { findOne, findAll } = await getMocks();
+    findOne.mockResolvedValueOnce({
+      groupName: 'Legacy Group',
+      groupDescription: 'Project root: /Users/me/Legacy. Purpose: x. Primary language: TypeScript.',
+      // No groupDescriptionUpdatedAt — predates the migration on this row.
+    });
+    findAll.mockResolvedValueOnce([]);
+
+    const got = await buildProjectContext('sub-1', 'Legacy Group', null, 'current-session');
+    expect(got!.text).toContain('Group description last updated: (unknown');
+    expect(got!.groupDescriptionUpdatedAt).toBeNull();
+  });
+});

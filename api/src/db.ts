@@ -53,6 +53,13 @@ const COLUMN_MIGRATIONS: ColumnMigration[] = [
   // Added: project grouping
   { table: 'agent_sessions', column: 'group_name', definition: 'VARCHAR(255)' },
   { table: 'agent_sessions', column: 'group_description', definition: 'TEXT' },
+  // Added: tracks when the cron last rewrote a group's description, so the
+  // <project_context> block can surface staleness to the agent.
+  {
+    table: 'agent_sessions',
+    column: 'group_description_updated_at',
+    definition: 'DATETIME',
+  },
   // Added: per-session summary used to assemble <project_context> at runtime.
   // The 1-2 sentence summary describes what the user worked on in THIS
   // session; the agent server prepends the most recent N (currently 5)

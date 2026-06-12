@@ -25,7 +25,7 @@ import {
   pushToSessionHistory,
   createUserContentForCronJob,
 } from './utils';
-import { updateSessionGroup, buildProjectContext } from './sessionGrouping';
+import { updateSessionGroup, buildProjectContext, summariseSession } from './sessionGrouping';
 import {
   aiClient,
   AITool,
@@ -1174,6 +1174,25 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
             sessionId: sid,
             wasActive,
             drainedQueueLength: queueLength,
+          });
+        }
+      }
+
+      // Session-end hook: when the WebSocket closes the user has stopped
+      // typing, so this is the right moment to (re)generate each touched
+      // session's sessionSummary. The summary feeds future <project_context>
+      // blocks under "Recent sessions in this project". We deliberately do
+      // NOT block the close handler on the LLM call — fire-and-forget with
+      // its own error logging so a slow LLM provider can't keep the
+      // connection close path waiting.
+      const sub = getSubscription();
+      if (sub) {
+        for (const sid of connectionSessionIds) {
+          void summariseSession(sid, sub.id).catch((err) => {
+            log.warn('summariseSession on WebSocket close failed', {
+              sessionId: sid,
+              error: err,
+            });
           });
         }
       }
