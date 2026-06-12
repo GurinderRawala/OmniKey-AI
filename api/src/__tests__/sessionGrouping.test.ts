@@ -740,3 +740,274 @@ describe('refreshGroupDescription', () => {
     expect(lastRefreshedAt.get('sub-1::My App')).toBeInstanceOf(Date);
   });
 });
+
+// ---------------------------------------------------------------------------
+// truncateOnSentenceBoundary
+// ---------------------------------------------------------------------------
+describe('truncateOnSentenceBoundary', () => {
+  const { truncateOnSentenceBoundary } = __testing__;
+
+  it('returns the input unchanged when shorter than the limit', () => {
+    expect(truncateOnSentenceBoundary('Hi.', 100)).toBe('Hi.');
+  });
+
+  it('truncates on the last sentence boundary within the budget', () => {
+    const input =
+      'Project root: /Users/me/MyApp. Purpose: build a thing. Primary language: TypeScript. Recent focus: refactoring tests.';
+    const got = truncateOnSentenceBoundary(input, 80);
+    // Must end with a full sentence; must not contain a trailing partial word.
+    expect(got.endsWith('.')).toBe(true);
+    expect(got.length).toBeLessThanOrEqual(80);
+    expect(got).toContain('Project root: /Users/me/MyApp.');
+  });
+
+  it('never cuts a word in half', () => {
+    const input = 'Primary language is TypeScriptAndJavaScript and we love it';
+    const got = truncateOnSentenceBoundary(input, 30);
+    // Either it ends at a word boundary OR it ended with the synthetic period.
+    expect(got).not.toMatch(/[A-Za-z]$/);
+  });
+
+  it('appends a period when there was no sentence to land on', () => {
+    const input = 'no terminator here just a long string of words without dots';
+    const got = truncateOnSentenceBoundary(input, 25);
+    expect(got.endsWith('.')).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// extractAllProjectRoots — surface every distinct root referenced in the inputs
+// ---------------------------------------------------------------------------
+describe('extractAllProjectRoots', () => {
+  const { extractAllProjectRoots } = __testing__;
+
+  it('returns one entry per distinct normalised root, ordered by votes', () => {
+    const got = extractAllProjectRoots([
+      'fix /Users/me/AppA/src/a.ts',
+      'fix /Users/me/AppA/src/b.ts',
+      'fix /Users/me/AppA/package.json',
+      'and one file in /Users/me/AppB/main.go',
+    ]);
+    expect(got).toEqual([
+      { root: '/Users/me/AppA', votes: 3 },
+      { root: '/Users/me/AppB', votes: 1 },
+    ]);
+  });
+
+  it('returns [] when no real paths are referenced', () => {
+    expect(extractAllProjectRoots(['hello world'])).toEqual([]);
+  });
+
+  it('ignores URL-shaped pseudo-paths', () => {
+    const got = extractAllProjectRoots([
+      'see /github.com/foo/bar/pull/1',
+      'and edit /Users/me/Real/src/x.ts',
+    ]);
+    expect(got).toEqual([{ root: '/Users/me/Real', votes: 1 }]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// extractKeySubdirectories — the directories worked on inside one project root
+// ---------------------------------------------------------------------------
+describe('extractKeySubdirectories', () => {
+  const { extractKeySubdirectories } = __testing__;
+
+  it('returns the most-referenced subdirs under the given root, ordered by votes', () => {
+    const got = extractKeySubdirectories(
+      [
+        'fix /Users/me/Repo/api/src/agent/x.ts',
+        'fix /Users/me/Repo/api/src/agent/y.ts',
+        'fix /Users/me/Repo/api/src/routes/z.ts',
+        'fix /Users/me/Repo/cli/main.ts',
+      ],
+      '/Users/me/Repo',
+      4,
+    );
+    // /Users/me/Repo/api appears in three of the four file paths, so it
+    // wins the top spot. The cli sub-dir only appears once, but with a
+    // limit of 4 it should still surface alongside the api sub-tree.
+    expect(got[0]).toBe('/Users/me/Repo/api');
+    expect(got).toContain('/Users/me/Repo/cli');
+  });
+
+  it('returns [] when no paths are under the root', () => {
+    const got = extractKeySubdirectories(['fix /Users/me/OtherRepo/main.ts'], '/Users/me/Repo', 3);
+    expect(got).toEqual([]);
+  });
+
+  it('respects the limit', () => {
+    const got = extractKeySubdirectories(
+      ['/Users/me/Repo/a/x.ts /Users/me/Repo/b/x.ts /Users/me/Repo/c/x.ts /Users/me/Repo/d/x.ts'],
+      '/Users/me/Repo',
+      2,
+    );
+    expect(got).toHaveLength(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// refreshGroupDescription — group splitting (one project = one group)
+// ---------------------------------------------------------------------------
+describe('refreshGroupDescription split behaviour', () => {
+  const { refreshGroupDescription, lastRefreshedAt } = __testing__;
+
+  async function getMocks() {
+    const aiClientMod = await import('../ai-client');
+    const agentSessionMod = await import('../models/agentSession');
+    return {
+      complete: (aiClientMod as unknown as { aiClient: { complete: ReturnType<typeof vi.fn> } })
+        .aiClient.complete,
+      findAll: (
+        agentSessionMod as unknown as { AgentSession: { findAll: ReturnType<typeof vi.fn> } }
+      ).AgentSession.findAll,
+      findOne: (
+        agentSessionMod as unknown as { AgentSession: { findOne: ReturnType<typeof vi.fn> } }
+      ).AgentSession.findOne,
+      update: (agentSessionMod as unknown as { AgentSession: { update: ReturnType<typeof vi.fn> } })
+        .AgentSession.update,
+    };
+  }
+
+  function userTurn(content: string) {
+    return { role: 'user', content: `<user_input>${content}</user_input>` };
+  }
+
+  it('demotes sessions whose dominant root differs from the group dominant root', async () => {
+    const { findOne, findAll, complete, update } = await getMocks();
+    lastRefreshedAt.clear();
+    findOne.mockResolvedValueOnce({ lastActiveAt: new Date('2030-01-02T00:00:00Z') });
+    findAll.mockResolvedValueOnce([
+      // 3 sessions belong to /Users/me/AppA — the dominant root.
+      {
+        id: 'a-1',
+        historyJson: JSON.stringify([userTurn('edit /Users/me/AppA/src/x.ts')]),
+      },
+      {
+        id: 'a-2',
+        historyJson: JSON.stringify([userTurn('fix /Users/me/AppA/y.ts')]),
+      },
+      {
+        id: 'a-3',
+        historyJson: JSON.stringify([userTurn('check /Users/me/AppA/z.ts')]),
+      },
+      // 1 polluting session in /Users/me/AppB — must be demoted.
+      {
+        id: 'b-1',
+        historyJson: JSON.stringify([userTurn('edit /Users/me/AppB/main.ts')]),
+      },
+    ]);
+    complete.mockResolvedValueOnce({
+      content: JSON.stringify({
+        groupDescription: 'Project root: /Users/me/AppA. Purpose: x. Primary language: TypeScript.',
+      }),
+    });
+    update.mockClear();
+
+    await refreshGroupDescription('sub-1', 'My App', 'old desc');
+
+    // First update call: clears groupName for the straggler 'b-1'.
+    expect(update).toHaveBeenCalledTimes(2);
+    const firstUpdate = update.mock.calls[0];
+    expect(firstUpdate[0]).toEqual({ groupName: null, groupDescription: null });
+    // The where clause should target only the straggler id.
+    const stragglerWhere = firstUpdate[1].where;
+    const idClause = stragglerWhere.id;
+    const ids = idClause[Object.getOwnPropertySymbols(idClause)[0]] ?? idClause['in'];
+    expect(ids).toEqual(['b-1']);
+
+    // Second update: writes the new description for the surviving group.
+    const secondUpdate = update.mock.calls[1];
+    expect(secondUpdate[0].groupDescription).toContain('/Users/me/AppA');
+    expect(secondUpdate[0].groupDescription).not.toContain('/Users/me/AppB');
+  });
+
+  it('does NOT demote sessions when they all share the same dominant root', async () => {
+    const { findOne, findAll, complete, update } = await getMocks();
+    lastRefreshedAt.clear();
+    findOne.mockResolvedValueOnce({ lastActiveAt: new Date('2030-02-02T00:00:00Z') });
+    findAll.mockResolvedValueOnce([
+      {
+        id: 'a-1',
+        historyJson: JSON.stringify([userTurn('edit /Users/me/AppA/src/x.ts')]),
+      },
+      {
+        id: 'a-2',
+        historyJson: JSON.stringify([userTurn('fix /Users/me/AppA/y.ts')]),
+      },
+    ]);
+    complete.mockResolvedValueOnce({
+      content: JSON.stringify({
+        groupDescription: 'Project root: /Users/me/AppA. Purpose: x. Primary language: TypeScript.',
+      }),
+    });
+    update.mockClear();
+
+    await refreshGroupDescription('sub-1', 'AppA', 'old desc');
+
+    // Only the description-update call should fire — no demotion update.
+    expect(update).toHaveBeenCalledTimes(1);
+    const onlyCall = update.mock.calls[0];
+    expect(onlyCall[0]).toHaveProperty('groupDescription');
+    expect(onlyCall[0]).not.toHaveProperty('groupName');
+  });
+});
+
+describe('refreshGroupDescription ancestor/descendant collapse', () => {
+  const { refreshGroupDescription, lastRefreshedAt } = __testing__;
+
+  async function getMocks() {
+    const aiClientMod = await import('../ai-client');
+    const agentSessionMod = await import('../models/agentSession');
+    return {
+      complete: (aiClientMod as unknown as { aiClient: { complete: ReturnType<typeof vi.fn> } })
+        .aiClient.complete,
+      findAll: (
+        agentSessionMod as unknown as { AgentSession: { findAll: ReturnType<typeof vi.fn> } }
+      ).AgentSession.findAll,
+      findOne: (
+        agentSessionMod as unknown as { AgentSession: { findOne: ReturnType<typeof vi.fn> } }
+      ).AgentSession.findOne,
+      update: (agentSessionMod as unknown as { AgentSession: { update: ReturnType<typeof vi.fn> } })
+        .AgentSession.update,
+    };
+  }
+
+  function userTurn(content: string) {
+    return { role: 'user', content: `<user_input>${content}</user_input>` };
+  }
+
+  it('does NOT split when sessions reference the project at different depths', async () => {
+    // Two sessions in the same project — one only mentions files at the
+    // repo root, the other only mentions files inside the api/ subdir.
+    // Before the ancestor/descendant collapse this group used to get split
+    // into two on every tick, demoting half the sessions for no reason.
+    const { findOne, findAll, complete, update } = await getMocks();
+    lastRefreshedAt.clear();
+    findOne.mockResolvedValueOnce({ lastActiveAt: new Date('2030-03-03T00:00:00Z') });
+    findAll.mockResolvedValueOnce([
+      {
+        id: 'a-1',
+        historyJson: JSON.stringify([userTurn('edit /Users/me/Repo/README.md')]),
+      },
+      {
+        id: 'a-2',
+        historyJson: JSON.stringify([userTurn('fix /Users/me/Repo/api/src/agent/x.ts')]),
+      },
+    ]);
+    complete.mockResolvedValueOnce({
+      content: JSON.stringify({
+        groupDescription: 'Project root: /Users/me/Repo. Purpose: x. Primary language: TypeScript.',
+      }),
+    });
+    update.mockClear();
+
+    await refreshGroupDescription('sub-1', 'Repo', 'old desc');
+
+    // Only the description-update call should fire — no demotion update.
+    expect(update).toHaveBeenCalledTimes(1);
+    const onlyCall = update.mock.calls[0];
+    expect(onlyCall[0]).toHaveProperty('groupDescription');
+    expect(onlyCall[0]).not.toHaveProperty('groupName');
+  });
+});

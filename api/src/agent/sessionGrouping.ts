@@ -265,7 +265,10 @@ function extractProjectPath(texts: string[]): string | null {
   const combined = tildeExpand(texts.join(' '));
 
   // Match absolute paths (Unix) — capture up to 6 path segments.
-  const pathRe = /(\/(?:[^\s/<>"'`]+\/){1,6}[^\s/<>"'`]*)/g;
+  // Path segments cannot contain whitespace, /, <>, quotes, or regex
+  // metacharacters that show up in source code and config but are never
+  // valid in real filesystem paths: ?, ^, $, {, }, [, ], (, ), |, \\, *, +.
+  const pathRe = /(\/(?:[^\s/<>"'`?^${}\[\]()|\\*+]+\/){1,6}[^\s/<>"'`?^${}\[\]()|\\*+]*)/g;
   const rawMatches = Array.from(combined.matchAll(pathRe), (m) => m[1])
     // Strip trailing sentence punctuation that the regex greedily included
     // (e.g. "see /Users/x/MyApp/cli, please edit ..." → /Users/x/MyApp/cli).
@@ -306,6 +309,99 @@ function extractProjectPath(texts: string[]): string | null {
 
   const winner = entries[0][0];
   return trimToProjectRoot(winner) ?? winner;
+}
+
+// Return ALL normalised project roots referenced in the given texts together
+// with their direct-vote count, ordered by score then by path. Used by the
+// cron to detect groups that have drifted across multiple unrelated projects
+// and need to be split.
+function extractAllProjectRoots(texts: string[]): Array<{ root: string; votes: number }> {
+  const homeDir =
+    (typeof process !== 'undefined' && (process.env.HOME || process.env.USERPROFILE)) || '';
+  const tildeExpand = (text: string): string =>
+    homeDir ? text.replace(/(^|[\s(\["'`])~\//g, (_m, pre: string) => `${pre}${homeDir}/`) : text;
+  const combined = tildeExpand(texts.join(' '));
+  // Path segments cannot contain whitespace, /, <>, quotes, or regex
+  // metacharacters that show up in source code and config but are never
+  // valid in real filesystem paths: ?, ^, $, {, }, [, ], (, ), |, \\, *, +.
+  const pathRe = /(\/(?:[^\s/<>"'`?^${}\[\]()|\\*+]+\/){1,6}[^\s/<>"'`?^${}\[\]()|\\*+]*)/g;
+  const rawMatches = Array.from(combined.matchAll(pathRe), (m) => m[1])
+    .map((raw) => raw.replace(/[.,;:!?)\]]+$/, ''))
+    .filter((raw) => raw.length > 1);
+  const votes = new Map<string, number>();
+  for (const raw of rawMatches) {
+    const trimmed = trimToProjectRoot(raw);
+    if (!trimmed) continue;
+    votes.set(trimmed, (votes.get(trimmed) ?? 0) + 1);
+  }
+  return Array.from(votes.entries())
+    .map(([root, n]) => ({ root, votes: n }))
+    .sort((a, b) => (b.votes !== a.votes ? b.votes - a.votes : a.root.length - b.root.length));
+}
+
+// Return the most-referenced sub-directories UNDER a given project root,
+// ordered by reference count then by depth, capped at `limit`. The trailing
+// file segment (if any) is stripped, but unlike trimToProjectRoot we keep
+// non-root subdirs (src, lib, dist, ...) because those are exactly the
+// "key directories worked on" the description should mention.
+function extractKeySubdirectories(texts: string[], projectRoot: string, limit: number): string[] {
+  if (!projectRoot) return [];
+  const homeDir =
+    (typeof process !== 'undefined' && (process.env.HOME || process.env.USERPROFILE)) || '';
+  const tildeExpand = (text: string): string =>
+    homeDir ? text.replace(/(^|[\s(\["'`])~\//g, (_m, pre: string) => `${pre}${homeDir}/`) : text;
+  const combined = tildeExpand(texts.join(' '));
+  const pathRe = /(\/(?:[^\s/<>"'`?^${}\[\]()|\\*+]+\/){1,8}[^\s/<>"'`?^${}\[\]()|\\*+]*)/g;
+  const prefix = projectRoot.endsWith('/') ? projectRoot : projectRoot + '/';
+  const votes = new Map<string, number>();
+  for (const m of combined.matchAll(pathRe)) {
+    const raw = m[1].replace(/[.,;:!?)\]]+$/, '');
+    if (!raw.startsWith(prefix)) continue;
+    const parts = raw.split('/').filter(Boolean);
+    // Strip trailing file segment, if any.
+    if (parts.length && looksLikeFile(parts[parts.length - 1])) {
+      parts.pop();
+    }
+    // Need at least one segment beyond the project root to be a subdir.
+    const rootDepth = projectRoot.split('/').filter(Boolean).length;
+    if (parts.length <= rootDepth) continue;
+    // Walk every ancestor depth strictly deeper than the root, capping at
+    // root + 3 segments so we don't promote one-off deeply-nested files.
+    const maxDepth = Math.min(parts.length, rootDepth + 3);
+    for (let depth = rootDepth + 1; depth <= maxDepth; depth++) {
+      const sub = '/' + parts.slice(0, depth).join('/');
+      votes.set(sub, (votes.get(sub) ?? 0) + 1);
+    }
+  }
+  return Array.from(votes.entries())
+    .filter(([, n]) => n >= 1)
+    .sort((a, b) => (b[1] !== a[1] ? b[1] - a[1] : a[0].split('/').length - b[0].split('/').length))
+    .slice(0, limit)
+    .map(([sub]) => sub);
+}
+
+// Truncate to at most `maxLen` characters but never mid-word, preferring to
+// end on a sentence boundary (.!?). Falls back to the last whitespace.
+function truncateOnSentenceBoundary(text: string, maxLen: number): string {
+  if (text.length <= maxLen) return text;
+  const slice = text.slice(0, maxLen);
+  // Prefer the last sentence terminator followed by a space (or end).
+  const sentenceMatch = /[.!?](?=\s|$)(?!.*[.!?](?=\s|$))/s.exec(slice);
+  if (sentenceMatch && sentenceMatch.index > maxLen * 0.5) {
+    return slice.slice(0, sentenceMatch.index + 1).trimEnd();
+  }
+  // Otherwise back off to the last whitespace so we don't cut a word.
+  const lastSpace = slice.lastIndexOf(' ');
+  if (lastSpace > maxLen * 0.5) {
+    return (
+      slice
+        .slice(0, lastSpace)
+        .trimEnd()
+        .replace(/[,;:]$/, '') + '.'
+    );
+  }
+  // Last resort: hard truncate, but always end on a period.
+  return slice.trimEnd().replace(/[,;:.!?]+$/, '') + '.';
 }
 
 // ---------------------------------------------------------------------------
@@ -606,7 +702,8 @@ Respond with ONLY valid JSON, no markdown:
       }
     }
 
-    groupDescription = groupDescription.slice(0, 800);
+    // Cap on a sentence boundary so we never store truncated mid-token text.
+    groupDescription = truncateOnSentenceBoundary(groupDescription, 1000);
 
     return {
       // Preserve the canonical existing group name when we fell through from
@@ -663,10 +760,16 @@ async function enrichGroupDescription(
   allInputs: string[],
   existingDescription: string | null,
   isUpdateMode: boolean,
+  forcedProjectPath?: string | null,
 ): Promise<string | null> {
   if (!allInputs.length) return null;
 
-  const projectPath = extractProjectPath(allInputs);
+  // Use the caller-provided project root when given (the cron passes the
+  // collapsed dominant root for the group, which is the correct project root
+  // even when individual sessions only reference subdirectories). Fall back
+  // to running our own extraction otherwise — that's the path taken from
+  // updateSessionGroup for a single session.
+  const projectPath = forcedProjectPath ?? extractProjectPath(allInputs);
   const messagesText = allInputs.map((m, i) => `${i + 1}. ${m}`).join('\n');
 
   // Hand the LLM the deterministically extracted root explicitly. Before
@@ -681,6 +784,15 @@ async function enrichGroupDescription(
     ? `Deterministically extracted project root for this group: ${projectPath}\n(Use this EXACT path in the "Project root:" sentence. Do not abbreviate, do not paraphrase, do not substitute a URL for it.)`
     : 'No absolute project root could be deterministically extracted from the messages. Say "Project root: not specified." in the description.';
 
+  // Surface the key sub-directories the user has been working on inside this
+  // project so the description can mention them. The LLM is instructed to
+  // weave them in as a single sentence — they are not the project root, just
+  // landmarks within it (e.g. /Users/me/Repo/api/src/agent, /Users/me/Repo/cli).
+  const keySubdirs = projectPath ? extractKeySubdirectories(allInputs, projectPath, 4) : [];
+  const keySubdirsLine = keySubdirs.length
+    ? `Key sub-directories worked on inside this project (most-referenced first):\n${keySubdirs.map((s) => `  - ${s}`).join('\n')}`
+    : 'No notable sub-directories were identified inside the project root.';
+
   const prompt =
     isUpdateMode && existingDescription
       ? `Update the project group description for "${groupName}" based on new session data.
@@ -690,30 +802,42 @@ Current description:
 
 ${projectPathLine}
 
+${keySubdirsLine}
+
 Recent user messages from sessions in this group:
 ${messagesText}
 
-Update the description to incorporate any new findings. Keep the same 3-4 sentence structure answering in order:
+A GROUP CORRESPONDS TO EXACTLY ONE PROJECT. The description must describe ONLY the project at the project root above. Do not mention any other project root. Do not merge information about multiple unrelated projects into one description — the cron will split them into separate groups on its own.
+
+Update the description to incorporate any new findings. Keep a 4-5 sentence single paragraph answering in order:
 1. Where is the project root? Use the deterministically extracted path above when one was provided. Never use a URL (github.com/..., linear.app/..., console.cloud.google.com/...) as the project root.
 2. What is the purpose of this project?
-3. What is the primary programming language?
+3. What are the main sub-directories worked on inside the project? Mention the most useful 2-3 from the key sub-directories list above (use their exact absolute paths). Skip this sentence if no sub-directories were identified.
+4. What is the primary programming language?
+5. (Optional, only if clearly inferable) What is the current focus of recent work, in one short clause.
 
-Rules: single paragraph, under ~500 characters, no markdown, no bullet points, no newlines. Preserve correct existing information. Only change what the messages provide new or better details on.
+Rules: single paragraph, no markdown, no bullet points, no newlines, end on a complete sentence. Keep under ~650 characters total. Preserve correct existing information. Only change what the messages provide new or better details on.
 
 Respond with ONLY valid JSON: {"groupDescription":"..."}`
       : `Generate a description for the project group "${groupName}" based on these session messages.
 
 ${projectPathLine}
 
+${keySubdirsLine}
+
 Messages:
 ${messagesText}
 
-Write a SINGLE paragraph of 3-4 sentences (no markdown, no bullet points, no newlines) answering in order:
+A GROUP CORRESPONDS TO EXACTLY ONE PROJECT. Describe ONLY the project at the project root above. Do not mention any other project root and do not merge multiple unrelated projects into one description.
+
+Write a SINGLE paragraph of 4-5 sentences (no markdown, no bullet points, no newlines, end on a complete sentence) answering in order:
 1. Where is the project root? Use the deterministically extracted path above when one was provided; never use a URL.
 2. What is the purpose of this project?
-3. What is the primary programming language? (Name it when inferable; "Primary language not identified." if not.)
+3. What are the main sub-directories worked on inside the project? Mention the most useful 2-3 from the key sub-directories list above (use their exact absolute paths). Skip if none.
+4. What is the primary programming language? (Name it when inferable; "Primary language not identified." if not.)
+5. (Optional) Current focus of recent work, in one short clause.
 
-Keep the whole description under ~500 characters.
+Keep the whole description under ~650 characters.
 
 Respond with ONLY valid JSON: {"groupDescription":"..."}`;
 
@@ -764,7 +888,11 @@ Respond with ONLY valid JSON: {"groupDescription":"..."}`;
       }
     }
 
-    return description.slice(0, 800);
+    // Cap on a sentence boundary so we never store "...Primary language: GPT-5"
+    // (cut mid-token by the old hard slice). Hard limit raised from 800 to 1000
+    // to accommodate the new sentence about key sub-directories, with the
+    // truncator picking the last complete sentence inside that budget.
+    return truncateOnSentenceBoundary(description, 1000);
   } catch (err) {
     logger.warn('Group description enrichment failed', { groupName, error: err });
     return null;
@@ -892,30 +1020,129 @@ async function refreshGroupDescription(
       where: { subscriptionId, groupName },
       order: [['last_active_at', 'DESC']],
       limit: 15,
-      attributes: ['historyJson'],
+      attributes: ['id', 'historyJson'],
     });
 
+    // Per-session inputs + each session's dominant project root. Used both
+    // to detect groups that have drifted across multiple unrelated projects
+    // (which we then split — one project per group is a hard invariant) and
+    // to build the LLM prompt from ONLY the sessions that actually belong to
+    // the dominant root.
+    type Resolved = { id: string; inputs: string[]; root: string | null };
+    const resolved: Resolved[] = sessions.map((s) => {
+      const inputs = extractUserInputs(s.historyJson);
+      return { id: s.id, inputs, root: extractProjectPath(inputs) };
+    });
+
+    // Count direct votes per root (sessions with no detectable root don't
+    // contribute to the split decision, they ride along with whatever wins).
+    const rawRootCounts = new Map<string, number>();
+    for (const r of resolved) {
+      if (r.root) rawRootCounts.set(r.root, (rawRootCounts.get(r.root) ?? 0) + 1);
+    }
+
+    // Collapse roots that are in an ancestor/descendant relationship into the
+    // SHALLOWEST one — they are the same project, just referenced at
+    // different depths (e.g. one session edits files in /Users/me/Repo, the
+    // next edits files in /Users/me/Repo/api). Without this collapse the
+    // split logic would treat /Users/me/Repo and /Users/me/Repo/api as two
+    // separate projects and demote half the group on every tick.
+    const isAncestorOrEqual = (a: string, b: string): boolean =>
+      a === b || b.startsWith(a.endsWith('/') ? a : a + '/');
+    const rawRoots = Array.from(rawRootCounts.keys());
+    const canonicalOf = new Map<string, string>();
+    for (const root of rawRoots) {
+      let canonical = root;
+      for (const other of rawRoots) {
+        if (other === root) continue;
+        if (isAncestorOrEqual(other, canonical)) canonical = other;
+      }
+      canonicalOf.set(root, canonical);
+    }
+    const rootCounts = new Map<string, number>();
+    for (const [root, votes] of rawRootCounts.entries()) {
+      const canon = canonicalOf.get(root) ?? root;
+      rootCounts.set(canon, (rootCounts.get(canon) ?? 0) + votes);
+    }
+
+    // Dominant root: the canonical project most-referenced across sessions.
+    // Ties are broken by shorter path (more likely the actual project root
+    // when two truly disjoint trees somehow tie).
+    const ranked = Array.from(rootCounts.entries()).sort((a, b) =>
+      b[1] !== a[1] ? b[1] - a[1] : a[0].length - b[0].length,
+    );
+    const dominantRoot = ranked.length ? ranked[0][0] : null;
+
+    // SPLIT: any session whose canonical root is non-null and DIFFERENT
+    // from the dominant root does not belong in this group. We clear its
+    // groupName/groupDescription so the next cron tick re-classifies it
+    // into its own (likely new) group. We deliberately do NOT move it to a
+    // specific named group here — classifyGroup handles naming, including
+    // the path-match short-circuit that will merge it into an existing
+    // sibling group if one already represents the same root.
+    if (dominantRoot) {
+      const stragglerIds = resolved
+        .filter((r) => {
+          if (!r.root) return false;
+          const canon = canonicalOf.get(r.root) ?? r.root;
+          return canon !== dominantRoot;
+        })
+        .map((r) => r.id);
+      if (stragglerIds.length > 0) {
+        logger.info(
+          'Splitting polluted group: demoting sessions whose root differs from the dominant root',
+          {
+            subscriptionId,
+            groupName,
+            dominantRoot,
+            stragglerCount: stragglerIds.length,
+            otherRoots: Array.from(rootCounts.entries())
+              .filter(([r]) => r !== dominantRoot)
+              .map(([r, n]) => `${r} (${n})`),
+          },
+        );
+        await AgentSession.update(
+          { groupName: null, groupDescription: null },
+          { where: { id: { [Op.in]: stragglerIds } } },
+        );
+      }
+    }
+
+    // Collect inputs ONLY from sessions that belong to the dominant root
+    // (or, if we couldn't detect a root at all, every session in the group).
+    // Without this filter the LLM would still see prose from the demoted
+    // sessions and weave their paths/topics into the description.
     const allInputs: string[] = [];
-    for (const s of sessions) {
-      for (const inp of extractUserInputs(s.historyJson)) {
+    for (const r of resolved) {
+      if (dominantRoot && r.root) {
+        const canon = canonicalOf.get(r.root) ?? r.root;
+        if (canon !== dominantRoot) continue;
+      }
+      for (const inp of r.inputs) {
         allInputs.push(inp);
         if (allInputs.length >= 10) break;
       }
       if (allInputs.length >= 10) break;
     }
 
-    if (!allInputs.length) return;
+    if (!allInputs.length) {
+      // Mark the refresh as done so we don't spin on this group every tick.
+      lastRefreshedAt.set(refreshKey(subscriptionId, groupName), new Date());
+      return;
+    }
 
     const newDescription = await enrichGroupDescription(
       groupName,
       allInputs,
       existingDescription,
       true,
+      dominantRoot,
     );
 
     if (!newDescription) return;
 
-    // Sync the updated description to every session in this group.
+    // Sync the updated description to every session that REMAINS in this
+    // group (i.e. excluding the just-demoted stragglers).
     await AgentSession.update(
       { groupDescription: newDescription },
       { where: { subscriptionId, groupName } },
@@ -923,7 +1150,7 @@ async function refreshGroupDescription(
 
     lastRefreshedAt.set(refreshKey(subscriptionId, groupName), new Date());
 
-    logger.info('Group description refreshed', { subscriptionId, groupName });
+    logger.info('Group description refreshed', { subscriptionId, groupName, dominantRoot });
   } catch (err) {
     logger.error('Failed to refresh group description', { subscriptionId, groupName, error: err });
   }
@@ -1088,6 +1315,9 @@ export function startGroupingCronJob(): void {
 export const __testing__ = {
   extractUserInputs,
   extractProjectPath,
+  extractAllProjectRoots,
+  extractKeySubdirectories,
+  truncateOnSentenceBoundary,
   stripInjectedWrappers,
   trimToProjectRoot,
   extractStoredProjectPath,
