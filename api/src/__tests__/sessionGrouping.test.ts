@@ -470,3 +470,142 @@ describe('classifyGroup', () => {
     expect(result).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// runWithConcurrency
+// ---------------------------------------------------------------------------
+describe('runWithConcurrency', () => {
+  const { runWithConcurrency } = __testing__;
+
+  it('runs every item exactly once', async () => {
+    const seen: number[] = [];
+    await runWithConcurrency([1, 2, 3, 4, 5], 2, async (n) => {
+      seen.push(n);
+    });
+    expect(seen.sort()).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  it('respects the concurrency limit', async () => {
+    let active = 0;
+    let peak = 0;
+    await runWithConcurrency([1, 2, 3, 4, 5, 6, 7, 8], 3, async () => {
+      active++;
+      peak = Math.max(peak, active);
+      await new Promise((r) => setTimeout(r, 5));
+      active--;
+    });
+    expect(peak).toBeLessThanOrEqual(3);
+  });
+
+  it('continues draining the queue when one item throws', async () => {
+    const seen: number[] = [];
+    await runWithConcurrency([1, 2, 3], 2, async (n) => {
+      if (n === 2) throw new Error('boom');
+      seen.push(n);
+    });
+    expect(seen.sort()).toEqual([1, 3]);
+  });
+
+  it('treats a concurrency limit < 1 as 1', async () => {
+    const seen: number[] = [];
+    await runWithConcurrency([1, 2, 3], 0, async (n) => {
+      seen.push(n);
+    });
+    expect(seen.sort()).toEqual([1, 2, 3]);
+  });
+
+  it('returns immediately for an empty input', async () => {
+    let called = false;
+    await runWithConcurrency([], 5, async () => {
+      called = true;
+    });
+    expect(called).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// refreshGroupDescription — skip-if-idle gating
+// ---------------------------------------------------------------------------
+describe('refreshGroupDescription', () => {
+  const { refreshGroupDescription, lastRefreshedAt } = __testing__;
+
+  // Reach into the same mocks we set up at the top of this file.
+  async function getMocks() {
+    const aiClientMod = await import('../ai-client');
+    const agentSessionMod = await import('../models/agentSession');
+    return {
+      complete: (aiClientMod as unknown as { aiClient: { complete: ReturnType<typeof vi.fn> } })
+        .aiClient.complete,
+      findAll: (
+        agentSessionMod as unknown as { AgentSession: { findAll: ReturnType<typeof vi.fn> } }
+      ).AgentSession.findAll,
+      findOne: (
+        agentSessionMod as unknown as { AgentSession: { findOne: ReturnType<typeof vi.fn> } }
+      ).AgentSession.findOne,
+      update: (agentSessionMod as unknown as { AgentSession: { update: ReturnType<typeof vi.fn> } })
+        .AgentSession.update,
+    };
+  }
+
+  it('returns silently when the group has no sessions', async () => {
+    const { findOne, complete, update } = await getMocks();
+    findOne.mockResolvedValueOnce(null);
+    complete.mockClear();
+    update.mockClear();
+
+    await refreshGroupDescription('sub-1', 'Empty Group', 'old description');
+
+    expect(complete).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('skips the LLM when there has been no activity since last refresh', async () => {
+    const { findOne, findAll, complete, update } = await getMocks();
+    lastRefreshedAt.clear();
+
+    const lastActive = new Date('2024-01-01T00:00:00Z');
+    findOne.mockResolvedValueOnce({ lastActiveAt: lastActive });
+    // Seed the in-memory marker as if we refreshed AFTER the newest activity.
+    lastRefreshedAt.set('sub-1::My App', new Date('2024-01-02T00:00:00Z'));
+
+    findAll.mockClear();
+    complete.mockClear();
+    update.mockClear();
+
+    await refreshGroupDescription('sub-1', 'My App', 'desc');
+
+    // findOne was called to get lastActiveAt; nothing else should happen.
+    expect(findAll).not.toHaveBeenCalled();
+    expect(complete).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('runs the LLM and updates when a session has been active since last refresh', async () => {
+    const { findOne, findAll, complete, update } = await getMocks();
+    lastRefreshedAt.clear();
+
+    const lastActive = new Date('2024-02-01T00:00:00Z');
+    findOne.mockResolvedValueOnce({ lastActiveAt: lastActive });
+    // No prior refresh marker → must run.
+    findAll.mockResolvedValueOnce([
+      {
+        historyJson: JSON.stringify([
+          { role: 'user', content: '<user_input>fix /Users/me/MyApp/index.ts</user_input>' },
+        ]),
+      },
+    ]);
+    complete.mockResolvedValueOnce({
+      content: JSON.stringify({
+        groupDescription:
+          'Project root: /Users/me/MyApp. Purpose: x. Primary language: TypeScript.',
+      }),
+    });
+    update.mockClear();
+
+    await refreshGroupDescription('sub-1', 'My App', 'old desc');
+
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(lastRefreshedAt.get('sub-1::My App')).toBeInstanceOf(Date);
+  });
+});

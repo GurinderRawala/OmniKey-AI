@@ -767,12 +767,45 @@ export async function updateSessionGroup(sessionId: string, subscriptionId: stri
 // to UPDATE the existing description with any new findings.
 // ---------------------------------------------------------------------------
 
+// In-memory map of when we last refreshed each group's description. Keyed by
+// `${subscriptionId}::${groupName}`. Lost on worker restart, which is fine —
+// the first tick after restart will refresh everything once and then settle
+// into the activity-gated steady state. We deliberately do NOT persist this
+// to the DB: the existing AgentSession.updatedAt covers "was the description
+// touched recently?" if we ever need durable tracking.
+const lastRefreshedAt = new Map<string, Date>();
+
+function refreshKey(subscriptionId: string, groupName: string): string {
+  return `${subscriptionId}::${groupName}`;
+}
+
 async function refreshGroupDescription(
   subscriptionId: string,
   groupName: string,
   existingDescription: string | null,
 ): Promise<void> {
   try {
+    // Skip-if-idle: only refresh when the group has had activity (a new user
+    // turn pushed onto some session's history) since we last refreshed it.
+    // Saves an LLM call per group per tick on quiet groups — the previous
+    // implementation paid that cost forever even when nothing changed.
+    const newest = await AgentSession.findOne({
+      where: { subscriptionId, groupName },
+      order: [['last_active_at', 'DESC']],
+      attributes: ['lastActiveAt'],
+    });
+    if (!newest) return;
+    const lastRefresh = lastRefreshedAt.get(refreshKey(subscriptionId, groupName));
+    if (lastRefresh && newest.lastActiveAt <= lastRefresh) {
+      logger.debug('Group description refresh skipped — no activity since last refresh', {
+        subscriptionId,
+        groupName,
+        lastRefresh,
+        lastActiveAt: newest.lastActiveAt,
+      });
+      return;
+    }
+
     const sessions = await AgentSession.findAll({
       where: { subscriptionId, groupName },
       order: [['last_active_at', 'DESC']],
@@ -806,6 +839,8 @@ async function refreshGroupDescription(
       { where: { subscriptionId, groupName } },
     );
 
+    lastRefreshedAt.set(refreshKey(subscriptionId, groupName), new Date());
+
     logger.info('Group description refreshed', { subscriptionId, groupName });
   } catch (err) {
     logger.error('Failed to refresh group description', { subscriptionId, groupName, error: err });
@@ -816,9 +851,38 @@ async function refreshGroupDescription(
 // Public: refresh all sessions for a subscription (used by cron)
 // ---------------------------------------------------------------------------
 
+// Run an async function over each item in `items` with at most `limit`
+// concurrent executions. Used to parallelise per-group refresh and
+// per-session backfill within a subscription without unbounded fan-out
+// against the LLM provider.
+async function runWithConcurrency<T>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T) => Promise<void>,
+): Promise<void> {
+  const queue = items.slice();
+  const workers: Promise<void>[] = [];
+  const worker = async (): Promise<void> => {
+    while (queue.length > 0) {
+      const item = queue.shift();
+      if (item === undefined) return;
+      try {
+        await fn(item);
+      } catch (err) {
+        // Individual item failures are logged inside `fn`; we keep draining
+        // the queue so one bad item never blocks the rest of the tick.
+        logger.error('runWithConcurrency item failed', { error: err });
+      }
+    }
+  };
+  for (let i = 0; i < Math.max(1, limit); i++) workers.push(worker());
+  await Promise.all(workers);
+}
+
 export async function refreshAllSessionGroups(subscriptionId: string): Promise<void> {
   try {
-    // Refresh descriptions for all existing groups (one LLM call per group).
+    // Refresh descriptions for all existing groups (one LLM call per group,
+    // gated by the per-group skip-if-idle check inside refreshGroupDescription).
     const groupRows = await AgentSession.findAll({
       where: {
         subscriptionId,
@@ -828,16 +892,10 @@ export async function refreshAllSessionGroups(subscriptionId: string): Promise<v
       group: ['group_name'],
     });
 
-    logger.info('Refreshing session groups', {
-      subscriptionId,
-      groupCount: groupRows.length,
-    });
-
-    for (const row of groupRows) {
-      await refreshGroupDescription(subscriptionId, row.groupName!, row.groupDescription ?? null);
-    }
-
-    // Also classify any sessions that haven't been grouped yet.
+    // Ungrouped sessions: classify any that have never been grouped yet.
+    // Limited to the 20 most recently active so a long-quiet account with
+    // thousands of historical ungrouped sessions still makes forward progress
+    // tick by tick instead of blowing past the LLM rate limit on the first run.
     const ungroupedSessions = await AgentSession.findAll({
       where: { subscriptionId, groupName: null },
       order: [['last_active_at', 'DESC']],
@@ -845,9 +903,24 @@ export async function refreshAllSessionGroups(subscriptionId: string): Promise<v
       attributes: ['id'],
     });
 
-    for (const session of ungroupedSessions) {
-      await updateSessionGroup(session.id, subscriptionId);
-    }
+    logger.info('Refreshing session groups', {
+      subscriptionId,
+      groupCount: groupRows.length,
+      ungroupedCount: ungroupedSessions.length,
+    });
+
+    // Refresh + backfill run in parallel (each with bounded concurrency) so
+    // that a slow refresh doesn't delay backfill for the same subscription.
+    // Concurrency is intentionally low (3) to avoid bursting the upstream
+    // LLM provider when a subscription has many groups.
+    await Promise.allSettled([
+      runWithConcurrency(groupRows, 3, async (row) => {
+        await refreshGroupDescription(subscriptionId, row.groupName!, row.groupDescription ?? null);
+      }),
+      runWithConcurrency(ungroupedSessions, 3, async (session) => {
+        await updateSessionGroup(session.id, subscriptionId);
+      }),
+    ]);
   } catch (err) {
     logger.error('Failed to refresh session groups for subscription', {
       subscriptionId,
@@ -857,49 +930,70 @@ export async function refreshAllSessionGroups(subscriptionId: string): Promise<v
 }
 
 // ---------------------------------------------------------------------------
-// Cron: run every 6 hours across all subscriptions
+// Cron: run hourly across all subscriptions.
+//
+// Each tick:
+//   1. Lists every subscription.
+//   2. For each subscription, refreshes existing group descriptions (gated by
+//      activity since last refresh — quiet groups cost nothing) and classifies
+//      up to 20 ungrouped sessions.
+//
+// Per-tick invariants:
+//   - Only one tick runs at a time. If a tick exceeds the interval, the next
+//     one is skipped instead of overlapping (overlap caused duplicate LLM
+//     calls and racy AgentSession.update writes in the previous version).
+//   - Subscriptions are processed concurrently with a small concurrency cap.
+//   - An initial tick runs ~5 seconds after worker boot so sessions written
+//     while the worker was down do not have to wait a full hour to be
+//     grouped. Previously the boot-time backfill only ran when ZERO sessions
+//     had ever been grouped, which silently regressed on every restart of a
+//     normal account.
 // ---------------------------------------------------------------------------
 
-export function startGroupingCronJob(): void {
-  const ONE_HOUR_MS = 60 * 60 * 1_000;
+export const GROUPING_TICK_INTERVAL_MS = 60 * 60 * 1_000;
+export const GROUPING_INITIAL_TICK_DELAY_MS = 5_000;
+export const GROUPING_SUBSCRIPTION_CONCURRENCY = 3;
 
-  const tick = async () => {
+export function startGroupingCronJob(): void {
+  let tickInFlight = false;
+
+  const tick = async (): Promise<void> => {
+    if (tickInFlight) {
+      logger.warn('Skipping session grouping tick — previous tick still running');
+      return;
+    }
+    tickInFlight = true;
+    const startedAt = Date.now();
     try {
       const subscriptions = await Subscription.findAll({ attributes: ['id'] });
       logger.info('Running session grouping cron', {
         subscriptionCount: subscriptions.length,
       });
-      for (const sub of subscriptions) {
+      await runWithConcurrency(subscriptions, GROUPING_SUBSCRIPTION_CONCURRENCY, async (sub) => {
         await refreshAllSessionGroups(sub.id);
-      }
+      });
+      logger.info('Session grouping cron tick completed', {
+        durationMs: Date.now() - startedAt,
+      });
     } catch (err) {
       logger.error('Session grouping cron failed', { error: err });
+    } finally {
+      tickInFlight = false;
     }
   };
 
-  setInterval(() => void tick(), ONE_HOUR_MS);
-  logger.info('Session grouping cron started (1h interval)');
+  setInterval(() => void tick(), GROUPING_TICK_INTERVAL_MS);
+  logger.info('Session grouping cron started', {
+    intervalMs: GROUPING_TICK_INTERVAL_MS,
+  });
 
-  // If no session has a group yet (e.g. first startup after the feature was
-  // added, or a fresh self-hosted install with existing sessions), run the
-  // full backfill immediately rather than waiting 1 hours.
-  void (async () => {
-    try {
-      const ungrouped = await AgentSession.count({ where: { groupName: null } });
-      const grouped = await AgentSession.count({ where: { groupName: { [Op.not]: null } } });
-      logger.info(
-        `Session grouping backfill check: ${ungrouped} ungrouped sessions, ${grouped} grouped sessions`,
-      );
-      if (ungrouped > 0 && grouped === 0) {
-        logger.info('No sessions have a group yet — running initial grouping backfill', {
-          sessionCount: ungrouped,
-        });
-        await tick();
-      }
-    } catch (err) {
-      logger.error('Initial grouping backfill check failed', { error: err });
-    }
-  })();
+  // Always run an initial tick shortly after boot. We deliberately schedule
+  // it (small delay) rather than awaiting it inline so worker bootstrap
+  // returns immediately and the parent process can mark the worker healthy.
+  // The previous "only if zero sessions have ever been grouped" gate meant
+  // any restart of a real account would leave new ungrouped sessions
+  // unclassified for up to an hour.
+  setTimeout(() => void tick(), GROUPING_INITIAL_TICK_DELAY_MS);
 }
 
 // ---------------------------------------------------------------------------
@@ -917,4 +1011,7 @@ export const __testing__ = {
   extractStoredProjectPath,
   findGroupByExactPath,
   classifyGroup,
+  runWithConcurrency,
+  refreshGroupDescription,
+  lastRefreshedAt,
 };
