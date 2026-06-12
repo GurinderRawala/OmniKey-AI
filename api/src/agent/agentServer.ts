@@ -567,6 +567,11 @@ async function runAgentTurnInternal(
         sessionId,
       );
       if (ctx?.text) {
+        logger.info('Prepending <project_context> block to user content', {
+          sessionId,
+          groupName: clientMessage.group_name,
+          text: ctx.text,
+        });
         userContent = `${ctx.text}\n\n${userContent}`;
       }
     } catch (err) {

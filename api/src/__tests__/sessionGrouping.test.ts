@@ -504,7 +504,7 @@ describe('classifyGroup', () => {
   // The module is mocked at the top of this file, so we reach into the mock
   // dynamically here to avoid a stale reference across describe blocks.
   async function withMockedLLM<T>(
-    response: { groupName: string; groupDescription: string },
+    response: { groupName: string; groupDescription?: string },
     run: () => Promise<T>,
   ): Promise<T> {
     const aiClientMod = await import('../ai-client');
@@ -533,7 +533,6 @@ describe('classifyGroup', () => {
 
     const result = await classifyGroup(inputs, existing);
     expect(result?.groupName).toBe('My App');
-    expect(result?.groupDescription).toContain('/Users/me/MyApp');
     expect(complete).not.toHaveBeenCalled();
   });
 
@@ -564,8 +563,6 @@ describe('classifyGroup', () => {
     expect(result?.groupName).not.toBe('Repo');
     // The derived name should come from the deepest path segment.
     expect(result?.groupName?.toLowerCase()).toContain('cli');
-    expect(result?.groupDescription).toContain('/Users/me/Repo/cli');
-    expect(result?.groupDescription).not.toMatch(/Project root:\s*\/Users\/me\/Repo\b(?!\/cli)/);
   });
 
   it('overrides LLM choice with exact-path match to a different existing group', async () => {
@@ -586,19 +583,15 @@ describe('classifyGroup', () => {
     expect(result?.groupName).toBe('Canonical Name');
   });
 
-  it('replaces a hallucinated path in the LLM description with the extracted path', async () => {
+  it('returns only the group name (no description) for a brand-new group', async () => {
+    // classifyGroup is now name-only — group descriptions are produced by
+    // the cron from per-session summaries, not on first-turn classification.
+    // This test pins the contract.
     const inputs = ['work in /Users/me/Actual/src/index.ts'];
-    const result = await withMockedLLM(
-      {
-        groupName: 'Actual',
-        groupDescription:
-          'Project root: /Users/me/SomethingElse. Purpose: x. Primary language: TypeScript.',
-      },
-      () => classifyGroup(inputs, []),
-    );
+    const result = await withMockedLLM({ groupName: 'Actual' }, () => classifyGroup(inputs, []));
 
-    expect(result?.groupDescription).toContain('/Users/me/Actual');
-    expect(result?.groupDescription).not.toContain('/Users/me/SomethingElse');
+    expect(result?.groupName).toBe('Actual');
+    expect(result).not.toHaveProperty('groupDescription');
   });
 
   it('returns null when there are no user inputs', async () => {

@@ -521,30 +521,6 @@ function truncateOnSentenceBoundary(text: string, maxLen: number): string {
 }
 
 // ---------------------------------------------------------------------------
-// Deterministic 3-sentence fallback description.
-// The description always answers, in order:
-//   1. Where is the project root located?
-//   2. What is the purpose of this project?
-//   3. If it is a coding project, what is the primary programming language?
-// Used when the LLM does not return a usable description.
-// ---------------------------------------------------------------------------
-
-function buildDescription(projectPath: string | null, groupName: string): string {
-  if (projectPath) {
-    return [
-      `Project root: ${projectPath} (the ${groupName} project).`,
-      `Purpose: ongoing work on the ${groupName} codebase.`,
-      `Primary language: not yet determined from session context.`,
-    ].join(' ');
-  }
-  return [
-    `Project root: not specified — no absolute path has been associated with the ${groupName} group yet.`,
-    `Purpose: sessions grouped under ${groupName}.`,
-    `Primary language: not applicable (no coding project identified).`,
-  ].join(' ');
-}
-
-// ---------------------------------------------------------------------------
 // Helpers for matching existing groups by project path. Name-based matching
 // alone is unreliable: the LLM may pick "CLI" for two unrelated /cli dirs in
 // different repos, or rename the same project ("OmniKey AI" vs "OmniKey-AI").
@@ -601,9 +577,19 @@ function findGroupByExactPath(
 // absolute project root path whenever one is present in the user inputs.
 // ---------------------------------------------------------------------------
 
+// classifyGroup picks ONLY the group NAME for a session. Group descriptions
+// are intentionally not produced here any more — that responsibility now
+// belongs to the cron, which rolls per-session sessionSummary rows up into
+// a group-level description via generateGroupDescriptionFromSummaries.
+//
+// This split exists because the first turn of a new session is the worst
+// possible moment to write a description that is supposed to describe the
+// whole project: the LLM sees one task in isolation and routinely shapes
+// the description around it, then that description survives into the
+// <project_context> of every future session. Letting the cron own the
+// description means it only ever sees settled, post-session summaries.
 interface GroupResult {
   groupName: string;
-  groupDescription: string;
 }
 
 async function classifyGroup(
@@ -628,10 +614,7 @@ async function classifyGroup(
         groupName: exactMatch.groupName,
         path: currentPath,
       });
-      return {
-        groupName: exactMatch.groupName,
-        groupDescription: exactMatch.groupDescription,
-      };
+      return { groupName: exactMatch.groupName };
     }
   }
 
@@ -682,15 +665,8 @@ Rules for the group name (in priority order):
 5. If the session is purely general/conversational with no project signal,
    use "General".
 
-Rules for the description (CRITICAL):
-The description is appended to user input as <project_context> whenever the user picks this project, so it must be short, factual, and load-bearing. Write a SINGLE paragraph of 3-4 sentences (max 4 sentences, no markdown, no bullet points, no newlines) that answers these three questions in order:
-   1. Where is the project root located? Use the EXACT "Project root detected in messages" path above when it is non-empty — do not invent, abbreviate, or guess a different path. If it is empty, say "Project root: not specified."
-   2. What is the purpose of this project? One sentence summarising what the project / group is for, inferred from the messages.
-   3. If it is a coding project, what is the primary programming language? Name the language (e.g. TypeScript, Python, Go, Rust) when it can be inferred from file extensions, framework names, package files, or explicit mentions. If it is not a coding project, say "Not a coding project." If the language cannot be inferred, say "Primary language not identified from the available context."
-Keep the whole description under ~500 characters. Do NOT add extra commentary, tech-stack lists, workflow notes, or session summaries beyond what the three questions require.
-
 Respond with ONLY valid JSON, no markdown:
-{"groupName":"...","groupDescription":"..."}`;
+{"groupName":"..."}`;
 
   try {
     const result = await aiClient.complete(
@@ -709,21 +685,13 @@ Respond with ONLY valid JSON, no markdown:
     const raw = stripResponseWrappers(result.content);
 
     const parsed: unknown = JSON.parse(raw);
-    const response = z
-      .object({ groupName: z.string(), groupDescription: z.string() })
-      .parse(parsed);
+    const response = z.object({ groupName: z.string() }).parse(parsed);
     let groupName = response.groupName.trim().slice(0, 100);
     if (!groupName) return null;
 
-    // When we fall through from the existingMatch branch to regenerate a stale
-    // description, preserve the canonical existing group name so we don't
-    // fragment groups by re-casing the name.
-    let canonicalName: string | null = null;
-
-    // Locate the LLM-chosen existing group, if any. We then VALIDATE the
-    // match against project paths — the LLM's name-based pick may be wrong:
-    // it might re-use a parent project's name even when the user is in a
-    // child project, or vice versa.
+    // Validate the LLM-chosen existing group, if any, against project paths.
+    // The LLM's name-based pick may be wrong — it might re-use a parent
+    // project's name even when the user is in a child project, or vice versa.
     let existingMatch = existingGroups.find(
       (g) => g.groupName.toLowerCase() === groupName.toLowerCase(),
     );
@@ -755,15 +723,11 @@ Respond with ONLY valid JSON, no markdown:
       }
     }
 
+    // If the LLM matched an existing group AND the path check did not
+    // reject it, return the canonical existing name verbatim so we don't
+    // fragment groups by re-casing or re-punctuating the name.
     if (existingMatch) {
-      const stored = existingMatch.groupDescription ?? '';
-      const hasNewShape = /project root/i.test(stored) && /primary language/i.test(stored);
-      if (hasNewShape) {
-        return { groupName: existingMatch.groupName, groupDescription: stored };
-      }
-      // Fall through: regenerate description using the LLM output below, but
-      // keep the canonical existing group name so we don't fragment groups.
-      canonicalName = existingMatch.groupName;
+      return { groupName: existingMatch.groupName };
     }
 
     // Final safety net: if currentPath EXACTLY matches some other existing
@@ -778,55 +742,11 @@ Respond with ONLY valid JSON, no markdown:
           matchedGroup: pathMatch.groupName,
           path: currentPath,
         });
-        return {
-          groupName: pathMatch.groupName,
-          groupDescription: pathMatch.groupDescription,
-        };
+        return { groupName: pathMatch.groupName };
       }
     }
 
-    // New group: prefer the LLM description but fall back to the deterministic builder.
-    // Description is a single 3-4 sentence paragraph (no newlines, capped at 800 chars
-    // to leave headroom over the ~500 char target while still bounding storage).
-    const rawDesc = response.groupDescription.trim();
-    let groupDescription = (rawDesc || buildDescription(currentPath, groupName))
-      .replace(/\s*\n+\s*/g, ' ')
-      .replace(/\s{2,}/g, ' ')
-      .trim();
-
-    // Safety net 1: if the LLM hallucinated a different absolute path in its
-    // "Project root:" sentence, replace it with the deterministically
-    // extracted currentPath. This is the description the agent server will
-    // inject as <project_context> on every future turn, so a wrong path here
-    // poisons the session forever.
-    if (currentPath) {
-      groupDescription = groupDescription.replace(
-        /Project root:\s*(\/[^\s.,;:!?)<>"'`]+)/i,
-        (_m, llmPath: string) => {
-          if (llmPath === currentPath) return `Project root: ${currentPath}`;
-          logger.info('Replacing hallucinated description path with extracted path', {
-            llmPath,
-            currentPath,
-          });
-          return `Project root: ${currentPath}`;
-        },
-      );
-      // Safety net 2: if the description never mentioned a path at all,
-      // prepend the extracted one so the contract holds.
-      if (!groupDescription.includes(currentPath)) {
-        groupDescription = `Project root: ${currentPath}. ${groupDescription}`.trim();
-      }
-    }
-
-    // Cap on a sentence boundary so we never store truncated mid-token text.
-    groupDescription = truncateOnSentenceBoundary(groupDescription, 1000);
-
-    return {
-      // Preserve the canonical existing group name when we fell through from
-      // the existingMatch branch to regenerate a stale description.
-      groupName: canonicalName ?? groupName,
-      groupDescription,
-    };
+    return { groupName };
   } catch (err) {
     logger.warn('Session group classification failed', { error: err });
     return null;
@@ -1432,38 +1352,24 @@ export async function updateSessionGroup(sessionId: string, subscriptionId: stri
       (g) => g.groupName.toLowerCase() === result.groupName.toLowerCase(),
     );
 
-    // For an existing group: do NOT overwrite the group description. Just
-    // attach this session to the group. Recent-activity context is now
-    // surfaced via per-session summaries (see Step 2) which buildProjectContext
-    // pulls into the <project_context> block at injection time.
+    // classifyGroup only returns a NAME. We attach the session to the group
+    // and stop there — no description work, no per-session summary work.
     //
-    // For a brand-new group: use the description classifyGroup just produced.
-    // No enrichment from siblings (there aren't any yet by definition).
-    const descriptionToWrite = isExistingGroup ? undefined : result.groupDescription;
-
-    // NOTE: we deliberately do NOT generate a per-session summary here.
-    // sessionSummary is now produced when the session ENDS (see
-    // summariseSession + the agentServer WebSocket close handler), so
-    // it always reflects the session's final state instead of the first
-    // turn of a still-in-progress conversation. If this session classifies
-    // mid-conversation and a sibling needs <project_context> built before
-    // we end, the sibling just won't see this session in its "recent
-    // sessions" list yet — it will appear after the session ends.
-    const update: Record<string, unknown> = { groupName: result.groupName };
-    if (descriptionToWrite !== undefined) {
-      update.groupDescription = descriptionToWrite;
-      // Stamp the description's freshness timestamp so buildProjectContext
-      // can show "Group description last updated: ..." on future turns.
-      update.groupDescriptionUpdatedAt = new Date();
-    }
-
-    await AgentSession.update(update, { where: { id: sessionId } });
+    //   * Group descriptions are produced by the cron from settled
+    //     per-session summaries (generateGroupDescriptionFromSummaries).
+    //   * Per-session summaries are produced when the session ENDS
+    //     (summariseSession, fired from the agent server's WebSocket close
+    //     handler).
+    //
+    // Doing description work here used to mean the very first turn of a
+    // new session got to shape the group's description around a single
+    // task; that drift is what this layering fixes.
+    await AgentSession.update({ groupName: result.groupName }, { where: { id: sessionId } });
 
     logger.info('Session group updated', {
       sessionId,
       groupName: result.groupName,
       isExistingGroup,
-      wroteGroupDescription: descriptionToWrite !== undefined,
     });
   } catch (err) {
     logger.error('Failed to update session group', { sessionId, error: err });
