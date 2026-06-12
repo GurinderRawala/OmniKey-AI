@@ -374,6 +374,24 @@ describe('production-observed regressions', () => {
     const got = extractProjectPath(inputs);
     expect(got).toBe('/Users/me/NewProj');
   });
+
+  it('expands ~/ to the current HOME before extracting paths', () => {
+    // Production sessions referenced things like "~/work/coderabbitai/grafana".
+    // Without tilde expansion the regex captures only "/work/coderabbitai/grafana"
+    // and we accept /work as a top-level root — that produced descriptions
+    // storing "Project root: /work/coderabbitai/..." which is wrong.
+    const originalHome = process.env.HOME;
+    process.env.HOME = '/Users/me';
+    try {
+      const got = extractProjectPath([
+        'edit ~/work/coderabbitai/grafana/src/x.ts',
+        'and ~/work/coderabbitai/grafana/package.json',
+      ]);
+      expect(got).toBe('/Users/me/work/coderabbitai/grafana');
+    } finally {
+      process.env.HOME = originalHome;
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

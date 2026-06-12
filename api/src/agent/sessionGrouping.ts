@@ -251,7 +251,18 @@ function trimToProjectRoot(path: string): string | null {
 }
 
 function extractProjectPath(texts: string[]): string | null {
-  const combined = texts.join(' ');
+  // Resolve the current user's home directory once. We use it to expand
+  // "~/foo" tokens BEFORE running the absolute-path regex, so paths the
+  // user typed with a tilde prefix (e.g. "~/work/coderabbitai/grafana")
+  // are treated the same as "/Users/<name>/work/coderabbitai/grafana".
+  // Without this, the regex captured only the "/work/..." tail and
+  // accepted /work as a top-level root — which is how descriptions ended
+  // up storing "Project root: /work/coderabbitai/...".
+  const homeDir =
+    (typeof process !== 'undefined' && (process.env.HOME || process.env.USERPROFILE)) || '';
+  const tildeExpand = (text: string): string =>
+    homeDir ? text.replace(/(^|[\s(\["'`])~\//g, (_m, pre: string) => `${pre}${homeDir}/`) : text;
+  const combined = tildeExpand(texts.join(' '));
 
   // Match absolute paths (Unix) — capture up to 6 path segments.
   const pathRe = /(\/(?:[^\s/<>"'`]+\/){1,6}[^\s/<>"'`]*)/g;
