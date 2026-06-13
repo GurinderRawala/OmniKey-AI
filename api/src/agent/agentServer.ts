@@ -358,7 +358,7 @@ async function getOrCreateSession(
   log: typeof logger,
   isCronJob = false,
   groupName?: string,
-): Promise<{ sessionState: SessionState; hasStoredPrompt: boolean; resumedSession: boolean }> {
+): Promise<{ sessionState: SessionState; hasStoredPrompt: boolean; contextExists: boolean }> {
   // 1. Try to resume from a persisted DB record.
   try {
     const dbSession = await AgentSession.findOne({
@@ -385,7 +385,7 @@ async function getOrCreateSession(
           .some(
             (h) => typeof h.content === 'string' && h.content.includes('<stored_instructions>'),
           ),
-        resumedSession: true,
+        contextExists: userHistoryHasProjectContext(history),
       };
     }
   } catch (err) {
@@ -468,7 +468,7 @@ ${prompt}
           .some(
             (h) => typeof h.content === 'string' && h.content.includes('<stored_instructions>'),
           ),
-        resumedSession: true,
+        contextExists: userHistoryHasProjectContext(history),
       };
     }
 
@@ -486,7 +486,9 @@ ${prompt}
   return {
     sessionState: entry,
     hasStoredPrompt: !!prompt,
-    resumedSession: false,
+    // Brand-new session: history starts with at most the stored-instructions
+    // turn (which is not a <project_context>), so no project context exists yet.
+    contextExists: false,
   };
 }
 
@@ -501,7 +503,7 @@ async function runAgentTurnInternal(
   const {
     sessionState: session,
     hasStoredPrompt,
-    resumedSession,
+    contextExists,
   } = await getOrCreateSession(
     sessionId,
     subscription,
@@ -518,7 +520,7 @@ async function runAgentTurnInternal(
     sessionId,
     subscriptionId: subscription.id,
     turn: session.turns,
-    resumedSession,
+    contextExists,
   });
 
   // Append the client message as user content, marking terminal
@@ -534,15 +536,24 @@ async function runAgentTurnInternal(
     userContent = `COMMAND ERROR:\n${truncateTerminalOutput(userContent)}`;
   }
 
-  // If the client specified a group_name, look up the stored description
-  // and prepend it as a <project_context> block. The frontend never sends
-  // the description itself — the server is the single source of truth.
+  // Prepend the <project_context> block whenever the client has a group
+  // selected AND the session's persisted history does NOT already carry one.
+  // This handles three cases coherently:
+  //   1. Brand-new session with a group selected from the start — inject
+  //      on the very first turn.
+  //   2. Resumed session that already has context in some earlier user
+  //      turn — skip; the agent's context window already shows it.
+  //   3. Resumed session that started WITHOUT a group and got classified
+  //      after a previous turn — inject now, so the agent finally sees the
+  //      project meta it has been missing.
+  // The frontend never sends the description itself — the server is the
+  // single source of truth.
   if (
     clientMessage.group_name &&
     !isTerminalOutput &&
     !isErrorFlag &&
     !clientMessage.is_web_call &&
-    !resumedSession
+    !contextExists
   ) {
     try {
       // The <project_context> block is now assembled from (a) the group's
@@ -1253,6 +1264,21 @@ function extractTaggedBlock(text: string, tag: string): string | null {
 function removeTaggedBlock(text: string, tag: string): string {
   const pattern = new RegExp(`<${tag}[^>]*>[\\s\\S]*?<\\/${tag}>`, 'gi');
   return text.replace(pattern, '');
+}
+
+// Detect whether any user message in the session's persisted history already
+// contains a <project_context> block. We inject the project context only
+// when NO past user message carries one — that way a session resumed AFTER
+// it has been classified (started without a group, ended, got grouped by
+// the cron, now resumed) still gets its first context injection. A session
+// that already has the block in some earlier turn does not get duplicates.
+function userHistoryHasProjectContext(history: SessionState['history']): boolean {
+  for (const msg of history) {
+    if (msg.role !== 'user') continue;
+    const text = typeof msg.content === 'string' ? msg.content : '';
+    if (/<project_context\b/i.test(text)) return true;
+  }
+  return false;
 }
 
 function cleanUserTranscriptText(text: string): string {
