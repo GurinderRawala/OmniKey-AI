@@ -358,7 +358,12 @@ async function getOrCreateSession(
   log: typeof logger,
   isCronJob = false,
   groupName?: string,
-): Promise<{ sessionState: SessionState; hasStoredPrompt: boolean; contextExists: boolean }> {
+): Promise<{
+  sessionState: SessionState;
+  hasStoredPrompt: boolean;
+  contextExists: boolean;
+  groupName: string | null;
+}> {
   // 1. Try to resume from a persisted DB record.
   try {
     const dbSession = await AgentSession.findOne({
@@ -386,6 +391,7 @@ async function getOrCreateSession(
             (h) => typeof h.content === 'string' && h.content.includes('<stored_instructions>'),
           ),
         contextExists: userHistoryHasProjectContext(history),
+        groupName: dbSession.groupName ?? null,
       };
     }
   } catch (err) {
@@ -469,6 +475,7 @@ ${prompt}
             (h) => typeof h.content === 'string' && h.content.includes('<stored_instructions>'),
           ),
         contextExists: userHistoryHasProjectContext(history),
+        groupName: dbSession.groupName ?? null,
       };
     }
 
@@ -489,6 +496,7 @@ ${prompt}
     // Brand-new session: history starts with at most the stored-instructions
     // turn (which is not a <project_context>), so no project context exists yet.
     contextExists: false,
+    groupName: null,
   };
 }
 
@@ -504,6 +512,7 @@ async function runAgentTurnInternal(
     sessionState: session,
     hasStoredPrompt,
     contextExists,
+    groupName,
   } = await getOrCreateSession(
     sessionId,
     subscription,
@@ -536,6 +545,8 @@ async function runAgentTurnInternal(
     userContent = `COMMAND ERROR:\n${truncateTerminalOutput(userContent)}`;
   }
 
+  const currentGroupName = clientMessage.group_name ?? groupName;
+
   // Prepend the <project_context> block whenever the client has a group
   // selected AND the session's persisted history does NOT already carry one.
   // This handles three cases coherently:
@@ -549,7 +560,7 @@ async function runAgentTurnInternal(
   // The frontend never sends the description itself — the server is the
   // single source of truth.
   if (
-    clientMessage.group_name &&
+    currentGroupName &&
     !isTerminalOutput &&
     !isErrorFlag &&
     !clientMessage.is_web_call &&
@@ -573,14 +584,14 @@ async function runAgentTurnInternal(
       // any prior path-detection error.
       const ctx = await buildProjectContext(
         subscription.id,
-        clientMessage.group_name,
+        currentGroupName,
         [clientMessage.content || ''],
         sessionId,
       );
       if (ctx?.text) {
         logger.info('Prepending <project_context> block to user content', {
           sessionId,
-          groupName: clientMessage.group_name,
+          groupName: currentGroupName,
           text: ctx.text,
         });
         userContent = `${ctx.text}\n\n${userContent}`;
@@ -724,14 +735,15 @@ async function runAgentTurnInternal(
       }
       pushToSessionHistory(logger, session, {
         role: 'user',
-        content: [
-          'Your previous response was cut off because it exceeded the output length limit.',
-          'Do NOT repeat or continue what you wrote.',
-          'Respond immediately with exactly one of:',
-          '- <shell_script>...</shell_script>',
-          '- <final_answer>...</final_answer>',
-          'No reasoning. No explanation. Just the tag.',
-        ].join('\n'),
+        content: `Your previous response exceeded the output length limit and was cut off.
+
+Do not repeat or continue what you wrote.
+
+Respond immediately with exactly one of the following:
+- An external tool call (e.g., web_search, shell_script) if you need to fetch data or run commands
+- <final_answer>...</final_answer>
+
+Provide only a tool call or final answer. Do not include reasoning or explanation.`,
       });
       result = await aiClient.complete(aiModel, session.history, {
         tools: tools?.length ? tools : undefined,
@@ -807,11 +819,11 @@ async function runAgentTurnInternal(
           content: webToolFailed
             ? [
                 'IMPORTANT: The web search tool failed and is unavailable. Do NOT attempt any further web calls or ask the user to run commands manually.',
-                'You MUST retrieve any needed data by generating a <shell_script> that runs terminal commands (curl, grep, cat, etc.).',
+                'You MUST retrieve any needed data by calling the shell_script tool to run terminal commands (curl, grep, cat, etc.).',
                 'The shell script output will be returned to you automatically.',
                 '',
                 'Respond with exactly one of:',
-                '- <shell_script>...</shell_script> — to fetch or retrieve data via terminal commands',
+                '- a shell_script tool call — to fetch or retrieve data via terminal commands',
                 '- <final_answer>...</final_answer> — only if you already have enough information',
                 'No plain text. No web tool calls. No other format.',
               ].join('\n')
@@ -819,7 +831,7 @@ async function runAgentTurnInternal(
                 'Web research is complete. The results are in the conversation above.',
                 '',
                 'Now respond with exactly one of:',
-                '- <shell_script>...</shell_script> — to run terminal commands (output will be returned to you automatically)',
+                '- a shell_script tool call — to run terminal commands (output will be returned to you automatically)',
                 '- <final_answer>...</final_answer> — only if you genuinely have enough information',
                 'No plain text. No other format.',
               ].join('\n'),
@@ -953,9 +965,9 @@ async function runAgentTurnInternal(
         content: [
           'Your response was plain text, which is not a valid format.',
           'You MUST respond with exactly one of:',
-          '- <shell_script>...</shell_script> — to run terminal commands',
+          '- a shell_script tool call — to run terminal commands',
           '- <final_answer>...</final_answer> — to conclude',
-          'Respond immediately with the tag. No reasoning, no explanation.',
+          'Respond immediately. No reasoning, no explanation.',
         ].join('\n'),
       });
       await persistSessionToDB(sessionId, session);
