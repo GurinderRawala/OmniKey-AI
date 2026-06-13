@@ -32,7 +32,6 @@ import {
   AICompletionResult,
   getDefaultModel,
   getContextWindowSize,
-  RESPONSES_API_MODEL,
 } from '../ai-client';
 import type { AgentMessage, AgentSendFn, SessionState } from './types';
 import { Logger } from 'winston';
@@ -643,18 +642,16 @@ async function runAgentTurnInternal(
   }
 
   const mcpBundle = await getMcpToolsForSubscription(subscription.id, log);
-  // gpt-5.5 (Responses API) already has execute_shell_script wired internally;
-  // all other providers get shell_script as a native function tool so the model
-  // can call it directly instead of emitting XML tags.
+  // All providers (including gpt-5.5 via the Responses API) receive the
+  // shell_script tool as a native function tool so the model can call it
+  // directly instead of emitting XML tags.
   //
   // When the user has set TERMINAL_ACCESS=limited via Settings → Agent Access,
   // we expose the same tool name but with a description that tells the model
-  // to stay within read-only / inspection commands. The Responses API path
-  // injects its equivalent restriction inside ai-client.ts (see
-  // shellScriptToolDescriptionForMode there).
+  // to stay within read-only / inspection commands.
   const shellTool =
     config.terminalAccess === 'limited' ? SHELL_SCRIPT_TOOL_LIMITED : SHELL_SCRIPT_TOOL;
-  const shellTools: AITool[] = aiModel !== RESPONSES_API_MODEL ? [shellTool] : [];
+  const shellTools: AITool[] = [shellTool];
   const tools = buildAvailableTools([...shellTools, ...mcpBundle.aiTools]);
 
   const recordUsage = async (result: AICompletionResult) => {

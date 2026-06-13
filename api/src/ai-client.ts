@@ -480,8 +480,6 @@ export const RESPONSES_API_MODEL = 'gpt-5.5';
  *     are re-emitted as function_call_output items so the model sees the result
  *     against the correct call_id.
  * - assistant with tool_calls → text part (if any) + one function_call per tool
- * - assistant with <shell_script> tag → synthetic function_call for
- *   execute_shell_script (so history from prior turns round-trips correctly)
  * - tool role → function_call_output
  */
 function toResponsesInput(messages: AIMessage[]): {
@@ -490,8 +488,6 @@ function toResponsesInput(messages: AIMessage[]): {
 } {
   let instructions: string | null = null;
   const input: any[] = [];
-  let pendingShellCallId: string | null = null;
-  let syntheticCounter = 0;
 
   for (const msg of messages) {
     if (msg.role === 'system') {
@@ -500,46 +496,11 @@ function toResponsesInput(messages: AIMessage[]): {
     }
 
     if (msg.role === 'user') {
-      const isTerminalFeedback = /^(TERMINAL OUTPUT:|COMMAND ERROR:)/i.test(
-        msg.content.trimStart(),
-      );
-      if (pendingShellCallId && isTerminalFeedback) {
-        const output = msg.content.replace(/^(TERMINAL OUTPUT:|COMMAND ERROR:)\s*/i, '').trim();
-        input.push({
-          type: 'function_call_output',
-          call_id: pendingShellCallId,
-          output: output || '(no output)',
-        });
-        pendingShellCallId = null;
-        continue;
-      }
-      // A shell_script function_call was emitted but terminal output never
-      // arrived (e.g. the client disconnected before executing the script).
-      // Emit a synthetic result so the Responses API input remains valid.
-      if (pendingShellCallId) {
-        input.push({
-          type: 'function_call_output',
-          call_id: pendingShellCallId,
-          output: '(no terminal output received — session was interrupted)',
-        });
-        pendingShellCallId = null;
-      }
       input.push({ role: 'user', content: msg.content });
       continue;
     }
 
     if (msg.role === 'assistant') {
-      // Same gap-fill: if the previous shell call never got a terminal result,
-      // plug it before the next assistant message.
-      if (pendingShellCallId) {
-        input.push({
-          type: 'function_call_output',
-          call_id: pendingShellCallId,
-          output: '(no terminal output received — session was interrupted)',
-        });
-        pendingShellCallId = null;
-      }
-
       if (msg.tool_calls?.length) {
         if (msg.content) {
           input.push({ role: 'assistant', content: msg.content });
@@ -552,23 +513,6 @@ function toResponsesInput(messages: AIMessage[]): {
             arguments: JSON.stringify(tc.arguments),
           });
         }
-      } else if (msg.content.includes('<shell_script>')) {
-        // Round-trip: a prior <shell_script> turn becomes a native function_call
-        // so the model sees it as a proper tool invocation in the history.
-        const scriptMatch = msg.content.match(/<shell_script>([\s\S]*?)<\/shell_script>/i);
-        const script = scriptMatch?.[1]?.trim() ?? msg.content;
-        const beforeShell = msg.content.split('<shell_script>')[0].trim();
-        if (beforeShell) {
-          input.push({ role: 'assistant', content: beforeShell });
-        }
-        const callId = `synth_shell_${++syntheticCounter}`;
-        pendingShellCallId = callId;
-        input.push({
-          type: 'function_call',
-          call_id: callId,
-          name: 'execute_shell_script',
-          arguments: JSON.stringify({ script }),
-        });
       } else {
         input.push({ role: 'assistant', content: msg.content });
       }
@@ -576,7 +520,6 @@ function toResponsesInput(messages: AIMessage[]): {
     }
 
     if (msg.role === 'tool' && msg.tool_call_id) {
-      pendingShellCallId = null;
       input.push({
         type: 'function_call_output',
         call_id: msg.tool_call_id,
@@ -584,16 +527,6 @@ function toResponsesInput(messages: AIMessage[]): {
       });
       continue;
     }
-  }
-
-  // If the history ends with a shell_script call that never received terminal
-  // output (the session was cut off at the very last turn), close the gap.
-  if (pendingShellCallId) {
-    input.push({
-      type: 'function_call_output',
-      call_id: pendingShellCallId,
-      output: '(no terminal output received — session was interrupted)',
-    });
   }
 
   return { instructions, input };
@@ -616,68 +549,13 @@ function toResponsesTools(tools: AITool[]): any[] {
 }
 
 /**
- * Native function tool exposed to gpt-5.5 / Responses API so the model can
- * run shell commands using tool-call syntax instead of XML tags. The adapter
- * intercepts calls to this tool and converts them to the <shell_script> tag
- * format that the rest of the agent pipeline expects.
- */
-const RESPONSES_SHELL_TOOL_FULL = {
-  type: 'function' as const,
-  name: 'execute_shell_script',
-  description:
-    'Execute shell commands to accomplish the task. Use this to run terminal commands, read or write files, install packages, or perform system operations. The output will be returned to you automatically.',
-  parameters: {
-    type: 'object',
-    properties: {
-      script: { type: 'string', description: 'The shell script to execute' },
-    },
-    required: ['script'],
-  },
-  strict: false,
-};
-
-/**
- * Limited variant of the gpt-5.5 shell tool. Same wire format as
- * RESPONSES_SHELL_TOOL_FULL, but the description tells the model that
- * terminal access is restricted to read-only inspection commands. Selected
- * at request time based on `config.terminalAccess`, which the macOS Settings
- * UI writes to ~/.omnikey/config.json.
- */
-const RESPONSES_SHELL_TOOL_LIMITED = {
-  type: 'function' as const,
-  name: 'execute_shell_script',
-  description:
-    'Execute a READ-ONLY shell script on the user\'s machine. Terminal access is set to LIMITED — restrict yourself to inspection commands (ls, cat, grep, ps, env, which, stat, head, tail, df, du, uname, echo, printenv) and never write to the filesystem, install packages, change configuration, kill processes, or perform mutating network calls. If the task needs mutation, return a <final_answer> telling the user to enable full terminal access in Settings.',
-  parameters: {
-    type: 'object',
-    properties: {
-      script: {
-        type: 'string',
-        description:
-          'Read-only shell script. Restrict yourself to inspection commands; do not write, delete, install, configure, or otherwise mutate state.',
-      },
-    },
-    required: ['script'],
-  },
-  strict: false,
-};
-
-function getResponsesShellTool() {
-  return config.terminalAccess === 'limited'
-    ? RESPONSES_SHELL_TOOL_LIMITED
-    : RESPONSES_SHELL_TOOL_FULL;
-}
-
-/**
  * Translates a Responses API response object into our normalised
  * AICompletionResult.
  *
  * Priority order for output classification:
- * 1. execute_shell_script function_call → wrap script in <shell_script> tags,
- *    return finish_reason:'stop' so agentServer sends it to the client.
- * 2. Other function_calls → return as tool_calls (MCP/web-search loop).
- * 3. Text that already contains <shell_script> or <final_answer> tags → pass through.
- * 4. Plain text with no recognized tags → auto-wrap in <final_answer> tags so
+ * 1. Function calls → return as tool_calls (shell_script, MCP, web-search, etc.).
+ * 2. Text that already contains <shell_script> or <final_answer> tags → pass through.
+ * 3. Plain text with no recognized tags → auto-wrap in <final_answer> tags so
  *    the agent loop does not spin trying to coerce the model into using tags.
  */
 function fromResponsesOutput(response: any, modelName: string): AICompletionResult {
@@ -692,33 +570,7 @@ function fromResponsesOutput(response: any, modelName: string): AICompletionResu
 
   const functionCalls: any[] = output.filter((item: any) => item.type === 'function_call');
 
-  // 1. Shell tool call → convert to <shell_script> content
-  const shellCall = functionCalls.find((f) => f.name === 'execute_shell_script');
-  if (shellCall) {
-    let script = '';
-    try {
-      script = JSON.parse(shellCall.arguments || '{}').script ?? '';
-    } catch {
-      script = shellCall.arguments ?? '';
-    }
-    const shellContent = `<shell_script>\n${script}\n</shell_script>`;
-    const usage: AIUsage | undefined = response.usage
-      ? {
-          prompt_tokens: response.usage.input_tokens ?? 0,
-          completion_tokens: response.usage.output_tokens ?? 0,
-          total_tokens: response.usage.total_tokens ?? 0,
-        }
-      : undefined;
-    return {
-      content: shellContent,
-      finish_reason: 'stop',
-      usage,
-      model: response.model ?? modelName,
-      assistantMessage: { role: 'assistant', content: shellContent },
-    };
-  }
-
-  // 2. Other function calls (MCP tools, web search, etc.)
+  // 1. Function calls (shell_script, MCP tools, web search, etc.)
   const tool_calls: AIToolCall[] = functionCalls.map((item: any) => ({
     id: item.call_id as string,
     name: item.name as string,
@@ -728,7 +580,7 @@ function fromResponsesOutput(response: any, modelName: string): AICompletionResu
   const hasRecognizedTags =
     /<shell_script>/i.test(textContent) || /<final_answer>/i.test(textContent);
 
-  // 4. Auto-wrap plain text that has no recognized tags
+  // 3. Auto-wrap plain text that has no recognized tags
   const normalizedContent =
     tool_calls.length === 0 && textContent && !hasRecognizedTags
       ? `<final_answer>\n${textContent}\n</final_answer>`
@@ -760,27 +612,6 @@ function fromResponsesOutput(response: any, modelName: string): AICompletionResu
     assistantMessage,
   };
 }
-
-/**
- * Appended to the system instructions when using the Responses API so that
- * gpt-5.5 (a reasoning model) calls execute_shell_script rather than the
- * shell_script tool used by other providers. The Responses API adapter
- * translates execute_shell_script calls back to the standard shell_script
- * format understood by the rest of the agent pipeline.
- */
-const RESPONSES_SHELL_OVERRIDE = `
----
-IMPORTANT — Responses API adjustment (one change only):
-
-You are running via the OpenAI Responses API. **Only one thing changes** from the instructions above:
-
-- **Shell commands**: instead of calling the \`shell_script\` tool, call the \`execute_shell_script\` function tool with \`{ "script": "..." }\`. The interface is identical — the output is returned to you automatically as a tool result. Every other rule about when and how to run scripts is unchanged.
-
-Everything else in the system prompt applies exactly as written:
-- \`web_search\` / \`web_fetch\` → native function calls (unchanged)
-- MCP tools (\`mcp_<server>__<tool>\`) → native function calls, subject to all MCP rules above (unchanged)
-- \`<final_answer>\` → text response wrapped in \`<final_answer>\` tags (unchanged)
-`;
 
 /**
  * Fetch wrapper backed by Node's https module (HTTP/1.1 only).
@@ -898,24 +729,17 @@ class OpenAIResponsesAdapter {
     this.client = new OpenAI({ apiKey, fetch: http1Fetch as unknown as typeof fetch });
   }
 
-  private buildInstructions(base: string | null): string {
-    return (base ?? '') + RESPONSES_SHELL_OVERRIDE;
-  }
-
   async complete(
     model: string,
     messages: AIMessage[],
     options: CompletionOptions,
   ): Promise<AICompletionResult> {
     const { instructions, input } = toResponsesInput(messages);
-    // Always inject the shell tool so gpt-5.5 can call execute_shell_script
-    // natively; the adapter converts those calls back to <shell_script> tags.
-    const userTools = options.tools?.length ? toResponsesTools(options.tools) : [];
-    const tools = [getResponsesShellTool(), ...userTools];
+    const tools = options.tools?.length ? toResponsesTools(options.tools) : [];
 
     const response = await (this.client.responses as any).create({
       model,
-      instructions: this.buildInstructions(instructions),
+      ...(instructions ? { instructions } : {}),
       input,
       tools,
     });
@@ -932,7 +756,7 @@ class OpenAIResponsesAdapter {
 
     const stream = (this.client.responses as any).stream({
       model,
-      instructions: this.buildInstructions(instructions),
+      ...(instructions ? { instructions } : {}),
       input,
     });
 

@@ -13,6 +13,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   openaiCreate: vi.fn(),
+  responsesCreate: vi.fn(),
+  responsesStream: vi.fn(),
   anthropicCreate: vi.fn(),
   anthropicStream: vi.fn(),
   geminiGenerate: vi.fn(),
@@ -22,6 +24,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('openai', () => ({
   default: class MockOpenAI {
     chat = { completions: { create: mocks.openaiCreate } };
+    responses = { create: mocks.responsesCreate, stream: mocks.responsesStream };
     images = { generate: vi.fn() };
     constructor(_opts: unknown) {}
   },
@@ -62,6 +65,8 @@ function asAsyncIterable<T>(chunks: T[]): AsyncIterable<T> {
 
 beforeEach(() => {
   mocks.openaiCreate.mockReset();
+  mocks.responsesCreate.mockReset();
+  mocks.responsesStream.mockReset();
   mocks.anthropicCreate.mockReset();
   mocks.anthropicStream.mockReset();
   mocks.geminiGenerate.mockReset();
@@ -100,11 +105,14 @@ describe('OpenAIAdapter temperature handling', () => {
     expect(body).toHaveProperty('temperature', 0.42);
   });
 
-  it('complete: omits temperature for gpt-5.5 even if caller supplies one', async () => {
-    mockCompleteResponse();
+  it('complete: omits temperature for gpt-5.5 (Responses API path)', async () => {
+    mocks.responsesCreate.mockResolvedValueOnce({
+      output: [{ type: 'message', content: [{ type: 'output_text', text: 'ok' }] }],
+      usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+    });
     const client = new AIClient('openai', 'sk-test');
     await client.complete('gpt-5.5', messages, { temperature: 0.42 });
-    const body = mocks.openaiCreate.mock.calls[0][0];
+    const body = mocks.responsesCreate.mock.calls[0][0];
     expect(body).not.toHaveProperty('temperature');
   });
 
@@ -128,20 +136,31 @@ describe('OpenAIAdapter temperature handling', () => {
     expect(body).toHaveProperty('stream', true);
   });
 
-  it('streamComplete: omits temperature for gpt-5.5', async () => {
-    mockStreamResponse();
+  it('streamComplete: omits temperature for gpt-5.5 (Responses API path)', async () => {
+    const stream: any = asAsyncIterable([
+      { type: 'response.output_text.delta', delta: 'ok' },
+    ]);
+    stream.finalResponse = vi.fn().mockResolvedValue({
+      usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+    });
+    mocks.responsesStream.mockReturnValueOnce(stream);
     const client = new AIClient('openai', 'sk-test');
     await client.streamComplete('gpt-5.5', messages, { temperature: 0.31 }, () => {});
-    const body = mocks.openaiCreate.mock.calls[0][0];
+    const body = mocks.responsesStream.mock.calls[0][0];
     expect(body).not.toHaveProperty('temperature');
-    expect(body).toHaveProperty('stream', true);
   });
 
   it('streamComplete: omits temperature even when caller passes empty options for gpt-5.5', async () => {
-    mockStreamResponse();
+    const stream: any = asAsyncIterable([
+      { type: 'response.output_text.delta', delta: 'ok' },
+    ]);
+    stream.finalResponse = vi.fn().mockResolvedValue({
+      usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+    });
+    mocks.responsesStream.mockReturnValueOnce(stream);
     const client = new AIClient('openai', 'sk-test');
     await client.streamComplete('gpt-5.5', messages, {}, () => {});
-    const body = mocks.openaiCreate.mock.calls[0][0];
+    const body = mocks.responsesStream.mock.calls[0][0];
     expect(body).not.toHaveProperty('temperature');
   });
 
