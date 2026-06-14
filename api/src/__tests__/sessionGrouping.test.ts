@@ -504,7 +504,7 @@ describe('classifyGroup', () => {
   // The module is mocked at the top of this file, so we reach into the mock
   // dynamically here to avoid a stale reference across describe blocks.
   async function withMockedLLM<T>(
-    response: { groupName: string; groupDescription: string },
+    response: { groupName: string; groupDescription?: string },
     run: () => Promise<T>,
   ): Promise<T> {
     const aiClientMod = await import('../ai-client');
@@ -533,7 +533,6 @@ describe('classifyGroup', () => {
 
     const result = await classifyGroup(inputs, existing);
     expect(result?.groupName).toBe('My App');
-    expect(result?.groupDescription).toContain('/Users/me/MyApp');
     expect(complete).not.toHaveBeenCalled();
   });
 
@@ -564,8 +563,6 @@ describe('classifyGroup', () => {
     expect(result?.groupName).not.toBe('Repo');
     // The derived name should come from the deepest path segment.
     expect(result?.groupName?.toLowerCase()).toContain('cli');
-    expect(result?.groupDescription).toContain('/Users/me/Repo/cli');
-    expect(result?.groupDescription).not.toMatch(/Project root:\s*\/Users\/me\/Repo\b(?!\/cli)/);
   });
 
   it('overrides LLM choice with exact-path match to a different existing group', async () => {
@@ -586,19 +583,15 @@ describe('classifyGroup', () => {
     expect(result?.groupName).toBe('Canonical Name');
   });
 
-  it('replaces a hallucinated path in the LLM description with the extracted path', async () => {
+  it('returns only the group name (no description) for a brand-new group', async () => {
+    // classifyGroup is now name-only — group descriptions are produced by
+    // the cron from per-session summaries, not on first-turn classification.
+    // This test pins the contract.
     const inputs = ['work in /Users/me/Actual/src/index.ts'];
-    const result = await withMockedLLM(
-      {
-        groupName: 'Actual',
-        groupDescription:
-          'Project root: /Users/me/SomethingElse. Purpose: x. Primary language: TypeScript.',
-      },
-      () => classifyGroup(inputs, []),
-    );
+    const result = await withMockedLLM({ groupName: 'Actual' }, () => classifyGroup(inputs, []));
 
-    expect(result?.groupDescription).toContain('/Users/me/Actual');
-    expect(result?.groupDescription).not.toContain('/Users/me/SomethingElse');
+    expect(result?.groupName).toBe('Actual');
+    expect(result).not.toHaveProperty('groupDescription');
   });
 
   it('returns null when there are no user inputs', async () => {
@@ -779,78 +772,6 @@ describe('truncateOnSentenceBoundary', () => {
     expect(got.endsWith('.')).toBe(true);
   });
 });
-
-// ---------------------------------------------------------------------------
-// extractAllProjectRoots — surface every distinct root referenced in the inputs
-// ---------------------------------------------------------------------------
-describe('extractAllProjectRoots', () => {
-  const { extractAllProjectRoots } = __testing__;
-
-  it('returns one entry per distinct normalised root, ordered by votes', () => {
-    const got = extractAllProjectRoots([
-      'fix /Users/me/AppA/src/a.ts',
-      'fix /Users/me/AppA/src/b.ts',
-      'fix /Users/me/AppA/package.json',
-      'and one file in /Users/me/AppB/main.go',
-    ]);
-    expect(got).toEqual([
-      { root: '/Users/me/AppA', votes: 3 },
-      { root: '/Users/me/AppB', votes: 1 },
-    ]);
-  });
-
-  it('returns [] when no real paths are referenced', () => {
-    expect(extractAllProjectRoots(['hello world'])).toEqual([]);
-  });
-
-  it('ignores URL-shaped pseudo-paths', () => {
-    const got = extractAllProjectRoots([
-      'see /github.com/foo/bar/pull/1',
-      'and edit /Users/me/Real/src/x.ts',
-    ]);
-    expect(got).toEqual([{ root: '/Users/me/Real', votes: 1 }]);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// extractKeySubdirectories — the directories worked on inside one project root
-// ---------------------------------------------------------------------------
-describe('extractKeySubdirectories', () => {
-  const { extractKeySubdirectories } = __testing__;
-
-  it('returns the most-referenced subdirs under the given root, ordered by votes', () => {
-    const got = extractKeySubdirectories(
-      [
-        'fix /Users/me/Repo/api/src/agent/x.ts',
-        'fix /Users/me/Repo/api/src/agent/y.ts',
-        'fix /Users/me/Repo/api/src/routes/z.ts',
-        'fix /Users/me/Repo/cli/main.ts',
-      ],
-      '/Users/me/Repo',
-      4,
-    );
-    // /Users/me/Repo/api appears in three of the four file paths, so it
-    // wins the top spot. The cli sub-dir only appears once, but with a
-    // limit of 4 it should still surface alongside the api sub-tree.
-    expect(got[0]).toBe('/Users/me/Repo/api');
-    expect(got).toContain('/Users/me/Repo/cli');
-  });
-
-  it('returns [] when no paths are under the root', () => {
-    const got = extractKeySubdirectories(['fix /Users/me/OtherRepo/main.ts'], '/Users/me/Repo', 3);
-    expect(got).toEqual([]);
-  });
-
-  it('respects the limit', () => {
-    const got = extractKeySubdirectories(
-      ['/Users/me/Repo/a/x.ts /Users/me/Repo/b/x.ts /Users/me/Repo/c/x.ts /Users/me/Repo/d/x.ts'],
-      '/Users/me/Repo',
-      2,
-    );
-    expect(got).toHaveLength(2);
-  });
-});
-
 // ---------------------------------------------------------------------------
 // refreshGroupDescription — group splitting (one project = one group)
 // ---------------------------------------------------------------------------
@@ -1023,7 +944,7 @@ describe('refreshGroupDescription ancestor/descendant collapse', () => {
 // stripped before path extraction runs.
 // ---------------------------------------------------------------------------
 describe('local-path-only filter', () => {
-  const { extractProjectPath, trimToProjectRoot, extractAllProjectRoots } = __testing__;
+  const { extractProjectPath, trimToProjectRoot } = __testing__;
 
   it('strips full URLs (http, https, ftp, file, ws, ssh, git+...) before path extraction', () => {
     // None of these URL substrings should contribute a project root candidate.
@@ -1037,7 +958,6 @@ describe('local-path-only filter', () => {
       'and git+https://github.com/foo/bar.git',
     ];
     expect(extractProjectPath(inputs)).toBeNull();
-    expect(extractAllProjectRoots(inputs)).toEqual([]);
   });
 
   it('strips scheme-relative URLs (//host.tld/path)', () => {
@@ -1140,5 +1060,394 @@ describe('CodeRabbit follow-ups', () => {
       'and /Users/me/Documents/projects/org/monorepo/packages/api/src/util.ts',
     ]);
     expect(got).toBe('/Users/me/Documents/projects/org/monorepo/packages/api');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Per-session summaries + buildProjectContext — the new architecture where
+// each session carries its own 1-2 sentence summary and the agent server
+// assembles the <project_context> block from the group's stored project
+// root + the most recent N session summaries at injection time. This
+// replaces the previous behaviour where every new session's first turn
+// rewrote the group's single rolling description.
+// ---------------------------------------------------------------------------
+describe('generateSessionSummary', () => {
+  const { generateSessionSummary } = __testing__;
+
+  async function getMocks() {
+    const aiClientMod = await import('../ai-client');
+    return {
+      complete: (aiClientMod as unknown as { aiClient: { complete: ReturnType<typeof vi.fn> } })
+        .aiClient.complete,
+    };
+  }
+
+  it('returns null when no user inputs are provided', async () => {
+    const { complete } = await getMocks();
+    complete.mockClear();
+    expect(await generateSessionSummary([])).toBeNull();
+    expect(complete).not.toHaveBeenCalled();
+  });
+
+  it('returns the LLM-produced summary on the happy path', async () => {
+    const { complete } = await getMocks();
+    complete.mockResolvedValueOnce({
+      content: JSON.stringify({ summary: 'Investigated a sqlite locking bug in the worker.' }),
+    });
+    const got = await generateSessionSummary(['edit /Users/me/Repo/api/src/worker.ts']);
+    expect(got).toBe('Investigated a sqlite locking bug in the worker.');
+  });
+
+  it('truncates absurdly long summaries on a sentence boundary at ~320 chars', async () => {
+    const { complete } = await getMocks();
+    const huge = 'A'.repeat(500) + '. Second sentence.';
+    complete.mockResolvedValueOnce({ content: JSON.stringify({ summary: huge }) });
+    const got = (await generateSessionSummary(['anything'])) ?? '';
+    // truncateOnSentenceBoundary may append a synthetic period to land on
+    // a sentence boundary, taking length up to maxLen + 1.
+    expect(got.length).toBeLessThanOrEqual(321);
+  });
+
+  it('returns null when the LLM throws or returns garbage', async () => {
+    const { complete } = await getMocks();
+    complete.mockResolvedValueOnce({ content: 'not json at all' });
+    expect(await generateSessionSummary(['hello'])).toBeNull();
+  });
+});
+
+describe('buildProjectContext', () => {
+  const { buildProjectContext } = __testing__;
+
+  async function getMocks() {
+    const agentSessionMod = await import('../models/agentSession');
+    return {
+      findOne: (
+        agentSessionMod as unknown as { AgentSession: { findOne: ReturnType<typeof vi.fn> } }
+      ).AgentSession.findOne,
+      findAll: (
+        agentSessionMod as unknown as { AgentSession: { findAll: ReturnType<typeof vi.fn> } }
+      ).AgentSession.findAll,
+    };
+  }
+
+  it('returns null when no description is stored for the group', async () => {
+    const { findOne } = await getMocks();
+    findOne.mockResolvedValueOnce(null);
+    expect(await buildProjectContext('sub-1', 'Some Group', null)).toBeNull();
+  });
+
+  it('builds a high-confidence block when the stored path matches the current input', async () => {
+    const { findOne, findAll } = await getMocks();
+    findOne.mockResolvedValueOnce({
+      groupName: 'My App',
+      groupDescription:
+        'Project root: /Users/me/MyApp. Purpose: ship a chat feature. Primary language: TypeScript.',
+    });
+    findAll.mockResolvedValueOnce([
+      {
+        sessionSummary: 'Refactored the chat scroll behaviour.',
+        lastActiveAt: new Date('2026-06-11T18:32:00Z'),
+      },
+      {
+        sessionSummary: 'Fixed a sqlite locking bug in the worker.',
+        lastActiveAt: new Date('2026-06-10T14:05:00Z'),
+      },
+    ]);
+
+    const got = await buildProjectContext(
+      'sub-1',
+      'My App',
+      ['edit /Users/me/MyApp/src/x.ts'],
+      'current-session',
+    );
+
+    expect(got).not.toBeNull();
+    expect(got!.confidence).toBe('high');
+    expect(got!.workingDirectory).toBe('/Users/me/MyApp');
+    expect(got!.text).toContain('<project_context name="My App">');
+    expect(got!.text).toContain('Working directory: /Users/me/MyApp');
+    expect(got!.text).toContain('Confidence: high');
+    expect(got!.text).toContain('Purpose: ship a chat feature');
+    expect(got!.text).toContain('Recent sessions in this project');
+    expect(got!.text).toContain('- 2026-06-11 18:32 UTC — Refactored the chat scroll behaviour.');
+    expect(got!.text).toContain(
+      '- 2026-06-10 14:05 UTC — Fixed a sqlite locking bug in the worker.',
+    );
+  });
+
+  it('marks confidence as medium when current path is an ancestor of the stored path', async () => {
+    const { findOne, findAll } = await getMocks();
+    findOne.mockResolvedValueOnce({
+      groupName: 'My App',
+      groupDescription:
+        'Project root: /Users/me/MyApp/api. Purpose: x. Primary language: TypeScript.',
+    });
+    findAll.mockResolvedValueOnce([]);
+
+    const got = await buildProjectContext(
+      'sub-1',
+      'My App',
+      ['edit /Users/me/MyApp/README.md'],
+      'current-session',
+    );
+
+    expect(got!.confidence).toBe('medium');
+    expect(got!.text).toContain('Confidence: medium');
+    expect(got!.text).toContain('confirm before running file operations');
+  });
+
+  it('marks confidence as low when current path is disjoint from the stored path', async () => {
+    const { findOne, findAll } = await getMocks();
+    findOne.mockResolvedValueOnce({
+      groupName: 'My App',
+      groupDescription: 'Project root: /Users/me/MyApp. Purpose: x. Primary language: TypeScript.',
+    });
+    findAll.mockResolvedValueOnce([]);
+
+    const got = await buildProjectContext(
+      'sub-1',
+      'My App',
+      ['edit /Users/me/SomeOtherProject/index.ts'],
+      'current-session',
+    );
+
+    expect(got!.confidence).toBe('low');
+    expect(got!.text).toContain('Confidence: low');
+  });
+
+  it('marks confidence as high when no fresh path is in the current turn but the group has a stored path', async () => {
+    const { findOne, findAll } = await getMocks();
+    findOne.mockResolvedValueOnce({
+      groupName: 'My App',
+      groupDescription: 'Project root: /Users/me/MyApp. Purpose: x. Primary language: TypeScript.',
+    });
+    findAll.mockResolvedValueOnce([]);
+
+    const got = await buildProjectContext(
+      'sub-1',
+      'My App',
+      ['continue working on the task'],
+      'current-session',
+    );
+
+    expect(got!.confidence).toBe('high');
+    expect(got!.workingDirectory).toBe('/Users/me/MyApp');
+  });
+
+  it('omits the recent-sessions section when there are no sibling summaries', async () => {
+    const { findOne, findAll } = await getMocks();
+    findOne.mockResolvedValueOnce({
+      groupName: 'My App',
+      groupDescription: 'Project root: /Users/me/MyApp. Purpose: x. Primary language: TypeScript.',
+    });
+    findAll.mockResolvedValueOnce([]);
+
+    const got = await buildProjectContext('sub-1', 'My App', null, 'current-session');
+    expect(got!.text).not.toContain('Recent sessions in this project');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Session-end driven summary + group description from summaries + freshness
+// timestamp. Pins the architecture:
+//
+//   * summariseSession() is the public entry point invoked from the agent
+//     server's WebSocket close handler. No in-memory marker required —
+//     the caller already knows the session ended.
+//   * generateGroupDescriptionFromSummaries() is the cron's only LLM call
+//     for descriptions. It sees ONLY per-session summaries + the existing
+//     description, never raw session history.
+//   * buildProjectContext() emits a "Group description last updated: ..."
+//     line so the agent can decide how much to trust the project meta.
+// ---------------------------------------------------------------------------
+describe('summariseSession (session-end hook)', () => {
+  const { summariseSession } = __testing__;
+
+  async function getMocks() {
+    const aiClientMod = await import('../ai-client');
+    const agentSessionMod = await import('../models/agentSession');
+    return {
+      complete: (aiClientMod as unknown as { aiClient: { complete: ReturnType<typeof vi.fn> } })
+        .aiClient.complete,
+      findOne: (
+        agentSessionMod as unknown as { AgentSession: { findOne: ReturnType<typeof vi.fn> } }
+      ).AgentSession.findOne,
+      update: (agentSessionMod as unknown as { AgentSession: { update: ReturnType<typeof vi.fn> } })
+        .AgentSession.update,
+    };
+  }
+
+  function userTurn(content: string) {
+    return { role: 'user', content: `<user_input>${content}</user_input>` };
+  }
+
+  it('writes a session summary when the session has real user inputs', async () => {
+    const { complete, findOne, update } = await getMocks();
+    complete.mockClear();
+    update.mockClear();
+
+    findOne.mockResolvedValueOnce({
+      id: 'sess-1',
+      historyJson: JSON.stringify([userTurn('refactored the agent tool loop')]),
+    });
+    complete.mockResolvedValueOnce({
+      content: JSON.stringify({ summary: 'Refactored the agent tool loop.' }),
+    });
+
+    await summariseSession('sess-1', 'sub-1');
+
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(update).toHaveBeenCalledWith(
+      { sessionSummary: 'Refactored the agent tool loop.' },
+      { where: { id: 'sess-1' } },
+    );
+  });
+
+  it('bails silently when the session has only terminal output / no real user inputs', async () => {
+    const { complete, findOne, update } = await getMocks();
+    complete.mockClear();
+    update.mockClear();
+
+    findOne.mockResolvedValueOnce({
+      id: 'sess-2',
+      historyJson: JSON.stringify([{ role: 'user', content: 'TERMINAL OUTPUT:\nfoo bar' }]),
+    });
+
+    await summariseSession('sess-2', 'sub-1');
+
+    expect(complete).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('does nothing when the session does not exist', async () => {
+    const { complete, findOne, update } = await getMocks();
+    complete.mockClear();
+    update.mockClear();
+
+    findOne.mockResolvedValueOnce(null);
+    await summariseSession('missing-session', 'sub-1');
+
+    expect(complete).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+  });
+});
+
+describe('generateGroupDescriptionFromSummaries (cron LLM call)', () => {
+  const { generateGroupDescriptionFromSummaries } = __testing__;
+
+  async function getMocks() {
+    const aiClientMod = await import('../ai-client');
+    return {
+      complete: (aiClientMod as unknown as { aiClient: { complete: ReturnType<typeof vi.fn> } })
+        .aiClient.complete,
+    };
+  }
+
+  it('returns null when there are no summaries AND no existing description', async () => {
+    const { complete } = await getMocks();
+    complete.mockClear();
+    const got = await generateGroupDescriptionFromSummaries('My App', '/Users/me/MyApp', [], null);
+    expect(got).toBeNull();
+    expect(complete).not.toHaveBeenCalled();
+  });
+
+  it('returns a description built only from summaries, never from raw history', async () => {
+    const { complete } = await getMocks();
+    complete.mockClear();
+    complete.mockResolvedValueOnce({
+      content: JSON.stringify({
+        groupDescription:
+          'Project root: /Users/me/MyApp. Purpose: ship a chat feature. Primary language: TypeScript. Recent work touched the message timestamps and search.',
+      }),
+    });
+
+    const got = await generateGroupDescriptionFromSummaries(
+      'My App',
+      '/Users/me/MyApp',
+      [
+        {
+          summary: 'Refactored the chat scroll behaviour.',
+          lastActiveAt: new Date('2030-01-02T00:00:00Z'),
+        },
+        {
+          summary: 'Added timestamps to messages.',
+          lastActiveAt: new Date('2030-01-01T00:00:00Z'),
+        },
+      ],
+      'Project root: /Users/me/MyApp. Purpose: ship a chat feature. Primary language: TypeScript.',
+    );
+
+    expect(got).not.toBeNull();
+    expect(got).toContain('/Users/me/MyApp');
+    // The function should pass the summaries into the prompt. We confirm by
+    // looking at the rendered prompt (second message arg).
+    const promptUser = complete.mock.calls[0][1][1].content as string;
+    expect(promptUser).toContain('Refactored the chat scroll behaviour.');
+    expect(promptUser).toContain('Added timestamps to messages.');
+  });
+
+  it('rewrites a hallucinated Project root: path back to the deterministic dominantRoot', async () => {
+    const { complete } = await getMocks();
+    complete.mockClear();
+    complete.mockResolvedValueOnce({
+      content: JSON.stringify({
+        groupDescription:
+          'Project root: /Users/me/SomethingElse. Purpose: x. Primary language: TypeScript.',
+      }),
+    });
+
+    const got = await generateGroupDescriptionFromSummaries(
+      'My App',
+      '/Users/me/MyApp',
+      [{ summary: 'Did stuff.', lastActiveAt: new Date('2030-01-02T00:00:00Z') }],
+      null,
+    );
+
+    expect(got).toContain('/Users/me/MyApp');
+    expect(got).not.toContain('/Users/me/SomethingElse');
+  });
+});
+
+describe('buildProjectContext: Group description last updated', () => {
+  const { buildProjectContext } = __testing__;
+
+  async function getMocks() {
+    const agentSessionMod = await import('../models/agentSession');
+    return {
+      findOne: (
+        agentSessionMod as unknown as { AgentSession: { findOne: ReturnType<typeof vi.fn> } }
+      ).AgentSession.findOne,
+      findAll: (
+        agentSessionMod as unknown as { AgentSession: { findAll: ReturnType<typeof vi.fn> } }
+      ).AgentSession.findAll,
+    };
+  }
+
+  it('renders a "Group description last updated: ..." line when the timestamp is known', async () => {
+    const { findOne, findAll } = await getMocks();
+    findOne.mockResolvedValueOnce({
+      groupName: 'My App',
+      groupDescription: 'Project root: /Users/me/MyApp. Purpose: x. Primary language: TypeScript.',
+      groupDescriptionUpdatedAt: new Date('2030-03-15T10:42:00Z'),
+    });
+    findAll.mockResolvedValueOnce([]);
+
+    const got = await buildProjectContext('sub-1', 'My App', null, 'current-session');
+    expect(got!.text).toContain('Group description last updated: 2030-03-15 10:42 UTC');
+    expect(got!.groupDescriptionUpdatedAt?.toISOString()).toBe('2030-03-15T10:42:00.000Z');
+  });
+
+  it('falls back to a clear "unknown" hint when the timestamp is missing (legacy rows)', async () => {
+    const { findOne, findAll } = await getMocks();
+    findOne.mockResolvedValueOnce({
+      groupName: 'Legacy Group',
+      groupDescription: 'Project root: /Users/me/Legacy. Purpose: x. Primary language: TypeScript.',
+      // No groupDescriptionUpdatedAt — predates the migration on this row.
+    });
+    findAll.mockResolvedValueOnce([]);
+
+    const got = await buildProjectContext('sub-1', 'Legacy Group', null, 'current-session');
+    expect(got!.text).toContain('Group description last updated: (unknown');
+    expect(got!.groupDescriptionUpdatedAt).toBeNull();
   });
 });

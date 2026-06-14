@@ -16,6 +16,7 @@ import { executeTool } from '../web-search/web-search-provider';
 import { createLazyAuthContext } from './agentAuth';
 import { authMiddleware, AuthLocals } from '../authMiddleware';
 import { executeImageGenerationTool } from './imageTool';
+import { runScript } from '../shellRunner';
 import {
   buildAvailableTools,
   SHELL_SCRIPT_TOOL,
@@ -25,19 +26,16 @@ import {
   pushToSessionHistory,
   createUserContentForCronJob,
 } from './utils';
-import { updateSessionGroup } from './sessionGrouping';
+import { updateSessionGroup, buildProjectContext, summariseSession } from './sessionGrouping';
 import {
   aiClient,
   AITool,
   AICompletionResult,
   getDefaultModel,
   getContextWindowSize,
-  RESPONSES_API_MODEL,
 } from '../ai-client';
 import type { AgentMessage, AgentSendFn, SessionState } from './types';
 import { Logger } from 'winston';
-
-type TurnOutcome = 'shell_pending' | 'complete';
 
 interface QueuedMessage {
   message: AgentMessage;
@@ -66,6 +64,7 @@ async function runToolLoop(
   tools: AITool[],
   mcpDispatch: Map<string, { serverId: string; mcpToolName: string }>,
   onUsage: (result: AICompletionResult) => Promise<void>,
+  isCronJob: boolean,
 ): Promise<AICompletionResult> {
   // Tools the model is allowed to invoke on this turn. Built from the same
   // list we hand to the AI client, so flipping `WEB_SEARCH_ENABLED` (or any
@@ -151,11 +150,32 @@ async function runToolLoop(
           return { id: tc.id, name: tc.name, result: toolResult };
         }
 
-        // shell_script is a real tool: send the script to the frontend and
-        // suspend until the WebSocket handler resolves the pending promise
-        // with the terminal output (or an error string).
+        // shell_script is a real tool. For interactive sessions we send the
+        // script to the frontend and suspend until the WebSocket handler
+        // resolves the pending promise with the terminal output. Cron jobs run
+        // server-side — there is no frontend — so we execute the script here
+        // and feed the output straight back as the tool result.
         if (tc.name === 'shell_script') {
           const script = typeof args.script === 'string' ? args.script : '';
+
+          if (isCronJob) {
+            log.info('Cron job: executing shell_script tool server-side', {
+              sessionId,
+              toolIteration: toolIterations,
+              scriptLength: script.length,
+            });
+            const { output, isError } = await runScript(script);
+            log.info('Cron job: shell_script finished', {
+              sessionId,
+              isError,
+              outputLength: output.length,
+            });
+            const result = isError
+              ? `COMMAND ERROR:\n${output}`
+              : `TERMINAL OUTPUT:\n${output}`;
+            return { id: tc.id, name: tc.name, result };
+          }
+
           log.info('Agent invoking shell_script tool; forwarding to frontend', {
             sessionId,
             toolIteration: toolIterations,
@@ -255,9 +275,9 @@ const contextWindowSize = getContextWindowSize(config.aiProvider);
 
 // ─── Terminal output helpers ──────────────────────────────────────────────────
 
-const TERMINAL_OUTPUT_MAX = 80_000;   // max chars kept per terminal message
-const TERMINAL_OUTPUT_HEAD = 30_000;  // chars kept from the beginning
-const TERMINAL_OUTPUT_TAIL = 50_000;  // chars kept from the end (errors land here)
+const TERMINAL_OUTPUT_MAX = 80_000; // max chars kept per terminal message
+const TERMINAL_OUTPUT_HEAD = 30_000; // chars kept from the beginning
+const TERMINAL_OUTPUT_TAIL = 50_000; // chars kept from the end (errors land here)
 
 /**
  * Caps large terminal outputs so they don't consume the entire history budget.
@@ -276,36 +296,6 @@ function truncateTerminalOutput(output: string): string {
 }
 
 // ─── DB helpers ───────────────────────────────────────────────────────────────
-
-/**
- * Sanitize LLM content before processing or forwarding to the client.
- *
- * Two known hallucination patterns are fixed here:
- *
- * 1. <shell_function_calls> wrapper — the model sometimes wraps <shell_script>
- *    in a <shell_function_calls> envelope.  Stored verbatim it compounds on
- *    every turn (double/triple nesting), so we strip every occurrence.
- *
- * 2. Mismatched closing tag — the model opens with <shell_script> but closes
- *    with a different tag (e.g. </shell_function>, </shell>, </script>).  The
- *    macOS client's extractor looks for </shell_script> exactly; a wrong tag
- *    makes it treat the entire script as plain reasoning text and call
- *    receiveNext(), while the backend waits for terminal output — a deadlock.
- *    We normalise any </shell…> variant to </shell_script> when the correct
- *    closing tag is absent.
- */
-function sanitizeLLMContent(content: string): string {
-  // 1. Strip <shell_function_calls> wrapper tags.
-  let result = content.replace(/<\/?shell_function_calls>/gi, '');
-
-  // 2. If <shell_script> is present but </shell_script> is missing,
-  //    replace any stray </shell…> closing tag with the correct one.
-  if (result.includes('<shell_script>') && !result.includes('</shell_script>')) {
-    result = result.replace(/<\/shell\w*>/gi, '</shell_script>');
-  }
-
-  return result.trim();
-}
 
 async function persistSessionToDB(sessionId: string, state: SessionState): Promise<void> {
   try {
@@ -358,7 +348,12 @@ async function getOrCreateSession(
   log: typeof logger,
   isCronJob = false,
   groupName?: string,
-): Promise<{ sessionState: SessionState; hasStoredPrompt: boolean; resumedSession: boolean }> {
+): Promise<{
+  sessionState: SessionState;
+  hasStoredPrompt: boolean;
+  contextExists: boolean;
+  groupName: string | null;
+}> {
   // 1. Try to resume from a persisted DB record.
   try {
     const dbSession = await AgentSession.findOne({
@@ -385,7 +380,8 @@ async function getOrCreateSession(
           .some(
             (h) => typeof h.content === 'string' && h.content.includes('<stored_instructions>'),
           ),
-        resumedSession: true,
+        contextExists: userHistoryHasProjectContext(history),
+        groupName: dbSession.groupName ?? null,
       };
     }
   } catch (err) {
@@ -468,7 +464,8 @@ ${prompt}
           .some(
             (h) => typeof h.content === 'string' && h.content.includes('<stored_instructions>'),
           ),
-        resumedSession: true,
+        contextExists: userHistoryHasProjectContext(history),
+        groupName: dbSession.groupName ?? null,
       };
     }
 
@@ -486,7 +483,10 @@ ${prompt}
   return {
     sessionState: entry,
     hasStoredPrompt: !!prompt,
-    resumedSession: false,
+    // Brand-new session: history starts with at most the stored-instructions
+    // turn (which is not a <project_context>), so no project context exists yet.
+    contextExists: false,
+    groupName: null,
   };
 }
 
@@ -497,11 +497,12 @@ async function runAgentTurnInternal(
   send: AgentSendFn,
   log: typeof logger,
   options?: { isCronJob?: boolean; untaggedDepth?: number },
-): Promise<TurnOutcome> {
+): Promise<void> {
   const {
     sessionState: session,
     hasStoredPrompt,
-    resumedSession,
+    contextExists,
+    groupName,
   } = await getOrCreateSession(
     sessionId,
     subscription,
@@ -518,7 +519,7 @@ async function runAgentTurnInternal(
     sessionId,
     subscriptionId: subscription.id,
     turn: session.turns,
-    resumedSession,
+    contextExists,
   });
 
   // Append the client message as user content, marking terminal
@@ -534,30 +535,59 @@ async function runAgentTurnInternal(
     userContent = `COMMAND ERROR:\n${truncateTerminalOutput(userContent)}`;
   }
 
-  // If the client specified a group_name, look up the stored description
-  // and prepend it as a <project_context> block. The frontend never sends
-  // the description itself — the server is the single source of truth.
+  const currentGroupName = clientMessage.group_name ?? groupName;
+
+  // Prepend the <project_context> block whenever the client has a group
+  // selected AND the session's persisted history does NOT already carry one.
+  // This handles three cases coherently:
+  //   1. Brand-new session with a group selected from the start — inject
+  //      on the very first turn.
+  //   2. Resumed session that already has context in some earlier user
+  //      turn — skip; the agent's context window already shows it.
+  //   3. Resumed session that started WITHOUT a group and got classified
+  //      after a previous turn — inject now, so the agent finally sees the
+  //      project meta it has been missing.
+  // The frontend never sends the description itself — the server is the
+  // single source of truth.
   if (
-    clientMessage.group_name &&
+    currentGroupName &&
     !isTerminalOutput &&
     !isErrorFlag &&
     !clientMessage.is_web_call &&
-    !resumedSession
+    !contextExists
   ) {
     try {
-      const groupRow = await AgentSession.findOne({
-        where: {
-          subscriptionId: subscription.id,
-          groupName: clientMessage.group_name,
-          groupDescription: { [Op.not]: null },
-        },
-        attributes: ['groupName', 'groupDescription'],
-      });
-      if (groupRow?.groupDescription) {
-        userContent = `<project_context name="${groupRow.groupName}">\n${groupRow.groupDescription}\n</project_context>\n\n${userContent}`;
+      // The <project_context> block is now assembled from (a) the group's
+      // stored project root + a confidence signal vs the path the user is
+      // typing about, (b) the group's slow-changing purpose/language meta,
+      // and (c) the last 5 sibling sessions' per-session summaries with
+      // timestamps. This replaces the previous behaviour where the block
+      // was just the group's single rolling description — a description
+      // that got rewritten by every new session's first turn, wiping out
+      // accumulated context.
+      //
+      // We pass the CURRENT turn's text as the only "input" so confidence
+      // can compare the stored project root against any path the user just
+      // typed. We do NOT include older messages from this session because
+      // they have already been re-injected as their own <project_context>
+      // on previous turns and re-extracting them now would just amplify
+      // any prior path-detection error.
+      const ctx = await buildProjectContext(
+        subscription.id,
+        currentGroupName,
+        [clientMessage.content || ''],
+        sessionId,
+      );
+      if (ctx?.text) {
+        logger.info('Prepending <project_context> block to user content', {
+          sessionId,
+          groupName: currentGroupName,
+          text: ctx.text,
+        });
+        userContent = `${ctx.text}\n\n${userContent}`;
       }
     } catch (err) {
-      log.warn('Failed to fetch group description for context injection', { error: err });
+      log.warn('Failed to build <project_context> block', { error: err });
     }
   }
 
@@ -603,19 +633,16 @@ async function runAgentTurnInternal(
   }
 
   const mcpBundle = await getMcpToolsForSubscription(subscription.id, log);
-  // gpt-5.5 (Responses API) already has execute_shell_script wired internally;
-  // all other providers get shell_script as a native function tool so the model
-  // can call it directly instead of emitting XML tags.
+  // All providers (including gpt-5.5 via the Responses API) receive the
+  // shell_script tool as a native function tool so the model can call it
+  // directly instead of emitting XML tags.
   //
   // When the user has set TERMINAL_ACCESS=limited via Settings → Agent Access,
   // we expose the same tool name but with a description that tells the model
-  // to stay within read-only / inspection commands. The Responses API path
-  // injects its equivalent restriction inside ai-client.ts (see
-  // shellScriptToolDescriptionForMode there).
-  const shellTool = config.terminalAccess === 'limited'
-    ? SHELL_SCRIPT_TOOL_LIMITED
-    : SHELL_SCRIPT_TOOL;
-  const shellTools: AITool[] = aiModel !== RESPONSES_API_MODEL ? [shellTool] : [];
+  // to stay within read-only / inspection commands.
+  const shellTool =
+    config.terminalAccess === 'limited' ? SHELL_SCRIPT_TOOL_LIMITED : SHELL_SCRIPT_TOOL;
+  const shellTools: AITool[] = [shellTool];
   const tools = buildAvailableTools([...shellTools, ...mcpBundle.aiTools]);
 
   const recordUsage = async (result: AICompletionResult) => {
@@ -696,14 +723,15 @@ async function runAgentTurnInternal(
       }
       pushToSessionHistory(logger, session, {
         role: 'user',
-        content: [
-          'Your previous response was cut off because it exceeded the output length limit.',
-          'Do NOT repeat or continue what you wrote.',
-          'Respond immediately with exactly one of:',
-          '- <shell_script>...</shell_script>',
-          '- <final_answer>...</final_answer>',
-          'No reasoning. No explanation. Just the tag.',
-        ].join('\n'),
+        content: `Your previous response exceeded the output length limit and was cut off.
+
+Do not repeat or continue what you wrote.
+
+Respond immediately with exactly one of the following:
+- An external tool call (e.g., web_search, shell_script) if you need to fetch data or run commands
+- <final_answer>...</final_answer>
+
+Provide only a tool call or final answer. Do not include reasoning or explanation.`,
       });
       result = await aiClient.complete(aiModel, session.history, {
         tools: tools?.length ? tools : undefined,
@@ -712,7 +740,7 @@ async function runAgentTurnInternal(
       await recordUsage(result);
     }
 
-    let content = sanitizeLLMContent(result.content.trim());
+    let content = result.content.trim();
 
     if (!content && result.finish_reason !== 'tool_calls') {
       log.warn('Agent LLM returned empty content; sending generic error to client.');
@@ -721,7 +749,7 @@ async function runAgentTurnInternal(
 
       await persistSessionToDB(sessionId, session);
       sendFinalAnswer(send, sessionId, errorMessage, true);
-      return 'complete';
+      return;
     }
 
     // If the model requested web tool calls, execute them and get a follow-up
@@ -742,10 +770,13 @@ async function runAgentTurnInternal(
         tools,
         mcpBundle.dispatch,
         recordUsage,
+        Boolean(options?.isCronJob),
       );
-      const toolLoopContent = sanitizeLLMContent(toolLoopResult.content.trim());
+      const toolLoopContent = toolLoopResult.content.trim();
 
-      const toolLoopHasShell = toolLoopContent.includes('<shell_script>');
+      // shell_script runs as a native tool inside runToolLoop, so the loop only
+      // returns once the model produces text — either plain text or a
+      // <final_answer>, never a raw <shell_script> tag.
       const toolLoopHasFinal = toolLoopContent.includes('<final_answer>');
       const webToolFailed = session.history.some(
         (msg) =>
@@ -755,21 +786,20 @@ async function runAgentTurnInternal(
           msg.content.startsWith('Error'),
       );
 
-      if (toolLoopHasShell || (toolLoopHasFinal && !webToolFailed)) {
-        // The tool loop already produced a shell script — use it directly.
-        // This avoids a redundant AI call and handles the case where the model
-        // emits a <shell_script> immediately after its web tool calls.
-        log.info('Tool loop produced shell script; processing inline', { sessionId });
+      if (toolLoopHasFinal && !webToolFailed) {
+        // The tool loop produced a final answer and no web tool failed — use it
+        // directly, avoiding a redundant AI call.
+        log.info('Tool loop produced final answer; processing inline', { sessionId });
         content = toolLoopContent;
         result = toolLoopResult;
-        // Fall through to the <shell_script> handling below.
+        // Fall through to the <final_answer> handling below.
       } else {
-        // The tool loop returned either plain text or a <final_answer>.
-        // We always make one more AI turn here so the model has a chance to
-        // correct itself — specifically when web tools failed (404 / error) the
-        // model tends to wrap a "please run this manually" message in
-        // <final_answer>. The directive below tells it to use <shell_script> as
-        // a fallback instead of asking the user to run commands.
+        // The tool loop returned either plain text or a <final_answer> produced
+        // after a web tool failed (404 / error) — the model tends to wrap a
+        // "please run this manually" message in <final_answer> in that case.
+        // We make one more AI turn so the model can correct itself. The
+        // directive below tells it to call the shell_script tool as a fallback
+        // instead of asking the user to run commands.
         if (toolLoopResult.assistantMessage) {
           pushToSessionHistory(logger, session, toolLoopResult.assistantMessage);
         }
@@ -779,11 +809,11 @@ async function runAgentTurnInternal(
           content: webToolFailed
             ? [
                 'IMPORTANT: The web search tool failed and is unavailable. Do NOT attempt any further web calls or ask the user to run commands manually.',
-                'You MUST retrieve any needed data by generating a <shell_script> that runs terminal commands (curl, grep, cat, etc.).',
+                'You MUST retrieve any needed data by calling the shell_script tool to run terminal commands (curl, grep, cat, etc.).',
                 'The shell script output will be returned to you automatically.',
                 '',
                 'Respond with exactly one of:',
-                '- <shell_script>...</shell_script> — to fetch or retrieve data via terminal commands',
+                '- a shell_script tool call — to fetch or retrieve data via terminal commands',
                 '- <final_answer>...</final_answer> — only if you already have enough information',
                 'No plain text. No web tool calls. No other format.',
               ].join('\n')
@@ -791,7 +821,7 @@ async function runAgentTurnInternal(
                 'Web research is complete. The results are in the conversation above.',
                 '',
                 'Now respond with exactly one of:',
-                '- <shell_script>...</shell_script> — to run terminal commands (output will be returned to you automatically)',
+                '- a shell_script tool call — to run terminal commands (output will be returned to you automatically)',
                 '- <final_answer>...</final_answer> — only if you genuinely have enough information',
                 'No plain text. No other format.',
               ].join('\n'),
@@ -817,36 +847,7 @@ async function runAgentTurnInternal(
       }
     }
 
-    const hasShellScriptTag = content.includes('<shell_script>');
     const hasFinalAnswerTag = content.includes('<final_answer>');
-
-    if (hasShellScriptTag) {
-      log.info('Completed agent turn. Sending back scripts, waiting for results.', {
-        sessionId,
-        subscriptionId: subscription.id,
-        turn: session.turns,
-        responseLength: result.content.length,
-      });
-
-      pushToSessionHistory(logger, session, {
-        role: 'assistant',
-        content,
-      });
-
-      // Persist before sending so that if the send callback triggers a new
-      // runAgentTurn immediately (e.g. cron shell-script loop), the DB already
-      // has the updated turn count and history.
-      await persistSessionToDB(sessionId, session);
-
-      send({
-        session_id: sessionId,
-        sender: 'agent',
-        content,
-        is_terminal_output: false,
-        is_error: false,
-      });
-      return 'shell_pending';
-    }
 
     if (hasFinalAnswerTag) {
       log.info('Finalizing agent session after final answer tag', {
@@ -906,7 +907,7 @@ async function runAgentTurnInternal(
           'The agent failed to produce a structured response after multiple attempts. Please try again.',
           true,
         );
-        return 'complete';
+        return;
       }
 
       log.info('Agent returned untagged content; injecting format-correction directive', {
@@ -925,9 +926,9 @@ async function runAgentTurnInternal(
         content: [
           'Your response was plain text, which is not a valid format.',
           'You MUST respond with exactly one of:',
-          '- <shell_script>...</shell_script> — to run terminal commands',
+          '- a shell_script tool call — to run terminal commands',
           '- <final_answer>...</final_answer> — to conclude',
-          'Respond immediately with the tag. No reasoning, no explanation.',
+          'Respond immediately. No reasoning, no explanation.',
         ].join('\n'),
       });
       await persistSessionToDB(sessionId, session);
@@ -970,7 +971,6 @@ async function runAgentTurnInternal(
     await persistSessionToDB(sessionId, session);
     sendFinalAnswer(send, sessionId, errorMessage, true);
   }
-  return 'complete';
 }
 
 export async function runAgentTurn(
@@ -980,7 +980,7 @@ export async function runAgentTurn(
   send: AgentSendFn,
   log: typeof logger,
   options?: { isCronJob?: boolean },
-): Promise<TurnOutcome> {
+): Promise<void> {
   // untaggedDepth always starts at 0 for external callers; it is only threaded
   // through the internal recursive path.
   return runAgentTurnInternal(sessionId, subscription, clientMessage, send, log, options);
@@ -995,19 +995,10 @@ async function processNextInQueue(sessionId: string): Promise<void> {
 
   activeSessions.add(sessionId);
   try {
-    const outcome = await runAgentTurn(
-      sessionId,
-      next.subscription,
-      next.message,
-      next.send,
-      next.log,
-    );
-    if (outcome === 'complete') {
-      activeSessions.delete(sessionId);
-      void processNextInQueue(sessionId);
-    }
-    // 'shell_pending': keep active; terminal output arriving later will complete the turn
-  } catch {
+    await runAgentTurn(sessionId, next.subscription, next.message, next.send, next.log);
+  } catch (err) {
+    next.log.error('Queued agent turn failed', { sessionId, error: err });
+  } finally {
     activeSessions.delete(sessionId);
     void processNextInQueue(sessionId);
   }
@@ -1082,8 +1073,7 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
 
         // Terminal feedback (shell output / errors) and internal recursive calls
         // always bypass the queue — they are part of the currently active turn.
-        const isTerminalFeedback =
-          Boolean(message.is_terminal_output) || Boolean(message.is_error);
+        const isTerminalFeedback = Boolean(message.is_terminal_output) || Boolean(message.is_error);
         const isInternalCall = Boolean(message.is_web_call);
 
         if (!isTerminalFeedback && !isInternalCall && activeSessions.has(sessionId)) {
@@ -1116,12 +1106,14 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
         }
 
         activeSessions.add(sessionId);
-        const outcome = await runAgentTurn(sessionId, subscription, message, send, log);
-        if (outcome === 'complete') {
+        try {
+          await runAgentTurn(sessionId, subscription, message, send, log);
+        } catch (err) {
+          log.error('Agent turn failed', { sessionId, error: err });
+        } finally {
           activeSessions.delete(sessionId);
           void processNextInQueue(sessionId);
         }
-        // 'shell_pending': keep active; terminal output will eventually unlock it
       })();
     });
 
@@ -1141,15 +1133,18 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
         const shellResolver = pendingShellScripts.get(sid);
         if (shellResolver) {
           pendingShellScripts.delete(sid);
-          shellResolver('COMMAND ERROR:\nWebSocket connection closed before script output was received.');
+          shellResolver(
+            'COMMAND ERROR:\nWebSocket connection closed before script output was received.',
+          );
           log.info('Resolved pending shell_script with disconnect error', { sessionId: sid });
         }
       }
 
-      // Sessions that were shell_pending (waiting for terminal output that will
-      // never arrive) stay stuck in activeSessions indefinitely, causing all
-      // follow-up messages to queue forever. Clean them up so a reconnecting
-      // client can resume without being stuck.
+      // A turn suspended inside runToolLoop waiting for shell_script terminal
+      // output (resolved just above with a disconnect error) leaves the session
+      // in activeSessions until that turn unwinds, which would make follow-up
+      // messages queue forever. Clean them up so a reconnecting client can
+      // resume without being stuck.
       for (const sid of connectionSessionIds) {
         const wasActive = activeSessions.has(sid);
         const queueLength = sessionQueues.get(sid)?.length ?? 0;
@@ -1161,6 +1156,25 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
             sessionId: sid,
             wasActive,
             drainedQueueLength: queueLength,
+          });
+        }
+      }
+
+      // Session-end hook: when the WebSocket closes the user has stopped
+      // typing, so this is the right moment to (re)generate each touched
+      // session's sessionSummary. The summary feeds future <project_context>
+      // blocks under "Recent sessions in this project". We deliberately do
+      // NOT block the close handler on the LLM call — fire-and-forget with
+      // its own error logging so a slow LLM provider can't keep the
+      // connection close path waiting.
+      const sub = getSubscription();
+      if (sub) {
+        for (const sid of connectionSessionIds) {
+          void summariseSession(sid, sub.id).catch((err) => {
+            log.warn('summariseSession on WebSocket close failed', {
+              sessionId: sid,
+              error: err,
+            });
           });
         }
       }
@@ -1216,6 +1230,21 @@ function extractTaggedBlock(text: string, tag: string): string | null {
 function removeTaggedBlock(text: string, tag: string): string {
   const pattern = new RegExp(`<${tag}[^>]*>[\\s\\S]*?<\\/${tag}>`, 'gi');
   return text.replace(pattern, '');
+}
+
+// Detect whether any user message in the session's persisted history already
+// contains a <project_context> block. We inject the project context only
+// when NO past user message carries one — that way a session resumed AFTER
+// it has been classified (started without a group, ended, got grouped by
+// the cron, now resumed) still gets its first context injection. A session
+// that already has the block in some earlier turn does not get duplicates.
+function userHistoryHasProjectContext(history: SessionState['history']): boolean {
+  for (const msg of history) {
+    if (msg.role !== 'user') continue;
+    const text = typeof msg.content === 'string' ? msg.content : '';
+    if (/<project_context\b/i.test(text)) return true;
+  }
+  return false;
 }
 
 function cleanUserTranscriptText(text: string): string {

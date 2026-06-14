@@ -13,12 +13,10 @@ import { IMAGE_GENERATE_TOOL } from './imageTool';
 
 /**
  * Tool definition for shell script execution. Registered as a native function
- * tool so the model invokes it via function calling rather than emitting XML
- * tags. agentServer intercepts the call, forwards the script to the frontend,
+ * tool for all providers (including gpt-5.5 via the Responses API) so the
+ * model invokes it via function calling rather than emitting XML tags.
+ * agentServer intercepts the call, forwards the script to the frontend,
  * and resolves the tool result with the terminal output.
- *
- * Not registered for the gpt-5.5 Responses API path — that adapter has its
- * own `execute_shell_script` tool and handles the conversion internally.
  */
 export const SHELL_SCRIPT_TOOL: AITool = {
   name: 'shell_script',
