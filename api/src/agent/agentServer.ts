@@ -16,6 +16,7 @@ import { executeTool } from '../web-search/web-search-provider';
 import { createLazyAuthContext } from './agentAuth';
 import { authMiddleware, AuthLocals } from '../authMiddleware';
 import { executeImageGenerationTool } from './imageTool';
+import { runScript } from '../shellRunner';
 import {
   buildAvailableTools,
   SHELL_SCRIPT_TOOL,
@@ -35,8 +36,6 @@ import {
 } from '../ai-client';
 import type { AgentMessage, AgentSendFn, SessionState } from './types';
 import { Logger } from 'winston';
-
-type TurnOutcome = 'shell_pending' | 'complete';
 
 interface QueuedMessage {
   message: AgentMessage;
@@ -65,6 +64,7 @@ async function runToolLoop(
   tools: AITool[],
   mcpDispatch: Map<string, { serverId: string; mcpToolName: string }>,
   onUsage: (result: AICompletionResult) => Promise<void>,
+  isCronJob: boolean,
 ): Promise<AICompletionResult> {
   // Tools the model is allowed to invoke on this turn. Built from the same
   // list we hand to the AI client, so flipping `WEB_SEARCH_ENABLED` (or any
@@ -150,11 +150,32 @@ async function runToolLoop(
           return { id: tc.id, name: tc.name, result: toolResult };
         }
 
-        // shell_script is a real tool: send the script to the frontend and
-        // suspend until the WebSocket handler resolves the pending promise
-        // with the terminal output (or an error string).
+        // shell_script is a real tool. For interactive sessions we send the
+        // script to the frontend and suspend until the WebSocket handler
+        // resolves the pending promise with the terminal output. Cron jobs run
+        // server-side — there is no frontend — so we execute the script here
+        // and feed the output straight back as the tool result.
         if (tc.name === 'shell_script') {
           const script = typeof args.script === 'string' ? args.script : '';
+
+          if (isCronJob) {
+            log.info('Cron job: executing shell_script tool server-side', {
+              sessionId,
+              toolIteration: toolIterations,
+              scriptLength: script.length,
+            });
+            const { output, isError } = await runScript(script);
+            log.info('Cron job: shell_script finished', {
+              sessionId,
+              isError,
+              outputLength: output.length,
+            });
+            const result = isError
+              ? `COMMAND ERROR:\n${output}`
+              : `TERMINAL OUTPUT:\n${output}`;
+            return { id: tc.id, name: tc.name, result };
+          }
+
           log.info('Agent invoking shell_script tool; forwarding to frontend', {
             sessionId,
             toolIteration: toolIterations,
@@ -275,36 +296,6 @@ function truncateTerminalOutput(output: string): string {
 }
 
 // ─── DB helpers ───────────────────────────────────────────────────────────────
-
-/**
- * Sanitize LLM content before processing or forwarding to the client.
- *
- * Two known hallucination patterns are fixed here:
- *
- * 1. <shell_function_calls> wrapper — the model sometimes wraps <shell_script>
- *    in a <shell_function_calls> envelope.  Stored verbatim it compounds on
- *    every turn (double/triple nesting), so we strip every occurrence.
- *
- * 2. Mismatched closing tag — the model opens with <shell_script> but closes
- *    with a different tag (e.g. </shell_function>, </shell>, </script>).  The
- *    macOS client's extractor looks for </shell_script> exactly; a wrong tag
- *    makes it treat the entire script as plain reasoning text and call
- *    receiveNext(), while the backend waits for terminal output — a deadlock.
- *    We normalise any </shell…> variant to </shell_script> when the correct
- *    closing tag is absent.
- */
-function sanitizeLLMContent(content: string): string {
-  // 1. Strip <shell_function_calls> wrapper tags.
-  let result = content.replace(/<\/?shell_function_calls>/gi, '');
-
-  // 2. If <shell_script> is present but </shell_script> is missing,
-  //    replace any stray </shell…> closing tag with the correct one.
-  if (result.includes('<shell_script>') && !result.includes('</shell_script>')) {
-    result = result.replace(/<\/shell\w*>/gi, '</shell_script>');
-  }
-
-  return result.trim();
-}
 
 async function persistSessionToDB(sessionId: string, state: SessionState): Promise<void> {
   try {
@@ -506,7 +497,7 @@ async function runAgentTurnInternal(
   send: AgentSendFn,
   log: typeof logger,
   options?: { isCronJob?: boolean; untaggedDepth?: number },
-): Promise<TurnOutcome> {
+): Promise<void> {
   const {
     sessionState: session,
     hasStoredPrompt,
@@ -749,7 +740,7 @@ Provide only a tool call or final answer. Do not include reasoning or explanatio
       await recordUsage(result);
     }
 
-    let content = sanitizeLLMContent(result.content.trim());
+    let content = result.content.trim();
 
     if (!content && result.finish_reason !== 'tool_calls') {
       log.warn('Agent LLM returned empty content; sending generic error to client.');
@@ -758,7 +749,7 @@ Provide only a tool call or final answer. Do not include reasoning or explanatio
 
       await persistSessionToDB(sessionId, session);
       sendFinalAnswer(send, sessionId, errorMessage, true);
-      return 'complete';
+      return;
     }
 
     // If the model requested web tool calls, execute them and get a follow-up
@@ -779,10 +770,13 @@ Provide only a tool call or final answer. Do not include reasoning or explanatio
         tools,
         mcpBundle.dispatch,
         recordUsage,
+        Boolean(options?.isCronJob),
       );
-      const toolLoopContent = sanitizeLLMContent(toolLoopResult.content.trim());
+      const toolLoopContent = toolLoopResult.content.trim();
 
-      const toolLoopHasShell = toolLoopContent.includes('<shell_script>');
+      // shell_script runs as a native tool inside runToolLoop, so the loop only
+      // returns once the model produces text — either plain text or a
+      // <final_answer>, never a raw <shell_script> tag.
       const toolLoopHasFinal = toolLoopContent.includes('<final_answer>');
       const webToolFailed = session.history.some(
         (msg) =>
@@ -792,21 +786,20 @@ Provide only a tool call or final answer. Do not include reasoning or explanatio
           msg.content.startsWith('Error'),
       );
 
-      if (toolLoopHasShell || (toolLoopHasFinal && !webToolFailed)) {
-        // The tool loop already produced a shell script — use it directly.
-        // This avoids a redundant AI call and handles the case where the model
-        // emits a <shell_script> immediately after its web tool calls.
-        log.info('Tool loop produced shell script; processing inline', { sessionId });
+      if (toolLoopHasFinal && !webToolFailed) {
+        // The tool loop produced a final answer and no web tool failed — use it
+        // directly, avoiding a redundant AI call.
+        log.info('Tool loop produced final answer; processing inline', { sessionId });
         content = toolLoopContent;
         result = toolLoopResult;
-        // Fall through to the <shell_script> handling below.
+        // Fall through to the <final_answer> handling below.
       } else {
-        // The tool loop returned either plain text or a <final_answer>.
-        // We always make one more AI turn here so the model has a chance to
-        // correct itself — specifically when web tools failed (404 / error) the
-        // model tends to wrap a "please run this manually" message in
-        // <final_answer>. The directive below tells it to use <shell_script> as
-        // a fallback instead of asking the user to run commands.
+        // The tool loop returned either plain text or a <final_answer> produced
+        // after a web tool failed (404 / error) — the model tends to wrap a
+        // "please run this manually" message in <final_answer> in that case.
+        // We make one more AI turn so the model can correct itself. The
+        // directive below tells it to call the shell_script tool as a fallback
+        // instead of asking the user to run commands.
         if (toolLoopResult.assistantMessage) {
           pushToSessionHistory(logger, session, toolLoopResult.assistantMessage);
         }
@@ -854,36 +847,7 @@ Provide only a tool call or final answer. Do not include reasoning or explanatio
       }
     }
 
-    const hasShellScriptTag = content.includes('<shell_script>');
     const hasFinalAnswerTag = content.includes('<final_answer>');
-
-    if (hasShellScriptTag) {
-      log.info('Completed agent turn. Sending back scripts, waiting for results.', {
-        sessionId,
-        subscriptionId: subscription.id,
-        turn: session.turns,
-        responseLength: result.content.length,
-      });
-
-      pushToSessionHistory(logger, session, {
-        role: 'assistant',
-        content,
-      });
-
-      // Persist before sending so that if the send callback triggers a new
-      // runAgentTurn immediately (e.g. cron shell-script loop), the DB already
-      // has the updated turn count and history.
-      await persistSessionToDB(sessionId, session);
-
-      send({
-        session_id: sessionId,
-        sender: 'agent',
-        content,
-        is_terminal_output: false,
-        is_error: false,
-      });
-      return 'shell_pending';
-    }
 
     if (hasFinalAnswerTag) {
       log.info('Finalizing agent session after final answer tag', {
@@ -943,7 +907,7 @@ Provide only a tool call or final answer. Do not include reasoning or explanatio
           'The agent failed to produce a structured response after multiple attempts. Please try again.',
           true,
         );
-        return 'complete';
+        return;
       }
 
       log.info('Agent returned untagged content; injecting format-correction directive', {
@@ -1007,7 +971,6 @@ Provide only a tool call or final answer. Do not include reasoning or explanatio
     await persistSessionToDB(sessionId, session);
     sendFinalAnswer(send, sessionId, errorMessage, true);
   }
-  return 'complete';
 }
 
 export async function runAgentTurn(
@@ -1017,7 +980,7 @@ export async function runAgentTurn(
   send: AgentSendFn,
   log: typeof logger,
   options?: { isCronJob?: boolean },
-): Promise<TurnOutcome> {
+): Promise<void> {
   // untaggedDepth always starts at 0 for external callers; it is only threaded
   // through the internal recursive path.
   return runAgentTurnInternal(sessionId, subscription, clientMessage, send, log, options);
@@ -1032,19 +995,10 @@ async function processNextInQueue(sessionId: string): Promise<void> {
 
   activeSessions.add(sessionId);
   try {
-    const outcome = await runAgentTurn(
-      sessionId,
-      next.subscription,
-      next.message,
-      next.send,
-      next.log,
-    );
-    if (outcome === 'complete') {
-      activeSessions.delete(sessionId);
-      void processNextInQueue(sessionId);
-    }
-    // 'shell_pending': keep active; terminal output arriving later will complete the turn
-  } catch {
+    await runAgentTurn(sessionId, next.subscription, next.message, next.send, next.log);
+  } catch (err) {
+    next.log.error('Queued agent turn failed', { sessionId, error: err });
+  } finally {
     activeSessions.delete(sessionId);
     void processNextInQueue(sessionId);
   }
@@ -1152,12 +1106,14 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
         }
 
         activeSessions.add(sessionId);
-        const outcome = await runAgentTurn(sessionId, subscription, message, send, log);
-        if (outcome === 'complete') {
+        try {
+          await runAgentTurn(sessionId, subscription, message, send, log);
+        } catch (err) {
+          log.error('Agent turn failed', { sessionId, error: err });
+        } finally {
           activeSessions.delete(sessionId);
           void processNextInQueue(sessionId);
         }
-        // 'shell_pending': keep active; terminal output will eventually unlock it
       })();
     });
 
@@ -1184,10 +1140,11 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
         }
       }
 
-      // Sessions that were shell_pending (waiting for terminal output that will
-      // never arrive) stay stuck in activeSessions indefinitely, causing all
-      // follow-up messages to queue forever. Clean them up so a reconnecting
-      // client can resume without being stuck.
+      // A turn suspended inside runToolLoop waiting for shell_script terminal
+      // output (resolved just above with a disconnect error) leaves the session
+      // in activeSessions until that turn unwinds, which would make follow-up
+      // messages queue forever. Clean them up so a reconnecting client can
+      // resume without being stuck.
       for (const sid of connectionSessionIds) {
         const wasActive = activeSessions.has(sid);
         const queueLength = sessionQueues.get(sid)?.length ?? 0;

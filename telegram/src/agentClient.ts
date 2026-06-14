@@ -182,7 +182,7 @@ function cleanReasoning(content: string): string {
     .trim();
 }
 
-const SHELL_TIMEOUT_MS = 5 * 60 * 1000;
+const SHELL_TIMEOUT_MS = 20 * 60 * 1000;
 const SHELL_OUTPUT_MAX = 64 * 1024;
 
 // Mirrors WINDOWS_SHELL_CANDIDATES in src/agent/mcpRuntime.ts

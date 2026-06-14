@@ -1,8 +1,3 @@
-import { exec } from 'child_process';
-import { writeFile, unlink } from 'fs/promises';
-import { tmpdir } from 'os';
-import path from 'path';
-import { promisify } from 'util';
 import cuid from 'cuid';
 import { Op } from 'sequelize';
 import { parseExpression } from 'cron-parser';
@@ -12,9 +7,6 @@ import { logger } from './logger';
 import { runAgentTurn } from './agent/agentServer';
 import type { AgentSendFn } from './agent/types';
 
-const execAsync = promisify(exec);
-
-const SHELL_SCRIPT_RE = /<shell_script>([\s\S]*?)<\/shell_script>/;
 const FINAL_ANSWER_RE = /<final_answer>/;
 
 // Maximum time a single job may run before it is forcibly cancelled.
@@ -66,42 +58,6 @@ async function executeDueJobs(): Promise<void> {
     }
   } catch (err) {
     logger.error('Error polling for due scheduled jobs.', { error: err });
-  }
-}
-
-// Runs the script in the user's login shell so PATH and profile env-vars are
-// present — identical to how the desktop apps open a terminal. Writing to a
-// temp file avoids quoting/escaping issues with multi-line scripts.
-export async function runScript(script: string): Promise<{ output: string; isError: boolean }> {
-  const isWin = process.platform === 'win32';
-  const userHome = process.env.HOME ?? process.env.USERPROFILE ?? process.cwd();
-  const userShell = isWin ? (process.env.COMSPEC ?? 'cmd.exe') : (process.env.SHELL ?? '/bin/zsh');
-
-  const ext = isWin ? '.bat' : '.sh';
-  const tmpFile = path.join(tmpdir(), `cron_${cuid()}${ext}`);
-
-  try {
-    if (isWin) {
-      await writeFile(tmpFile, `@echo off\r\n${script}`, 'utf8');
-    } else {
-      await writeFile(tmpFile, script, { encoding: 'utf8', mode: 0o700 });
-    }
-
-    // -l = login shell → sources ~/.zprofile / ~/.bash_profile etc.
-    const command = isWin ? `"${tmpFile}"` : `"${userShell}" -l "${tmpFile}"`;
-
-    const { stdout, stderr } = await execAsync(command, {
-      timeout: 60_000,
-      cwd: userHome,
-      env: process.env,
-    });
-    const combined = [stdout, stderr ? `STDERR:\n${stderr}` : ''].filter(Boolean).join('\n').trim();
-    return { output: combined || '(no output)', isError: false };
-  } catch (err: any) {
-    const combined = [err.stdout ?? '', err.stderr ?? ''].filter(Boolean).join('\n').trim();
-    return { output: combined || err.message || 'Command failed', isError: true };
-  } finally {
-    unlink(tmpFile).catch(() => {});
   }
 }
 
@@ -157,8 +113,8 @@ function runCronJob(
               sender: 'user',
               content:
                 `Agent turn failed while processing this cron job. ` +
-                `Recover from the latest state and return the next ` +
-                `<shell_script> or a <final_answer>.\n\n` +
+                `Recover from the latest state and either call the shell_script ` +
+                `tool or return a <final_answer>.\n\n` +
                 `Error details:\n${content}`,
               is_error: true,
             },
@@ -169,41 +125,16 @@ function runCronJob(
           return;
         }
 
-        const scriptMatch = SHELL_SCRIPT_RE.exec(content);
-        if (scriptMatch) {
-          const script = scriptMatch[1].trim();
-          logger.info('Cron job: executing shell script.', { jobId: job.id });
-          const { output, isError } = await runScript(script);
-          logger.info('Cron job: shell script finished.', {
-            jobId: job.id,
-            isError,
-            outputLength: output.length,
-          });
-
-          if (settled) return;
-
-          runAgentTurn(
-            sessionId,
-            subscription,
-            {
-              session_id: sessionId,
-              sender: 'user',
-              content: output,
-              is_terminal_output: true,
-              is_error: isError,
-            },
-            send,
-            logger,
-            { isCronJob: true },
-          ).catch((err) => settle(err instanceof Error ? err : new Error(String(err))));
-          return;
-        }
-
-        if (msg.is_web_call || msg.is_image_rendering) {
+        // shell_script now runs as a native tool inside the agent's tool loop
+        // (executed server-side for cron jobs — see agentServer.ts). The cron
+        // executor no longer parses or runs <shell_script> tags itself; it only
+        // observes progress notifications and waits for the final answer.
+        if (msg.is_web_call || msg.is_image_rendering || msg.is_mcp_call) {
           logger.debug('Cron job: received progress notification; waiting for next message.', {
             jobId: job.id,
             isWebCall: !!msg.is_web_call,
             isImageRendering: !!msg.is_image_rendering,
+            isMcpCall: !!msg.is_mcp_call,
           });
           return;
         }
