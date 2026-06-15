@@ -50,4 +50,21 @@ namespace OmniKey.Windows.Converters
         public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
             value is bool b ? !b : false;
     }
+
+    /// <summary>
+    /// Two-way: a string value equals the ConverterParameter → true. On the way
+    /// back, a checked (true) control writes the parameter into the bound string;
+    /// an unchecked control writes nothing (Binding.DoNothing) so the sibling
+    /// radio that just became checked is the one that updates the source. Used by
+    /// the Settings page to bind grouped RadioButtons to the string-valued
+    /// PendingTerminalAccess ("limited" / "full").
+    /// </summary>
+    public sealed class StringEqualsConverter : IValueConverter
+    {
+        public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+            string.Equals(value as string, parameter as string, StringComparison.Ordinal);
+
+        public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+            value is bool b && b ? (parameter ?? Binding.DoNothing) : Binding.DoNothing;
+    }
 }

@@ -255,6 +255,34 @@ namespace OmniKey.Windows
             // mirroring the macOS resolvedLoginShell() approach.
             string shell = ResolvedPowerShell();
 
+            // Windows caps a process command line (CreateProcess / lpCommandLine) at
+            // 32,767 characters. Base64-of-UTF16 inflates the script ~2.67x, so any
+            // script beyond ~12K source chars overflows the command line and
+            // Process.Start throws Win32 error 206 ("The filename or extension is too
+            // long"). For large scripts, write the script to a temp .ps1 file and run
+            // it with -File, which has no command-line length limit. Small scripts keep
+            // the inline -EncodedCommand path. The temp file is deleted in the finally
+            // block below.
+            const int MaxEncodedInlineLength = 24000;
+            string? tempScriptPath = null;
+            string arguments;
+
+            if (encodedScript.Length <= MaxEncodedInlineLength)
+            {
+                arguments = $"-NonInteractive -EncodedCommand {encodedScript}";
+            }
+            else
+            {
+                tempScriptPath = System.IO.Path.Combine(
+                    System.IO.Path.GetTempPath(), $"omnikey-{Guid.NewGuid():N}.ps1");
+                // UTF-8 with BOM so Windows PowerShell 5.1 reads non-ASCII correctly.
+                System.IO.File.WriteAllText(
+                    tempScriptPath, script, new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
+                // -ExecutionPolicy Bypass: running a .ps1 file is subject to execution
+                // policy (unlike -EncodedCommand), so bypass it for this child only.
+                arguments = $"-NonInteractive -ExecutionPolicy Bypass -File \"{tempScriptPath}\"";
+            }
+
             // Omit -NoProfile so the user's profile scripts run and load PATH
             // modifications and tool configurations (GitHub CLI, git, nvm, etc.).
             // This mirrors the macOS approach of launching with -l (login shell)
@@ -262,7 +290,7 @@ namespace OmniKey.Windows
             var psi = new ProcessStartInfo
             {
                 FileName               = shell,
-                Arguments              = $"-NonInteractive -EncodedCommand {encodedScript}",
+                Arguments              = arguments,
                 RedirectStandardOutput = true,
                 RedirectStandardError  = true,
                 UseShellExecute        = false,
@@ -312,6 +340,12 @@ namespace OmniKey.Windows
             finally
             {
                 onProcessChanged?.Invoke(null);
+
+                if (tempScriptPath != null)
+                {
+                    try { System.IO.File.Delete(tempScriptPath); }
+                    catch { }
+                }
             }
 
             return (outputSb.ToString(), process.ExitCode);

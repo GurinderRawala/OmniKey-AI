@@ -109,7 +109,14 @@ namespace OmniKey.Windows.MarkdownRender
             switch (block)
             {
                 case Paragraph p:
-                    p.Margin = new Thickness(0, 0, 0, 8);
+                    // MdXaml emits markdown headings as Paragraphs carrying a
+                    // larger/bolder font than body text. Give those extra top
+                    // breathing room and force the Nord foreground — MdXaml's
+                    // light theme can stamp a dark heading brush that would be
+                    // near-invisible on the dark chat surface.
+                    bool isHeading = p.FontSize > 14.5 || p.FontWeight.ToOpenTypeWeight() >= 600;
+                    p.Margin = isHeading ? new Thickness(0, 10, 0, 4) : new Thickness(0, 0, 0, 8);
+                    if (isHeading) p.Foreground = theme.Primary;
                     p.Background = Brushes.Transparent;
                     foreach (var inline in p.Inlines)
                         RestyleInline(inline, theme);
@@ -126,24 +133,7 @@ namespace OmniKey.Windows.MarkdownRender
                     break;
 
                 case List list:
-                    // Bullet/number markers live inside the List's left
-                    // padding area. With PagePadding=0 on the document
-                    // and a 20 DIP padding here, the marker glyph itself
-                    // was being clipped against the FlowDocument's left
-                    // edge (≈25% of the bullet eaten on the left). Bump
-                    // left padding to 28 DIP and pin MarkerOffset to a
-                    // small positive value so the bullet sits ~8 DIP to
-                    // the left of the text column, fully visible.
-                    list.Margin = new Thickness(0, 0, 0, 8);
-                    list.Padding = new Thickness(28, 0, 0, 0);
-                    list.MarkerOffset = 8;
-                    list.Background = Brushes.Transparent;
-                    foreach (var item in list.ListItems)
-                    {
-                        item.Background = Brushes.Transparent;
-                        foreach (var child in item.Blocks)
-                            RestyleBlock(child, theme);
-                    }
+                    StyleList(list, theme, depth: 0);
                     break;
 
                 case Table table:
@@ -200,6 +190,69 @@ namespace OmniKey.Windows.MarkdownRender
                     break;
             }
         }
+
+        /// <summary>
+        /// Styles a markdown list and (recursively) its nested lists so bullets
+        /// read like a real document: depth-varied unordered markers
+        /// (• → ◦ → ▪), compact item spacing (MdXaml's default 8 DIP paragraph
+        /// margin makes lists look double-spaced), and a left indent that keeps
+        /// the marker glyph fully visible against the zero-padding FlowDocument
+        /// edge. Ordered lists keep their numeric / alpha markers untouched.
+        /// </summary>
+        private static void StyleList(List list, ThemeTokens theme, int depth)
+        {
+            list.Background = Brushes.Transparent;
+            // Top-level lists get room below; nested lists hug their parent item.
+            list.Margin = new Thickness(0, 0, 0, depth == 0 ? 8 : 2);
+            // Left padding hosts the marker — keep it clear of the document edge
+            // so the glyph isn't clipped, and indent nested levels a touch less.
+            list.Padding = new Thickness(depth == 0 ? 24 : 20, 2, 0, 0);
+            list.MarkerOffset = 6;
+
+            // Cycle disc → circle → square down the nesting levels, matching how
+            // browsers render nested <ul>s. Ordered lists keep their markers.
+            if (!IsOrderedMarker(list.MarkerStyle))
+            {
+                list.MarkerStyle = depth switch
+                {
+                    0 => TextMarkerStyle.Disc,
+                    1 => TextMarkerStyle.Circle,
+                    _ => TextMarkerStyle.Square,
+                };
+            }
+
+            foreach (var item in list.ListItems)
+            {
+                item.Background = Brushes.Transparent;
+                foreach (var child in item.Blocks)
+                {
+                    switch (child)
+                    {
+                        case List nested:
+                            StyleList(nested, theme, depth + 1);
+                            break;
+
+                        case Paragraph itemPara:
+                            // Tight inter-item spacing — overrides MdXaml's 8 DIP.
+                            itemPara.Margin = new Thickness(0, 0, 0, 2);
+                            itemPara.Background = Brushes.Transparent;
+                            itemPara.Foreground ??= theme.Primary;
+                            foreach (var inline in itemPara.Inlines)
+                                RestyleInline(inline, theme);
+                            break;
+
+                        default:
+                            RestyleBlock(child, theme);
+                            break;
+                    }
+                }
+            }
+        }
+
+        private static bool IsOrderedMarker(TextMarkerStyle style) =>
+            style is TextMarkerStyle.Decimal
+                or TextMarkerStyle.LowerLatin or TextMarkerStyle.UpperLatin
+                or TextMarkerStyle.LowerRoman or TextMarkerStyle.UpperRoman;
 
         private static void RestyleInline(Inline inline, ThemeTokens theme)
         {
