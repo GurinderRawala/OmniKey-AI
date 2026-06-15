@@ -718,8 +718,13 @@ async function runAgentTurnInternal(
         sessionId,
         contentLength: result.content.length,
       });
+      // The truncated turn may contain a partial `tool_use` block. Persisting
+      // the assistant message verbatim (with its tool_calls) and then following
+      // it with the user recovery directive below would leave a `tool_use` with
+      // no matching `tool_result` — Anthropic rejects that with a 400. Keep only
+      // the text fragment; the directive tells the model to start over anyway.
       if (result.content.trim()) {
-        pushToSessionHistory(logger, session, result.assistantMessage);
+        pushToSessionHistory(logger, session, { role: 'assistant', content: result.content });
       }
       pushToSessionHistory(logger, session, {
         role: 'user',
@@ -800,8 +805,20 @@ Provide only a tool call or final answer. Do not include reasoning or explanatio
         // We make one more AI turn so the model can correct itself. The
         // directive below tells it to call the shell_script tool as a fallback
         // instead of asking the user to run commands.
-        if (toolLoopResult.assistantMessage) {
-          pushToSessionHistory(logger, session, toolLoopResult.assistantMessage);
+        // The tool loop can return a turn that was truncated at max_tokens
+        // (finish_reason 'length') while it was still emitting a `tool_use`
+        // block. Persisting that assistant message verbatim and then following
+        // it with the user directive below would leave a `tool_use` with no
+        // matching `tool_result`, which Anthropic rejects with a 400. Strip the
+        // partial tool_calls and keep only the text — the directive makes the
+        // model produce a fresh tool call or final answer regardless. (When the
+        // loop exits with finish_reason 'stop' there are no tool_calls anyway,
+        // so this is a no-op for the normal path.)
+        if (toolLoopResult.assistantMessage?.content?.trim()) {
+          pushToSessionHistory(logger, session, {
+            role: 'assistant',
+            content: toolLoopResult.assistantMessage.content,
+          });
         }
 
         pushToSessionHistory(logger, session, {

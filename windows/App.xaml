@@ -160,6 +160,7 @@
             <conv:InverseBooleanToVisibilityConverter x:Key="InverseBooleanToVisibilityConverter" />
             <conv:StringToVisibilityConverter x:Key="StringToVisibilityConverter" />
             <conv:InverseBooleanConverter x:Key="InverseBooleanConverter" />
+            <conv:StringEqualsConverter x:Key="StringEqualsConverter" />
             <conv:StringToUpperConverter x:Key="ToUpper" />
         </ResourceDictionary>
     </Application.Resources>

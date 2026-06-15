@@ -20,6 +20,58 @@ namespace OmniKey.Windows
         public bool IsDefault { get; set; }
     }
 
+    internal sealed class AIProviderDto
+    {
+        public string Provider { get; set; } = "";
+        public bool IsConfigured { get; set; }
+        public string? ApiKeyMasked { get; set; }
+        public string? BaseUrl { get; set; }
+        public string? Model { get; set; }
+    }
+
+    internal sealed class AIProviderListResponse
+    {
+        public List<AIProviderDto> Providers { get; set; } = new();
+        public string ActiveProvider { get; set; } = "openai";
+        public string? RuntimeProvider { get; set; }
+    }
+
+    internal sealed class AIProviderMutationResponse
+    {
+        public string Provider { get; set; } = "";
+        public bool? IsConfigured { get; set; }
+        public string? ApiKeyMasked { get; set; }
+        public string? BaseUrl { get; set; }
+        public string? ActiveProvider { get; set; }
+        public bool? RestartScheduled { get; set; }
+        public string? Message { get; set; }
+    }
+
+    internal sealed class AppSettingsDto
+    {
+        public string TerminalAccess { get; set; } = "limited";
+        public bool WebSearchEnabled { get; set; }
+        public bool BrowserAccessEnabled { get; set; }
+        public string? BrowserDebugBrowserName { get; set; }
+        public int? BrowserDebugPort { get; set; }
+    }
+
+    internal sealed class AppSettingsMutationResponse
+    {
+        public string TerminalAccess { get; set; } = "limited";
+        public bool WebSearchEnabled { get; set; }
+        public bool BrowserAccessEnabled { get; set; }
+        public bool? RestartScheduled { get; set; }
+        public string? Message { get; set; }
+    }
+
+    internal sealed class BrowserAccessMutationResponse
+    {
+        public bool BrowserAccessEnabled { get; set; }
+        public bool? Launched { get; set; }
+        public string? Message { get; set; }
+        public bool? RestartScheduled { get; set; }
+    }
     internal sealed class ScheduledJobDto
     {
         public string  Id            { get; set; } = "";
@@ -449,6 +501,105 @@ namespace OmniKey.Windows
             return messages;
         }
 
+        // ─── AI Providers & App Settings ──────────────────────────────
+        // Mirror macOS APIClient.swift: AI providers live under /api/providers
+        // and the "Agent Access" toggles under /api/app-settings. Both persist
+        // to ~/.omnikey/config.json server-side and may schedule a daemon
+        // restart; the mutation responses carry a human-readable `message`.
+
+        /// <summary>GET /api/providers — list providers + which is active.</summary>
+        public async Task<AIProviderListResponse> FetchAIProvidersAsync()
+        {
+            using var req  = BuildRequest(HttpMethod.Get, "/api/providers");
+            using var resp = await Http.SendAsync(req);
+            await EnsureSuccessAsync(resp);
+            return await resp.Content.ReadFromJsonAsync<AIProviderListResponse>()
+                   ?? new AIProviderListResponse();
+        }
+
+        /// <summary>PUT /api/providers/{provider} — store/update its API key.
+        /// <paramref name="baseUrl"/> is only meaningful for Nemotron and is
+        /// omitted when blank (the backend validates it as a URL).</summary>
+        public async Task<AIProviderMutationResponse> SaveAIProviderKeyAsync(
+            string provider, string apiKey, string? baseUrl)
+        {
+            using var req = BuildRequest(HttpMethod.Put, $"/api/providers/{provider}");
+            var body = new Dictionary<string, object?> { ["apiKey"] = apiKey };
+            if (!string.IsNullOrWhiteSpace(baseUrl)) body["baseUrl"] = baseUrl;
+            req.Content = JsonContent.Create(body);
+            using var resp = await Http.SendAsync(req);
+            await EnsureSuccessAsync(resp);
+            return ParseAIProviderMutation(await resp.Content.ReadAsStringAsync());
+        }
+
+        /// <summary>DELETE /api/providers/{provider} — remove the saved key.</summary>
+        public async Task DeleteAIProviderKeyAsync(string provider)
+        {
+            using var req  = BuildRequest(HttpMethod.Delete, $"/api/providers/{provider}");
+            using var resp = await Http.SendAsync(req);
+            if (resp.StatusCode != HttpStatusCode.NoContent)
+                await EnsureSuccessAsync(resp);
+        }
+
+        /// <summary>POST /api/providers/{provider}/activate — switch the active
+        /// provider; the server restarts the daemon to apply it.</summary>
+        public async Task<AIProviderMutationResponse> ActivateAIProviderAsync(string provider)
+        {
+            using var req  = BuildRequest(HttpMethod.Post, $"/api/providers/{provider}/activate");
+            using var resp = await Http.SendAsync(req);
+            await EnsureSuccessAsync(resp);
+            return ParseAIProviderMutation(await resp.Content.ReadAsStringAsync());
+        }
+
+        /// <summary>PATCH /api/providers/{provider}/model — set the model
+        /// (OpenAI only, enforced server-side).</summary>
+        public async Task<AIProviderMutationResponse> UpdateProviderModelAsync(string provider, string model)
+        {
+            using var req = BuildRequest(HttpMethod.Patch, $"/api/providers/{provider}/model");
+            req.Content = JsonContent.Create(new { model });
+            using var resp = await Http.SendAsync(req);
+            await EnsureSuccessAsync(resp);
+            return ParseAIProviderMutation(await resp.Content.ReadAsStringAsync());
+        }
+
+        /// <summary>GET /api/app-settings — terminal-access mode, web-search and
+        /// browser-access toggles.</summary>
+        public async Task<AppSettingsDto> FetchAppSettingsAsync()
+        {
+            using var req  = BuildRequest(HttpMethod.Get, "/api/app-settings");
+            using var resp = await Http.SendAsync(req);
+            await EnsureSuccessAsync(resp);
+            return await resp.Content.ReadFromJsonAsync<AppSettingsDto>()
+                   ?? new AppSettingsDto();
+        }
+
+        /// <summary>PATCH /api/app-settings — partial update of terminalAccess
+        /// and/or webSearchEnabled (each omitted when null).</summary>
+        public async Task<AppSettingsMutationResponse> UpdateAppSettingsAsync(
+            string? terminalAccess, bool? webSearchEnabled)
+        {
+            using var req = BuildRequest(HttpMethod.Patch, "/api/app-settings");
+            var body = new Dictionary<string, object?>();
+            if (terminalAccess != null)        body["terminalAccess"]   = terminalAccess;
+            if (webSearchEnabled.HasValue)     body["webSearchEnabled"] = webSearchEnabled.Value;
+            req.Content = JsonContent.Create(body);
+            using var resp = await Http.SendAsync(req);
+            await EnsureSuccessAsync(resp);
+            return ParseAppSettingsMutation(await resp.Content.ReadAsStringAsync());
+        }
+
+        /// <summary>POST /api/app-settings/browser-access — enable/disable
+        /// authenticated browser session reading.</summary>
+        public async Task<BrowserAccessMutationResponse> SetBrowserAccessEnabledAsync(bool enabled)
+        {
+            using var req = BuildRequest(HttpMethod.Post, "/api/app-settings/browser-access");
+            req.Content = JsonContent.Create(new { enabled });
+            using var resp = await Http.SendAsync(req);
+            await EnsureSuccessAsync(resp);
+            return await resp.Content.ReadFromJsonAsync<BrowserAccessMutationResponse>()
+                   ?? new BrowserAccessMutationResponse();
+        }
+
         // ─── Helpers ──────────────────────────────────────────────────
 
         private static ScheduledJobDto ParseScheduledJob(JsonElement el) => new()
@@ -491,6 +642,56 @@ namespace OmniKey.Windows
             return blocks;
         }
 
+        private static AIProviderMutationResponse ParseAIProviderMutation(string body)
+        {
+            using var doc = JsonDocument.Parse(body);
+            var root = doc.RootElement;
+            return new AIProviderMutationResponse
+            {
+                Provider = ReadString(root, "provider") ?? "",
+                IsConfigured = ReadNullableBool(root, "isConfigured"),
+                ApiKeyMasked = ReadString(root, "apiKeyMasked"),
+                BaseUrl = ReadString(root, "baseUrl"),
+                ActiveProvider = ReadString(root, "activeProvider"),
+                RestartScheduled = ReadNullableBool(root, "restartScheduled"),
+                Message = ReadString(root, "message")
+            };
+        }
+
+        private static AppSettingsMutationResponse ParseAppSettingsMutation(string body)
+        {
+            using var doc = JsonDocument.Parse(body);
+            var root = doc.RootElement;
+            return new AppSettingsMutationResponse
+            {
+                TerminalAccess = ReadString(root, "terminalAccess") ?? "limited",
+                WebSearchEnabled = ReadBool(root, "webSearchEnabled"),
+                BrowserAccessEnabled = ReadBool(root, "browserAccessEnabled"),
+                RestartScheduled = ReadNullableBool(root, "restartScheduled"),
+                Message = ReadString(root, "message")
+            };
+        }
+
+        private static string? ReadString(JsonElement el, string name) =>
+            el.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
+                ? value.GetString()
+                : null;
+
+        private static bool ReadBool(JsonElement el, string name) =>
+            el.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.True;
+
+        private static bool? ReadNullableBool(JsonElement el, string name) =>
+            el.TryGetProperty(name, out var value)
+                ? value.ValueKind == JsonValueKind.True ? true : value.ValueKind == JsonValueKind.False ? false : null
+                : null;
+
+        private static int? ReadInt(JsonElement el, string name)
+        {
+            if (!el.TryGetProperty(name, out var value)) return null;
+            if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var number)) return number;
+            if (value.ValueKind == JsonValueKind.String && int.TryParse(value.GetString(), out number)) return number;
+            return null;
+        }
         private static string ExtractImprovedText(string response)
         {
             string trimmed = response.Trim();
@@ -548,3 +749,4 @@ namespace OmniKey.Windows
         public ApiException(int code, string msg) : base(msg) => StatusCode = code;
     }
 }
+

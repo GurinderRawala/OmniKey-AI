@@ -1,0 +1,547 @@
+<Page
+    x:Class="OmniKey.Windows.Views.Pages.SettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+    xmlns:vm="clr-namespace:OmniKey.Windows.ViewModels"
+    Title="Settings"
+    Background="Transparent"
+    d:DesignHeight="720"
+    d:DesignWidth="980"
+    ScrollViewer.CanContentScroll="False"
+    mc:Ignorable="d">
+
+    <Page.Resources>
+        <!--  Sidebar nav item: transparent pill that highlights when its
+              bound Tag (IsXxxSelected) is true, mirroring the macOS settings
+              sidebar.  -->
+        <Style x:Key="SidebarNavButton" TargetType="Button">
+            <Setter Property="Height" Value="42" />
+            <Setter Property="Margin" Value="0,2,0,2" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="Foreground" Value="{StaticResource Nord.SecondaryTextBrush}" />
+            <Setter Property="FontFamily" Value="{StaticResource OK.FontFamily}" />
+            <Setter Property="FontSize" Value="{StaticResource OK.Font.Body}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border
+                            x:Name="Bd"
+                            Padding="12,0"
+                            Background="Transparent"
+                            CornerRadius="8">
+                            <ContentPresenter HorizontalAlignment="Left" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{StaticResource Nord.HoverBrush}" />
+                            </Trigger>
+                            <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource Self}}" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{StaticResource Nord.BlueSectionFillBrush}" />
+                                <Setter Property="Foreground" Value="{StaticResource Nord.PrimaryTextBrush}" />
+                            </DataTrigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!--  Whole-tile clickable button: strips the default chrome so the
+              inner Border supplies all visuals (and binds to the item).  -->
+        <Style x:Key="TileButton" TargetType="Button">
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <ContentPresenter />
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="FieldLabel" TargetType="TextBlock">
+            <Setter Property="Margin" Value="0,0,0,6" />
+            <Setter Property="FontFamily" Value="{StaticResource OK.FontFamily}" />
+            <Setter Property="FontSize" Value="{StaticResource OK.Font.CaptionSmall}" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="{StaticResource Nord.SecondaryTextBrush}" />
+        </Style>
+    </Page.Resources>
+
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="220" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+
+        <!-- ─────────────────────── Sidebar ─────────────────────── -->
+        <Border
+            Grid.Column="0"
+            Padding="12,18,12,12"
+            Background="{StaticResource Nord.PanelBackgroundBrush}"
+            BorderBrush="{StaticResource Nord.BorderBrush}"
+            BorderThickness="0,0,1,0">
+            <StackPanel>
+                <TextBlock
+                    Margin="8,0,0,14"
+                    FontFamily="{StaticResource OK.FontFamily}"
+                    FontSize="{StaticResource OK.Font.Title}"
+                    FontWeight="SemiBold"
+                    Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                    Text="Settings" />
+
+                <Button
+                    Command="{Binding SelectSectionCommand}"
+                    CommandParameter="{x:Static vm:SettingsSection.Providers}"
+                    Style="{StaticResource SidebarNavButton}"
+                    Tag="{Binding IsProvidersSelected}">
+                    <StackPanel Orientation="Horizontal">
+                        <ui:SymbolIcon
+                            Margin="0,0,10,0"
+                            VerticalAlignment="Center"
+                            FontSize="16"
+                            Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                            Symbol="Sparkle24" />
+                        <TextBlock VerticalAlignment="Center" Text="AI Providers" />
+                    </StackPanel>
+                </Button>
+
+                <Button
+                    Command="{Binding SelectSectionCommand}"
+                    CommandParameter="{x:Static vm:SettingsSection.AgentAccess}"
+                    Style="{StaticResource SidebarNavButton}"
+                    Tag="{Binding IsAgentAccessSelected}">
+                    <StackPanel Orientation="Horizontal">
+                        <ui:SymbolIcon
+                            Margin="0,0,10,0"
+                            VerticalAlignment="Center"
+                            FontSize="16"
+                            Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                            Symbol="ShieldKeyhole24" />
+                        <TextBlock VerticalAlignment="Center" Text="Agent Access" />
+                    </StackPanel>
+                </Button>
+
+                <Button
+                    Command="{Binding SelectSectionCommand}"
+                    CommandParameter="{x:Static vm:SettingsSection.Updates}"
+                    Style="{StaticResource SidebarNavButton}"
+                    Tag="{Binding IsUpdatesSelected}">
+                    <StackPanel Orientation="Horizontal">
+                        <ui:SymbolIcon
+                            Margin="0,0,10,0"
+                            VerticalAlignment="Center"
+                            FontSize="16"
+                            Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                            Symbol="ArrowSync24" />
+                        <TextBlock VerticalAlignment="Center" Text="Check for updates" />
+                    </StackPanel>
+                </Button>
+
+                <Button
+                    Command="{Binding SelectSectionCommand}"
+                    CommandParameter="{x:Static vm:SettingsSection.Manual}"
+                    Style="{StaticResource SidebarNavButton}"
+                    Tag="{Binding IsManualSelected}">
+                    <StackPanel Orientation="Horizontal">
+                        <ui:SymbolIcon
+                            Margin="0,0,10,0"
+                            VerticalAlignment="Center"
+                            FontSize="16"
+                            Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                            Symbol="Book24" />
+                        <TextBlock VerticalAlignment="Center" Text="Manual" />
+                    </StackPanel>
+                </Button>
+            </StackPanel>
+        </Border>
+
+        <!-- ─────────────────────── Detail pane ─────────────────────── -->
+        <Grid Grid.Column="1" Margin="24,20,24,16">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <!--  =========== Providers — tile list ===========  -->
+            <Grid Grid.Row="0" Visibility="{Binding IsProvidersList, Converter={StaticResource BooleanToVisibilityConverter}}">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+
+                <StackPanel Grid.Row="0" Margin="0,0,0,14">
+                    <TextBlock
+                        FontFamily="{StaticResource OK.FontFamily}"
+                        FontSize="{StaticResource OK.Font.Title}"
+                        FontWeight="SemiBold"
+                        Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                        Text="AI Providers" />
+                    <TextBlock
+                        Margin="0,4,0,0"
+                        FontFamily="{StaticResource OK.FontFamily}"
+                        FontSize="{StaticResource OK.Font.Body}"
+                        Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                        Text="Select a provider to set its key. The active provider has a green outline."
+                        TextWrapping="Wrap" />
+                </StackPanel>
+
+                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                    <ItemsControl ItemsSource="{Binding Providers}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Button
+                                    HorizontalContentAlignment="Stretch"
+                                    Command="{Binding DataContext.OpenProviderCommand, RelativeSource={RelativeSource AncestorType=Page}}"
+                                    CommandParameter="{Binding}"
+                                    Style="{StaticResource TileButton}">
+                                    <Border
+                                        Margin="0,0,0,8"
+                                        Padding="16,12"
+                                        Background="{StaticResource Nord.PanelBackgroundBrush}"
+                                        BorderBrush="{Binding TileBorderBrush}"
+                                        BorderThickness="{Binding TileBorderThickness}"
+                                        CornerRadius="12">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+
+                                            <StackPanel Grid.Column="0">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <Ellipse
+                                                        Width="9"
+                                                        Height="9"
+                                                        Margin="0,0,8,0"
+                                                        VerticalAlignment="Center"
+                                                        Fill="{Binding StatusBrush}" />
+                                                    <TextBlock
+                                                        VerticalAlignment="Center"
+                                                        FontFamily="{StaticResource OK.FontFamily}"
+                                                        FontSize="{StaticResource OK.Font.Headline}"
+                                                        FontWeight="SemiBold"
+                                                        Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                                                        Text="{Binding DisplayName}" />
+                                                </StackPanel>
+                                                <TextBlock
+                                                    Margin="17,6,0,0"
+                                                    FontFamily="{StaticResource OK.MonoFontFamily}"
+                                                    FontSize="{StaticResource OK.Font.Caption}"
+                                                    Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                                                    Text="{Binding KeyDisplay}"
+                                                    TextTrimming="CharacterEllipsis" />
+                                            </StackPanel>
+
+                                            <TextBlock
+                                                Grid.Column="1"
+                                                Margin="12,0,0,0"
+                                                VerticalAlignment="Center"
+                                                FontFamily="{StaticResource OK.FontFamily}"
+                                                FontSize="{StaticResource OK.Font.CaptionSmall}"
+                                                FontWeight="SemiBold"
+                                                Foreground="{Binding StatusBrush}"
+                                                Text="{Binding StatusBadge}" />
+                                        </Grid>
+                                    </Border>
+                                </Button>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+            </Grid>
+
+            <!--  =========== Providers — per-provider editor ===========  -->
+            <ScrollViewer
+                Grid.Row="0"
+                VerticalScrollBarVisibility="Auto"
+                Visibility="{Binding IsProvidersEdit, Converter={StaticResource BooleanToVisibilityConverter}}">
+                <StackPanel>
+                    <StackPanel Margin="0,0,0,12" Orientation="Horizontal">
+                        <ui:Button
+                            Margin="0,0,12,0"
+                            Padding="8,4"
+                            Appearance="Transparent"
+                            Command="{Binding BackToProvidersCommand}"
+                            Content="Back"
+                            Icon="{ui:SymbolIcon Symbol=ArrowLeft24}" />
+                        <TextBlock
+                            VerticalAlignment="Center"
+                            FontFamily="{StaticResource OK.FontFamily}"
+                            FontSize="{StaticResource OK.Font.Title}"
+                            FontWeight="SemiBold"
+                            Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                            Text="{Binding SelectedProvider.DisplayName}" />
+                    </StackPanel>
+
+                    <Border
+                        Padding="20,18,20,20"
+                        Background="{StaticResource Nord.PanelBackgroundBrush}"
+                        CornerRadius="14">
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource FieldLabel}" Text="CURRENT KEY" />
+                            <TextBlock
+                                Margin="0,0,0,14"
+                                FontFamily="{StaticResource OK.MonoFontFamily}"
+                                FontSize="{StaticResource OK.Font.Caption}"
+                                Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                                Text="{Binding SelectedProvider.KeyDisplay}"
+                                TextWrapping="Wrap" />
+
+                            <TextBlock Style="{StaticResource FieldLabel}" Text="API KEY" />
+                            <ui:TextBox
+                                Margin="0,0,0,14"
+                                FontFamily="{StaticResource OK.MonoFontFamily}"
+                                FontSize="13"
+                                PlaceholderText="Paste a new API key to update"
+                                Text="{Binding ApiKeyInput, UpdateSourceTrigger=PropertyChanged}" />
+
+                            <StackPanel Visibility="{Binding SelectedProvider.SupportsBaseUrl, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                <TextBlock Style="{StaticResource FieldLabel}" Text="BASE URL" />
+                                <ui:TextBox
+                                    Margin="0,0,0,14"
+                                    FontFamily="{StaticResource OK.MonoFontFamily}"
+                                    FontSize="13"
+                                    PlaceholderText="Optional provider endpoint"
+                                    Text="{Binding BaseUrlInput, UpdateSourceTrigger=PropertyChanged}" />
+                            </StackPanel>
+
+                            <StackPanel Visibility="{Binding SelectedProvider.SupportsModel, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                <TextBlock Style="{StaticResource FieldLabel}" Text="OPENAI MODEL" />
+                                <Grid Margin="0,0,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <ComboBox
+                                        Grid.Column="0"
+                                        Margin="0,0,8,0"
+                                        FontFamily="{StaticResource OK.MonoFontFamily}"
+                                        FontSize="13"
+                                        IsEditable="True"
+                                        ItemsSource="{Binding OpenAiModelOptions}"
+                                        Text="{Binding OpenAiModelInput, UpdateSourceTrigger=PropertyChanged}" />
+                                    <!--  Apply only surfaces once the picked model differs from
+                                          what's saved, mirroring the macOS settings card.  -->
+                                    <ui:Button
+                                        Grid.Column="1"
+                                        Appearance="Primary"
+                                        Command="{Binding SaveModelCommand}"
+                                        Content="Apply"
+                                        Visibility="{Binding ModelDirty, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                                </Grid>
+                                <TextBlock
+                                    Margin="0,0,0,14"
+                                    FontFamily="{StaticResource OK.FontFamily}"
+                                    FontSize="{StaticResource OK.Font.CaptionSmall}"
+                                    Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                                    Text="Choose gpt-5.1 / gpt-5.5 (or type a model id). Applying restarts the daemon."
+                                    TextWrapping="Wrap" />
+                            </StackPanel>
+
+                            <Border
+                                Height="1"
+                                Margin="0,4,0,16"
+                                Background="{StaticResource Nord.BorderBrush}" />
+
+                            <StackPanel Orientation="Horizontal">
+                                <ui:Button
+                                    Margin="0,0,8,0"
+                                    Appearance="Primary"
+                                    Command="{Binding SaveProviderCommand}"
+                                    Content="Save Key"
+                                    Icon="{ui:SymbolIcon Symbol=Save24}" />
+                                <ui:Button
+                                    Margin="0,0,8,0"
+                                    Command="{Binding ActivateProviderCommand}"
+                                    Content="Activate"
+                                    Icon="{ui:SymbolIcon Symbol=Checkmark24}" />
+                                <ui:Button
+                                    Command="{Binding DeleteProviderCommand}"
+                                    Content="Remove Key"
+                                    Icon="{ui:SymbolIcon Symbol=Delete24}"
+                                    Style="{StaticResource OK.DangerGhostButtonStyle}" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+
+            <!--  =========== Agent access ===========  -->
+            <ScrollViewer
+                Grid.Row="0"
+                VerticalScrollBarVisibility="Auto"
+                Visibility="{Binding IsAgentAccessSelected, Converter={StaticResource BooleanToVisibilityConverter}}">
+                <StackPanel>
+                    <StackPanel Margin="0,0,0,14">
+                        <TextBlock
+                            FontFamily="{StaticResource OK.FontFamily}"
+                            FontSize="{StaticResource OK.Font.Title}"
+                            FontWeight="SemiBold"
+                            Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                            Text="Agent Access" />
+                        <TextBlock
+                            Margin="0,4,0,0"
+                            FontFamily="{StaticResource OK.FontFamily}"
+                            FontSize="{StaticResource OK.Font.Body}"
+                            Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                            Text="Control what agent sessions are allowed to do. Save to apply — the daemon restarts to pick up changes."
+                            TextWrapping="Wrap" />
+                    </StackPanel>
+
+                    <!--  Terminal access  -->
+                    <Border
+                        Margin="0,0,0,14"
+                        Padding="18,16"
+                        Background="{StaticResource Nord.PanelBackgroundBrush}"
+                        CornerRadius="14">
+                        <StackPanel>
+                            <TextBlock
+                                Margin="0,0,0,4"
+                                FontFamily="{StaticResource OK.FontFamily}"
+                                FontSize="{StaticResource OK.Font.Headline}"
+                                FontWeight="SemiBold"
+                                Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                                Text="Terminal access" />
+                            <TextBlock
+                                Margin="0,0,0,12"
+                                FontFamily="{StaticResource OK.FontFamily}"
+                                FontSize="{StaticResource OK.Font.Caption}"
+                                Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                                Text="Limited keeps the agent to read-only / inspection commands. Full allows any command."
+                                TextWrapping="Wrap" />
+                            <RadioButton
+                                Margin="0,0,0,6"
+                                Content="Limited (read-only)"
+                                GroupName="TerminalAccess"
+                                IsChecked="{Binding PendingTerminalAccess, Converter={StaticResource StringEqualsConverter}, ConverterParameter=limited, Mode=TwoWay}" />
+                            <RadioButton
+                                Content="Full access"
+                                GroupName="TerminalAccess"
+                                IsChecked="{Binding PendingTerminalAccess, Converter={StaticResource StringEqualsConverter}, ConverterParameter=full, Mode=TwoWay}" />
+                        </StackPanel>
+                    </Border>
+
+                    <!--  Web search  -->
+                    <Border
+                        Margin="0,0,0,14"
+                        Padding="18,16"
+                        Background="{StaticResource Nord.PanelBackgroundBrush}"
+                        CornerRadius="14">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                                <TextBlock
+                                    FontFamily="{StaticResource OK.FontFamily}"
+                                    FontSize="{StaticResource OK.Font.Headline}"
+                                    FontWeight="SemiBold"
+                                    Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                                    Text="Web search" />
+                                <TextBlock
+                                    Margin="0,4,0,0"
+                                    FontFamily="{StaticResource OK.FontFamily}"
+                                    FontSize="{StaticResource OK.Font.Caption}"
+                                    Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                                    Text="Allow the agent to search and fetch pages from the web."
+                                    TextWrapping="Wrap" />
+                            </StackPanel>
+                            <ui:ToggleSwitch
+                                Grid.Column="1"
+                                VerticalAlignment="Center"
+                                IsChecked="{Binding PendingWebSearchEnabled, Mode=TwoWay}" />
+                        </Grid>
+                    </Border>
+
+                    <!--  Browser access  -->
+                    <Border
+                        Margin="0,0,0,16"
+                        Padding="18,16"
+                        Background="{StaticResource Nord.PanelBackgroundBrush}"
+                        CornerRadius="14">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                                <TextBlock
+                                    FontFamily="{StaticResource OK.FontFamily}"
+                                    FontSize="{StaticResource OK.Font.Headline}"
+                                    FontWeight="SemiBold"
+                                    Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                                    Text="Authenticated browser access" />
+                                <TextBlock
+                                    Margin="0,4,0,0"
+                                    FontFamily="{StaticResource OK.FontFamily}"
+                                    FontSize="{StaticResource OK.Font.Caption}"
+                                    Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                                    Text="Let the agent read pages from a signed-in browser session."
+                                    TextWrapping="Wrap" />
+                                <TextBlock
+                                    Margin="0,6,0,0"
+                                    FontFamily="{StaticResource OK.FontFamily}"
+                                    FontSize="{StaticResource OK.Font.CaptionSmall}"
+                                    Foreground="{StaticResource Nord.AccentBlueBrush}"
+                                    Text="{Binding BrowserAccessSummary}"
+                                    TextWrapping="Wrap" />
+                            </StackPanel>
+                            <ui:ToggleSwitch
+                                Grid.Column="1"
+                                VerticalAlignment="Center"
+                                IsChecked="{Binding PendingBrowserAccessEnabled, Mode=TwoWay}" />
+                        </Grid>
+                    </Border>
+
+                    <ui:Button
+                        HorizontalAlignment="Left"
+                        Appearance="Primary"
+                        Command="{Binding SaveAgentAccessCommand}"
+                        Content="Save changes"
+                        Icon="{ui:SymbolIcon Symbol=Save24}" />
+                </StackPanel>
+            </ScrollViewer>
+
+            <!--  =========== Updates (hosted page) ===========  -->
+            <Frame
+                x:Name="UpdatesFrame"
+                Grid.Row="0"
+                Background="Transparent"
+                NavigationUIVisibility="Hidden"
+                Visibility="{Binding IsUpdatesSelected, Converter={StaticResource BooleanToVisibilityConverter}}" />
+
+            <!--  =========== Manual (hosted page) ===========  -->
+            <Frame
+                x:Name="ManualFrame"
+                Grid.Row="0"
+                Background="Transparent"
+                NavigationUIVisibility="Hidden"
+                Visibility="{Binding IsManualSelected, Converter={StaticResource BooleanToVisibilityConverter}}" />
+
+            <!--  Status bar  -->
+            <StackPanel
+                Grid.Row="1"
+                Margin="0,14,0,0"
+                Orientation="Horizontal">
+                <ui:ProgressRing
+                    Width="16"
+                    Height="16"
+                    Margin="0,0,8,0"
+                    IsIndeterminate="True"
+                    Visibility="{Binding IsBusy, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                <TextBlock
+                    VerticalAlignment="Center"
+                    FontFamily="{StaticResource OK.FontFamily}"
+                    FontSize="{StaticResource OK.Font.CaptionSmall}"
+                    Foreground="{Binding StatusBrush}"
+                    Text="{Binding StatusMessage}"
+                    TextTrimming="CharacterEllipsis" />
+            </StackPanel>
+        </Grid>
+    </Grid>
+</Page>

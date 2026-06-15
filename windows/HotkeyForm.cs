@@ -22,7 +22,6 @@ namespace OmniKey.Windows
         private readonly ApiClient _apiClient = new();
         private bool _isProcessing;
         private ToolStripMenuItem? _statusMenuItem;
-        private ToolStripMenuItem? _checkUpdatesMenuItem;
 
         public HotkeyForm()
         {
@@ -167,10 +166,6 @@ namespace OmniKey.Windows
             scheduledJobsItem.Click += (_, _) => Program.ShowMainWindow<ScheduledJobsPage>();
             menu.Items.Add(scheduledJobsItem);
 
-            _checkUpdatesMenuItem = new ToolStripMenuItem("Check for Updates");
-            _checkUpdatesMenuItem.Click += (_, _) => Program.ShowMainWindow<UpdatesPage>();
-            menu.Items.Add(_checkUpdatesMenuItem);
-
             menu.Items.Add(new ToolStripSeparator());
 
             var exitItem = new ToolStripMenuItem("Exit");
@@ -195,7 +190,7 @@ namespace OmniKey.Windows
             var info = await UpdateChecker.CheckAsync();
             if (info == null) return;
 
-            ShowBalloon("OmniKey AI", $"Update {info.Version} is available! Click \u2018Check for Updates\u2019 to install.");
+            ShowBalloon("OmniKey AI", $"Update {info.Version} is available! Open Settings \u2192 Updates to install.");
         }
 
 
@@ -381,3 +376,4 @@ namespace OmniKey.Windows
         private static extern bool SetForegroundWindow(IntPtr hWnd);
     }
 }
+
