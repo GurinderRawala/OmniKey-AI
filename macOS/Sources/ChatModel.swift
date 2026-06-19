@@ -89,13 +89,28 @@ final class ChatModel: ObservableObject {
     @Published var sessions: [AgentSessionInfo] = []
 
     /// Free-text query used to filter the sidebar session list. The
-    /// backend stores each session's `title` as the first ~60 characters
-    /// of the very first user message in the thread, so filtering on
-    /// `title` is equivalent to searching by "first user message" —
-    /// without any extra network round-trips. Whitespace-trimmed,
-    /// case- and diacritic-insensitive matching is applied in
-    /// `filteredSessions`.
-    @Published var sessionSearchQuery: String = ""
+    /// query is matched against the session title *and*, when
+    /// available, the full transcript of user messages for the
+    /// session (lazily fetched + cached in
+    /// `sessionUserMessageHaystacks` once a search is active).
+    /// Whitespace-trimmed, case- and diacritic-insensitive matching is
+    /// applied in `filteredSessions`.
+    @Published var sessionSearchQuery: String = "" {
+        didSet { hydrateUserMessageHaystacksIfNeeded() }
+    }
+
+    /// Cache of normalised user-message text keyed by session id. Used
+    /// to extend the sidebar search beyond session titles so the
+    /// filter finds any prior question the user typed in a session,
+    /// not only the first message that became the title. Hydrated
+    /// lazily on first search; entries are reused across keystrokes
+    /// so each session is fetched at most once per app launch.
+    @Published private var sessionUserMessageHaystacks: [String: String] = [:]
+
+    /// Set of session ids whose user-message transcript is currently
+    /// being fetched. Guards against duplicate in-flight requests when
+    /// the user types quickly into the sidebar search field.
+    private var hydratingUserMessageSessionIds: Set<String> = []
 
     /// The session the user is currently chatting in.
     /// `nil` means a brand-new session that has not been persisted yet —
@@ -188,11 +203,106 @@ final class ChatModel: ObservableObject {
         guard !tokens.isEmpty else { return sessions }
 
         return sessions.filter { session in
-            let haystack = session.title
+            // Title (the first ~60 chars of the first user message) is
+            // always searched. When we've cached deeper transcript text
+            // for the session, fold it into the same haystack so the
+            // query also matches against later user messages in the
+            // thread.
+            var haystack = session.title
                 .lowercased()
                 .folding(options: .diacriticInsensitive, locale: .current)
+            if let extra = sessionUserMessageHaystacks[session.id], !extra.isEmpty {
+                haystack += "\n" + extra
+            }
+            // Project group name + description should also be searchable
+            // so users can find chats by typing the project name even
+            // when the title doesn't reference it directly.
+            if let groupName = session.groupName, !groupName.isEmpty {
+                haystack += "\n" + groupName
+                    .lowercased()
+                    .folding(options: .diacriticInsensitive, locale: .current)
+            }
+            if let desc = session.groupDescription, !desc.isEmpty {
+                haystack += "\n" + desc
+                    .lowercased()
+                    .folding(options: .diacriticInsensitive, locale: .current)
+            }
             return tokens.allSatisfy { haystack.contains($0) }
         }
+    }
+
+    /// When a search is active, kick off background fetches for any
+    /// session whose user-message text we haven't cached yet so the
+    /// haystack grows beyond the title for the next keystroke. Limits
+    /// concurrent fetches via `hydratingUserMessageSessionIds` and the
+    /// per-session in-progress set so a fast typist doesn't fan out
+    /// dozens of duplicate requests.
+    private func hydrateUserMessageHaystacksIfNeeded() {
+        guard isSessionSearchActive else { return }
+        guard let token = SubscriptionManager.shared.jwtToken, !token.isEmpty else { return }
+
+        // Sessions whose transcript we haven't fetched yet, prioritised
+        // by recency (the same order the sidebar displays). Cap the
+        // fan-out per keystroke so the network stays calm on accounts
+        // with hundreds of sessions.
+        let pending = sessions.lazy.filter { [weak self] s in
+            guard let self else { return false }
+            return self.sessionUserMessageHaystacks[s.id] == nil
+                && !self.hydratingUserMessageSessionIds.contains(s.id)
+        }
+        let batch = Array(pending.prefix(8))
+        for session in batch {
+            fetchUserMessageHaystack(for: session.id, token: token)
+        }
+    }
+
+    /// Fetch the persisted transcript for `sessionId` and cache the
+    /// concatenated user-message text (folded + lowercased) for use as
+    /// a search haystack. Decode failures and HTTP errors are
+    /// swallowed silently — search falls back to title-only matching
+    /// for that session, which is no worse than the previous behaviour.
+    private func fetchUserMessageHaystack(for sessionId: String, token: String) {
+        hydratingUserMessageSessionIds.insert(sessionId)
+
+        let url = APIClient.baseURL
+            .appendingPathComponent("api/agent/sessions")
+            .appendingPathComponent(sessionId)
+            .appendingPathComponent("messages")
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, _, _ in
+            guard let self else { return }
+            guard let data else {
+                DispatchQueue.main.async {
+                    self.hydratingUserMessageSessionIds.remove(sessionId)
+                }
+                return
+            }
+            struct Response: Decodable { let messages: [SessionHistoryEntry] }
+            let decoded = try? JSONDecoder().decode(Response.self, from: data)
+
+            let folded: String
+            if let entries = decoded?.messages {
+                folded = entries
+                    .filter { $0.role == "user" }
+                    .map(\.text)
+                    .joined(separator: "\n")
+                    .lowercased()
+                    .folding(options: .diacriticInsensitive, locale: .current)
+            } else {
+                folded = ""
+            }
+
+            DispatchQueue.main.async {
+                self.hydratingUserMessageSessionIds.remove(sessionId)
+                // Always populate the cache (even with an empty string)
+                // so a failed fetch isn't re-attempted on every
+                // keystroke. The "" sentinel is treated as "no extra
+                // haystack" by the filter.
+                self.sessionUserMessageHaystacks[sessionId] = folded
+            }
+        }.resume()
     }
 
     /// True when the user has typed something into the sidebar search
@@ -328,21 +438,31 @@ final class ChatModel: ObservableObject {
         activeSessionTitle = session.title
         hasPendingNewChat = false
         lastErrorMessage = nil
-        isLoadingSessionHistory = true
 
-        // If we already have live state for this session (e.g. it was streaming
-        // in the background), restore it immediately; otherwise start fresh.
-        if let existing = states[session.id] {
-            loadState(existing)
+        // A session that is streaming in the background must NOT be
+        // re-hydrated from the backend here. Re-fetching would overwrite
+        // the in-flight `messages` array with the persisted (and
+        // necessarily older) transcript, orphaning the
+        // `capturedAssistantIndex` the streaming callback writes to. The
+        // turn would keep running (`runCount > 0`) while its thinking
+        // blocks land at a stale index and never surface — i.e. "the
+        // session stays running but shows no thinking" after switching
+        // away and back. Restore the live state as-is instead.
+        if let running = states[session.id], running.isRunning {
+            isLoadingSessionHistory = false
+            loadState(running)
         } else {
-            let fresh = ChatSessionState()
-            states[session.id] = fresh
-            loadState(fresh)
+            // Idle session: show any cached messages immediately (no
+            // blank flash) and refresh the transcript from the backend.
+            let existing = states[session.id] ?? ChatSessionState()
+            states[session.id] = existing
+            isLoadingSessionHistory = true
+            loadState(existing)
+            loadSessionHistory(sessionId: session.id)
         }
 
         defaultTaskTemplate = nil
         fetchDefaultTaskTemplate()
-        loadSessionHistory(sessionId: session.id)
     }
 
     /// Fetch the compact message transcript for the given session and
@@ -386,6 +506,18 @@ final class ChatModel: ObservableObject {
                 let s = self.sessionState(for: sessionId)
                 s.messages = visible
                 s.trimmedOlderMessageCount = overflow
+
+                // Refresh the sidebar deep-search cache for this
+                // session from the just-hydrated transcript so any
+                // user messages beyond the title become matchable
+                // straight away without a second round-trip.
+                let userBlob = hydrated
+                    .filter { $0.role == .user }
+                    .map(\.text)
+                    .joined(separator: "\n")
+                    .lowercased()
+                    .folding(options: .diacriticInsensitive, locale: .current)
+                self.sessionUserMessageHaystacks[sessionId] = userBlob
 
                 self.messages = visible
                 self.trimmedOlderMessageCount = overflow
@@ -477,7 +609,23 @@ final class ChatModel: ObservableObject {
 
     /// Delete a session from the backend. Cancels any in-flight turn for that
     /// session so its WebSocket closes cleanly.
+    /// Append `text` (folded + lowercased) to the cached search
+    /// haystack for `sessionId`. Used both when the user sends a new
+    /// turn and when streamed history is hydrated, so the sidebar
+    /// deep-search reflects the freshest content.
+    private func appendToUserMessageHaystack(sessionId: String, text: String) {
+        let folded = text
+            .lowercased()
+            .folding(options: .diacriticInsensitive, locale: .current)
+        guard !folded.isEmpty else { return }
+        let existing = sessionUserMessageHaystacks[sessionId] ?? ""
+        sessionUserMessageHaystacks[sessionId] = existing.isEmpty
+            ? folded
+            : existing + "\n" + folded
+    }
+
     func deleteSession(_ session: AgentSessionInfo) {
+        sessionUserMessageHaystacks.removeValue(forKey: session.id)
         // Optimistically cancel all running turns for this session.
         states[session.id]?.runHandles.forEach { $0.cancel() }
 
@@ -537,6 +685,11 @@ final class ChatModel: ObservableObject {
         sessionSt.messages.append(ChatMessage.user(text))
         sessionSt.messages.append(ChatMessage.assistant())
         enforceMessageCap(on: sessionSt)
+
+        // Keep the sidebar deep-search cache in sync with what the
+        // user just sent so it's matchable immediately, without
+        // waiting for the session to be re-fetched.
+        appendToUserMessageHaystack(sessionId: sessionId, text: text)
 
         // Capture the index for *this* turn's assistant bubble so concurrent
         // turns each stream into their own row rather than fighting over one index.

@@ -104,8 +104,10 @@ struct ChatSidebarView: View {
             .padding(.top, 14)
             .padding(.bottom, 8)
 
-            // Search field — filters sessions by their title, which the
-            // backend sets to the first user message of the thread.
+            // Search field — filters sessions by title, project group,
+            // and (lazily fetched) full user-message transcript so the
+            // user can find a chat by anything they ever typed in it,
+            // not just the first message.
             ChatSidebarSearchField(query: $model.sessionSearchQuery)
                 .padding(.horizontal, 10)
                 .padding(.bottom, 10)
@@ -130,6 +132,7 @@ struct ChatSidebarView: View {
                             isActive: model.activeSessionId == nil,
                             onTap: { /* already on the pending new chat */ }
                         )
+                        .id("pending-new-chat")
                         .padding(.top, 6)
                     }
 
@@ -178,6 +181,14 @@ struct ChatSidebarView: View {
                                 onTap: { model.openSession(pinned) },
                                 onDelete: { model.deleteSession(pinned) }
                             )
+                            // Distinct identity from the grouped rows below.
+                            // Without it, SwiftUI's LazyVStack can recycle
+                            // this conditional cell into the grouped ForEach
+                            // (or vice-versa) when the pinned row appears /
+                            // disappears as the active session starts or stops
+                            // running — carrying the stale "active" highlight
+                            // onto the previously-selected session.
+                            .id("pinned-\(pinned.id)")
                         }
 
                         // Build ordered groups from visible sessions.
@@ -258,6 +269,10 @@ struct ChatSidebarView: View {
                                         onTap: { model.openSession(session) },
                                         onDelete: { model.deleteSession(session) }
                                     )
+                                    // Pin each row's identity to its session id
+                                    // so the active highlight tracks the session
+                                    // and never lingers on a recycled cell.
+                                    .id("row-\(session.id)")
                                 }
                             }
                         }
@@ -329,8 +344,10 @@ struct ChatSidebarView: View {
 // MARK: - Sidebar Search Field
 
 /// Compact, rounded search field shown at the top of the sidebar. It
-/// filters the session list by the first user message of each thread
-/// (which is stored as the session's `title` on the backend).
+/// filters the session list by the session title, the assigned
+/// project group, and every user message that has been sent in the
+/// thread (the transcript is lazily fetched and cached when the
+/// search becomes active so the haystack expands beyond the title).
 ///
 /// UX details:
 /// - Magnifying-glass leading icon for affordance.
@@ -358,7 +375,7 @@ private struct ChatSidebarSearchField: View {
                 )
                 .frame(width: 14)
 
-            TextField("Search chats", text: $query)
+            TextField("Search chats and messages", text: $query)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
                 .foregroundColor(NordTheme.primaryText(colorScheme))
@@ -373,7 +390,7 @@ private struct ChatSidebarSearchField: View {
                     }
                 }
                 .accessibilityLabel("Search chats")
-                .accessibilityHint("Filter the sidebar by the first message of each chat")
+                .accessibilityHint("Filter the sidebar by chat title, project, or any user message in the chat")
 
             if !query.isEmpty {
                 Button(action: { query = "" }) {
@@ -441,7 +458,7 @@ private struct ChatSidebarSearchEmptyState: View {
                     .foregroundColor(NordTheme.primaryText(colorScheme).opacity(0.85))
             }
 
-            Text("No chats start with \u{201C}\(query)\u{201D}.")
+            Text("No chats or messages match \u{201C}\(query)\u{201D}.")
                 .font(.system(size: 11))
                 .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.65))
                 .lineLimit(2)
@@ -578,6 +595,7 @@ struct ChatSidebarRailView: View {
                                         : NordTheme.secondaryText(colorScheme)
                                 )
                         }
+                        .id("rail-pending-new-chat")
                         .help("New chat (unsaved)")
                     }
 
@@ -610,6 +628,7 @@ struct ChatSidebarRailView: View {
                             }
                         }
                         .buttonStyle(.plain)
+                        .id("rail-\(session.id)")
                         .help(session.title)
                     }
                 }
@@ -1211,17 +1230,38 @@ struct ContextWindowIndicator: View {
 
 // MARK: - Landing Input Composer
 
-/// Two-part input: text area on top, a thin divider, then a footer row
-/// with a task-instruction menu on the left and send/stop on the right.
-/// No opaque fill — only a border so the editor background shows through.
+/// Polished, single-card chat composer used at the bottom of the
+/// conversation view: an expanding text area on top and a borderless
+/// footer row underneath with project / task-instruction menus, the
+/// context-window indicator, a keyboard-hint, and a circular send /
+/// stop button. The whole surface uses a real fill + soft drop shadow
+/// so it reads as a self-contained card lifted above the transcript.
 private struct LandingInputComposer: View {
     @ObservedObject var model: ChatModel
     @Environment(\.colorScheme) private var colorScheme
     @State private var isFocused = false
     @State private var inputHeight: CGFloat = 88
+    @State private var isSendHovered = false
 
     private var inputIsEmpty: Bool {
         model.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var isStopState: Bool {
+        model.isRunning && inputIsEmpty
+    }
+
+    // The composer surface gets a real fill (not `Color.clear`) so the
+    // input visually lifts above the conversation transcript and the
+    // border/shadow read as a single layered card rather than a thin
+    // outline floating over the editor background.
+    private var surfaceFill: Color {
+        switch colorScheme {
+        case .dark:
+            return Color(red: 30 / 255, green: 32 / 255, blue: 38 / 255)
+        default:
+            return Color(red: 252 / 255, green: 252 / 255, blue: 254 / 255)
+        }
     }
 
     var body: some View {
@@ -1231,8 +1271,8 @@ private struct LandingInputComposer: View {
                 if model.inputText.isEmpty {
                     Text("Ask OmniAgent anything…")
                         .font(.system(size: 13))
-                        .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.42))
-                        .padding(.horizontal, 14)
+                        .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.45))
+                        .padding(.horizontal, 16)
                         .padding(.vertical, 12)
                         .allowsHitTesting(false)
                 }
@@ -1247,21 +1287,24 @@ private struct LandingInputComposer: View {
                     onRecallHistory: { model.recallLastUserMessage() }
                 )
                 .frame(height: inputHeight)
+                .padding(.horizontal, 4)
                 .onChange(of: model.inputText) { _, newValue in
                     let lineCount = max(1, newValue.components(separatedBy: "\n").count)
                     inputHeight = max(88, min(CGFloat(lineCount) * 20 + 40, 220))
                 }
             }
+            .padding(.top, 4)
             .contentShape(Rectangle())
             .onTapGesture { isFocused = true }
 
-            // ── Divider ──────────────────────────────────────────────
-            Rectangle()
-                .fill(NordTheme.border(colorScheme))
-                .frame(height: 1)
-
             // ── Bottom: task instruction + send/stop ─────────────────
-            HStack(spacing: 10) {
+            // The toolbar is intentionally borderless — the divider
+            // line we used to draw between the input and the controls
+            // pinched the rounded outer card and made the composer
+            // look cramped. Vertical padding alone gives plenty of
+            // breathing room and keeps the whole surface feeling like
+            // one connected control.
+            HStack(spacing: 8) {
                 // Task instruction dropdown
                 if !model.availableTaskTemplates.isEmpty {
                     Menu {
@@ -1281,46 +1324,29 @@ private struct LandingInputComposer: View {
                             model.setDefaultTaskTemplate(id: nil)
                         }
                     } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "text.badge.star")
-                                .font(.system(size: 9, weight: .medium))
-                            Text(model.defaultTaskTemplate?.heading ?? "No instruction")
-                                .font(.system(size: 11, weight: .medium))
-                                .lineLimit(1)
-                            Image(systemName: "chevron.up.chevron.down")
-                                .font(.system(size: 8, weight: .medium))
-                        }
-                        .foregroundColor(
-                            model.defaultTaskTemplate != nil
-                                ? NordTheme.accent(colorScheme)
-                                : NordTheme.secondaryText(colorScheme).opacity(0.55)
-                        )
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(
-                            Capsule()
-                                .fill(
-                                    model.defaultTaskTemplate != nil
-                                        ? NordTheme.accent(colorScheme).opacity(0.09)
-                                        : NordTheme.badgeFill(colorScheme)
-                                )
+                        ComposerPillLabel(
+                            icon: "text.badge.star",
+                            title: model.defaultTaskTemplate?.heading ?? "No instruction",
+                            isActive: model.defaultTaskTemplate != nil,
+                            activeColor: NordTheme.accent(colorScheme),
+                            colorScheme: colorScheme
                         )
                     }
                     .menuStyle(.borderlessButton)
                     .fixedSize()
                     .disabled(model.isUpdatingDefaultTaskTemplate)
                 } else {
-                    // Placeholder so the send button stays right-aligned
                     Button {
                         AppDelegate.shared?.showTaskInstructionsWindow()
                     } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "plus")
-                                .font(.system(size: 9, weight: .medium))
-                            Text("Add instruction")
-                                .font(.system(size: 11, weight: .medium))
-                        }
-                        .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.5))
+                        ComposerPillLabel(
+                            icon: "plus",
+                            title: "Add instruction",
+                            isActive: false,
+                            activeColor: NordTheme.accent(colorScheme),
+                            colorScheme: colorScheme,
+                            showsChevron: false
+                        )
                     }
                     .buttonStyle(.plain)
                 }
@@ -1356,29 +1382,12 @@ private struct LandingInputComposer: View {
                         }
                     }
                 } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "folder")
-                            .font(.system(size: 9, weight: .medium))
-                        Text(model.selectedGroup?.groupName ?? "Select project")
-                            .font(.system(size: 11, weight: .medium))
-                            .lineLimit(1)
-                        Image(systemName: "chevron.up.chevron.down")
-                            .font(.system(size: 8, weight: .medium))
-                    }
-                    .foregroundColor(
-                        model.selectedGroup != nil
-                            ? NordTheme.accentGreen(colorScheme)
-                            : NordTheme.secondaryText(colorScheme).opacity(0.55)
-                    )
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(
-                        Capsule()
-                            .fill(
-                                model.selectedGroup != nil
-                                    ? NordTheme.accentGreen(colorScheme).opacity(0.09)
-                                    : NordTheme.badgeFill(colorScheme)
-                            )
+                    ComposerPillLabel(
+                        icon: "folder",
+                        title: model.selectedGroup?.groupName ?? "Select project",
+                        isActive: model.selectedGroup != nil,
+                        activeColor: NordTheme.accentGreen(colorScheme),
+                        colorScheme: colorScheme
                     )
                 }
                 .menuStyle(.borderlessButton)
@@ -1399,6 +1408,21 @@ private struct LandingInputComposer: View {
                     .transition(.opacity)
                 }
 
+                // Subtle keyboard hint (`⏎` / `⇧⏎`) — only visible when
+                // the composer has focus and content, mirroring the
+                // hints surfaced by other production AI chat inputs.
+                if isFocused, !inputIsEmpty {
+                    HStack(spacing: 3) {
+                        Text("⇧⏎")
+                            .font(.system(size: 9, weight: .semibold, design: .rounded))
+                        Text("newline")
+                            .font(.system(size: 9, weight: .medium))
+                    }
+                    .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.55))
+                    .padding(.horizontal, 6)
+                    .transition(.opacity)
+                }
+
                 // Send / Stop
                 // • Has text → always send (even mid-run; server queues it)
                 // • No text + running → stop button
@@ -1409,40 +1433,132 @@ private struct LandingInputComposer: View {
                 } label: {
                     ZStack {
                         Circle()
-                            .fill(
-                                model.isRunning && inputIsEmpty
-                                    ? Color.red
-                                    : inputIsEmpty
-                                        ? NordTheme.border(colorScheme).opacity(2.5)
-                                        : NordTheme.accent(colorScheme)
+                            .fill(sendButtonFill)
+                            .frame(width: 32, height: 32)
+                            .shadow(
+                                color: sendButtonShadowColor,
+                                radius: isSendHovered && !inputIsEmpty ? 6 : 0,
+                                x: 0, y: 1
                             )
-                            .frame(width: 30, height: 30)
-                        Image(systemName: model.isRunning && inputIsEmpty ? "stop.fill" : "arrow.up")
-                            .font(.system(size: 12, weight: .bold))
-                            .foregroundColor(inputIsEmpty && !model.isRunning ? NordTheme.secondaryText(colorScheme).opacity(0.4) : .white)
+                        Image(systemName: isStopState ? "stop.fill" : "arrow.up")
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundColor(sendButtonIconColor)
                     }
+                    .scaleEffect(isSendHovered && !inputIsEmpty ? 1.05 : 1.0)
                     .animation(.easeInOut(duration: 0.14), value: model.isRunning)
+                    .animation(.easeInOut(duration: 0.12), value: isSendHovered)
+                    .animation(.easeInOut(duration: 0.12), value: inputIsEmpty)
+                    .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
                 .disabled(inputIsEmpty && !model.isRunning)
+                .onHover { isSendHovered = $0 }
+                .help(isStopState ? "Stop current turn" : "Send message  ·  ⏎")
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 9)
+            .padding(.horizontal, 10)
+            .padding(.top, 6)
+            .padding(.bottom, 8)
+            .animation(.easeInOut(duration: 0.12), value: isFocused)
+            .animation(.easeInOut(duration: 0.12), value: inputIsEmpty)
         }
-        .background(Color.clear)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(surfaceFill)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .strokeBorder(
                     isFocused
-                        ? NordTheme.accent(colorScheme).opacity(0.5)
-                        : NordTheme.border(colorScheme).opacity(1.6),
-                    lineWidth: isFocused ? 1.5 : 1
+                        ? NordTheme.accent(colorScheme).opacity(0.55)
+                        : NordTheme.border(colorScheme),
+                    lineWidth: isFocused ? 1.4 : 1
                 )
         )
         .shadow(
-            color: .black.opacity(colorScheme == .dark ? 0.18 : 0.07),
-            radius: 10, x: 0, y: 3
+            color: .black.opacity(
+                colorScheme == .dark
+                    ? (isFocused ? 0.30 : 0.20)
+                    : (isFocused ? 0.10 : 0.06)
+            ),
+            radius: isFocused ? 14 : 9,
+            x: 0,
+            y: isFocused ? 4 : 2
+        )
+        .animation(.easeInOut(duration: 0.16), value: isFocused)
+    }
+
+    // MARK: - Send button styling
+
+    private var sendButtonFill: Color {
+        if isStopState { return Color.red }
+        if inputIsEmpty { return NordTheme.border(colorScheme).opacity(1.8) }
+        return NordTheme.accent(colorScheme)
+    }
+
+    private var sendButtonIconColor: Color {
+        if inputIsEmpty, !model.isRunning {
+            return NordTheme.secondaryText(colorScheme).opacity(0.45)
+        }
+        return .white
+    }
+
+    private var sendButtonShadowColor: Color {
+        if isStopState { return Color.red.opacity(0.35) }
+        return NordTheme.accent(colorScheme).opacity(0.35)
+    }
+}
+
+// MARK: - Composer Pill Label
+
+/// Reusable label used by the dropdowns inside `LandingInputComposer`.
+/// Centralising the styling keeps the project/instruction/add buttons
+/// visually consistent and gives the composer a tighter, more
+/// production-ready look.
+private struct ComposerPillLabel: View {
+    let icon: String
+    let title: String
+    let isActive: Bool
+    let activeColor: Color
+    let colorScheme: ColorScheme
+    var showsChevron: Bool = true
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: icon)
+                .font(.system(size: 10, weight: .semibold))
+            Text(title)
+                .font(.system(size: 11.5, weight: .medium))
+                .lineLimit(1)
+            if showsChevron {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .semibold))
+                    .opacity(0.65)
+            }
+        }
+        .foregroundColor(
+            isActive
+                ? activeColor
+                : NordTheme.secondaryText(colorScheme).opacity(0.65)
+        )
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(
+            Capsule()
+                .fill(
+                    isActive
+                        ? activeColor.opacity(0.10)
+                        : NordTheme.badgeFill(colorScheme).opacity(0.85)
+                )
+        )
+        .overlay(
+            Capsule()
+                .strokeBorder(
+                    isActive
+                        ? activeColor.opacity(0.25)
+                        : NordTheme.border(colorScheme).opacity(0.6),
+                    lineWidth: 0.5
+                )
         )
     }
 }
@@ -1680,12 +1796,24 @@ struct UserBubbleView: View {
         HStack(alignment: .top) {
             Spacer(minLength: 60)
             VStack(alignment: .trailing, spacing: 4) {
-                Text(text)
-                    .font(OKFont.body)
-                    .foregroundColor(bubbleTextColor)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                // Render user input as Markdown so prompts that paste in
+                // code fences, lists, or inline formatting display
+                // structurally the same as the assistant's answer.
+                // Falls back to plain `Text` when the message is short
+                // single-line prose so very simple inputs avoid the
+                // extra parse work and keep their original spacing.
+                if Self.shouldRenderAsMarkdown(text) {
+                    ChatMarkdownView(text: text, baseFontSize: 13)
+                        .equatable()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    Text(text)
+                        .font(OKFont.body)
+                        .foregroundColor(bubbleTextColor)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
 
                 ChatCopyButton(text: text, title: "Copy message")
             }
@@ -1697,12 +1825,35 @@ struct UserBubbleView: View {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .fill(bubbleFillColor)
             )
+            // Clip first so any wide child (code blocks, tables) honours
+            // the rounded bubble corners instead of poking past them.
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .strokeBorder(bubbleBorderColor, lineWidth: 1)
             )
         }
         .frame(maxWidth: .infinity)
+    }
+
+    /// Heuristic that decides whether a user message benefits from the
+    /// full Markdown renderer. Short single-line messages stay on the
+    /// lightweight `Text` path so they keep their original tight
+    /// spacing; anything that looks structured (code fences, lists,
+    /// headings, blockquotes, inline code, bold/italic markers,
+    /// multiple lines) is sent through `ChatMarkdownView`.
+    fileprivate static func shouldRenderAsMarkdown(_ raw: String) -> Bool {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return false }
+        if trimmed.contains("\n") { return true }
+        if trimmed.contains("```") { return true }
+        if trimmed.contains("`") { return true }
+        let structuralPrefixes = ["# ", "## ", "### ", "#### ", "##### ", "###### ", "- ", "* ", "> "]
+        for prefix in structuralPrefixes where trimmed.hasPrefix(prefix) { return true }
+        if trimmed.contains("**") || trimmed.contains("__") { return true }
+        // Inline links: [text](url)
+        if trimmed.contains("](") { return true }
+        return false
     }
 
     // In dark mode the user-bubble uses a muted tinted surface instead of
@@ -2310,8 +2461,15 @@ struct ChatMarkdownView: View, @MainActor Equatable {
             return baseFontSize + 2
         case 3:
             return baseFontSize + 1
-        default:
+        case 4:
             return baseFontSize
+        default:
+            // Levels 5 and 6 (e.g. "##### TL;DR") render slightly smaller
+            // than body text and slightly subdued. Keeping them visually
+            // distinct from a paragraph avoids the "looks identical to
+            // surrounding prose" complaint while still respecting the
+            // semantic depth chosen by the model.
+            return max(baseFontSize - 1, 11)
         }
     }
 
@@ -2435,9 +2593,20 @@ struct ChatMarkdownView: View, @MainActor Equatable {
     }
 
     fileprivate static func parseHeading(_ line: String) -> (level: Int, text: String)? {
+        // Full ATX-heading support (levels 1–6). Some LLMs emit deeper
+        // section markers such as `##### TL;DR` for callouts — clamping
+        // at 4 levels caused those lines to render as literal hash marks
+        // in the assistant's final answer (the "TL;DR symbol" bug).
         let count = line.prefix { $0 == "#" }.count
-        guard count > 0, count <= 4, line.dropFirst(count).first == " " else { return nil }
-        return (count, String(line.dropFirst(count + 1)).trimmingCharacters(in: .whitespaces))
+        guard count > 0, count <= 6, line.dropFirst(count).first == " " else { return nil }
+        var text = String(line.dropFirst(count + 1))
+        // Strip optional ATX closing markers ("## Heading ##") so the
+        // trailing hashes don't bleed into the rendered title.
+        text = text.trimmingCharacters(in: .whitespaces)
+        while text.hasSuffix("#") {
+            text.removeLast()
+        }
+        return (min(count, 6), text.trimmingCharacters(in: .whitespaces))
     }
 
     fileprivate static func isDivider(_ line: String) -> Bool {
@@ -2629,6 +2798,13 @@ struct ChatCodeBlockView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        // Clip the entire stack to the rounded outer shape *before*
+        // drawing the background and border. Without this, the
+        // top-bar's rectangular `.background(badgeFill)` fill and the
+        // separator rectangle paint into the four corners that should
+        // be carved out by the rounded rectangle — producing the
+        // "shadowed corner" artifact reported on the chat page.
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(
@@ -2662,6 +2838,12 @@ private struct ChatErrorBanner: View {
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
+        // Rounded, self-contained alert pill. The original banner drew a
+        // square-cornered red wash that ran flush against the input
+        // composer below, producing the "shadow on the corners" look
+        // the user reported next to the new ready-state alert. Adding
+        // a proper rounded background + matching clip mirrors the
+        // styling we use on `FinalAnswerView` / `UserBubbleView`.
         HStack(spacing: 8) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 12))
@@ -2678,9 +2860,19 @@ private struct ChatErrorBanner: View {
             }
             .buttonStyle(.plain)
         }
-        .padding(.horizontal, 18)
+        .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .background(Color.red.opacity(colorScheme == .dark ? 0.10 : 0.07))
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.red.opacity(colorScheme == .dark ? 0.14 : 0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(Color.red.opacity(colorScheme == .dark ? 0.30 : 0.22), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .padding(.horizontal, 22)
+        .padding(.vertical, 6)
     }
 }
 
