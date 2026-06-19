@@ -900,9 +900,16 @@ final class KeyboardMonitor {
 
         // Add an explicit base surface tint so text remains readable on bright
         // wallpapers and translucent content in both appearance modes.
+        // Both the surface tint and the accent-gradient wash get the
+        // same `cornerRadius` + `masksToBounds` as the root layer so
+        // their rectangular bounds don't leak past the rounded outer
+        // shape — that bleed was what produced the "shadow on the
+        // corners" of the rounded Result Ready alert.
         let surfaceLayer = CALayer()
         surfaceLayer.frame = CGRect(x: 0, y: 0, width: width, height: height)
         surfaceLayer.backgroundColor = palette.surface.cgColor
+        surfaceLayer.cornerRadius = radius
+        surfaceLayer.masksToBounds = true
         root.layer?.insertSublayer(surfaceLayer, at: 0)
 
         // Subtle accent gradient wash bleeding from the left edge
@@ -914,6 +921,8 @@ final class KeyboardMonitor {
             palette.accent.withAlphaComponent(isDarkMode ? 0.13 : 0.08).cgColor,
             palette.accent.withAlphaComponent(0).cgColor,
         ]
+        gradientLayer.cornerRadius = radius
+        gradientLayer.masksToBounds = true
         root.layer?.addSublayer(gradientLayer)
 
         // Circular icon badge

@@ -127,9 +127,9 @@ cat > "${INFO_PLIST}" <<EOF
     <key>CFBundleIdentifier</key>
     <string>${BUNDLE_ID}</string>
     <key>CFBundleVersion</key>
-    <string>41</string>
+    <string>42</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0.40</string>
+    <string>1.0.41</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>LSMinimumSystemVersion</key>
@@ -281,7 +281,7 @@ ln -s /Applications "${STAGE_DIR}/Applications"
 info "Creating styled DMG..."
 rm -f "${DMG_PATH}"
 
-sudo create-dmg \
+create-dmg \
   --skip-jenkins \
   --volname "${APP_NAME}" \
   --volicon "${APP_BUNDLE}/Contents/Resources/AppIcon.icns" \
