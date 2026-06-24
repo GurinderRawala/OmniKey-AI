@@ -133,7 +133,7 @@ app.get('/macos/appcast', (req, res) => {
 // ── Windows distribution endpoints ───────────────────────────────────────────
 // These should match the values in windows/OmniKey.Windows.csproj
 // <Version> and windows/build_release_zip.ps1 $APP_VERSION.
-const WIN_VERSION = '1.14';
+const WIN_VERSION = '1.15';
 const WIN_ZIP_FILENAME = 'OmniKeyAI-windows-win-x64.zip';
 const WIN_ZIP_PATH = path.join(process.cwd(), 'windows', WIN_ZIP_FILENAME);
 
@@ -186,15 +186,8 @@ app.get('/windows/update', (req, res) => {
     releaseNotes: [
       `What's new in ${WIN_VERSION}`,
       ``,
-      `• Settings: redesigned with a dedicated sidebar — AI Providers, Agent Access, Check for updates, and Manual now live in one place, and the main app sidebar tucks away automatically when you open Settings.`,
-      `• Settings: Manual and Check for updates moved into Settings and removed from the top-level sidebar and the tray menu.`,
-      `• AI Providers: listed as rows showing each provider's masked key and which one is active. Pick a provider to edit its key, base URL, or model on the next screen with a Back button — and keys already saved in your config now load and display automatically.`,
-      `• AI Providers: change the OpenAI model (gpt-5.1 or gpt-5.5) from a dropdown; an Apply button appears only when you pick a different model, mirroring the macOS app.`,
-      `• Agent Access: terminal access (limited / full), web search, and authenticated browser access are managed together and applied with a single Save.`,
-      `• Authenticated browser access now works on Windows — toggling it on opens the guided setup so the agent can read tabs from a signed-in browser session.`,
-      `• Markdown: proper bullet points — disc / circle / square markers by nesting level, no left-edge clipping, and tighter list spacing so answers read cleanly. Headings now stand out with better spacing and contrast.`,
-      `• Stability: the app no longer closes when you change a setting or when the self-hosted backend is briefly unavailable, and restarting the daemon after a settings change no longer shuts the app down.`,
-      `• Reliability: large agent shell commands no longer fail with "The filename or extension is too long".`,
+      ` Chat: code blocks in assistant responses no longer flash up with a bright white background. The markdown theming pass used to abort mid-document whenever it hit a fenced code block, leaving every subsequent code block unthemed - that path is now iteration-safe.`,
+      ` Chat: opening an old conversation now jumps straight to the latest message instead of leaving you scrolled to the very top, and the view stays pinned to the bottom whenever you send a new message.`,
     ].join('\n'),
   });
 });
