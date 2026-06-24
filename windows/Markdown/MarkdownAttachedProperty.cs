@@ -91,7 +91,16 @@ namespace OmniKey.Windows.MarkdownRender
             doc.IsHyphenationEnabled = false;
             doc.LineHeight = 20;
 
-            foreach (var block in doc.Blocks)
+            // Snapshot the block list before iterating: RestyleBlock can
+            // mutate the document tree (BuildCodeChrome swaps a
+            // BlockUIContainer's child), which invalidates the live
+            // TextElementCollection enumerator and throws
+            // "Collection was modified" on the next MoveNext. Without
+            // .ToList(), any code block after the first one in an
+            // assistant turn stayed in MdXaml's white-themed AvalonEdit
+            // form because the rest of the theming pass was aborted by
+            // the exception and silently swallowed at the call site.
+            foreach (var block in doc.Blocks.ToList())
                 RestyleBlock(block, theme);
         }
 
@@ -128,7 +137,7 @@ namespace OmniKey.Windows.MarkdownRender
                     section.Background = Brushes.Transparent;
                     section.BorderBrush = theme.Accent;
                     section.BorderThickness = new Thickness(3, 0, 0, 0);
-                    foreach (var child in section.Blocks)
+                    foreach (var child in section.Blocks.ToList())
                         RestyleBlock(child, theme);
                     break;
 
@@ -158,7 +167,7 @@ namespace OmniKey.Windows.MarkdownRender
                                 cell.BorderBrush = theme.Border;
                                 cell.BorderThickness = new Thickness(0, 0, 1, 1);
                                 cell.Padding = new Thickness(8, 6, 8, 6);
-                                foreach (var child in cell.Blocks)
+                                foreach (var child in cell.Blocks.ToList())
                                     RestyleBlock(child, theme);
                             }
                         }
@@ -224,7 +233,7 @@ namespace OmniKey.Windows.MarkdownRender
             foreach (var item in list.ListItems)
             {
                 item.Background = Brushes.Transparent;
-                foreach (var child in item.Blocks)
+                foreach (var child in item.Blocks.ToList())
                 {
                     switch (child)
                     {

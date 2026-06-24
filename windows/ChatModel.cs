@@ -204,9 +204,19 @@ namespace OmniKey.Windows
             {
                 if (_inputText == value) return;
                 _inputText = value;
-                NotifyStateChanged();
+                // Hot path: input edits fire on every keystroke. Don't run the
+                // full StateChanged -> ProjectFromModel pipeline (which rebuilds
+                // the entire transcript). Use a dedicated lightweight event
+                // so the view model can just sync the InputText binding.
+                InputTextChanged?.Invoke(this, EventArgs.Empty);
             }
         }
+
+        /// <summary>Raised when only <see cref="InputText"/> changes. Decoupled
+        /// from <see cref="StateChanged"/> so per-keystroke edits don't force
+        /// view models to re-project the entire chat transcript (which was
+        /// the root cause of typing / scroll lag in long conversations).</summary>
+        public event EventHandler? InputTextChanged;
 
         public TaskTemplateDto? DefaultTaskTemplate { get; private set; }
         public List<TaskTemplateDto> AvailableTaskTemplates { get; private set; } = new();

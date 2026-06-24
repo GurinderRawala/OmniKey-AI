@@ -233,13 +233,26 @@ namespace OmniKey.Windows.ViewModels
             _ui = SynchronizationContext.Current ?? new SynchronizationContext();
             _model.BindToCurrentThread();
             _model.StateChanged += OnModelStateChanged;
+            _model.InputTextChanged += OnModelInputTextChanged;
             ProjectFromModel();
         }
 
         public void Dispose()
         {
             _model.StateChanged -= OnModelStateChanged;
+            _model.InputTextChanged -= OnModelInputTextChanged;
         }
+
+        /// <summary>Lightweight handler for input-text-only model edits.
+        /// Avoids the full <see cref="ProjectFromModel"/> rebuild that would otherwise
+        /// tear down the transcript on every keystroke. Was the root cause
+        /// of typing / scroll lag in long chats.</summary>
+        private void OnModelInputTextChanged(object? sender, EventArgs e) =>
+            _ui.Post(_ =>
+            {
+                OnPropertyChanged(nameof(InputText));
+                SendCommand.NotifyCanExecuteChanged();
+            }, null);
 
         [RelayCommand]
         private void Load()
@@ -345,18 +358,13 @@ namespace OmniKey.Windows.ViewModels
                 finally { _suppressSelectionFeedback = false; }
             }
 
-            // Messages — project with streaming flag on the last assistant turn.
-            int lastIndex = _model.Messages.Count - 1;
-            var rows = new List<ChatMessageRow>(_model.Messages.Count);
-            for (int i = 0; i < _model.Messages.Count; i++)
-            {
-                bool streaming = _model.IsRunning && i == lastIndex
-                    && _model.Messages[i].Role == ChatMessageRole.Assistant;
-                var row = ChatMessageRow.Create(_model.Messages[i], streaming);
-                AttachExpansionTracking(row);
-                rows.Add(row);
-            }
-            ReplaceCollection(Messages, rows);
+            // Messages - diff against the existing collection so untouched
+            // rows keep their realized visuals (FlowDocumentScrollViewer,
+            // markdown parses, thinking timelines, ...). Wholesale Clear+Add
+            // on every model tick used to rebuild all 30 rows on every
+            // streamed block, which was the root cause of scroll lag in
+            // long conversations.
+            ProjectMessages();
 
             // Templates list — keep existing item references when only the
             // Default flag changed. Replacing the items wholesale forces the
@@ -413,6 +421,79 @@ namespace OmniKey.Windows.ViewModels
             target.Clear();
             foreach (var item in source) target.Add(item);
         }
+
+        /// <summary>Diff <see cref="Messages"/> against <see cref="ChatModel.Messages"/>:
+        /// reuse the existing <see cref="ChatMessageRow"/> for any source message
+        /// whose Id and streaming-flag match the current row. Only the
+        /// streaming row (and any genuinely new tail rows) are rebuilt.
+        /// This avoids tearing down the entire transcript visual tree on
+        /// every appended block - the previous implementation recreated
+        /// up to 30 FlowDocumentScrollViewers and reparsed every markdown
+        /// answer on every NotifyStateChanged tick, which is what was
+        /// making typing and scrolling lag in long chats.</summary>
+        private void ProjectMessages()
+        {
+            var src = _model.Messages;
+            int lastIndex = src.Count - 1;
+
+            // Fast path: counts match and all message Ids align in order.
+            // Only the streaming row (or a row whose block count changed)
+            // needs a refresh; everything else keeps its realized visuals.
+            if (Messages.Count == src.Count)
+            {
+                bool allMatch = true;
+                for (int i = 0; i < src.Count; i++)
+                {
+                    if (Messages[i].Source.Id != src[i].Id) { allMatch = false; break; }
+                }
+                if (allMatch)
+                {
+                    if (lastIndex >= 0)
+                    {
+                        bool streaming = _model.IsRunning
+                            && src[lastIndex].Role == ChatMessageRole.Assistant;
+                        var existing = Messages[lastIndex];
+                        // The streaming row needs to be rebuilt when its
+                        // content (blocks) changed, OR when its streaming
+                        // flag flipped (run completed). Identity stays
+                        // stable for non-streaming rows.
+                        if (streaming
+                            || existing.IsStreaming
+                            || existing.Source.Blocks.Count != src[lastIndex].Blocks.Count)
+                        {
+                            DetachRow(existing);
+                            var row = ChatMessageRow.Create(src[lastIndex], streaming);
+                            AttachExpansionTracking(row);
+                            Messages[lastIndex] = row;
+                        }
+                    }
+                    return;
+                }
+            }
+
+            // Slow path: structural change (session switched, history
+            // loaded, message trimmed, ...). Rebuild from scratch.
+            foreach (var existing in Messages) DetachRow(existing);
+            Messages.Clear();
+            for (int i = 0; i < src.Count; i++)
+            {
+                bool streaming = _model.IsRunning && i == lastIndex
+                    && src[i].Role == ChatMessageRole.Assistant;
+                var row = ChatMessageRow.Create(src[i], streaming);
+                AttachExpansionTracking(row);
+                Messages.Add(row);
+            }
+        }
+
+        private void DetachRow(ChatMessageRow row)
+        {
+            row.PropertyChanged -= OnRowPropertyChanged;
+            foreach (var block in row.ThinkingBlocks)
+                block.PropertyChanged -= OnBlockPropertyChanged;
+            if (row.FinalAnswer != null)
+                row.FinalAnswer.PropertyChanged -= OnBlockPropertyChanged;
+        }
+
 
         /// <summary>Rehydrate previously-toggled expansion state onto the
         /// freshly-built row and wire up listeners so future user toggles
