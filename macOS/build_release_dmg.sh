@@ -127,9 +127,9 @@ cat > "${INFO_PLIST}" <<EOF
     <key>CFBundleIdentifier</key>
     <string>${BUNDLE_ID}</string>
     <key>CFBundleVersion</key>
-    <string>42</string>
+    <string>43</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0.41</string>
+    <string>1.0.42</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>LSMinimumSystemVersion</key>
@@ -149,9 +149,14 @@ cat > "${INFO_PLIST}" <<EOF
     <key>SUEnableAutomaticChecks</key>
     <true/>
 
-    <!-- Run as a UIElement (menu bar style, no Dock icon). Remove if you want Dock icon. -->
-    <key>LSUIElement</key>
-    <true/>
+    <!-- Note: we intentionally do NOT set LSUIElement. The app starts in
+         `.accessory` mode at runtime (so there's no Dock icon at idle), but
+         LSUIElement=true *also* removes the application's menu bar entirely,
+         which breaks native full-screen on the chat window (the title bar
+         can no longer be revealed by hovering at the top of the screen).
+         By leaving LSUIElement out, AppKit installs our `NSApp.mainMenu`
+         the moment we promote to `.regular`, and full-screen reveal works
+         normally. -->
 
     <!-- Required for global keyboard monitoring / shortcuts -->
     <key>NSInputMonitoringUsageDescription</key>

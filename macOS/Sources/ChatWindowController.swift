@@ -44,7 +44,7 @@ final class ChatWindow: NSWindow {
     }
 }
 
-final class ChatWindowController: NSWindowController {
+final class ChatWindowController: NSWindowController, NSWindowDelegate {
     /// Strong reference to the chat model so we can re-fetch sessions whenever
     /// the chat window is shown or becomes key. `ChatView.onAppear` only fires
     /// the first time the SwiftUI hierarchy is mounted — subsequent reopens
@@ -60,6 +60,15 @@ final class ChatWindowController: NSWindowController {
         self.model = model
         let rootView = ChatView(model: model)
         let hostingController = NSHostingController(rootView: rootView)
+        // Decouple the SwiftUI content's intrinsic size from the AppKit window
+        // size. Without this, SwiftUI keeps republishing a "preferred" content
+        // size on every layout pass while the user drags the window between
+        // displays (or from a large monitor to a smaller one). AppKit then
+        // tries to honour both the window's minSize and the SwiftUI preferred
+        // size, which on macOS 13/14/15 can spin the layout loop and hang the
+        // UI until the window finally settles. The window owns its size; the
+        // SwiftUI tree just fills whatever it's given.
+        hostingController.sizingOptions = []
 
         // ~20% larger than original 1100×740
         let window = ChatWindow(
@@ -77,12 +86,14 @@ final class ChatWindowController: NSWindowController {
 
         super.init(window: window)
 
+        window.delegate = self
+
         // Keep the sidebar in sync whenever focus returns to the chat window
         // (e.g. user Cmd-Tabs back, or clicks the window after working
         // elsewhere). Cheap GET that no-ops when unauthenticated.
         NotificationCenter.default.addObserver(
             self,
-            selector: #selector(windowDidBecomeKey(_:)),
+            selector: #selector(handleWindowDidBecomeKey(_:)),
             name: NSWindow.didBecomeKeyNotification,
             object: window
         )
@@ -100,6 +111,10 @@ final class ChatWindowController: NSWindowController {
     override func showWindow(_ sender: Any?) {
         super.showWindow(sender)
         guard let window else { return }
+        // Dock-icon visibility is handled centrally in `AppDelegate` via
+        // the global `NSWindow.didBecomeVisible` / `willClose` notifications,
+        // so every OmniKey window — not just chat — adds the Dock icon
+        // while it's on screen.
         NSApp.activate(ignoringOtherApps: true)
         window.level = .normal
         window.makeKeyAndOrderFront(nil)
@@ -111,8 +126,49 @@ final class ChatWindowController: NSWindowController {
         refreshChatData()
     }
 
-    @objc private func windowDidBecomeKey(_ notification: Notification) {
+    @objc private func handleWindowDidBecomeKey(_: Notification) {
         refreshChatData()
+    }
+
+    // MARK: - NSWindowDelegate
+
+    /// Snap the window back inside the new screen's visible frame whenever
+    /// the user moves it between displays. Without this, dragging a 1320×888
+    /// window from a large external monitor onto a 1280×800 built-in display
+    /// (or unplugging the external entirely) can leave the window larger than
+    /// the target screen — at which point AppKit's automatic clamp + SwiftUI's
+    /// own preferred-size feedback fight each other and the app appears to
+    /// hang for several seconds. Doing the clamp ourselves (synchronously,
+    /// once) cuts that loop short.
+    func windowDidChangeScreen(_: Notification) {
+        clampWindowToScreen()
+    }
+
+    func windowDidChangeBackingProperties(_: Notification) {
+        clampWindowToScreen()
+    }
+
+    private func clampWindowToScreen() {
+        guard let window, let screen = window.screen ?? NSScreen.main else { return }
+        let visible = screen.visibleFrame
+        var frame = window.frame
+
+        // Honour the window's minSize while clamping; if the screen is
+        // narrower than minSize we still respect the screen edge so the
+        // titlebar stays reachable.
+        let maxWidth = max(window.minSize.width, visible.width)
+        let maxHeight = max(window.minSize.height, visible.height)
+        frame.size.width = min(frame.size.width, maxWidth)
+        frame.size.height = min(frame.size.height, maxHeight)
+
+        if frame.maxX > visible.maxX { frame.origin.x = visible.maxX - frame.size.width }
+        if frame.minX < visible.minX { frame.origin.x = visible.minX }
+        if frame.maxY > visible.maxY { frame.origin.y = visible.maxY - frame.size.height }
+        if frame.minY < visible.minY { frame.origin.y = visible.minY }
+
+        if frame != window.frame {
+            window.setFrame(frame, display: true, animate: false)
+        }
     }
 
     private func refreshChatData() {

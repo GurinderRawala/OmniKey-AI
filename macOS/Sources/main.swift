@@ -22,6 +22,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     private var chatWindowController: ChatWindowController?
     private var chatMenuItem: NSMenuItem?
     private var monitoringStarted = false
+    private var dockUpdateScheduled = false
     private var isAuthorized = false
 
     private var updaterController: SPUStandardUpdaterController?
@@ -31,6 +32,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     weak static var shared: AppDelegate?
 
     func applicationDidFinishLaunching(_: Notification) {
+        // Install the standard top-of-screen menu bar before *anything*
+        // else. macOS only displays the strip when the app is `.regular`
+        // and active, but installing it now means it's ready the moment
+        // the user opens a window — including for native full-screen,
+        // which depends on the app owning the menu bar to reveal the
+        // title-bar (and traffic lights) on cursor-to-top.
+        AppMainMenu.install()
         NSApp.setActivationPolicy(.accessory)
         setupMenuBar()
 
@@ -43,6 +51,43 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         )
 
         AppDelegate.shared = self
+
+        // Observe every OmniKey window so we can show / hide the Dock
+        // icon based on whether any user-facing window is on screen.
+        // `nil` `object:` means "for any window in this process".
+        // `NSWindow.didBecomeKey` fires reliably the first time any
+        // OmniKey window comes on screen via `makeKeyAndOrderFront`,
+        // and `NSWindow.willClose` fires when one goes away. Together
+        // they cover every show/hide transition for the windows we
+        // create. We also observe `NSWindow.didMiniaturize` and
+        // `NSWindow.didDeminiaturize` so windows tucked into the Dock
+        // don't keep the icon up — the Dock presence should reflect
+        // *actually visible* windows, not just allocated ones.
+        // We only need *two* signals to maintain Dock visibility:
+        //   - `didBecomeKey` fires the first time any user-facing window
+        //     comes on screen via `makeKeyAndOrderFront`.
+        //   - `willClose` fires when one goes away.
+        //
+        // Notifications like `didMiniaturize` / `didBecomeMain` MUST NOT be
+        // observed here: changing the activation policy while a zoom or
+        // miniaturise animation is in flight tears the Dock tile out from
+        // under AppKit's animator and the green / orange traffic-light
+        // buttons stop responding ("once maximised I can no longer
+        // minimise the chat window"). Letting miniaturised windows keep
+        // the Dock icon present is also the standard macOS behaviour —
+        // the user can still click the Dock tile to bring them back.
+        let windowEvents: [Notification.Name] = [
+            NSWindow.didBecomeKeyNotification,
+            NSWindow.willCloseNotification,
+        ]
+        for name in windowEvents {
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(scheduleDockVisibilityUpdate),
+                name: name,
+                object: nil
+            )
+        }
 
         NotificationCenter.default.addObserver(
             self,
@@ -176,6 +221,33 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     @objc private func checkForUpdatesFromMenu() {
         updaterController?.checkForUpdates(nil)
     }
+    @objc func checkForUpdatesFromMainMenu() {
+        updaterController?.checkForUpdates(nil)
+    }
+
+    @objc func showSettingsWindowFromMainMenu() {
+        showSettingsWindow()
+    }
+
+    @objc func newChatFromMainMenu() {
+        // The chat window owns the actual "start new chat" action via
+        // ChatModel; opening (or focusing) the chat window first is the
+        // safest cross-state entry point.
+        showChatWindow()
+        ChatModel.shared.startNewChat()
+    }
+
+    @objc func openHelpFromMainMenu() {
+        // Reuse the existing manual window — it's what users get the
+        // first time they launch and is the closest thing OmniKey has
+        // to a help center today.
+        if manualWindowController == nil {
+            manualWindowController = ManualWindowController()
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        manualWindowController?.showWindow(nil)
+    }
+
 
     /// Public hook so SwiftUI views (e.g. SettingsView) can trigger Sparkle.
     func checkForUpdates() {
@@ -385,6 +457,76 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_: NSApplication) -> Bool {
         return false // Keep app running in menu bar
+    }
+
+    // MARK: - Dock visibility
+
+    /// Coalesces dock-visibility recomputes onto the next runloop tick.
+    /// Reacting *synchronously* to AppKit window notifications was
+    /// dangerous: when the user hit the green traffic-light button, the
+    /// `didBecomeMain` notification fired mid-zoom-animation, we flipped
+    /// the activation policy, and AppKit got confused enough that the
+    /// traffic-light buttons (specifically minimise) stopped responding
+    /// until the window was closed and re-opened. Bouncing through a
+    /// `DispatchQueue.main.async` lets every in-flight window animation
+    /// finish before we touch `NSApp.activationPolicy`, and naturally
+    /// debounces bursts of notifications (e.g. didResignKey +
+    /// didBecomeKey when switching between OmniKey windows).
+    @objc private func scheduleDockVisibilityUpdate() {
+        guard !dockUpdateScheduled else { return }
+        dockUpdateScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.dockUpdateScheduled = false
+            self.applyDockVisibility()
+        }
+    }
+
+    /// Recomputes the app's activation policy from the set of currently
+    /// visible user windows. The app starts as `.accessory` (menu-bar
+    /// only); the moment any user-facing OmniKey window appears we
+    /// promote to `.regular` so the Dock icon shows up, and the moment
+    /// the last one closes we drop back to `.accessory`.
+    ///
+    /// Critically this method:
+    ///   - does **not** call `NSApp.activate(...)`. Re-activating mid-
+    ///     session yanks key focus away from whatever the user is doing
+    ///     and was the root cause of the "after maximise I can't
+    ///     minimise" bug — the spurious activation interrupted the zoom
+    ///     animation and left the traffic-light buttons stuck.
+    ///   - **counts miniaturised windows as still present** so tucking
+    ///     a window into the Dock keeps the OmniKey icon there for the
+    ///     user to click it back out.
+    private func applyDockVisibility() {
+        let hasUserWindow = NSApp.windows.contains { Self.isUserFacingWindow($0) }
+        let desired: NSApplication.ActivationPolicy = hasUserWindow ? .regular : .accessory
+        guard NSApp.activationPolicy() != desired else { return }
+        NSApp.setActivationPolicy(desired)
+    }
+
+    /// Filter for "real" user-facing windows. Excludes status-bar panels,
+    /// menu host windows, popovers, and anything that isn't currently
+    /// visible on screen — otherwise the Dock icon would never go away
+    /// because AppKit keeps several invisible bookkeeping windows around.
+    /// Miniaturised windows *do* count: their owning user-facing window
+    /// is still present (just docked), so the Dock icon should remain.
+    private static func isUserFacingWindow(_ window: NSWindow) -> Bool {
+        // `isVisible` reports `true` for both on-screen *and* miniaturised
+        // windows, which is exactly what we want.
+        guard window.isVisible else { return false }
+        if window is NSPanel { return false }
+        guard window.canBecomeMain else { return false }
+        guard window.styleMask.contains(.titled) else { return false }
+        return true
+    }
+
+    /// Re-open the chat window when the user clicks the Dock icon while no
+    /// windows are visible — standard macOS app behaviour.
+    func applicationShouldHandleReopen(_: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag {
+            showChatWindow()
+        }
+        return true
     }
 }
 

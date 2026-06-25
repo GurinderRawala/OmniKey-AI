@@ -45,7 +45,6 @@ struct ChatView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .frame(minWidth: 880, minHeight: 600)
         .onAppear {
             model.refreshSessions()
             model.fetchDefaultTaskTemplate()
@@ -1157,10 +1156,9 @@ struct ChatNewChatLandingView: View {
                 }
                 .padding(.horizontal, 44)
                 .frame(maxWidth: 680)
-                .frame(maxWidth: .infinity)
                 // Centre vertically when content is shorter than the view;
                 // scroll naturally when tiles overflow.
-                .frame(minHeight: geo.size.height, alignment: .center)
+                .frame(maxWidth: .infinity, minHeight: geo.size.height, alignment: .center)
                 .padding(.vertical, 36)
             }
         }
@@ -2680,6 +2678,19 @@ private struct MarkdownTableView: View {
     let rows: [[String]]
     @Environment(\.colorScheme) private var colorScheme
 
+    /// Pre-computed column layout. Building the table used to walk every
+    /// cell on every SwiftUI layout pass (O(rows × cols²)), which became
+    /// the dominant cost during live window resize — especially when the
+    /// chat window moved from a large external display to a smaller one.
+    /// Computing this once at init time keeps per-frame work constant.
+    private let layout: TableLayout
+
+    init(header: [String], rows: [[String]]) {
+        self.header = header
+        self.rows = rows
+        layout = TableLayout(header: header, rows: rows)
+    }
+
     var body: some View {
         // Wrap the table in the rounded shape *and* clip its contents
         // to it, so the header band's fill and the per-cell separators
@@ -2704,16 +2715,16 @@ private struct MarkdownTableView: View {
     }
 
     private func tableRow(_ cells: [String], isHeader: Bool, isLastRow: Bool) -> some View {
-        let lastColumnIndex = maxColumnCount - 1
+        let lastColumnIndex = layout.columnCount - 1
         return HStack(spacing: 0) {
-            ForEach(0 ..< maxColumnCount, id: \.self) { index in
+            ForEach(0 ..< layout.columnCount, id: \.self) { index in
                 Text(index < cells.count ? cells[index] : "")
                     .font(.system(size: 12, weight: isHeader ? .semibold : .regular))
                     .foregroundColor(
                         isHeader ? NordTheme.primaryText(colorScheme) : NordTheme.secondaryText(colorScheme)
                     )
                     .lineLimit(3)
-                    .frame(width: columnWidth(for: index), alignment: .leading)
+                    .frame(width: layout.widths[index], alignment: .leading)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 7)
                     .background(isHeader ? NordTheme.badgeFill(colorScheme) : Color.clear)
@@ -2740,14 +2751,32 @@ private struct MarkdownTableView: View {
         }
     }
 
-    private var maxColumnCount: Int {
-        max(header.count, rows.map(\.count).max() ?? 0)
-    }
+    /// Immutable layout descriptor — column count plus pre-computed widths
+    /// for each column. Computing widths once (instead of inside `body`)
+    /// keeps `MarkdownTableView` cheap to redraw during window resize.
+    private struct TableLayout {
+        let columnCount: Int
+        let widths: [CGFloat]
 
-    private func columnWidth(for index: Int) -> CGFloat {
-        let values = [header] + rows
-        let longest = values.compactMap { index < $0.count ? $0[index].count : nil }.max() ?? 8
-        return min(max(CGFloat(longest) * 7 + 24, 96), 220)
+        init(header: [String], rows: [[String]]) {
+            let count = max(header.count, rows.map(\.count).max() ?? 0)
+            columnCount = count
+            guard count > 0 else {
+                widths = []
+                return
+            }
+            let allRows = [header] + rows
+            var widths: [CGFloat] = []
+            widths.reserveCapacity(count)
+            for index in 0 ..< count {
+                var longest = 8
+                for row in allRows where index < row.count {
+                    if row[index].count > longest { longest = row[index].count }
+                }
+                widths.append(min(max(CGFloat(longest) * 7 + 24, 96), 220))
+            }
+            self.widths = widths
+        }
     }
 }
 
