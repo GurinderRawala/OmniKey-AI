@@ -87,8 +87,17 @@ OmniKey AI is a Yarn monorepo with three TypeScript workspaces (`api`, `cli`, `t
 ## License & Terms
 
 OmniKey AI is open-source software released under the [MIT License](./LICENSE).
-By installing or using the desktop app or CLI you also agree to the
-[Terms and Conditions](./TERMS.md). The software is provided **as-is, without
-warranty of any kind**; OmniKey and its contributors are not liable for any
-damages, data loss, third-party charges, or issues arising from AI-generated
-content or from use of the software.
+Use of any component is governed by the [Terms and Conditions](./TERMS.md):
+
+- **Desktop app (macOS menu bar / Windows tray)** — the first launch shows a
+  Terms & Conditions dialog you must accept before the app becomes usable.
+  Acceptance is remembered per terms revision; a materially updated `TERMS.md`
+  re-prompts on the next launch.
+- **CLI (`omnikey-cli`)** — the interactive `omnikey onboard` command handles
+  provider configuration, not terms acceptance. Installing or running the CLI
+  is treated as acceptance of the same Terms & Conditions.
+
+The software is provided **as-is, without warranty of any kind**; OmniKey and
+its contributors are not liable for any damages, data loss, third-party
+charges, or issues arising from AI-generated content or from use of the
+software.

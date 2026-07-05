@@ -137,7 +137,11 @@ namespace OmniKey.Windows
                 Close();
             };
 
-            AcceptButton = _acceptButton;
+            // Deliberately do NOT wire _acceptButton as AcceptButton — legal
+            // consent must be an explicit click on "I Accept", not a stray
+            // Enter keypress while focus happens to be on the scrollable
+            // terms box or the Decline button. Esc still maps to CancelButton
+            // (Decline & Quit), which is the safe default.
             CancelButton = _declineButton;
 
             Controls.AddRange(new Control[]
