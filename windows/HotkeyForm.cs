@@ -76,6 +76,13 @@ namespace OmniKey.Windows
 
         private async Task InitializeAuthAsync()
         {
+            // First-launch Terms & Conditions gate. Runs synchronously on
+            // the UI thread before any subscription / activation work so
+            // the user cannot use OmniKey without accepting the current
+            // terms. Declining terminates the process.
+            if (!TermsAcceptance.HasAcceptedCurrent && !ShowTermsForm())
+                return;
+
             if (ApiClient.IsSelfHosted)
             {
                 // Self-hosted backend issues a JWT without a subscription key.
@@ -101,6 +108,22 @@ namespace OmniKey.Windows
 
             // No key, or activation failed – show the license form
             ShowLicenseForm();
+        }
+
+        /// <summary>
+        /// Presents the modal Terms &amp; Conditions form. Returns true if
+        /// the user accepted (in which case <see cref="TermsAcceptance"/>
+        /// has already persisted the acceptance); false otherwise, in
+        /// which case the app exits.
+        /// </summary>
+        private bool ShowTermsForm()
+        {
+            using var form = new TermsForm();
+            var result = form.ShowDialog(this);
+            if (result == DialogResult.OK) return true;
+
+            Application.Exit();
+            return false;
         }
 
         private void ShowLicenseForm()

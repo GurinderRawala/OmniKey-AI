@@ -83,3 +83,12 @@ Use `@omnikeyai` (without the agent prefix) for plain Q&A in the context of your
 ## Developers
 
 OmniKey AI is a Yarn monorepo with three TypeScript workspaces (`api`, `cli`, `telegram`) plus native desktop clients in Swift (macOS) and C# (Windows). For setup, build/test workflows, and a tour of the main commands, see **[DEVELOPMENT.md](./DEVELOPMENT.md)**.
+
+## License & Terms
+
+OmniKey AI is open-source software released under the [MIT License](./LICENSE).
+By installing or using the desktop app or CLI you also agree to the
+[Terms and Conditions](./TERMS.md). The software is provided **as-is, without
+warranty of any kind**; OmniKey and its contributors are not liable for any
+damages, data loss, third-party charges, or issues arising from AI-generated
+content or from use of the software.

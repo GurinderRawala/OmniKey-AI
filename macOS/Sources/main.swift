@@ -12,6 +12,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     private var taskInstructionsWindowController: TaskInstructionsWindowController?
     private var agentThinkingWindowController: AgentThinkingWindowController?
     private var licenseWindowController: LicenseWindowController?
+    private var termsWindowController: TermsWindowController?
     private var manualWindowController: ManualWindowController?
     private var scheduledJobsWindowController: ScheduledJobsWindowController?
     private var scheduledJobsMenuItem: NSMenuItem?
@@ -103,6 +104,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
             object: nil
         )
 
+        // Terms & Conditions gate — must run before the subscription /
+        // hotkey / manual logic. If the user has already accepted the
+        // current version we fall straight through; otherwise the terms
+        // window blocks the rest of the launch flow until accepted (or
+        // the user quits by declining).
+        if TermsAcceptance.hasAcceptedCurrent {
+            beginSubscriptionFlow()
+        } else {
+            showTermsWindow { [weak self] in
+                self?.beginSubscriptionFlow()
+            }
+        }
+    }
+
+    /// Runs the existing subscription / license / manual gating. Extracted
+    /// from `applicationDidFinishLaunching` so it can be deferred behind
+    /// the first-launch Terms & Conditions acceptance.
+    private func beginSubscriptionFlow() {
         // Self-hosted: call /activate with an empty key to obtain a JWT
         // (the backend issues one without requiring a subscription key).
         // We still need the token for the agent WebSocket, so we cannot skip this.
@@ -144,6 +163,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
                 showLicenseWindow()
             }
         }
+    }
+
+    /// Presents the first-launch Terms & Conditions window. Invokes
+    /// `onAccept` on the main queue once the user accepts. Declining
+    /// closes the window and terminates the app inside the controller.
+    private func showTermsWindow(onAccept: @escaping () -> Void) {
+        if termsWindowController == nil {
+            termsWindowController = TermsWindowController(onAccept: { [weak self] in
+                // Release the controller so we don't hold on to the window
+                // for the rest of the process lifetime.
+                self?.termsWindowController = nil
+                onAccept()
+            })
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        termsWindowController?.showWindow(nil)
     }
 
     private func setupMenuBar() {
