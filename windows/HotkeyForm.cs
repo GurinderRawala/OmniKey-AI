@@ -111,16 +111,27 @@ namespace OmniKey.Windows
         }
 
         /// <summary>
-        /// Presents the modal Terms &amp; Conditions form. Returns true if
-        /// the user accepted (in which case <see cref="TermsAcceptance"/>
-        /// has already persisted the acceptance); false otherwise, in
-        /// which case the app exits.
+        /// Presents the modal Terms &amp; Conditions window. Uses the WPF
+        /// <see cref="Views.TermsWindow"/> so the packaged TERMS.md is
+        /// rendered by the same MdXaml-backed markdown pipeline as
+        /// ChatPage (headings, lists, inline formatting, links). Returns
+        /// true if the user accepted; false otherwise (in which case the
+        /// process exits).
         /// </summary>
         private bool ShowTermsForm()
         {
-            using var form = new TermsForm();
-            var result = form.ShowDialog(this);
-            if (result == DialogResult.OK) return true;
+            // Hop onto the WPF dispatcher so ShowDialog() is invoked on
+            // the correct thread — HotkeyForm runs on the same STA thread
+            // as the WPF app, but the dispatcher.Invoke roundtrip keeps
+            // the modality guarantees consistent with the rest of the
+            // WPF-driven UI (see Program.Main / ShowMainWindow).
+            bool? accepted = Program.WpfApp.Dispatcher.Invoke(() =>
+            {
+                var window = new Views.TermsWindow();
+                return window.ShowDialog();
+            });
+
+            if (accepted == true) return true;
 
             Application.Exit();
             return false;

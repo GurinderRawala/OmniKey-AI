@@ -53,12 +53,12 @@ struct TermsView: View {
                     .overlay(NordTheme.secondaryText(colorScheme).opacity(0.15))
 
                 // ── Body ──────────────────────────────────────────────
+                // Render TERMS.md via the same markdown pipeline used by
+                // the chat transcript so headings, lists, bold/italic, and
+                // links match the rest of the app. `baseFontSize: 12`
+                // keeps the terms visually calmer than an assistant reply.
                 ScrollView {
-                    Text(TermsContent.text)
-                        .font(.system(size: 12, design: .default))
-                        .foregroundColor(NordTheme.primaryText(colorScheme))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .textSelection(.enabled)
+                    ChatMarkdownView(text: TermsContent.text, baseFontSize: 12)
                         .padding(20)
                 }
                 .background(
@@ -132,8 +132,12 @@ struct TermsView: View {
                 .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.5 : 0.12), radius: 18, x: 0, y: 14)
             )
         }
-        .frame(minWidth: 720, minHeight: 560)
-        .padding(.bottom, 20)
+        // Room above and below the card so the acceptance dialog doesn't
+        // feel cramped against the window chrome — matches the standard
+        // macOS system-dialog top/bottom margin.
+        .frame(minWidth: 720, minHeight: 620)
+        .padding(.top, 24)
+        .padding(.bottom, 24)
     }
 
     private func accept() {
