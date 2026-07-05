@@ -261,17 +261,18 @@ struct ChatSidebarView: View {
                             .help(isCollapsed ? "Expand \(name)" : "Collapse \(name)")
 
                             if !isCollapsed {
-                                ForEach(sessions) { session in
+                                ForEach(sessions.map { ChatSessionRowItem(session: $0, activeSessionId: model.activeSessionId) }) { item in
                                     ChatSessionRowView(
-                                        session: session,
-                                        isActive: session.id == model.activeSessionId,
-                                        onTap: { model.openSession(session) },
-                                        onDelete: { model.deleteSession(session) }
+                                        session: item.session,
+                                        isActive: item.isActive,
+                                        onTap: { model.openSession(item.session) },
+                                        onDelete: { model.deleteSession(item.session) }
                                     )
-                                    // Pin each row's identity to its session id
-                                    // so the active highlight tracks the session
-                                    // and never lingers on a recycled cell.
-                                    .id("row-\(session.id)")
+                                    // Include the active flag in the identity so
+                                    // SwiftUI recreates the row that gained or
+                                    // lost selection instead of reusing a stale
+                                    // button/background drawing from a prior row.
+                                    .id("row-\(item.id)")
                                 }
                             }
                         }
@@ -476,6 +477,18 @@ private struct ChatSidebarSearchEmptyState: View {
     }
 }
 
+/// Stable view-data for one sidebar session row. Keeping the active
+/// flag in the row identity fixes a SwiftUI reuse edge case where the
+/// conversation changed after selecting another chat but the sidebar
+/// highlight remained visually attached to the previously-selected row.
+private struct ChatSessionRowItem: Identifiable, Equatable {
+    let session: AgentSessionInfo
+    let activeSessionId: String?
+
+    var id: String { "\(session.id)-active-\(activeSessionId == session.id)" }
+    var isActive: Bool { session.id == activeSessionId }
+}
+
 private struct SidebarIconButton: View {
     let icon: String
     let help: String
@@ -598,12 +611,13 @@ struct ChatSidebarRailView: View {
                         .help("New chat (unsaved)")
                     }
 
-                    ForEach(model.sessions.prefix(12)) { session in
+                    ForEach(model.sessions.prefix(12).map { ChatSessionRowItem(session: $0, activeSessionId: model.activeSessionId) }) { item in
+                        let session = item.session
                         Button(action: { model.openSession(session) }) {
                             ZStack {
                                 Circle()
                                     .fill(
-                                        session.id == model.activeSessionId
+                                        item.isActive
                                             ? NordTheme.accent(colorScheme).opacity(0.18)
                                             : NordTheme.badgeFill(colorScheme)
                                     )
@@ -611,7 +625,7 @@ struct ChatSidebarRailView: View {
                                     .overlay(
                                         Circle()
                                             .strokeBorder(
-                                                session.id == model.activeSessionId
+                                                item.isActive
                                                     ? NordTheme.accent(colorScheme).opacity(0.40)
                                                     : NordTheme.border(colorScheme),
                                                 lineWidth: 1
@@ -620,14 +634,14 @@ struct ChatSidebarRailView: View {
                                 Text(String(session.title.prefix(1)).uppercased())
                                     .font(.system(size: 12, weight: .semibold))
                                     .foregroundColor(
-                                        session.id == model.activeSessionId
+                                        item.isActive
                                             ? NordTheme.accent(colorScheme)
                                             : NordTheme.secondaryText(colorScheme)
                                     )
                             }
                         }
                         .buttonStyle(.plain)
-                        .id("rail-\(session.id)")
+                        .id("rail-\(item.id)")
                         .help(session.title)
                     }
                 }
@@ -1304,7 +1318,7 @@ private struct LandingInputComposer: View {
             // one connected control.
             HStack(spacing: 8) {
                 // Task instruction dropdown
-                if !model.availableTaskTemplates.isEmpty {
+                if !model.availableTaskTemplates.isEmpty || !model.canChangeSessionSetup {
                     Menu {
                         ForEach(model.availableTaskTemplates) { tpl in
                             Button {
@@ -1323,16 +1337,18 @@ private struct LandingInputComposer: View {
                         }
                     } label: {
                         ComposerPillLabel(
-                            icon: "text.badge.star",
-                            title: model.defaultTaskTemplate?.heading ?? "No instruction",
-                            isActive: model.defaultTaskTemplate != nil,
+                            icon: model.canChangeSessionSetup ? "text.badge.star" : "lock.fill",
+                            title: model.displayedTaskInstructionTitle,
+                            isActive: model.hasDisplayedTaskInstruction,
                             activeColor: NordTheme.accent(colorScheme),
-                            colorScheme: colorScheme
+                            colorScheme: colorScheme,
+                            showsChevron: model.canChangeSessionSetup
                         )
                     }
                     .menuStyle(.borderlessButton)
                     .fixedSize()
-                    .disabled(model.isUpdatingDefaultTaskTemplate)
+                    .disabled(model.isUpdatingDefaultTaskTemplate || !model.canChangeSessionSetup)
+                    .help(model.canChangeSessionSetup ? "Choose task instructions" : "Task instructions are locked after a session starts")
                 } else {
                     Button {
                         AppDelegate.shared?.showTaskInstructionsWindow()
@@ -1347,11 +1363,14 @@ private struct LandingInputComposer: View {
                         )
                     }
                     .buttonStyle(.plain)
+                    .disabled(!model.canChangeSessionSetup)
+                    .help(model.canChangeSessionSetup ? "Add instruction" : "Task instructions are locked after a session starts")
                 }
 
                 // Project path / group dropdown
                 Menu {
                     Button {
+                        guard model.canChangeSessionSetup else { return }
                         model.selectedGroup = nil
                     } label: {
                         if model.selectedGroup == nil {
@@ -1369,6 +1388,7 @@ private struct LandingInputComposer: View {
                         Divider()
                         ForEach(distinctGroups) { group in
                             Button {
+                                guard model.canChangeSessionSetup else { return }
                                 model.selectedGroup = group
                             } label: {
                                 if model.selectedGroup?.groupName == group.groupName {
@@ -1381,15 +1401,18 @@ private struct LandingInputComposer: View {
                     }
                 } label: {
                     ComposerPillLabel(
-                        icon: "folder",
-                        title: model.selectedGroup?.groupName ?? "Select project",
-                        isActive: model.selectedGroup != nil,
+                        icon: model.canChangeSessionSetup ? "folder" : "lock.fill",
+                        title: model.displayedProjectName,
+                        isActive: model.hasDisplayedProject,
                         activeColor: NordTheme.accentGreen(colorScheme),
-                        colorScheme: colorScheme
+                        colorScheme: colorScheme,
+                        showsChevron: model.canChangeSessionSetup
                     )
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
+                .disabled(!model.canChangeSessionSetup)
+                .help(model.canChangeSessionSetup ? "Choose project" : "Project is locked after a session starts")
 
                 Spacer()
 

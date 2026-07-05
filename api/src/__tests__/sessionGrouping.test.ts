@@ -29,11 +29,17 @@ vi.mock('../ai-client', () => ({
 }));
 
 vi.mock('../models/agentSession', () => ({
-  AgentSession: { findAll: vi.fn(), findOne: vi.fn(), update: vi.fn(), count: vi.fn() },
+  AgentSession: {
+    findAll: vi.fn(),
+    findOne: vi.fn(),
+    update: vi.fn(),
+    count: vi.fn(),
+    destroy: vi.fn(),
+  },
 }));
 
 vi.mock('../models/subscription', () => ({
-  Subscription: { findAll: vi.fn() },
+  Subscription: { findAll: vi.fn(), findByPk: vi.fn() },
 }));
 
 vi.mock('../config', () => ({
@@ -653,93 +659,6 @@ describe('runWithConcurrency', () => {
 });
 
 // ---------------------------------------------------------------------------
-// refreshGroupDescription — skip-if-idle gating
-// ---------------------------------------------------------------------------
-describe('refreshGroupDescription', () => {
-  const { refreshGroupDescription, lastRefreshedAt } = __testing__;
-
-  // Reach into the same mocks we set up at the top of this file.
-  async function getMocks() {
-    const aiClientMod = await import('../ai-client');
-    const agentSessionMod = await import('../models/agentSession');
-    return {
-      complete: (aiClientMod as unknown as { aiClient: { complete: ReturnType<typeof vi.fn> } })
-        .aiClient.complete,
-      findAll: (
-        agentSessionMod as unknown as { AgentSession: { findAll: ReturnType<typeof vi.fn> } }
-      ).AgentSession.findAll,
-      findOne: (
-        agentSessionMod as unknown as { AgentSession: { findOne: ReturnType<typeof vi.fn> } }
-      ).AgentSession.findOne,
-      update: (agentSessionMod as unknown as { AgentSession: { update: ReturnType<typeof vi.fn> } })
-        .AgentSession.update,
-    };
-  }
-
-  it('returns silently when the group has no sessions', async () => {
-    const { findOne, complete, update } = await getMocks();
-    findOne.mockResolvedValueOnce(null);
-    complete.mockClear();
-    update.mockClear();
-
-    await refreshGroupDescription('sub-1', 'Empty Group', 'old description');
-
-    expect(complete).not.toHaveBeenCalled();
-    expect(update).not.toHaveBeenCalled();
-  });
-
-  it('skips the LLM when there has been no activity since last refresh', async () => {
-    const { findOne, findAll, complete, update } = await getMocks();
-    lastRefreshedAt.clear();
-
-    const lastActive = new Date('2024-01-01T00:00:00Z');
-    findOne.mockResolvedValueOnce({ lastActiveAt: lastActive });
-    // Seed the in-memory marker as if we refreshed AFTER the newest activity.
-    lastRefreshedAt.set('sub-1::My App', new Date('2024-01-02T00:00:00Z'));
-
-    findAll.mockClear();
-    complete.mockClear();
-    update.mockClear();
-
-    await refreshGroupDescription('sub-1', 'My App', 'desc');
-
-    // findOne was called to get lastActiveAt; nothing else should happen.
-    expect(findAll).not.toHaveBeenCalled();
-    expect(complete).not.toHaveBeenCalled();
-    expect(update).not.toHaveBeenCalled();
-  });
-
-  it('runs the LLM and updates when a session has been active since last refresh', async () => {
-    const { findOne, findAll, complete, update } = await getMocks();
-    lastRefreshedAt.clear();
-
-    const lastActive = new Date('2024-02-01T00:00:00Z');
-    findOne.mockResolvedValueOnce({ lastActiveAt: lastActive });
-    // No prior refresh marker → must run.
-    findAll.mockResolvedValueOnce([
-      {
-        historyJson: JSON.stringify([
-          { role: 'user', content: '<user_input>fix /Users/me/MyApp/index.ts</user_input>' },
-        ]),
-      },
-    ]);
-    complete.mockResolvedValueOnce({
-      content: JSON.stringify({
-        groupDescription:
-          'Project root: /Users/me/MyApp. Purpose: x. Primary language: TypeScript.',
-      }),
-    });
-    update.mockClear();
-
-    await refreshGroupDescription('sub-1', 'My App', 'old desc');
-
-    expect(complete).toHaveBeenCalledTimes(1);
-    expect(update).toHaveBeenCalledTimes(1);
-    expect(lastRefreshedAt.get('sub-1::My App')).toBeInstanceOf(Date);
-  });
-});
-
-// ---------------------------------------------------------------------------
 // truncateOnSentenceBoundary
 // ---------------------------------------------------------------------------
 describe('truncateOnSentenceBoundary', () => {
@@ -770,171 +689,6 @@ describe('truncateOnSentenceBoundary', () => {
     const input = 'no terminator here just a long string of words without dots';
     const got = truncateOnSentenceBoundary(input, 25);
     expect(got.endsWith('.')).toBe(true);
-  });
-});
-// ---------------------------------------------------------------------------
-// refreshGroupDescription — group splitting (one project = one group)
-// ---------------------------------------------------------------------------
-describe('refreshGroupDescription split behaviour', () => {
-  const { refreshGroupDescription, lastRefreshedAt } = __testing__;
-
-  async function getMocks() {
-    const aiClientMod = await import('../ai-client');
-    const agentSessionMod = await import('../models/agentSession');
-    return {
-      complete: (aiClientMod as unknown as { aiClient: { complete: ReturnType<typeof vi.fn> } })
-        .aiClient.complete,
-      findAll: (
-        agentSessionMod as unknown as { AgentSession: { findAll: ReturnType<typeof vi.fn> } }
-      ).AgentSession.findAll,
-      findOne: (
-        agentSessionMod as unknown as { AgentSession: { findOne: ReturnType<typeof vi.fn> } }
-      ).AgentSession.findOne,
-      update: (agentSessionMod as unknown as { AgentSession: { update: ReturnType<typeof vi.fn> } })
-        .AgentSession.update,
-    };
-  }
-
-  function userTurn(content: string) {
-    return { role: 'user', content: `<user_input>${content}</user_input>` };
-  }
-
-  it('demotes sessions whose dominant root differs from the group dominant root', async () => {
-    const { findOne, findAll, complete, update } = await getMocks();
-    lastRefreshedAt.clear();
-    findOne.mockResolvedValueOnce({ lastActiveAt: new Date('2030-01-02T00:00:00Z') });
-    findAll.mockResolvedValueOnce([
-      // 3 sessions belong to /Users/me/AppA — the dominant root.
-      {
-        id: 'a-1',
-        historyJson: JSON.stringify([userTurn('edit /Users/me/AppA/src/x.ts')]),
-      },
-      {
-        id: 'a-2',
-        historyJson: JSON.stringify([userTurn('fix /Users/me/AppA/y.ts')]),
-      },
-      {
-        id: 'a-3',
-        historyJson: JSON.stringify([userTurn('check /Users/me/AppA/z.ts')]),
-      },
-      // 1 polluting session in /Users/me/AppB — must be demoted.
-      {
-        id: 'b-1',
-        historyJson: JSON.stringify([userTurn('edit /Users/me/AppB/main.ts')]),
-      },
-    ]);
-    complete.mockResolvedValueOnce({
-      content: JSON.stringify({
-        groupDescription: 'Project root: /Users/me/AppA. Purpose: x. Primary language: TypeScript.',
-      }),
-    });
-    update.mockClear();
-
-    await refreshGroupDescription('sub-1', 'My App', 'old desc');
-
-    // First update call: clears groupName for the straggler 'b-1'.
-    expect(update).toHaveBeenCalledTimes(2);
-    const firstUpdate = update.mock.calls[0];
-    expect(firstUpdate[0]).toEqual({ groupName: null, groupDescription: null });
-    // The where clause should target only the straggler id.
-    const stragglerWhere = firstUpdate[1].where;
-    const idClause = stragglerWhere.id;
-    const ids = idClause[Object.getOwnPropertySymbols(idClause)[0]] ?? idClause['in'];
-    expect(ids).toEqual(['b-1']);
-
-    // Second update: writes the new description for the surviving group.
-    const secondUpdate = update.mock.calls[1];
-    expect(secondUpdate[0].groupDescription).toContain('/Users/me/AppA');
-    expect(secondUpdate[0].groupDescription).not.toContain('/Users/me/AppB');
-  });
-
-  it('does NOT demote sessions when they all share the same dominant root', async () => {
-    const { findOne, findAll, complete, update } = await getMocks();
-    lastRefreshedAt.clear();
-    findOne.mockResolvedValueOnce({ lastActiveAt: new Date('2030-02-02T00:00:00Z') });
-    findAll.mockResolvedValueOnce([
-      {
-        id: 'a-1',
-        historyJson: JSON.stringify([userTurn('edit /Users/me/AppA/src/x.ts')]),
-      },
-      {
-        id: 'a-2',
-        historyJson: JSON.stringify([userTurn('fix /Users/me/AppA/y.ts')]),
-      },
-    ]);
-    complete.mockResolvedValueOnce({
-      content: JSON.stringify({
-        groupDescription: 'Project root: /Users/me/AppA. Purpose: x. Primary language: TypeScript.',
-      }),
-    });
-    update.mockClear();
-
-    await refreshGroupDescription('sub-1', 'AppA', 'old desc');
-
-    // Only the description-update call should fire — no demotion update.
-    expect(update).toHaveBeenCalledTimes(1);
-    const onlyCall = update.mock.calls[0];
-    expect(onlyCall[0]).toHaveProperty('groupDescription');
-    expect(onlyCall[0]).not.toHaveProperty('groupName');
-  });
-});
-
-describe('refreshGroupDescription ancestor/descendant collapse', () => {
-  const { refreshGroupDescription, lastRefreshedAt } = __testing__;
-
-  async function getMocks() {
-    const aiClientMod = await import('../ai-client');
-    const agentSessionMod = await import('../models/agentSession');
-    return {
-      complete: (aiClientMod as unknown as { aiClient: { complete: ReturnType<typeof vi.fn> } })
-        .aiClient.complete,
-      findAll: (
-        agentSessionMod as unknown as { AgentSession: { findAll: ReturnType<typeof vi.fn> } }
-      ).AgentSession.findAll,
-      findOne: (
-        agentSessionMod as unknown as { AgentSession: { findOne: ReturnType<typeof vi.fn> } }
-      ).AgentSession.findOne,
-      update: (agentSessionMod as unknown as { AgentSession: { update: ReturnType<typeof vi.fn> } })
-        .AgentSession.update,
-    };
-  }
-
-  function userTurn(content: string) {
-    return { role: 'user', content: `<user_input>${content}</user_input>` };
-  }
-
-  it('does NOT split when sessions reference the project at different depths', async () => {
-    // Two sessions in the same project — one only mentions files at the
-    // repo root, the other only mentions files inside the api/ subdir.
-    // Before the ancestor/descendant collapse this group used to get split
-    // into two on every tick, demoting half the sessions for no reason.
-    const { findOne, findAll, complete, update } = await getMocks();
-    lastRefreshedAt.clear();
-    findOne.mockResolvedValueOnce({ lastActiveAt: new Date('2030-03-03T00:00:00Z') });
-    findAll.mockResolvedValueOnce([
-      {
-        id: 'a-1',
-        historyJson: JSON.stringify([userTurn('edit /Users/me/Repo/README.md')]),
-      },
-      {
-        id: 'a-2',
-        historyJson: JSON.stringify([userTurn('fix /Users/me/Repo/api/src/agent/x.ts')]),
-      },
-    ]);
-    complete.mockResolvedValueOnce({
-      content: JSON.stringify({
-        groupDescription: 'Project root: /Users/me/Repo. Purpose: x. Primary language: TypeScript.',
-      }),
-    });
-    update.mockClear();
-
-    await refreshGroupDescription('sub-1', 'Repo', 'old desc');
-
-    // Only the description-update call should fire — no demotion update.
-    expect(update).toHaveBeenCalledTimes(1);
-    const onlyCall = update.mock.calls[0];
-    expect(onlyCall[0]).toHaveProperty('groupDescription');
-    expect(onlyCall[0]).not.toHaveProperty('groupName');
   });
 });
 
@@ -1060,58 +814,6 @@ describe('CodeRabbit follow-ups', () => {
       'and /Users/me/Documents/projects/org/monorepo/packages/api/src/util.ts',
     ]);
     expect(got).toBe('/Users/me/Documents/projects/org/monorepo/packages/api');
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Per-session summaries + buildProjectContext — the new architecture where
-// each session carries its own 1-2 sentence summary and the agent server
-// assembles the <project_context> block from the group's stored project
-// root + the most recent N session summaries at injection time. This
-// replaces the previous behaviour where every new session's first turn
-// rewrote the group's single rolling description.
-// ---------------------------------------------------------------------------
-describe('generateSessionSummary', () => {
-  const { generateSessionSummary } = __testing__;
-
-  async function getMocks() {
-    const aiClientMod = await import('../ai-client');
-    return {
-      complete: (aiClientMod as unknown as { aiClient: { complete: ReturnType<typeof vi.fn> } })
-        .aiClient.complete,
-    };
-  }
-
-  it('returns null when no user inputs are provided', async () => {
-    const { complete } = await getMocks();
-    complete.mockClear();
-    expect(await generateSessionSummary([])).toBeNull();
-    expect(complete).not.toHaveBeenCalled();
-  });
-
-  it('returns the LLM-produced summary on the happy path', async () => {
-    const { complete } = await getMocks();
-    complete.mockResolvedValueOnce({
-      content: JSON.stringify({ summary: 'Investigated a sqlite locking bug in the worker.' }),
-    });
-    const got = await generateSessionSummary(['edit /Users/me/Repo/api/src/worker.ts']);
-    expect(got).toBe('Investigated a sqlite locking bug in the worker.');
-  });
-
-  it('truncates absurdly long summaries on a sentence boundary at ~320 chars', async () => {
-    const { complete } = await getMocks();
-    const huge = 'A'.repeat(500) + '. Second sentence.';
-    complete.mockResolvedValueOnce({ content: JSON.stringify({ summary: huge }) });
-    const got = (await generateSessionSummary(['anything'])) ?? '';
-    // truncateOnSentenceBoundary may append a synthetic period to land on
-    // a sentence boundary, taking length up to maxLen + 1.
-    expect(got.length).toBeLessThanOrEqual(321);
-  });
-
-  it('returns null when the LLM throws or returns garbage', async () => {
-    const { complete } = await getMocks();
-    complete.mockResolvedValueOnce({ content: 'not json at all' });
-    expect(await generateSessionSummary(['hello'])).toBeNull();
   });
 });
 
@@ -1247,167 +949,6 @@ describe('buildProjectContext', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Session-end driven summary + group description from summaries + freshness
-// timestamp. Pins the architecture:
-//
-//   * summariseSession() is the public entry point invoked from the agent
-//     server's WebSocket close handler. No in-memory marker required —
-//     the caller already knows the session ended.
-//   * generateGroupDescriptionFromSummaries() is the cron's only LLM call
-//     for descriptions. It sees ONLY per-session summaries + the existing
-//     description, never raw session history.
-//   * buildProjectContext() emits a "Group description last updated: ..."
-//     line so the agent can decide how much to trust the project meta.
-// ---------------------------------------------------------------------------
-describe('summariseSession (session-end hook)', () => {
-  const { summariseSession } = __testing__;
-
-  async function getMocks() {
-    const aiClientMod = await import('../ai-client');
-    const agentSessionMod = await import('../models/agentSession');
-    return {
-      complete: (aiClientMod as unknown as { aiClient: { complete: ReturnType<typeof vi.fn> } })
-        .aiClient.complete,
-      findOne: (
-        agentSessionMod as unknown as { AgentSession: { findOne: ReturnType<typeof vi.fn> } }
-      ).AgentSession.findOne,
-      update: (agentSessionMod as unknown as { AgentSession: { update: ReturnType<typeof vi.fn> } })
-        .AgentSession.update,
-    };
-  }
-
-  function userTurn(content: string) {
-    return { role: 'user', content: `<user_input>${content}</user_input>` };
-  }
-
-  it('writes a session summary when the session has real user inputs', async () => {
-    const { complete, findOne, update } = await getMocks();
-    complete.mockClear();
-    update.mockClear();
-
-    findOne.mockResolvedValueOnce({
-      id: 'sess-1',
-      historyJson: JSON.stringify([userTurn('refactored the agent tool loop')]),
-    });
-    complete.mockResolvedValueOnce({
-      content: JSON.stringify({ summary: 'Refactored the agent tool loop.' }),
-    });
-
-    await summariseSession('sess-1', 'sub-1');
-
-    expect(complete).toHaveBeenCalledTimes(1);
-    expect(update).toHaveBeenCalledWith(
-      { sessionSummary: 'Refactored the agent tool loop.' },
-      { where: { id: 'sess-1' } },
-    );
-  });
-
-  it('bails silently when the session has only terminal output / no real user inputs', async () => {
-    const { complete, findOne, update } = await getMocks();
-    complete.mockClear();
-    update.mockClear();
-
-    findOne.mockResolvedValueOnce({
-      id: 'sess-2',
-      historyJson: JSON.stringify([{ role: 'user', content: 'TERMINAL OUTPUT:\nfoo bar' }]),
-    });
-
-    await summariseSession('sess-2', 'sub-1');
-
-    expect(complete).not.toHaveBeenCalled();
-    expect(update).not.toHaveBeenCalled();
-  });
-
-  it('does nothing when the session does not exist', async () => {
-    const { complete, findOne, update } = await getMocks();
-    complete.mockClear();
-    update.mockClear();
-
-    findOne.mockResolvedValueOnce(null);
-    await summariseSession('missing-session', 'sub-1');
-
-    expect(complete).not.toHaveBeenCalled();
-    expect(update).not.toHaveBeenCalled();
-  });
-});
-
-describe('generateGroupDescriptionFromSummaries (cron LLM call)', () => {
-  const { generateGroupDescriptionFromSummaries } = __testing__;
-
-  async function getMocks() {
-    const aiClientMod = await import('../ai-client');
-    return {
-      complete: (aiClientMod as unknown as { aiClient: { complete: ReturnType<typeof vi.fn> } })
-        .aiClient.complete,
-    };
-  }
-
-  it('returns null when there are no summaries AND no existing description', async () => {
-    const { complete } = await getMocks();
-    complete.mockClear();
-    const got = await generateGroupDescriptionFromSummaries('My App', '/Users/me/MyApp', [], null);
-    expect(got).toBeNull();
-    expect(complete).not.toHaveBeenCalled();
-  });
-
-  it('returns a description built only from summaries, never from raw history', async () => {
-    const { complete } = await getMocks();
-    complete.mockClear();
-    complete.mockResolvedValueOnce({
-      content: JSON.stringify({
-        groupDescription:
-          'Project root: /Users/me/MyApp. Purpose: ship a chat feature. Primary language: TypeScript. Recent work touched the message timestamps and search.',
-      }),
-    });
-
-    const got = await generateGroupDescriptionFromSummaries(
-      'My App',
-      '/Users/me/MyApp',
-      [
-        {
-          summary: 'Refactored the chat scroll behaviour.',
-          lastActiveAt: new Date('2030-01-02T00:00:00Z'),
-        },
-        {
-          summary: 'Added timestamps to messages.',
-          lastActiveAt: new Date('2030-01-01T00:00:00Z'),
-        },
-      ],
-      'Project root: /Users/me/MyApp. Purpose: ship a chat feature. Primary language: TypeScript.',
-    );
-
-    expect(got).not.toBeNull();
-    expect(got).toContain('/Users/me/MyApp');
-    // The function should pass the summaries into the prompt. We confirm by
-    // looking at the rendered prompt (second message arg).
-    const promptUser = complete.mock.calls[0][1][1].content as string;
-    expect(promptUser).toContain('Refactored the chat scroll behaviour.');
-    expect(promptUser).toContain('Added timestamps to messages.');
-  });
-
-  it('rewrites a hallucinated Project root: path back to the deterministic dominantRoot', async () => {
-    const { complete } = await getMocks();
-    complete.mockClear();
-    complete.mockResolvedValueOnce({
-      content: JSON.stringify({
-        groupDescription:
-          'Project root: /Users/me/SomethingElse. Purpose: x. Primary language: TypeScript.',
-      }),
-    });
-
-    const got = await generateGroupDescriptionFromSummaries(
-      'My App',
-      '/Users/me/MyApp',
-      [{ summary: 'Did stuff.', lastActiveAt: new Date('2030-01-02T00:00:00Z') }],
-      null,
-    );
-
-    expect(got).toContain('/Users/me/MyApp');
-    expect(got).not.toContain('/Users/me/SomethingElse');
-  });
-});
-
 describe('buildProjectContext: Group description last updated', () => {
   const { buildProjectContext } = __testing__;
 
@@ -1449,5 +990,227 @@ describe('buildProjectContext: Group description last updated', () => {
     const got = await buildProjectContext('sub-1', 'Legacy Group', null, 'current-session');
     expect(got!.text).toContain('Group description last updated: (unknown');
     expect(got!.groupDescriptionUpdatedAt).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// assign_session_groups tool handler — the grouping agent's single write path.
+// The safety invariants (never move a grouped/locked session, only touch
+// presented sessions) live in the handler, not the prompt, so we pin them here.
+// ---------------------------------------------------------------------------
+describe('assign_session_groups handler', () => {
+  const { createAssignSessionGroupsHandler } = __testing__;
+  const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as never;
+
+  async function getMocks() {
+    const agentSessionMod = await import('../models/agentSession');
+    const M = agentSessionMod as unknown as {
+      AgentSession: {
+        findOne: ReturnType<typeof vi.fn>;
+        update: ReturnType<typeof vi.fn>;
+      };
+    };
+    return { findOne: M.AgentSession.findOne, update: M.AgentSession.update };
+  }
+
+  it('assigns an ungrouped, unlocked session and records its summary', async () => {
+    const { findOne, update } = await getMocks();
+    findOne.mockReset();
+    update.mockReset().mockResolvedValue([1]);
+    findOne.mockResolvedValueOnce({ id: 's1', groupName: null, groupLocked: false });
+
+    const handler = createAssignSessionGroupsHandler({
+      subscriptionId: 'sub-1',
+      allowedSessionIds: new Set(['s1']),
+      existingGroupNames: new Set(),
+    });
+
+    await handler(
+      {
+        groups: [{ groupName: 'My App', projectRoot: '/Users/me/MyApp', description: 'A cool app.' }],
+        sessions: [{ sessionId: 's1', groupName: 'My App', summary: 'Did a thing.' }],
+      },
+      log,
+    );
+
+    // Session assigned + summarised.
+    expect(update).toHaveBeenCalledWith(
+      { groupName: 'My App', sessionSummary: 'Did a thing.' },
+      { where: { id: 's1' } },
+    );
+    // Group description written with the verified root prefixed.
+    const descCall = update.mock.calls.find(
+      (c) => c[1]?.where?.groupName === 'My App' && c[0]?.groupDescription,
+    );
+    expect(descCall).toBeTruthy();
+    expect(descCall![0].groupDescription).toBe('Project root: /Users/me/MyApp. A cool app.');
+  });
+
+  it('never moves an already-grouped session, but still refreshes its summary', async () => {
+    const { findOne, update } = await getMocks();
+    findOne.mockReset();
+    update.mockReset().mockResolvedValue([1]);
+    findOne.mockResolvedValueOnce({ id: 's2', groupName: 'Existing', groupLocked: false });
+
+    const handler = createAssignSessionGroupsHandler({
+      subscriptionId: 'sub-1',
+      allowedSessionIds: new Set(['s2']),
+      existingGroupNames: new Set(['Existing']),
+    });
+
+    await handler(
+      { sessions: [{ sessionId: 's2', groupName: 'Different', summary: 'New summary.' }] },
+      log,
+    );
+
+    // No groupName write; only the summary was updated.
+    const groupWrite = update.mock.calls.find((c) => 'groupName' in (c[0] ?? {}));
+    expect(groupWrite).toBeUndefined();
+    expect(update).toHaveBeenCalledWith(
+      { sessionSummary: 'New summary.' },
+      { where: { id: 's2' } },
+    );
+  });
+
+  it('never assigns a user-locked session to a group', async () => {
+    const { findOne, update } = await getMocks();
+    findOne.mockReset();
+    update.mockReset().mockResolvedValue([1]);
+    findOne.mockResolvedValueOnce({ id: 's3', groupName: null, groupLocked: true });
+
+    const handler = createAssignSessionGroupsHandler({
+      subscriptionId: 'sub-1',
+      allowedSessionIds: new Set(['s3']),
+      existingGroupNames: new Set(),
+    });
+
+    await handler({ sessions: [{ sessionId: 's3', groupName: 'Whatever' }] }, log);
+
+    const groupWrite = update.mock.calls.find((c) => 'groupName' in (c[0] ?? {}));
+    expect(groupWrite).toBeUndefined();
+  });
+
+  it('ignores sessions that were not presented to the agent', async () => {
+    const { findOne, update } = await getMocks();
+    findOne.mockReset();
+    update.mockReset().mockResolvedValue([1]);
+
+    const handler = createAssignSessionGroupsHandler({
+      subscriptionId: 'sub-1',
+      allowedSessionIds: new Set(['s1']),
+      existingGroupNames: new Set(),
+    });
+
+    await handler({ sessions: [{ sessionId: 'not-allowed', groupName: 'X' }] }, log);
+
+    expect(findOne).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('does not write a description for a group with no members and unknown name', async () => {
+    const { findOne, update } = await getMocks();
+    findOne.mockReset();
+    update.mockReset().mockResolvedValue([1]);
+
+    const handler = createAssignSessionGroupsHandler({
+      subscriptionId: 'sub-1',
+      allowedSessionIds: new Set(),
+      existingGroupNames: new Set(),
+    });
+
+    await handler(
+      { groups: [{ groupName: 'Ghost', projectRoot: null, description: 'nobody.' }], sessions: [] },
+      log,
+    );
+
+    expect(update).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isCatchAllGroupName — reject generic buckets so sessions are left ungrouped
+// instead of being dumped into "Other"/"General"/etc.
+// ---------------------------------------------------------------------------
+describe('isCatchAllGroupName', () => {
+  const { isCatchAllGroupName } = __testing__;
+
+  it('flags generic catch-all names (case/format insensitive)', () => {
+    for (const name of [
+      'Other',
+      'other',
+      'Other Projects',
+      'Misc',
+      'Miscellaneous',
+      'General',
+      'General Chat',
+      'Uncategorized',
+      'Uncategorised',
+      'Various',
+      'Ungrouped',
+      'misc-scripts',
+    ]) {
+      expect(isCatchAllGroupName(name), name).toBe(true);
+    }
+  });
+
+  it('does NOT flag real project-derived names', () => {
+    for (const name of ['Grafana', 'OmniKey Mac App', 'CodeRabbit Mono', 'Bhabi Ads', 'My App']) {
+      expect(isCatchAllGroupName(name), name).toBe(false);
+    }
+  });
+
+  it('handles empty/nullish input', () => {
+    expect(isCatchAllGroupName('')).toBe(false);
+    expect(isCatchAllGroupName(null)).toBe(false);
+    expect(isCatchAllGroupName(undefined)).toBe(false);
+  });
+});
+
+describe('assign_session_groups handler — catch-all rejection', () => {
+  const { createAssignSessionGroupsHandler } = __testing__;
+  const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as never;
+
+  async function getMocks() {
+    const agentSessionMod = await import('../models/agentSession');
+    const M = agentSessionMod as unknown as {
+      AgentSession: {
+        findOne: ReturnType<typeof vi.fn>;
+        update: ReturnType<typeof vi.fn>;
+      };
+    };
+    return { findOne: M.AgentSession.findOne, update: M.AgentSession.update };
+  }
+
+  it('leaves a session ungrouped when the agent picks a catch-all group name', async () => {
+    const { findOne, update } = await getMocks();
+    findOne.mockReset();
+    update.mockReset().mockResolvedValue([1]);
+    findOne.mockResolvedValueOnce({ id: 's1', groupName: null, groupLocked: false });
+
+    const handler = createAssignSessionGroupsHandler({
+      subscriptionId: 'sub-1',
+      allowedSessionIds: new Set(['s1']),
+      existingGroupNames: new Set(),
+    });
+
+    await handler(
+      {
+        groups: [{ groupName: 'Other', projectRoot: null, description: 'catch-all.' }],
+        sessions: [{ sessionId: 's1', groupName: 'Other', summary: 'A one-off question.' }],
+      },
+      log,
+    );
+
+    // No group assignment for a catch-all name...
+    const groupWrite = update.mock.calls.find((c) => 'groupName' in (c[0] ?? {}));
+    expect(groupWrite).toBeUndefined();
+    // ...but the summary is still recorded for the (ungrouped) session.
+    expect(update).toHaveBeenCalledWith(
+      { sessionSummary: 'A one-off question.' },
+      { where: { id: 's1' } },
+    );
+    // ...and no catch-all description row is written.
+    const descWrite = update.mock.calls.find((c) => c[0]?.groupDescription);
+    expect(descWrite).toBeUndefined();
   });
 });

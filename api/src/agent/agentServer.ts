@@ -25,14 +25,19 @@ import {
   sendFinalAnswer,
   pushToSessionHistory,
   createUserContentForCronJob,
+  isContextLengthError,
+  pruneHistoryForContextLimit,
 } from './utils';
-import { updateSessionGroup, buildProjectContext, summariseSession } from './sessionGrouping';
+import { updateSessionGroup, buildProjectContext, GROUPING_SESSION_PREFIX } from './sessionGrouping';
 import {
   aiClient,
   AITool,
   AICompletionResult,
+  CompletionOptions,
   getDefaultModel,
   getContextWindowSize,
+  estimateHistoryTokens,
+  getInputTokenBudget,
 } from '../ai-client';
 import type { AgentMessage, AgentSendFn, SessionState } from './types';
 import { Logger } from 'winston';
@@ -55,6 +60,104 @@ const sessionQueues = new Map<string, QueuedMessage[]>();
 // new agent turn.
 const pendingShellScripts = new Map<string, (output: string) => void>();
 
+// Upper bound on prune-and-retry cycles per completion. Each cycle removes one
+// unit (or compacts one message), so 12 is plenty to claw back from an overflow
+// while still terminating if the history somehow cannot be shrunk enough.
+const MAX_CONTEXT_RECOVERY_ATTEMPTS = 12;
+
+/**
+ * Wraps `aiClient.complete` with context-window overflow recovery. When the
+ * provider rejects the request because the input exceeds the model's context
+ * window, we prune the session history in place (compact the biggest message,
+ * then drop the oldest turns — see pruneHistoryForContextLimit) and retry,
+ * rather than letting a single oversized message break the whole session.
+ *
+ * All agent completions go through here so the recovery applies uniformly to
+ * the first turn, the length-truncation recovery turn, and every tool-loop turn.
+ */
+// Fraction of the input-token budget we proactively trim down to before
+// sending. The 10% headroom absorbs the gap between our estimate and the
+// provider's real tokenizer so we rarely fall through to reactive recovery.
+const PROACTIVE_TRIM_RATIO = 0.9;
+
+/**
+ * Proactively shrinks the history *before* a request so we never knowingly send
+ * an over-window turn. Unlike pushToSessionHistory (which truncates only the
+ * incoming message and does not count tool-call arguments), this estimates the
+ * whole history — tool calls included — and drops the oldest turns until it fits
+ * a safe fraction of the input budget, preserving the system prompt and the
+ * latest user turn. Reactive recovery in the retry loop remains the backstop for
+ * the rare case where the real token count still exceeds our estimate.
+ */
+function trimHistoryToBudget(session: SessionState, sessionId: string, log: typeof logger): void {
+  const budget = Math.floor(getInputTokenBudget(config.aiProvider) * PROACTIVE_TRIM_RATIO);
+  if (budget <= 0) return;
+
+  let guard = 0;
+  while (estimateHistoryTokens(session.history) > budget && guard < 200) {
+    guard++;
+    if (!pruneHistoryForContextLimit(session, log)) break;
+  }
+
+  if (guard > 0) {
+    log.info('Proactively trimmed history to fit context budget before sending', {
+      sessionId,
+      steps: guard,
+      estimatedTokens: estimateHistoryTokens(session.history),
+      budget,
+    });
+  }
+}
+
+async function completeWithContextRecovery(
+  session: SessionState,
+  sessionId: string,
+  options: CompletionOptions,
+  log: typeof logger,
+): Promise<AICompletionResult> {
+  trimHistoryToBudget(session, sessionId, log);
+
+  let attempt = 0;
+  for (;;) {
+    try {
+      return await aiClient.complete(aiModel, session.history, options);
+    } catch (err) {
+      if (!isContextLengthError(err) || attempt >= MAX_CONTEXT_RECOVERY_ATTEMPTS) throw err;
+      attempt++;
+      const pruned = pruneHistoryForContextLimit(session, log);
+      log.warn('Context-length error from provider; pruned history and retrying', {
+        sessionId,
+        attempt,
+        pruned,
+        historyLength: session.history.length,
+      });
+      // Nothing left to prune (only system + final user turn remain) — give up
+      // and let the caller surface the error instead of spinning.
+      if (!pruned) throw err;
+    }
+  }
+}
+
+// A server-side tool handler injected for a single agent invocation (see
+// AgentTurnOptions.toolHandlers). Receives the parsed tool arguments and
+// returns the string that is fed back to the model as the tool result.
+export type CustomToolHandler = (
+  args: Record<string, unknown>,
+  log: typeof logger,
+) => Promise<string>;
+
+// Options accepted by runAgentTurn. `extraTools` + `toolHandlers` let an
+// internal caller (e.g. the session-grouping cron) hand the agent a bespoke
+// server-side tool for one invocation without exposing it to normal chat
+// sessions. `skipGrouping` disables the end-of-turn group classification for
+// runs that are not real user sessions.
+export interface AgentTurnOptions {
+  isCronJob?: boolean;
+  skipGrouping?: boolean;
+  extraTools?: AITool[];
+  toolHandlers?: Map<string, CustomToolHandler>;
+}
+
 async function runToolLoop(
   initialResult: AICompletionResult,
   session: SessionState,
@@ -65,6 +168,7 @@ async function runToolLoop(
   mcpDispatch: Map<string, { serverId: string; mcpToolName: string }>,
   onUsage: (result: AICompletionResult) => Promise<void>,
   isCronJob: boolean,
+  toolHandlers?: Map<string, CustomToolHandler>,
 ): Promise<AICompletionResult> {
   // Tools the model is allowed to invoke on this turn. Built from the same
   // list we hand to the AI client, so flipping `WEB_SEARCH_ENABLED` (or any
@@ -111,6 +215,26 @@ async function runToolLoop(
           });
           const toolResult = await executeMcpTool(tc.name, args, mcpDispatch, log);
           log.info('Tool call completed', {
+            sessionId,
+            tool: tc.name,
+            resultLength: toolResult.length,
+          });
+          return { id: tc.id, name: tc.name, result: toolResult };
+        }
+
+        // Injected server-side tools (e.g. the session-grouping cron's
+        // assign_session_groups). Intercept BEFORE the web/executeTool path so
+        // a custom tool name is never mistaken for a web tool.
+        if (toolHandlers?.has(tc.name)) {
+          send({
+            session_id: sessionId,
+            sender: 'agent',
+            content: `Running ${tc.name}`,
+            is_terminal_output: false,
+            is_error: false,
+          });
+          const toolResult = await toolHandlers.get(tc.name)!(args, log);
+          log.info('Custom tool call completed', {
             sessionId,
             tool: tc.name,
             resultLength: toolResult.length,
@@ -256,10 +380,10 @@ async function runToolLoop(
     }
 
     // Call the AI again with the tool results in history to get the next response.
-    result = await aiClient.complete(aiModel, session.history, {
+    result = await completeWithContextRecovery(session, sessionId, {
       tools: tools.length ? tools : undefined,
       temperature: 0.2,
-    });
+    }, log);
     await onUsage(result);
   }
 
@@ -305,6 +429,13 @@ async function persistSessionToDB(sessionId: string, state: SessionState): Promi
         historyJson,
         turns: state.turns,
         lastActiveAt: new Date(),
+        // Refresh the "context remaining" signal from the history we're actually
+        // persisting — including any pruning that just happened — so the UI
+        // reflects what the NEXT request will send. Relying only on the last
+        // successful call's usage (see recordUsage) left the figure stale after
+        // a turn that failed on overflow: the oversized message never got
+        // counted, so the UI kept showing a half-empty window.
+        lastPromptTokens: estimateHistoryTokens(state.history),
       },
       { where: { id: sessionId } },
     );
@@ -341,6 +472,31 @@ async function enforceSessionCap(subscriptionId: string, logger: Logger): Promis
   }
 }
 
+// Fetch the current description + freshness timestamp for an existing group so
+// a new session the user explicitly files under that group inherits them
+// immediately (rather than showing an empty description until the next cron
+// pass). groupDescription is denormalised across every session in a group, so
+// we read it from the group's most recently active description-bearing row —
+// the same source buildProjectContext uses.
+async function fetchGroupMeta(
+  subscriptionId: string,
+  groupName: string,
+): Promise<{ groupDescription: string | null; groupDescriptionUpdatedAt: Date | null }> {
+  try {
+    const row = await AgentSession.findOne({
+      where: { subscriptionId, groupName, groupDescription: { [Op.not]: null } },
+      order: [['last_active_at', 'DESC']],
+      attributes: ['groupDescription', 'groupDescriptionUpdatedAt'],
+    });
+    return {
+      groupDescription: row?.groupDescription ?? null,
+      groupDescriptionUpdatedAt: row?.groupDescriptionUpdatedAt ?? null,
+    };
+  } catch {
+    return { groupDescription: null, groupDescriptionUpdatedAt: null };
+  }
+}
+
 async function getOrCreateSession(
   sessionId: string,
   subscription: Subscription,
@@ -367,6 +523,7 @@ async function getOrCreateSession(
         history,
         turns: dbSession.turns,
         groupName: dbSession.groupName ?? null,
+        groupLocked: dbSession.groupLocked ?? false,
       };
       log.info('Resumed agent session from DB', {
         sessionId,
@@ -424,7 +581,21 @@ ${prompt}
         : []),
     ],
     turns: 0,
+    // A group name supplied at session start is a deliberate USER choice, so
+    // lock it: this session is never (re)classified and the cron never moves
+    // it. When no group is supplied the session stays unlocked and is
+    // classified once at the end of its first turn.
+    groupName: groupName ?? null,
+    groupLocked: Boolean(groupName),
   };
+
+  // When the user filed this session under an existing group, inherit that
+  // group's current description + freshness timestamp so the new row is
+  // complete immediately (sidebar, /sessions, and <project_context> all read
+  // groupDescription per row).
+  const groupMeta = groupName
+    ? await fetchGroupMeta(subscription.id, groupName)
+    : { groupDescription: null, groupDescriptionUpdatedAt: null };
 
   // Persist immediately so that GET /sessions picks it up right away.
   try {
@@ -439,16 +610,39 @@ ${prompt}
         turns: 0,
         lastActiveAt: new Date(),
         groupName: groupName ?? null,
+        groupLocked: Boolean(groupName),
+        groupDescription: groupMeta.groupDescription,
+        groupDescriptionUpdatedAt: groupMeta.groupDescriptionUpdatedAt,
       },
     });
 
     if (!created) {
       const history = JSON.parse(dbSession.historyJson || '[]') as SessionState['history'];
+
+      // If the row exists without a group but the caller supplied one, adopt
+      // and lock it now (user chose a group for a session that was pre-created),
+      // inheriting the group's current description + freshness timestamp.
+      const adoptUserGroup = Boolean(groupName) && !dbSession.groupName;
+      if (adoptUserGroup) {
+        await AgentSession.update(
+          {
+            groupName: groupName!,
+            groupLocked: true,
+            groupDescription: groupMeta.groupDescription,
+            groupDescriptionUpdatedAt: groupMeta.groupDescriptionUpdatedAt,
+          },
+          { where: { id: sessionId } },
+        );
+      }
+      const effectiveGroupName = dbSession.groupName ?? (adoptUserGroup ? groupName! : null);
+      const effectiveGroupLocked = dbSession.groupLocked ?? false ? true : adoptUserGroup;
+
       const existingEntry: SessionState = {
         subscription,
         history,
         turns: dbSession.turns,
-        groupName: dbSession.groupName ?? null,
+        groupName: effectiveGroupName,
+        groupLocked: effectiveGroupLocked,
       };
 
       log.info('Reused existing agent session row from DB during create path', {
@@ -465,7 +659,7 @@ ${prompt}
             (h) => typeof h.content === 'string' && h.content.includes('<stored_instructions>'),
           ),
         contextExists: userHistoryHasProjectContext(history),
-        groupName: dbSession.groupName ?? null,
+        groupName: effectiveGroupName,
       };
     }
 
@@ -496,7 +690,7 @@ async function runAgentTurnInternal(
   clientMessage: AgentMessage,
   send: AgentSendFn,
   log: typeof logger,
-  options?: { isCronJob?: boolean; untaggedDepth?: number },
+  options?: AgentTurnOptions & { untaggedDepth?: number },
 ): Promise<void> {
   const {
     sessionState: session,
@@ -643,13 +837,20 @@ async function runAgentTurnInternal(
   const shellTool =
     config.terminalAccess === 'limited' ? SHELL_SCRIPT_TOOL_LIMITED : SHELL_SCRIPT_TOOL;
   const shellTools: AITool[] = [shellTool];
-  const tools = buildAvailableTools([...shellTools, ...mcpBundle.aiTools]);
+  const tools = buildAvailableTools([
+    ...shellTools,
+    ...mcpBundle.aiTools,
+    ...(options?.extraTools ?? []),
+  ]);
 
   const recordUsage = async (result: AICompletionResult) => {
     const usage = result.usage;
     if (!usage) return;
 
-    // Always update the per-session token counters in the DB.
+    // Update the cumulative per-session token counters in the DB. The
+    // "context remaining" signal (lastPromptTokens) is NOT set here — it is
+    // refreshed from the actual stored history in persistSessionToDB so it stays
+    // accurate even on turns that fail before any usage is reported.
     try {
       await AgentSession.increment(
         {
@@ -657,12 +858,6 @@ async function runAgentTurnInternal(
           completionTokensUsed: usage.completion_tokens,
           totalTokensUsed: usage.total_tokens,
         },
-        { where: { id: sessionId } },
-      );
-      // Track the most recent prompt size so the UI can show accurate
-      // "tokens remaining" without the cumulative-sum skew of promptTokensUsed.
-      await AgentSession.update(
-        { lastPromptTokens: usage.prompt_tokens },
         { where: { id: sessionId } },
       );
     } catch (err) {
@@ -699,10 +894,10 @@ async function runAgentTurnInternal(
       historyLength: session.history.length,
     });
 
-    let result = await aiClient.complete(aiModel, session.history, {
+    let result = await completeWithContextRecovery(session, sessionId, {
       tools: tools?.length ? tools : undefined,
       temperature: 0.2,
-    });
+    }, log);
 
     await recordUsage(result);
 
@@ -738,10 +933,10 @@ Respond immediately with exactly one of the following:
 
 Provide only a tool call or final answer. Do not include reasoning or explanation.`,
       });
-      result = await aiClient.complete(aiModel, session.history, {
+      result = await completeWithContextRecovery(session, sessionId, {
         tools: tools?.length ? tools : undefined,
         temperature: 0.2,
-      });
+      }, log);
       await recordUsage(result);
     }
 
@@ -776,6 +971,7 @@ Provide only a tool call or final answer. Do not include reasoning or explanatio
         mcpBundle.dispatch,
         recordUsage,
         Boolean(options?.isCronJob),
+        options?.toolHandlers,
       );
       const toolLoopContent = toolLoopResult.content.trim();
 
@@ -881,11 +1077,15 @@ Provide only a tool call or final answer. Do not include reasoning or explanatio
         sender: 'agent',
         content: hasFinalAnswerTag ? content : `<final_answer>\n${content}\n</final_answer>`,
       });
-      // Only re-classify when the session doesn't already have a group name.
-      // Re-classification is expensive (LLM call) and unnecessary once a group
-      // has been assigned — the cron in sessionGrouping.ts is responsible for
-      // periodic refreshes if descriptions ever need updating.
-      if (!session.groupName) {
+      // Classify the session's group with a single completion, but ONLY when:
+      //   - this is a real user session (not an internal run like the grouping
+      //     cron, which sets skipGrouping), AND
+      //   - the session has no group yet, AND
+      //   - the group was not explicitly locked by the user at session start.
+      // A user-locked group is never reclassified — we keep the chosen group.
+      // Once a group is assigned, the cron refreshes descriptions; it never
+      // moves an already-grouped session.
+      if (!options?.skipGrouping && !session.groupName && !session.groupLocked) {
         void updateSessionGroup(sessionId, subscription.id).then(async () => {
           // Reflect the newly-assigned group back into the in-memory session
           // so subsequent turns in this same session also skip re-classification.
@@ -996,7 +1196,7 @@ export async function runAgentTurn(
   clientMessage: AgentMessage,
   send: AgentSendFn,
   log: typeof logger,
-  options?: { isCronJob?: boolean },
+  options?: AgentTurnOptions,
 ): Promise<void> {
   // untaggedDepth always starts at 0 for external callers; it is only threaded
   // through the internal recursive path.
@@ -1177,24 +1377,13 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
         }
       }
 
-      // Session-end hook: when the WebSocket closes the user has stopped
-      // typing, so this is the right moment to (re)generate each touched
-      // session's sessionSummary. The summary feeds future <project_context>
-      // blocks under "Recent sessions in this project". We deliberately do
-      // NOT block the close handler on the LLM call — fire-and-forget with
-      // its own error logging so a slow LLM provider can't keep the
-      // connection close path waiting.
-      const sub = getSubscription();
-      if (sub) {
-        for (const sid of connectionSessionIds) {
-          void summariseSession(sid, sub.id).catch((err) => {
-            log.warn('summariseSession on WebSocket close failed', {
-              sessionId: sid,
-              error: err,
-            });
-          });
-        }
-      }
+      // Per-session summaries and group descriptions are (re)generated by the
+      // hourly grouping cron's single agent pass (see sessionGrouping), which
+      // sees every session at once and can verify project roots on disk. We no
+      // longer make an extra per-session LLM call on WebSocket close — the only
+      // grouping-related completion tied to a session is the one-shot group
+      // classification that runs when the session produces its first
+      // <final_answer> (skipped entirely for user-locked groups).
     });
   });
 
@@ -1444,7 +1633,11 @@ export function createAgentRouter(): express.Router {
 
     try {
       const sessions = await AgentSession.findAll({
-        where: { subscriptionId: subscription.id },
+        where: {
+          subscriptionId: subscription.id,
+          // Hide the internal grouping-cron helper sessions.
+          id: { [Op.notLike]: `${GROUPING_SESSION_PREFIX}%` },
+        },
         order: [['last_active_at', 'DESC']],
         limit: 50,
         attributes: [

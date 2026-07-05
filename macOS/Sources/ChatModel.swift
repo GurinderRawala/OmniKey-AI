@@ -155,6 +155,13 @@ final class ChatModel: ObservableObject {
     /// different saved instruction without leaving the chat page.
     @Published var defaultTaskTemplate: APIClient.TaskTemplateDTO? = nil
 
+    /// The task instruction label locked to the currently active
+    /// session. For existing sessions this is derived from the
+    /// persisted <stored_instructions> block when history is loaded;
+    /// for a freshly-started session it snapshots the selected
+    /// template at send time.
+    @Published var activeSessionTaskInstructionTitle: String? = nil
+
     /// All saved task instruction templates for the current user. Drives
     /// the dropdown below the chat input. Empty until
     /// `fetchDefaultTaskTemplate` resolves.
@@ -182,6 +189,37 @@ final class ChatModel: ObservableObject {
     var activeSession: AgentSessionInfo? {
         guard let id = activeSessionId else { return nil }
         return sessions.first { $0.id == id }
+    }
+
+    /// Project and task-instruction choices are part of how a new
+    /// session is initialized. Once a session exists, or a first turn
+    /// has been staged/sent, those choices are locked so an existing
+    /// conversation cannot silently switch context mid-thread.
+    var canChangeSessionSetup: Bool {
+        activeSessionId == nil && messages.isEmpty && !isRunning && !isLoadingSessionHistory
+    }
+
+
+    var displayedTaskInstructionTitle: String {
+        if canChangeSessionSetup {
+            return defaultTaskTemplate?.heading ?? "No instruction"
+        }
+        return activeSessionTaskInstructionTitle ?? defaultTaskTemplate?.heading ?? "No instruction"
+    }
+
+    var displayedProjectName: String {
+        if canChangeSessionSetup {
+            return selectedGroup?.groupName ?? "Select project"
+        }
+        return activeSession?.groupName ?? selectedGroup?.groupName ?? "No project"
+    }
+
+    var hasDisplayedTaskInstruction: Bool {
+        displayedTaskInstructionTitle != "No instruction"
+    }
+
+    var hasDisplayedProject: Bool {
+        displayedProjectName != "No project" && displayedProjectName != "Select project"
     }
 
     /// Sessions filtered by `sessionSearchQuery`. When the query is
@@ -426,6 +464,7 @@ final class ChatModel: ObservableObject {
         loadState(fresh)
 
         defaultTaskTemplate = nil
+        activeSessionTaskInstructionTitle = nil
         fetchDefaultTaskTemplate()
     }
 
@@ -462,6 +501,7 @@ final class ChatModel: ObservableObject {
         }
 
         defaultTaskTemplate = nil
+        activeSessionTaskInstructionTitle = nil
         fetchDefaultTaskTemplate()
     }
 
@@ -518,12 +558,39 @@ final class ChatModel: ObservableObject {
                     .lowercased()
                     .folding(options: .diacriticInsensitive, locale: .current)
                 self.sessionUserMessageHaystacks[sessionId] = userBlob
+                self.activeSessionTaskInstructionTitle = ChatModel.lockedInstructionTitle(from: body.messages)
 
                 self.messages = visible
                 self.trimmedOlderMessageCount = overflow
                 self.isLoadingSessionHistory = false
             }
         }.resume()
+    }
+
+    private static func lockedInstructionTitle(from entries: [SessionHistoryEntry]) -> String? {
+        let storedInstruction = entries
+            .lazy
+            .filter { $0.role == "user" }
+            .compactMap { entry -> String? in
+                guard let range = entry.text.range(
+                    of: #"<stored_instructions>[\s\S]*?</stored_instructions>"#,
+                    options: [.regularExpression, .caseInsensitive]
+                ) else { return nil }
+                let block = String(entry.text[range])
+                guard let start = block.range(of: "\"\"\"") else { return nil }
+                let remainder = block[start.upperBound...]
+                guard let end = remainder.range(of: "\"\"\"") else { return nil }
+                return String(remainder[..<end.lowerBound])
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            .first
+
+        guard let storedInstruction, !storedInstruction.isEmpty else { return nil }
+        let firstMeaningfulLine = storedInstruction
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty && !$0.hasPrefix("#") }
+        return firstMeaningfulLine ?? "Custom instructions"
     }
 
     /// The persisted agent history contains intermediate assistant messages
@@ -665,6 +732,9 @@ final class ChatModel: ObservableObject {
         let currentState = sessionState(for: activeStateKey)
         inputText = ""
         lastErrorMessage = nil
+        if activeSessionId == nil && messages.isEmpty {
+            activeSessionTaskInstructionTitle = defaultTaskTemplate?.heading
+        }
 
         // Determine (or create) the session ID for this turn.
         let sessionId = activeSessionId ?? UUID().uuidString
@@ -886,6 +956,7 @@ final class ChatModel: ObservableObject {
     /// the local cache optimistically so the dropdown UI reflects the
     /// change immediately, and rolls back on failure.
     func setDefaultTaskTemplate(id: String?) {
+        guard canChangeSessionSetup else { return }
         guard !isUpdatingDefaultTaskTemplate else { return }
         // Skip no-op selections so we don't fire a request when the
         // user re-picks the already-default template.

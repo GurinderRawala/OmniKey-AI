@@ -17,6 +17,7 @@ struct ScheduledJobsView: View {
     @State private var showingRunHistory: Bool = false
     @State private var historyJobLabel: String = ""
     @State private var historySessionId: String = ""
+    @State private var historyJobId: String? = nil
 
     // Running-status tracking
     @State private var runningJobIds: Set<String> = []
@@ -99,7 +100,11 @@ struct ScheduledJobsView: View {
         .onAppear { loadJobs() }
         .onDisappear { stopPolling() }
         .sheet(isPresented: $showingRunHistory) {
-            JobRunHistoryView(jobLabel: historyJobLabel, sessionId: historySessionId)
+            JobRunHistoryView(
+                jobLabel: historyJobLabel,
+                sessionId: historySessionId,
+                isRunning: historyJobId.map { runningJobIds.contains($0) } ?? false
+            )
         }
     }
 
@@ -257,7 +262,7 @@ struct ScheduledJobsView: View {
                     .buttonStyle(.bordered).font(.system(size: 12))
                     .disabled(isLoading)
 
-                if job.lastRunAt != nil || job.lastRunSessionId != nil {
+                if job.lastRunSessionId != nil {
                     Button {
                         openRunHistory(for: job)
                     } label: {
@@ -592,7 +597,7 @@ struct ScheduledJobsView: View {
 
     private func resolveHistorySessionAndOpen(for job: APIClient.ScheduledJobDTO) {
         if let sid = job.lastRunSessionId?.trimmingCharacters(in: .whitespacesAndNewlines), !sid.isEmpty {
-            presentRunHistory(jobLabel: job.label, sessionId: sid)
+            presentRunHistory(jobLabel: job.label, jobId: job.id, sessionId: sid)
             return
         }
 
@@ -606,7 +611,7 @@ struct ScheduledJobsView: View {
                        let sid = refreshed.lastRunSessionId?.trimmingCharacters(in: .whitespacesAndNewlines),
                        !sid.isEmpty
                     {
-                        self.presentRunHistory(jobLabel: refreshed.label, sessionId: sid)
+                        self.presentRunHistory(jobLabel: refreshed.label, jobId: refreshed.id, sessionId: sid)
                     } else {
                         self.statusMessage = "Session history is not ready yet. Please try again in a moment."
                     }
@@ -617,9 +622,10 @@ struct ScheduledJobsView: View {
         }
     }
 
-    private func presentRunHistory(jobLabel: String, sessionId: String) {
+    private func presentRunHistory(jobLabel: String, jobId: String, sessionId: String) {
         statusMessage = ""
         historyJobLabel = jobLabel
+        historyJobId = jobId
         historySessionId = sessionId
         showingRunHistory = true
     }
@@ -714,13 +720,22 @@ struct ScheduledJobsView: View {
         }
     }
 
+    private func upsertJob(_ job: APIClient.ScheduledJobDTO) {
+        if let index = jobs.firstIndex(where: { $0.id == job.id }) {
+            jobs[index] = job
+        } else {
+            jobs.append(job)
+        }
+    }
+
     private func runJobNow(_ job: APIClient.ScheduledJobDTO) {
         isLoading = true
         apiClient.runScheduledJobNow(id: job.id) { result in
             DispatchQueue.main.async {
                 self.isLoading = false
                 switch result {
-                case .success:
+                case .success(let updatedJob):
+                    self.upsertJob(updatedJob)
                     self.runningJobIds.insert(job.id)
                     self.preRunLastRunAt.updateValue(job.lastRunAt, forKey: job.id)
                     self.statusMessage = "\"\(job.label)\" triggered."

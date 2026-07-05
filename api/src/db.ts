@@ -68,6 +68,13 @@ const COLUMN_MIGRATIONS: ColumnMigration[] = [
   // rewritten by every new session's LLM enrichment, wiping out accumulated
   // context from older sessions.
   { table: 'agent_sessions', column: 'session_summary', definition: 'TEXT' },
+  // Added: locks a session to a user-chosen group so it is never
+  // (re)classified or moved between groups by the grouping cron.
+  {
+    table: 'agent_sessions',
+    column: 'group_locked',
+    definition: 'TINYINT(1) NOT NULL DEFAULT 0',
+  },
 ];
 
 async function runSQLiteMigrations(logger: Logger): Promise<void> {

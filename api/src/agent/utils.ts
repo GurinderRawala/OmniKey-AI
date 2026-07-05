@@ -231,3 +231,149 @@ export function pushToSessionHistory(
     }
   }
 }
+
+// ─── Context-window overflow recovery ─────────────────────────────────────────
+//
+// The char budget enforced above is only an *estimate* (2 chars/token against a
+// configured 1M window). The provider's real token count can still overflow the
+// deployed model's actual context window — for example when a single message
+// carries a big pasted blob, when content tokenizes denser than 2 chars/token
+// (JSON, code, tool results), or when the configured window is larger than the
+// model actually supports. When that happens `aiClient.complete` throws a
+// context-length error. The helpers below let the caller recover in place —
+// shrink the history and retry — instead of killing the whole session.
+
+// Head/tail chars kept when a single oversized message is compacted.
+const OVERSIZED_MSG_HEAD = 4_000;
+const OVERSIZED_MSG_TAIL = 4_000;
+// Only compact messages large enough that compaction meaningfully shrinks them.
+const OVERSIZED_MSG_THRESHOLD = OVERSIZED_MSG_HEAD + OVERSIZED_MSG_TAIL + 1_000;
+
+/**
+ * True when `err` is a provider "input exceeds the context window" style error.
+ *
+ * OpenAI / nemotron set `code: 'context_length_exceeded'`; Anthropic and Gemini
+ * do not always expose a machine code, so we also match the human-readable
+ * message. Kept deliberately broad — a false positive just triggers a harmless
+ * prune-and-retry, whereas a miss kills the session.
+ */
+export function isContextLengthError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as {
+    code?: unknown;
+    error?: { code?: unknown };
+    message?: unknown;
+  };
+  const code = String(e.code ?? e.error?.code ?? '');
+  if (code === 'context_length_exceeded') return true;
+
+  const message = String(e.message ?? '').toLowerCase();
+  return (
+    message.includes('context window') ||
+    message.includes('context length') ||
+    message.includes('maximum context') ||
+    message.includes('too many tokens') ||
+    message.includes('reduce the length') ||
+    (message.includes('token') && message.includes('exceed'))
+  );
+}
+
+/**
+ * Shrinks a session's history *in place* so a retried completion fits inside the
+ * model's real context window. Call it after a provider rejects a turn with a
+ * context-length error, then retry `aiClient.complete`.
+ *
+ * Two strategies, applied in order, one step per call so the caller can retry in
+ * a loop and stop as soon as the request fits:
+ *
+ *   1. **Compact the single largest oversized message** — replace its middle
+ *      with a truncation notice, keeping a head and tail. This targets the
+ *      "one big pasted message blew up the window" case without reordering
+ *      messages or disturbing tool_call/tool_result pairing.
+ *   2. **Drop the oldest droppable unit** — a user turn, a plain assistant turn,
+ *      or an assistant `tool_calls` message together with its following tool
+ *      results as one atomic block (so a tool_call is never left without its
+ *      results, which the provider APIs reject). Leading system messages and the
+ *      final user turn are always preserved.
+ *
+ * @returns true if the history changed (caller should retry), false if there is
+ *          nothing left to prune.
+ */
+export function pruneHistoryForContextLimit(session: SessionState, log: Logger): boolean {
+  const history = session.history;
+
+  // Leading system messages are always preserved.
+  let systemEnd = 0;
+  while (systemEnd < history.length && history[systemEnd].role === 'system') systemEnd++;
+
+  // Strategy 1: compact the single largest oversized message.
+  let largestIdx = -1;
+  let largestLen = 0;
+  for (let i = systemEnd; i < history.length; i++) {
+    const c = history[i].content;
+    const len = typeof c === 'string' ? c.length : 0;
+    if (len > largestLen) {
+      largestLen = len;
+      largestIdx = i;
+    }
+  }
+
+  if (largestIdx >= 0 && largestLen > OVERSIZED_MSG_THRESHOLD) {
+    const original = history[largestIdx].content as string;
+    const dropped = original.length - OVERSIZED_MSG_HEAD - OVERSIZED_MSG_TAIL;
+    history[largestIdx] = {
+      ...history[largestIdx],
+      content:
+        original.slice(0, OVERSIZED_MSG_HEAD) +
+        `\n\n[... ${dropped.toLocaleString()} chars omitted to fit the model context window ...]\n\n` +
+        original.slice(original.length - OVERSIZED_MSG_TAIL),
+    };
+    log.warn('Compacted oversized history message after context-length error', {
+      messageIndex: largestIdx,
+      role: history[largestIdx].role,
+      originalLength: original.length,
+      newLength: (history[largestIdx].content as string).length,
+    });
+    return true;
+  }
+
+  // Strategy 2: drop the oldest complete unit, preserving the final user turn.
+  let protectedStart = history.length;
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (history[i].role === 'user') {
+      protectedStart = i;
+      break;
+    }
+  }
+
+  if (systemEnd >= protectedStart) {
+    // Only system messages and the final user turn remain — nothing droppable
+    // without breaking the request. The caller should surface the error.
+    log.warn('Cannot prune history further for context-length recovery', {
+      historyLength: history.length,
+      systemEnd,
+      protectedStart,
+    });
+    return false;
+  }
+
+  // The oldest unit begins right after the system messages. An assistant message
+  // that carries tool_calls owns the tool-result messages that immediately
+  // follow it — drop them together so we never orphan a tool_call or a result.
+  let unitEnd = systemEnd + 1;
+  if (
+    history[systemEnd].role === 'assistant' &&
+    (history[systemEnd].tool_calls?.length ?? 0) > 0
+  ) {
+    while (unitEnd < history.length && history[unitEnd].role === 'tool') unitEnd++;
+  }
+  unitEnd = Math.min(unitEnd, protectedStart);
+
+  const removed = history.splice(systemEnd, unitEnd - systemEnd);
+  log.warn('Dropped oldest history unit after context-length error', {
+    removedCount: removed.length,
+    removedRoles: removed.map((m) => m.role),
+    historyLength: history.length,
+  });
+  return removed.length > 0;
+}

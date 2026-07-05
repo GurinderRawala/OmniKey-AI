@@ -1,4 +1,5 @@
 import express from 'express';
+import cuid from 'cuid';
 import zod from 'zod';
 import { authMiddleware } from './authMiddleware';
 import { ScheduledJob } from './models/scheduledJob';
@@ -192,13 +193,16 @@ export function scheduledJobRouter(): express.Router {
         return res.status(404).json({ error: 'Scheduled job not found.' });
       }
 
+      const sessionId = cuid();
+      await job.update({ lastRunSessionId: sessionId });
+
       // Prefer the background worker (self-hosted) so the execution
       // doesn't block this HTTP handler or any other request on the main
       // event loop. Fall back to in-process execution when no worker is
       // running (e.g. cloud deployments or during shutdown).
-      const dispatched = triggerJobInWorker(job.id);
+      const dispatched = triggerJobInWorker(job.id, sessionId);
       if (!dispatched) {
-        void executeJob(job).catch((err) => {
+        void executeJob(job, sessionId).catch((err) => {
           logger.error('run-now execution failed.', { jobId: job.id, error: err });
         });
       } else {

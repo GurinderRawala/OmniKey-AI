@@ -228,7 +228,17 @@ struct AIProvidersSettingsView: View {
 
                 // OpenAI-only: compact model picker in the card header
                 if row.kind == .openai {
-                    Picker("", selection: $openaiModelSelected) {
+                    let currentModel = dto.model ?? openAISmartModels[0].id
+                    Picker("", selection: Binding(
+                        get: { openaiModelSelected },
+                        set: { newValue in
+                            guard newValue != openaiModelSelected else { return }
+                            openaiModelSelected = newValue
+                            if newValue != currentModel {
+                                pendingModelChange = newValue
+                            }
+                        }
+                    )) {
                         ForEach(openAISmartModels, id: \.id) { m in
                             Text(m.label).tag(m.id)
                         }
@@ -236,21 +246,10 @@ struct AIProvidersSettingsView: View {
                     .labelsHidden()
                     .pickerStyle(.menu)
                     .font(.system(size: 12))
-
-                    let currentModel = dto.model ?? openAISmartModels[0].id
-                    if openaiModelSelected != currentModel {
-                        Button("Apply") { pendingModelChange = openaiModelSelected }
-                            .buttonStyle(.borderedProminent)
-                            .tint(NordTheme.accentBlue(colorScheme))
-                            .controlSize(.mini)
-                    }
+                    .disabled(isLoading)
                 }
 
-                if isActive {
-                    Text("Active")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(NordTheme.accentGreen(colorScheme))
-                } else if !dto.isConfigured {
+                if !isActive && !dto.isConfigured {
                     Text("Not configured")
                         .font(.system(size: 12))
                         .foregroundColor(NordTheme.secondaryText(colorScheme))

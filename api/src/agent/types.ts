@@ -11,6 +11,9 @@ export interface SessionState {
   // the grouping classifier. Used to skip redundant re-classification work at
   // the end of each agent turn.
   groupName?: string | null;
+  // True when the user explicitly chose this session's group. Locked sessions
+  // are never (re)classified — we only ever attach them to the chosen group.
+  groupLocked?: boolean;
 }
 
 export interface AgentMessage {

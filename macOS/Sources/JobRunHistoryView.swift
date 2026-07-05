@@ -7,11 +7,12 @@ final class JobRunHistoryModel: ObservableObject {
     @Published var messages: [SessionHistoryEntry] = []
     @Published var isLoading = true
     @Published var errorMessage: String? = nil
+    @Published var lastLoadedAt: Date? = nil
 
-    func load(sessionId: String) {
+    func load(sessionId: String, showLoading: Bool = true) {
         guard let token = SubscriptionManager.shared.jwtToken, !token.isEmpty else {
             errorMessage = "Not authenticated"
-            isLoading = false
+            if showLoading { isLoading = false }
             return
         }
         let url = APIClient.baseURL
@@ -21,19 +22,27 @@ final class JobRunHistoryModel: ObservableObject {
         var request = URLRequest(url: url)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
 
+        if showLoading { isLoading = true }
+
         URLSession.shared.dataTask(with: request) { [weak self] data, _, err in
             DispatchQueue.main.async {
                 guard let self else { return }
-                self.isLoading = false
+                if showLoading { self.isLoading = false }
                 guard let data else {
-                    self.errorMessage = err?.localizedDescription ?? "Network error"
+                    if self.messages.isEmpty {
+                        self.errorMessage = err?.localizedDescription ?? "Network error"
+                    }
                     return
                 }
                 struct Envelope: Decodable { let messages: [SessionHistoryEntry] }
                 if let body = try? JSONDecoder().decode(Envelope.self, from: data) {
                     self.messages = body.messages
+                    self.errorMessage = nil
+                    self.lastLoadedAt = Date()
                 } else {
-                    self.errorMessage = "Could not load session data"
+                    if self.messages.isEmpty {
+                        self.errorMessage = "Could not load session data"
+                    }
                 }
             }
         }.resume()
@@ -45,8 +54,10 @@ final class JobRunHistoryModel: ObservableObject {
 struct JobRunHistoryView: View {
     let jobLabel: String
     let sessionId: String
+    let isRunning: Bool
 
     @StateObject private var model = JobRunHistoryModel()
+    @State private var pollTimer: Timer? = nil
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dismiss) private var dismiss
 
@@ -106,7 +117,30 @@ struct JobRunHistoryView: View {
             .padding(.bottom, 32)
         }
         .frame(minWidth: 700, minHeight: 504, maxHeight: 504)
-        .onAppear { model.load(sessionId: sessionId) }
+        .onAppear {
+            model.load(sessionId: sessionId)
+            startPollingIfNeeded()
+        }
+        .onDisappear { stopPolling() }
+        .onChange(of: isRunning) { _, running in
+            running ? startPollingIfNeeded() : stopPolling()
+        }
+    }
+
+    // MARK: - Polling
+
+    private func startPollingIfNeeded() {
+        guard isRunning, pollTimer == nil else { return }
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { _ in
+            DispatchQueue.main.async {
+                model.load(sessionId: sessionId, showLoading: false)
+            }
+        }
+    }
+
+    private func stopPolling() {
+        pollTimer?.invalidate()
+        pollTimer = nil
     }
 
     // MARK: - Sub-views
@@ -127,9 +161,17 @@ struct JobRunHistoryView: View {
                         .foregroundColor(NordTheme.accentBlue(colorScheme))
                         .lineLimit(1)
                         .truncationMode(.tail)
+
+                    if isRunning {
+                        Text("Running…")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(NordTheme.accentAmber(colorScheme))
+                    }
                 }
 
-                Text("Steps the agent took during the last scheduled run.")
+                Text(isRunning
+                     ? "Live details from the current manually-triggered run."
+                     : "Steps the agent took during the last scheduled run.")
                     .font(.system(size: 12))
                     .foregroundColor(NordTheme.secondaryText(colorScheme))
             }

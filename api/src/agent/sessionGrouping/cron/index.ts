@@ -1,4 +1,3 @@
-export { lastRefreshedAt, refreshGroupDescription, refreshKey } from './refreshGroupDescription';
 export { refreshAllSessionGroups } from './refreshAllSessionGroups';
 export {
   GROUPING_INITIAL_TICK_DELAY_MS,

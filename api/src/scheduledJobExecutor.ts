@@ -174,7 +174,7 @@ function runCronJob(
   });
 }
 
-export async function executeJob(job: ScheduledJob): Promise<void> {
+export async function executeJob(job: ScheduledJob, sessionId: string = cuid()): Promise<void> {
   if (RUNNING_JOB_IDS.has(job.id)) {
     logger.warn('Scheduled job is already running; skipping duplicate execution.', {
       jobId: job.id,
@@ -197,7 +197,10 @@ export async function executeJob(job: ScheduledJob): Promise<void> {
       return;
     }
 
-    const sessionId = cuid();
+    // Store the session ID before the agent starts so clients can stream the
+    // in-progress transcript for manually-triggered runs. The finalizer below
+    // still updates lastRunAt/nextRunAt even when the agent errors.
+    await job.update({ lastRunSessionId: sessionId });
 
     try {
       await runCronJob(job, subscription, sessionId);

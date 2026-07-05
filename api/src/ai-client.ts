@@ -150,66 +150,144 @@ export function modelSupportsTemperature(model: string): boolean {
 }
 
 /**
- * Maximum character length for a single message content string per provider.
+ * Realistic context-window sizes (in tokens) for the specific models this app
+ * uses, plus common alternatives a deployment might pin via OPENAI_MODEL.
  *
- * - anthropic: hard API-enforced string limit of 10,485,760 chars; we stay
- *              just below it with a small safety buffer.
- * - openai:    no documented per-string limit; gpt-5.5 (Responses API) has a
- *              1M-token context window. Use the history cap.
- * - gemini:    no documented per-string limit; bounded by the 1M-token
- *              context window (~4M chars). Use the history cap.
+ * These are the *real* published windows — getting them right matters because
+ * the char budgets below are derived from them, and an over-stated window means
+ * the length-based trimming never fires and the provider rejects the turn with
+ * a context-length error instead. Numbers verified against provider docs
+ * (July 2026):
+ *   - GPT-5.5 / GPT-5.4:          ~1,000,000 tok API window (400K in Codex)
+ *   - GPT-5 / 5.1 (base):         400,000 tok (272K input cap historically)
+ *   - GPT-4.1:                    1,000,000 tok
+ *   - GPT-4o / 4o-mini / 4-turbo: 128,000 tok
+ *   - o1 / o3 / o4 reasoning:     200,000 tok
+ *   - Claude Opus 4.7:            1,000,000 tok (1M is the default, no beta hdr)
+ *   - Other Claude 4.x / Haiku:   200,000 tok (1M only via beta header)
+ *   - Gemini 1.5/2.5 (all tiers): 1,048,576 tok
+ *   - Nemotron 3 (Ultra/Super/Nano): 262,144 tok NATIVE via NIM. 1M is only
+ *     served when the deployment sets VLLM_ALLOW_LONG_MAX_MODEL_LEN=1 — use the
+ *     AI_CONTEXT_WINDOW override in that case. Defaulting to 256K here is what
+ *     prevents "input exceeds the context window" on the stock NIM endpoint.
  */
-const MAX_MESSAGE_CONTENT_LENGTH_BY_PROVIDER: Record<AIProvider, number> = {
-  anthropic: 10_000_000,
-  openai: 3_500_000,
-  gemini: 3_500_000,
-  // Nemotron 3 ships a 1M-token context window via NIM; mirror Gemini's
-  // per-string cap (no documented hard limit, bounded by the context window).
-  nemotron: 3_500_000,
-};
+function contextWindowForModel(model: string, provider: AIProvider): number {
+  const m = model.toLowerCase();
+
+  // OpenAI
+  if (/^gpt-5\.[45]/.test(m)) return 1_000_000;
+  if (/^gpt-5(\b|[.\-])/.test(m)) return 400_000;
+  if (/^gpt-4\.1/.test(m)) return 1_000_000;
+  if (/^gpt-4o/.test(m) || /^gpt-4-turbo/.test(m) || /^gpt-4/.test(m)) return 128_000;
+  if (/^gpt-3\.5/.test(m)) return 16_384;
+  if (/^o[134](\b|[-_])/.test(m)) return 200_000;
+  if (/^codex/.test(m)) return 400_000;
+
+  // Anthropic Claude — Opus 4.7 defaults to 1M; every other Claude is 200K
+  // unless the caller opts into the 1M beta (which this app does not).
+  if (/^claude-opus-4-7/.test(m)) return 1_000_000;
+  if (/^claude/.test(m)) return 200_000;
+
+  // Google Gemini — 1.5 and 2.5 families expose a ~1M-token window.
+  if (/^gemini/.test(m)) return 1_048_576;
+
+  // NVIDIA Nemotron — 256K native on the stock NIM endpoint.
+  if (/nemotron/.test(m)) return 262_144;
+
+  return CONTEXT_WINDOW_BY_PROVIDER[provider];
+}
 
 /**
- * Maximum total character length across all messages in the conversation
- * history. Uses 2 chars/token (conservative) instead of 4 to account for
- * content with low chars-per-token ratios (JSON, code, tool results).
- *
- * - anthropic: 1M token ctx, reserve 100K for output + system prompt
- *              → 900K target tokens × 2 chars ≈ 1.8M chars
- * - openai:    1M token ctx (gpt-5.5 Responses API), reserve 100K
- *              → 900K target tokens × 2 chars ≈ 1.8M chars
- * - gemini:    1M token ctx, reserve 100K
- *              → 900K target tokens × 2 chars ≈ 1.8M chars
- */
-const MAX_HISTORY_LENGTH_BY_PROVIDER: Record<AIProvider, number> = {
-  anthropic: 1_800_000,
-  openai: 1_800_000,
-  gemini: 1_800_000,
-  // 1M-token context with 100K reserved for output → 900K target × 2 chars
-  nemotron: 1_800_000,
-};
-
-/**
- * Hard token limit of the context window for each provider/model tier.
- * Used to compute the accurate "tokens remaining" value shown in the UI.
+ * Conservative provider fallbacks for models not matched above. Set to the
+ * smallest realistic window for each provider's model family so an unknown
+ * model under-promises (safe) rather than over-promises (overflow).
  */
 const CONTEXT_WINDOW_BY_PROVIDER: Record<AIProvider, number> = {
-  anthropic: 1_000_000,
-  openai: 1_000_000,
-  gemini: 1_000_000,
-  // Nemotron 3 hybrid Mamba-Transformer MoE family ships with 1M-token context.
-  nemotron: 1_000_000,
+  anthropic: 200_000,
+  openai: 128_000,
+  gemini: 1_048_576,
+  nemotron: 262_144,
 };
 
-export function getMaxMessageContentLength(provider: AIProvider): number {
-  return MAX_MESSAGE_CONTENT_LENGTH_BY_PROVIDER[provider];
+// Tokens held back from the raw window for the model's output + system-prompt
+// overhead before computing the input history budget.
+const OUTPUT_TOKEN_RESERVE = 40_000;
+
+// Conservative chars-per-token used to convert a token budget into a character
+// budget for the cheap length-based trimming in pushToSessionHistory. Real text
+// averages ~4 chars/token; we deliberately use 2 so dense JSON/code/tool-result
+// content (and denser tokenizers like Opus 4.7's) stays under the real window.
+const CHARS_PER_TOKEN = 2;
+
+/**
+ * Resolves the token context window for the given provider, honouring the
+ * AI_CONTEXT_WINDOW deployment override and otherwise using the realistic
+ * per-model default for the provider's active smart-tier model.
+ */
+export function getContextWindowSize(provider: AIProvider, model?: string): number {
+  if (config.aiContextWindowOverride && config.aiContextWindowOverride > 0) {
+    return config.aiContextWindowOverride;
+  }
+  const resolved = model ?? getDefaultModel(provider, 'smart');
+  return contextWindowForModel(resolved, provider);
 }
 
-export function getMaxHistoryLength(provider: AIProvider): number {
-  return MAX_HISTORY_LENGTH_BY_PROVIDER[provider];
+/**
+ * Total character budget across all history messages, derived from the model's
+ * real context window: (window − output reserve) input tokens × chars/token.
+ */
+export function getMaxHistoryLength(provider: AIProvider, model?: string): number {
+  const inputTokens = Math.max(0, getContextWindowSize(provider, model) - OUTPUT_TOKEN_RESERVE);
+  return inputTokens * CHARS_PER_TOKEN;
 }
 
-export function getContextWindowSize(provider: AIProvider): number {
-  return CONTEXT_WINDOW_BY_PROVIDER[provider];
+/**
+ * Maximum character length for a single message content string.
+ *
+ * Anthropic enforces a hard ~10 MB per-string limit at the API layer regardless
+ * of the context window, so we cap just below it. Every other provider is bound
+ * only by the context window, so a single message can be as large as the whole
+ * history budget.
+ */
+export function getMaxMessageContentLength(provider: AIProvider, model?: string): number {
+  if (provider === 'anthropic') return 10_000_000;
+  return getMaxHistoryLength(provider, model);
+}
+
+// Realistic average chars-per-token used only for *estimating* how full a
+// stored history is (English prose ≈ 4, code/JSON ≈ 3; 3.5 is a middle
+// ground). Deliberately distinct from CHARS_PER_TOKEN, which is pessimistic on
+// purpose so the trimming budget under-fills the real window.
+const ESTIMATE_CHARS_PER_TOKEN = 3.5;
+
+/**
+ * Estimates the token footprint of a conversation history — every content
+ * string plus serialized tool-call arguments (which the provider also counts,
+ * but the cheap length-based budget in pushToSessionHistory does not).
+ *
+ * Used to drive an accurate "context remaining" figure in the UI and to
+ * proactively trim before a request would overflow. Approximate by design: the
+ * provider's own tokenizer is authoritative but only observable *after* a
+ * successful call, which is exactly why a failed/oversized turn otherwise leaves
+ * the UI showing a stale, too-optimistic number.
+ */
+export function estimateHistoryTokens(history: AIMessage[]): number {
+  let chars = 0;
+  for (const msg of history) {
+    if (typeof msg.content === 'string') chars += msg.content.length;
+    else if (msg.content != null) chars += JSON.stringify(msg.content).length;
+    if (msg.tool_calls?.length) chars += JSON.stringify(msg.tool_calls).length;
+  }
+  return Math.ceil(chars / ESTIMATE_CHARS_PER_TOKEN);
+}
+
+/**
+ * Safe input-token budget for a turn: the real context window minus the reserve
+ * held back for the model's output. Requests estimated to exceed this should be
+ * trimmed before being sent.
+ */
+export function getInputTokenBudget(provider: AIProvider, model?: string): number {
+  return Math.max(0, getContextWindowSize(provider, model) - OUTPUT_TOKEN_RESERVE);
 }
 
 // ---------------------------------------------------------------------------

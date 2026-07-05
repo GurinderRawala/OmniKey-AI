@@ -6,6 +6,7 @@ import {
   extractProjectPath,
   extractStoredProjectPath,
   findGroupByExactPath,
+  isCatchAllGroupName,
   stripResponseWrappers,
 } from '../utils';
 
@@ -14,8 +15,8 @@ const aiModel = getDefaultModel(config.aiProvider, 'fast');
 /**
  * classifyGroup picks ONLY the group NAME for a session. Group descriptions
  * are intentionally NOT produced here — that responsibility belongs to the
- * cron's `generateGroupDescriptionFromSummaries`, which rolls settled
- * per-session summaries up into a group-level description.
+ * grouping cron's agent pass (see ./agent/regroupViaAgent), which refreshes
+ * each group's description and verified project root across all sessions.
  *
  * Why the split: the first turn of a new session is the worst possible
  * moment to write a description that is supposed to describe the whole
@@ -96,11 +97,14 @@ Rules for the group name (in priority order):
    Do NOT re-use the ancestor or descendant group's name.
 3. If no path is detected but an existing group's NAME clearly matches the
    subject of the messages, return that existing name.
-4. Otherwise create a concise NEW group name: 2-4 words, Title Case, derived
-   from the deepest meaningful path segment (e.g. /Users/john/projects/my-app
-   → "My App") or from the topic when no path is present.
-5. If the session is purely general/conversational with no project signal,
-   use "General".
+4. Otherwise, IF the session clearly concerns a specific project, create a
+   concise NEW group name: 2-4 words, Title Case, derived from the deepest
+   meaningful path segment (e.g. /Users/john/projects/my-app → "My App") or
+   from the project topic.
+5. If the session is purely general/conversational, or you cannot confidently
+   tie it to ONE specific project, return an EMPTY name: {"groupName":""}.
+   Do NOT invent a catch-all bucket like "Other", "General", "Misc", or
+   "Uncategorized" — leaving the session ungrouped is the correct outcome.
 
 You ONLY need to produce a group NAME here. Do NOT write a description —
 the cron job builds the group's description from per-session summaries
@@ -129,6 +133,16 @@ Respond with ONLY valid JSON, no markdown:
     const response = z.object({ groupName: z.string() }).parse(parsed);
     let groupName = response.groupName.trim().slice(0, 100);
     if (!groupName) return null;
+
+    // Never create a catch-all bucket ("Other", "General", "Misc", …). If the
+    // model fell back to one, leave the session ungrouped — a later cron pass
+    // can classify it once there's a clearer project signal.
+    if (isCatchAllGroupName(groupName)) {
+      logger.info('classifyGroup: refusing catch-all group name; leaving session ungrouped', {
+        groupName,
+      });
+      return null;
+    }
 
     // Validate the LLM-chosen existing group, if any, against project paths.
     // The LLM's name-based pick may be wrong — it might re-use a parent

@@ -18,6 +18,11 @@ export interface AgentSessionAttributes {
   groupDescription?: string | null;
   groupDescriptionUpdatedAt?: Date | null;
   sessionSummary?: string | null;
+  // True when the user explicitly chose this session's group at the start of
+  // the session. Locked sessions are never (re)classified and are never moved
+  // between groups by the grouping cron — we only ever attach them to the
+  // chosen group. See sessionGrouping and agentServer.getOrCreateSession.
+  groupLocked?: boolean;
   lastActiveAt: Date;
   createdAt?: Date;
   updatedAt?: Date;
@@ -38,6 +43,7 @@ interface AgentSessionCreationAttributes extends Optional<
   | 'groupDescription'
   | 'groupDescriptionUpdatedAt'
   | 'sessionSummary'
+  | 'groupLocked'
   | 'lastActiveAt'
   | 'createdAt'
   | 'updatedAt'
@@ -61,6 +67,7 @@ export class AgentSession
   public groupDescription?: string | null;
   public groupDescriptionUpdatedAt?: Date | null;
   public sessionSummary?: string | null;
+  public groupLocked?: boolean;
   public lastActiveAt!: Date;
   public readonly createdAt!: Date;
   public readonly updatedAt!: Date;
@@ -148,6 +155,12 @@ AgentSession.init(
       type: DataTypes.TEXT,
       allowNull: true,
       field: 'session_summary',
+    },
+    groupLocked: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+      field: 'group_locked',
     },
     lastActiveAt: {
       type: DataTypes.DATE,

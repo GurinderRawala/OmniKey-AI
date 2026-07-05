@@ -26,7 +26,8 @@ void bootstrapWorker(
       // (via RUNNING_JOB_IDS) and updates lastRunAt / nextRunAt itself, so we
       // just fire-and-forget here and let errors surface through its own
       // logger.error call.
-      await executeJob(job).catch((err) => {
+      const sessionId = typeof msg.sessionId === 'string' ? msg.sessionId : undefined;
+      await executeJob(job, sessionId).catch((err) => {
         logger.error('runJob: execution failed.', { jobId: job.id, error: err });
       });
     },

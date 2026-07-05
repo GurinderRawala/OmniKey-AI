@@ -101,6 +101,13 @@ export const config = {
   // (codex-mini-latest) or pinning a specific GPT version.
   openaiModel: getEnv('OPENAI_MODEL', false),
 
+  // Optional context-window override (in tokens). Leave unset (0) to use the
+  // realistic per-model default resolved in ai-client. Set this when a
+  // deployment's real window differs from the model's published default — most
+  // notably a self-hosted NIM serving Nemotron with VLLM_ALLOW_LONG_MAX_MODEL_LEN
+  // enabled, where the window can be raised from the 256K native default to 1M.
+  aiContextWindowOverride: getNumberEnv('AI_CONTEXT_WINDOW', 0),
+
   // Database
   databaseUrl: getEnv('DATABASE_URL', getBooleanEnv('IS_SELF_HOSTED', false) ? false : true),
   dbLogging: getBooleanEnv('DB_LOGGING', false),

@@ -1,16 +1,12 @@
 /**
- * sessionGrouping.ts holds the four public entry points that the rest of
- * the app calls:
+ * sessionGrouping.ts holds the public entry points that the rest of the app
+ * calls:
  *
  *   - updateSessionGroup(sessionId, subscriptionId)
- *     Called by the agent server when a session sends its first turn and
- *     has no group yet. Picks a group NAME via classifyGroup, attaches
- *     the session to that group, and stops. No description work, no
- *     summary work.
- *
- *   - summariseSession(sessionId, subscriptionId)
- *     Called by the agent server's WebSocket close handler. Generates
- *     a fresh sessionSummary from the just-finished session.
+ *     Called by the agent server when a session produces its first
+ *     <final_answer> and has no group yet (and was not user-locked). Picks a
+ *     group NAME via classifyGroup with ONE completion, attaches the session
+ *     to that group, and stops. No description work, no summary work.
  *
  *   - buildProjectContext(subId, groupName, currentInputs, excludeSessionId)
  *     Called by the agent server before every user turn. Assembles the
@@ -18,15 +14,21 @@
  *     last 5 sibling session summaries + a confidence signal.
  *
  *   - refreshAllSessionGroups / startGroupingCronJob (re-exported from
- *     ./cron) — the hourly cron job entry points.
+ *     ./cron) — the hourly cron. Each tick runs ONE agent pass per
+ *     subscription (see ./agent/regroupViaAgent) that sees all recent sessions
+ *     at once and, via the assign_session_groups tool, classifies ungrouped
+ *     sessions, refreshes group descriptions + verified project roots, and
+ *     fills in missing per-session summaries. Per-session summaries and group
+ *     descriptions are therefore produced by that agent pass, not by any
+ *     per-session LLM call on session end.
  *
  * The heavy lifting (LLM prompts, path normalisation, etc.) lives in
- * ./llm and ./utils. This file is the orchestration layer only.
+ * ./llm, ./agent and ./utils. This file is the orchestration layer only.
  */
 import { Op } from 'sequelize';
 import { AgentSession } from '../../models/agentSession';
 import { logger } from '../../logger';
-import { classifyGroup, generateSessionSummary } from './llm';
+import { classifyGroup } from './llm';
 import {
   extractProjectPath,
   extractStoredProjectPath,
@@ -177,64 +179,22 @@ export async function buildProjectContext(
     groupDescriptionUpdatedAt: descUpdatedAt,
   };
 }
-
-// ---------------------------------------------------------------------------
-// summariseSession — (re)generate the per-session summary for a single
-// session. Called by the agent server when a session ends.
-// ---------------------------------------------------------------------------
-
-/**
- * (Re)generate the per-session summary for a single session. The summary
- * is the unit of "recent activity" surfaced in future turns'
- * `<project_context>` block — by refreshing it on session-end rather
- * than on a cron schedule, the next session in the same group sees what
- * the user JUST finished doing instead of what they were doing an hour
- * ago.
- *
- * We do not gate by an in-memory marker here because the caller already
- * knows the session has just ended; if there's nothing to summarise (no
- * real user inputs) we bail silently.
- */
-export async function summariseSession(sessionId: string, subscriptionId: string): Promise<void> {
-  try {
-    const session = await AgentSession.findOne({
-      where: { id: sessionId, subscriptionId },
-      attributes: ['id', 'historyJson'],
-    });
-    if (!session) return;
-
-    const inputs = extractUserInputs(session.historyJson);
-    if (!inputs.length) return;
-
-    const summary = await generateSessionSummary(inputs);
-    if (!summary) return;
-
-    await AgentSession.update({ sessionSummary: summary }, { where: { id: sessionId } });
-
-    logger.info('Session summary generated on session end', { sessionId });
-  } catch (err) {
-    logger.warn('Failed to generate session summary on session end', { sessionId, error: err });
-  }
-}
-
 // ---------------------------------------------------------------------------
 // updateSessionGroup — pick a group name for a session and attach the
-// session to it. Called by the agent server when a session sends its
-// first turn and has no group yet.
+// session to it. Called by the agent server when a session produces its
+// first <final_answer>, has no group yet, and was not user-locked.
 // ---------------------------------------------------------------------------
 
 /**
- * Pick a group name for a session and attach the session to it. Does NO
- * description work and NO summary work:
- *   - Group descriptions are produced by the cron from settled per-session
- *     summaries (see refreshGroupDescription).
- *   - Per-session summaries are produced when the session ENDS (see
- *     summariseSession, fired from the agent server's WebSocket close
- *     handler).
+ * Pick a group name for a session and attach the session to it with a SINGLE
+ * completion call. Does NO description work and NO summary work — those are
+ * produced by the hourly grouping cron's agent pass (see the package header
+ * and ./agent/regroupViaAgent), which sees all sessions at once and can verify
+ * project roots on disk.
  *
- * Doing description work here used to mean the very first turn of a new
- * session got to shape the group's description around a single task; that
- * drift is what this layering fixes.
+ * Doing description work here used to mean the very first turn of a new session
+ * got to shape the group's description around a single task; that drift is what
+ * this layering fixes.
  */
 export async function updateSessionGroup(sessionId: string, subscriptionId: string): Promise<void> {
   try {

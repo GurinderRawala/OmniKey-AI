@@ -34,7 +34,7 @@ struct SessionHistoryBlock: Decodable, Identifiable {
 
 // MARK: - Session metadata returned by GET /api/agent/sessions
 
-struct AgentSessionInfo: Identifiable, Decodable {
+struct AgentSessionInfo: Identifiable, Decodable, Equatable {
     let id: String
     let title: String
     let platform: String?

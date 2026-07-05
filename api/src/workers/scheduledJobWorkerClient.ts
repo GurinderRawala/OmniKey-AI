@@ -17,8 +17,8 @@ export function setScheduledJobWorker(worker: ManagedWorker | null): void {
  * caller is expected to fall back to an in-process `executeJob` when this
  * returns false.
  */
-export function triggerJobInWorker(jobId: string): boolean {
+export function triggerJobInWorker(jobId: string, sessionId?: string): boolean {
   if (!scheduledJobWorker) return false;
-  scheduledJobWorker.postMessage({ type: 'runJob', jobId });
+  scheduledJobWorker.postMessage({ type: 'runJob', jobId, sessionId });
   return true;
 }

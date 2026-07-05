@@ -26,3 +26,4 @@ export {
 export type { StrippedInput } from './extractUserInputs';
 export { extractStoredProjectPath } from './extractStoredProjectPath';
 export { findGroupByExactPath } from './findGroupByExactPath';
+export { isCatchAllGroupName } from './genericGroupNames';
