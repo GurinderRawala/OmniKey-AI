@@ -76,6 +76,13 @@ namespace OmniKey.Windows
 
         private async Task InitializeAuthAsync()
         {
+            // First-launch Terms & Conditions gate. Runs synchronously on
+            // the UI thread before any subscription / activation work so
+            // the user cannot use OmniKey without accepting the current
+            // terms. Declining terminates the process.
+            if (!TermsAcceptance.HasAcceptedCurrent && !ShowTermsForm())
+                return;
+
             if (ApiClient.IsSelfHosted)
             {
                 // Self-hosted backend issues a JWT without a subscription key.
@@ -101,6 +108,33 @@ namespace OmniKey.Windows
 
             // No key, or activation failed – show the license form
             ShowLicenseForm();
+        }
+
+        /// <summary>
+        /// Presents the modal Terms &amp; Conditions window. Uses the WPF
+        /// <see cref="Views.TermsWindow"/> so the packaged TERMS.md is
+        /// rendered by the same MdXaml-backed markdown pipeline as
+        /// ChatPage (headings, lists, inline formatting, links). Returns
+        /// true if the user accepted; false otherwise (in which case the
+        /// process exits).
+        /// </summary>
+        private bool ShowTermsForm()
+        {
+            // Hop onto the WPF dispatcher so ShowDialog() is invoked on
+            // the correct thread — HotkeyForm runs on the same STA thread
+            // as the WPF app, but the dispatcher.Invoke roundtrip keeps
+            // the modality guarantees consistent with the rest of the
+            // WPF-driven UI (see Program.Main / ShowMainWindow).
+            bool? accepted = Program.WpfApp.Dispatcher.Invoke(() =>
+            {
+                var window = new Views.TermsWindow();
+                return window.ShowDialog();
+            });
+
+            if (accepted == true) return true;
+
+            Application.Exit();
+            return false;
         }
 
         private void ShowLicenseForm()

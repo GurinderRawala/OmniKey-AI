@@ -1,0 +1,110 @@
+<ui:FluentWindow
+    x:Class="OmniKey.Windows.Views.TermsWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+    xmlns:md="clr-namespace:OmniKey.Windows.MarkdownRender"
+    Title="OmniKey AI — Terms &amp; Conditions"
+    Width="820"
+    Height="720"
+    MinWidth="720"
+    MinHeight="600"
+    ExtendsContentIntoTitleBar="True"
+    WindowBackdropType="Mica"
+    WindowCornerPreference="Round"
+    WindowStartupLocation="CenterScreen"
+    ShowInTaskbar="True"
+    mc:Ignorable="d">
+
+    <Grid Background="{StaticResource Nord.WindowBackgroundBrush}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <ui:TitleBar
+            Grid.Row="0"
+            Title="OmniKey"
+            ShowMaximize="False"
+            ShowMinimize="False" />
+
+        <!-- Header (title + subtitle) with generous top / horizontal breathing room -->
+        <StackPanel
+            Grid.Row="1"
+            Margin="32,24,32,16"
+            HorizontalAlignment="Stretch">
+            <TextBlock
+                Text="Terms &amp; Conditions"
+                FontSize="20"
+                FontWeight="SemiBold"
+                Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                HorizontalAlignment="Center" />
+            <TextBlock
+                Margin="0,6,0,0"
+                Text="Please review and accept the terms before using OmniKey AI."
+                FontSize="12.5"
+                Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                HorizontalAlignment="Center"
+                TextWrapping="Wrap" />
+        </StackPanel>
+
+        <!-- Scrollable, markdown-rendered body — reuses the same MdXaml
+             attached property that ChatPage uses for LLM answers. -->
+        <Border
+            Grid.Row="2"
+            Margin="32,0,32,16"
+            Background="{StaticResource Nord.PanelBackgroundBrush}"
+            BorderBrush="{StaticResource Nord.BorderBrush}"
+            BorderThickness="1"
+            CornerRadius="12">
+            <FlowDocumentScrollViewer
+                x:Name="TermsViewer"
+                Background="Transparent"
+                Padding="20,16,20,16"
+                IsToolBarVisible="False"
+                VerticalScrollBarVisibility="Auto"
+                md:Markdown.Source="{Binding TermsMarkdown, RelativeSource={RelativeSource AncestorType=ui:FluentWindow}}" />
+        </Border>
+
+        <!-- Disclaimer summary directly beneath the scroller -->
+        <TextBlock
+            Grid.Row="3"
+            Margin="32,0,32,20"
+            Text="OmniKey AI is open-source software released under the MIT License. It is provided AS-IS, without warranty. OmniKey and its contributors are not liable for any damages, data loss, third-party charges, or issues arising from AI-generated content."
+            FontSize="11"
+            FontStyle="Italic"
+            Foreground="{StaticResource Nord.SecondaryTextBrush}"
+            TextWrapping="Wrap" />
+
+        <!-- Action row with matching bottom breathing room -->
+        <Grid
+            Grid.Row="4"
+            Margin="32,0,32,28">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <ui:Button
+                Grid.Column="0"
+                Content="Decline &amp; Quit"
+                Appearance="Secondary"
+                Padding="16,8"
+                Click="OnDeclineClick" />
+
+            <ui:Button
+                x:Name="AcceptButton"
+                Grid.Column="2"
+                Content="I Accept"
+                Appearance="Primary"
+                Padding="20,8"
+                Click="OnAcceptClick" />
+        </Grid>
+    </Grid>
+</ui:FluentWindow>

@@ -12,6 +12,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     private var taskInstructionsWindowController: TaskInstructionsWindowController?
     private var agentThinkingWindowController: AgentThinkingWindowController?
     private var licenseWindowController: LicenseWindowController?
+    private var termsWindowController: TermsWindowController?
     private var manualWindowController: ManualWindowController?
     private var scheduledJobsWindowController: ScheduledJobsWindowController?
     private var scheduledJobsMenuItem: NSMenuItem?
@@ -103,6 +104,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
             object: nil
         )
 
+        // Terms & Conditions gate — must run before the subscription /
+        // hotkey / manual logic. If the user has already accepted the
+        // current version we fall straight through; otherwise the terms
+        // window blocks the rest of the launch flow until accepted (or
+        // the user quits by declining).
+        if TermsAcceptance.hasAcceptedCurrent {
+            beginSubscriptionFlow()
+        } else {
+            showTermsWindow { [weak self] in
+                self?.beginSubscriptionFlow()
+            }
+        }
+    }
+
+    /// Runs the existing subscription / license / manual gating. Extracted
+    /// from `applicationDidFinishLaunching` so it can be deferred behind
+    /// the first-launch Terms & Conditions acceptance.
+    private func beginSubscriptionFlow() {
         // Self-hosted: call /activate with an empty key to obtain a JWT
         // (the backend issues one without requiring a subscription key).
         // We still need the token for the agent WebSocket, so we cannot skip this.
@@ -144,6 +163,49 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
                 showLicenseWindow()
             }
         }
+    }
+
+    /// Presents the first-launch Terms & Conditions window. Invokes
+    /// `onAccept` on the main queue once the user accepts. Declining
+    /// closes the window and terminates the app inside the controller.
+    private func showTermsWindow(onAccept: @escaping () -> Void) {
+        if termsWindowController == nil {
+            termsWindowController = TermsWindowController(onAccept: { [weak self] in
+                // Release the controller so we don't hold on to the window
+                // for the rest of the process lifetime.
+                self?.termsWindowController = nil
+                onAccept()
+            })
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        termsWindowController?.showWindow(nil)
+    }
+
+    /// Central gate for every user-facing menu action. If the current
+    /// version of the Terms & Conditions has not been accepted yet, we
+    /// force-focus the terms window and swallow the requested action so
+    /// no menu entry (Chat, Settings, Subscription, Manual, Agent
+    /// Session, etc.) can be used to bypass the acceptance step.
+    ///
+    /// Callers should treat a `false` return value as "action was
+    /// intercepted, do nothing".
+    @discardableResult
+    private func requireTermsAccepted() -> Bool {
+        if TermsAcceptance.hasAcceptedCurrent { return true }
+
+        // If the terms window has already been dismissed by an accept
+        // callback but state is somehow out of sync, or the controller
+        // was released, recreate it. Otherwise just bring it back to
+        // the front.
+        if termsWindowController == nil {
+            showTermsWindow { [weak self] in
+                self?.beginSubscriptionFlow()
+            }
+        } else {
+            NSApp.activate(ignoringOtherApps: true)
+            termsWindowController?.showWindow(nil)
+        }
+        return false
     }
 
     private func setupMenuBar() {
@@ -219,13 +281,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     }
 
     @objc private func checkForUpdatesFromMenu() {
+        guard requireTermsAccepted() else { return }
         updaterController?.checkForUpdates(nil)
     }
     @objc func checkForUpdatesFromMainMenu() {
+        guard requireTermsAccepted() else { return }
         updaterController?.checkForUpdates(nil)
     }
 
     @objc func showSettingsWindowFromMainMenu() {
+        // showSettingsWindow itself gates on requireTermsAccepted, but we
+        // stop here so an unaccepted user isn't briefly walked into the
+        // window-controller code path from a global menu shortcut.
+        guard requireTermsAccepted() else { return }
         showSettingsWindow()
     }
 
@@ -233,6 +301,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         // The chat window owns the actual "start new chat" action via
         // ChatModel; opening (or focusing) the chat window first is the
         // safest cross-state entry point.
+        guard requireTermsAccepted() else { return }
         showChatWindow()
         ChatModel.shared.startNewChat()
     }
@@ -241,6 +310,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         // Reuse the existing manual window — it's what users get the
         // first time they launch and is the closest thing OmniKey has
         // to a help center today.
+        guard requireTermsAccepted() else { return }
         if manualWindowController == nil {
             manualWindowController = ManualWindowController()
         }
@@ -265,6 +335,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     }
 
     func showChatWindow() {
+        guard requireTermsAccepted() else { return }
         if chatWindowController == nil {
             chatWindowController = ChatWindowController()
         }
@@ -277,6 +348,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     }
 
     func showTaskInstructionsWindow() {
+        guard requireTermsAccepted() else { return }
         guard isAuthorized else {
             showLicenseWindow()
             return
@@ -295,6 +367,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     }
 
     func showScheduledJobsWindow() {
+        guard requireTermsAccepted() else { return }
         guard isAuthorized else { showLicenseWindow(); return }
         if scheduledJobsWindowController == nil {
             scheduledJobsWindowController = ScheduledJobsWindowController()
@@ -308,6 +381,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     }
 
     func showMCPServersWindow() {
+        guard requireTermsAccepted() else { return }
         guard isAuthorized else { showLicenseWindow(); return }
         if mcpServersWindowController == nil {
             mcpServersWindowController = MCPServersWindowController()
@@ -321,6 +395,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     }
 
     func showSettingsWindow() {
+        guard requireTermsAccepted() else { return }
         if settingsWindowController == nil {
             settingsWindowController = SettingsWindowController()
         }
@@ -333,6 +408,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     }
 
     func showAgentThinkingWindow() {
+        guard requireTermsAccepted() else { return }
         if agentThinkingWindowController == nil {
             agentThinkingWindowController = AgentThinkingWindowController()
         }
@@ -346,6 +422,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     }
 
     private func showManualWindow() {
+        guard requireTermsAccepted() else { return }
         if manualWindowController == nil {
             manualWindowController = ManualWindowController()
         }
@@ -359,6 +436,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     }
 
     private func showLicenseWindow() {
+        guard requireTermsAccepted() else { return }
         if licenseWindowController == nil {
             licenseWindowController = LicenseWindowController()
         }
