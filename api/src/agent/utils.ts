@@ -3,7 +3,6 @@ import {
   AIMessage,
   AITool,
   getMaxMessageContentLength,
-  getMaxHistoryLength,
   providerSupportsImageGeneration,
 } from '../ai-client';
 import { AgentSendFn, SessionState } from './types';
@@ -150,27 +149,25 @@ export function sendFinalAnswer(
 
 // Per-message hard string limit enforced by the provider API.
 const MAX_MESSAGE_CONTENT = getMaxMessageContentLength(config.aiProvider);
-// Total character budget across all history messages (derived from the
-// provider's context-window size minus headroom for output + system prompt).
-export const MAX_HISTORY_TOTAL = getMaxHistoryLength(config.aiProvider);
-
-const FINAL_ANSWER_REQUEST: AIMessage = {
-  role: 'user',
-  content:
-    'Content was truncated because a length limit was reached. ' +
-    'You MUST stop making tool calls and provide a final answer immediately using <final_answer>...</final_answer>.',
-};
+// Head/tail chars kept when a single message exceeds the per-message cap.
+const OVER_CAP_HEAD_RATIO = 0.6;
 
 /**
- * Pushes a message onto the session history, enforcing two independent limits:
+ * Pushes a message onto the session history.
  *
- * 1. **Per-message limit** (`MAX_MESSAGE_CONTENT`) — the provider's hard cap
- *    on a single content string (e.g. Anthropic: 10 MB, OpenAI/Gemini: context-bound).
- * 2. **Total history limit** (`MAX_HISTORY_TOTAL`) — the cumulative character
- *    budget derived from each provider's context-window size.
+ * The only limit enforced here is the provider's **per-message** hard cap
+ * (`MAX_MESSAGE_CONTENT` — e.g. Anthropic's ~10 MB per content string). A single
+ * message larger than that is compacted in the middle (keeping a head and tail)
+ * so the request is still accepted while retaining the most useful context.
  *
- * When either limit is hit the message content is truncated and a separate
- * `user` message is appended instructing the model to emit a final answer.
+ * Fitting the *whole* history inside the model's context window is deliberately
+ * NOT done here. `completeWithContextRecovery` proactively trims the oldest
+ * turns — and reactively prunes/compacts on an over-window error — before every
+ * send. That keeps the newest turn (the current task) intact and lets the agent
+ * keep working. The previous behaviour truncated the *latest* message and
+ * injected a "stop and give a final answer" directive, which made the agent
+ * abandon the task even after recovery had freed up room; that is intentionally
+ * gone.
  */
 export function pushToSessionHistory(
   logger: Logger,
@@ -183,29 +180,21 @@ export function pushToSessionHistory(
   }
 
   let content = message.content;
-  let limitHit = false;
 
-  // 1. Per-message content limit.
+  // Per-message content cap. Compact the middle rather than dropping the tail so
+  // a huge single message keeps a useful head and tail. This is a safety net
+  // only — terminal output is already bounded upstream by truncateTerminalOutput.
   if (content.length > MAX_MESSAGE_CONTENT) {
-    content = content.slice(0, MAX_MESSAGE_CONTENT);
-    limitHit = true;
-  }
-
-  // 2. Total history length limit.
-  const currentTotal = session.history.reduce((acc, msg) => {
-    if (typeof msg.content === 'string') return acc + msg.content.length;
-    if (msg.content != null) return acc + JSON.stringify(msg.content).length;
-    return acc;
-  }, 0);
-  const remaining = MAX_HISTORY_TOTAL - currentTotal;
-  if (content.length > remaining) {
-    // Truncate to whatever space is left, but never to a zero-length string —
-    // empty messages break the Responses API and confuse other models. If there
-    // is no room at all, skip the message entirely and just inject the
-    // final-answer prompt.
-    const trimmed = Math.max(0, remaining);
-    content = trimmed > 0 ? content.slice(0, trimmed) : '';
-    limitHit = true;
+    const head = Math.floor(MAX_MESSAGE_CONTENT * OVER_CAP_HEAD_RATIO);
+    const tail = Math.max(0, MAX_MESSAGE_CONTENT - head - 200);
+    const dropped = content.length - head - tail;
+    content =
+      content.slice(0, head) +
+      `\n\n[... ${dropped.toLocaleString()} chars omitted (message exceeded the per-message size limit) ...]\n\n` +
+      content.slice(content.length - tail);
+    logger.warn(
+      `Single message exceeded per-message cap; compacted from ${message.content.length} to ${content.length} chars.`,
+    );
   }
 
   // Always push messages that carry function-call data even when their text
@@ -217,18 +206,6 @@ export function pushToSessionHistory(
     (message.tool_calls?.length ?? 0) > 0 || message.role === 'tool';
   if (content.length > 0 || hasFunctionData) {
     session.history.push({ ...message, content });
-  }
-
-  if (limitHit) {
-    // Avoid pushing duplicate final-answer prompts when successive messages
-    // are all being dropped (remaining has been 0 for several turns).
-    const lastMsg = session.history[session.history.length - 1];
-    if (lastMsg?.content !== FINAL_ANSWER_REQUEST.content) {
-      logger.warn(
-        `History limits exceeded. Message truncated to ${content.length} chars, total history is now ${currentTotal + content.length} chars.`,
-      );
-      session.history.push(FINAL_ANSWER_REQUEST);
-    }
   }
 }
 
@@ -274,6 +251,11 @@ export function isContextLengthError(err: unknown): boolean {
     message.includes('maximum context') ||
     message.includes('too many tokens') ||
     message.includes('reduce the length') ||
+    // Anthropic over-window error: "prompt is too long: N tokens > M maximum".
+    // It carries no machine code and uses ">" rather than the word "exceed",
+    // so match the phrasing directly.
+    message.includes('prompt is too long') ||
+    (message.includes('token') && message.includes('maximum')) ||
     (message.includes('token') && message.includes('exceed'))
   );
 }

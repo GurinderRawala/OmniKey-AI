@@ -25,6 +25,19 @@ describe('isContextLengthError', () => {
     expect(isContextLengthError({ message: 'prompt is too many tokens' })).toBe(true);
   });
 
+  it('detects the real Anthropic over-window message', () => {
+    // Exact shape thrown by the Anthropic SDK: no machine code, ">" instead of
+    // "exceed". Regression guard for the 400 that was killing agent turns.
+    expect(
+      isContextLengthError({
+        status: 400,
+        type: 'error',
+        message:
+          '400 {"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 1337986 tokens > 1000000 maximum"}}',
+      }),
+    ).toBe(true);
+  });
+
   it('ignores unrelated errors and non-objects', () => {
     expect(isContextLengthError({ code: 'rate_limit_exceeded', message: 'slow down' })).toBe(false);
     expect(isContextLengthError(null)).toBe(false);
