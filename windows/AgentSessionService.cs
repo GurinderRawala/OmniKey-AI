@@ -33,6 +33,22 @@ namespace OmniKey.Windows
         /// <summary>Human-readable description of the project group. Used
         /// as the tooltip on group filter pills.</summary>
         public string? GroupDescription { get; set; }
+
+        /// <summary>Server-persisted snapshot of the task-instruction
+        /// template id that was default when this session was first
+        /// created. Never changes for the lifetime of the session, even
+        /// if the user later renames or replaces their default template
+        /// in a different chat. Null when the session was started with
+        /// no default template configured, or was created before the
+        /// server started snapshotting this field.</summary>
+        public string? TaskInstructionId { get; set; }
+
+        /// <summary>Server-persisted heading (display name) of the
+        /// task-instruction template that was locked to this session at
+        /// creation time. Drives the LOCKED chip shown in the chat
+        /// composer for any non-new session — must be surfaced verbatim
+        /// so the label stays stable across template renames elsewhere.</summary>
+        public string? TaskInstructionHeading { get; set; }
     }
 
     /// <summary>

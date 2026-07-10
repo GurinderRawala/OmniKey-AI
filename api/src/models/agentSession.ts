@@ -23,6 +23,14 @@ export interface AgentSessionAttributes {
   // between groups by the grouping cron — we only ever attach them to the
   // chosen group. See sessionGrouping and agentServer.getOrCreateSession.
   groupLocked?: boolean;
+  // Snapshot of the task-instruction template that was default when this
+  // session was first created. Persisted once at session-create time and
+  // never changed thereafter so the UI can display the locked task
+  // instructions bound to this session even when the subscription's default
+  // template is later renamed, replaced, or cleared. Both are nullable when
+  // the session was started with "No instruction" configured.
+  taskInstructionId?: string | null;
+  taskInstructionHeading?: string | null;
   lastActiveAt: Date;
   createdAt?: Date;
   updatedAt?: Date;
@@ -44,6 +52,8 @@ interface AgentSessionCreationAttributes extends Optional<
   | 'groupDescriptionUpdatedAt'
   | 'sessionSummary'
   | 'groupLocked'
+  | 'taskInstructionId'
+  | 'taskInstructionHeading'
   | 'lastActiveAt'
   | 'createdAt'
   | 'updatedAt'
@@ -68,6 +78,8 @@ export class AgentSession
   public groupDescriptionUpdatedAt?: Date | null;
   public sessionSummary?: string | null;
   public groupLocked?: boolean;
+  public taskInstructionId?: string | null;
+  public taskInstructionHeading?: string | null;
   public lastActiveAt!: Date;
   public readonly createdAt!: Date;
   public readonly updatedAt!: Date;
@@ -161,6 +173,16 @@ AgentSession.init(
       allowNull: false,
       defaultValue: false,
       field: 'group_locked',
+    },
+    taskInstructionId: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      field: 'task_instruction_id',
+    },
+    taskInstructionHeading: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      field: 'task_instruction_heading',
     },
     lastActiveAt: {
       type: DataTypes.DATE,

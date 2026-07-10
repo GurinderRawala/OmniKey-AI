@@ -170,6 +170,55 @@ namespace OmniKey.Windows
         public bool IsLoadingSessionHistory { get; private set; }
         public bool IsRunning { get; private set; }
 
+        /// <summary>
+        /// True while the composer setup (task instruction + project) can
+        /// still be modified. Mirrors macOS <c>canChangeSessionSetup</c>:
+        /// once a session has been started (an id exists, or the user has
+        /// staged the first turn, or a stream is in flight) the choices
+        /// become LOCKED so an existing conversation can't silently switch
+        /// its stored instructions or project mid-thread.
+        /// </summary>
+        public bool CanChangeSessionSetup =>
+            ActiveSessionId == null
+            && Messages.Count == 0
+            && !IsRunning
+            && !IsLoadingSessionHistory;
+
+        /// <summary>
+        /// The task-instruction heading to display in the composer chip.
+        ///
+        /// While the session is still editable this tracks the
+        /// subscription's current default template. Once a session has
+        /// been started, the label is locked to that session:
+        ///   1. <see cref="AgentSessionInfo.TaskInstructionHeading"/> is
+        ///      authoritative — it was snapshotted by the server at
+        ///      session-create time and never changes.
+        ///   2. If a pre-existing session predates that snapshot the
+        ///      composer falls through to <c>"No instruction"</c>.
+        /// The subscription's CURRENT default is intentionally not used
+        /// as a fallback for locked sessions — that was the source of
+        /// the bug where the chip silently changed whenever the user
+        /// picked a different default template in another chat.
+        /// </summary>
+        public string DisplayedTaskInstructionHeading
+        {
+            get
+            {
+                if (CanChangeSessionSetup)
+                    return DefaultTaskTemplate?.Heading ?? "No instruction";
+
+                var locked = ActiveSession?.TaskInstructionHeading;
+                if (!string.IsNullOrEmpty(locked))
+                    return locked!;
+
+                return "No instruction";
+            }
+        }
+
+        public bool HasDisplayedTaskInstruction =>
+            DisplayedTaskInstructionHeading != "No instruction";
+
+
         /// <summary>One-shot signal consumed by the sidebar: when set, the
         /// sidebar expands whichever group currently contains this session
         /// id so the user can see the freshly-classified chat right after
@@ -355,6 +404,12 @@ namespace OmniKey.Windows
             if (ActiveSessionId == null)
             {
                 string title = text.Length > 60 ? text[..60] : text;
+                // Stamp the placeholder with the task-instruction heading we
+                // just locked in. The next RefreshSessions() will replace this
+                // row with the server-authoritative record; until then the
+                // composer chip reads the right value straight from the
+                // placeholder rather than falling through to "No instruction"
+                // on the very first turn.
                 var placeholder = new AgentSessionInfo
                 {
                     Id = sessionId,
@@ -364,6 +419,8 @@ namespace OmniKey.Windows
                     RemainingContextTokens = 0,
                     GroupName = _selectedGroup?.GroupName,
                     GroupDescription = _selectedGroup?.GroupDescription,
+                    TaskInstructionId = DefaultTaskTemplate?.Id,
+                    TaskInstructionHeading = DefaultTaskTemplate?.Heading,
                     LastActiveAt = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture),
                 };
 

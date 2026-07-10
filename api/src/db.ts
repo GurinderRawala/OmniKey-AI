@@ -75,6 +75,22 @@ const COLUMN_MIGRATIONS: ColumnMigration[] = [
     column: 'group_locked',
     definition: 'TINYINT(1) NOT NULL DEFAULT 0',
   },
+  // Added: snapshots the task-instruction template (id + heading) that was
+  // the subscription's default at the moment the session was created. Both
+  // stay null when the user had no default template configured. These
+  // columns are the source of truth for the "locked task instruction" chip
+  // in the desktop clients — the label must not change if the user later
+  // renames or replaces their default template in a different chat.
+  {
+    table: 'agent_sessions',
+    column: 'task_instruction_id',
+    definition: 'VARCHAR(255)',
+  },
+  {
+    table: 'agent_sessions',
+    column: 'task_instruction_heading',
+    definition: 'VARCHAR(255)',
+  },
 ];
 
 async function runSQLiteMigrations(logger: Logger): Promise<void> {

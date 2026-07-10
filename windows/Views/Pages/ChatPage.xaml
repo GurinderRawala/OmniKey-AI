@@ -1165,51 +1165,87 @@
                         <!-- Composer pickers cluster (task instruction + project) -->
                         <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
 
-                                                <!-- Task-instruction pill -->
+                                                <!-- Task-instruction pill.
+                                                     Two mutually-exclusive faces:
+                                                       • Editable: shows the list-icon + ComboBox
+                                                         so a new chat can still pick which default
+                                                         task instructions apply to the first turn.
+                                                       • Locked (session already started): shows a
+                                                         lock icon + read-only TextBlock bound to
+                                                         DisplayedTaskInstructionHeading. The heading
+                                                         is snapshotted server-side at session-create
+                                                         time so it never drifts if the user changes
+                                                         their default template in another chat. -->
                         <Border
                             Padding="4,2,4,2"
                             VerticalAlignment="Center"
-                            CornerRadius="999">
+                            CornerRadius="999"
+                            ToolTip="{Binding TaskInstructionTooltip}">
                             <StackPanel VerticalAlignment="Center" Orientation="Horizontal">
-                                <ui:SymbolIcon
-                                    Margin="4,0,6,0"
+                                <!-- Editable icon + ComboBox (new chat) -->
+                                <StackPanel
+                                    Orientation="Horizontal"
                                     VerticalAlignment="Center"
-                                    FontSize="13"
-                                    Foreground="{StaticResource Nord.AccentBrush}"
-                                    Symbol="TextBulletListSquare24"
-                                    ToolTip="Default task instruction" />
-                                <ComboBox
-                                    MinWidth="180"
+                                    Visibility="{Binding CanChangeSessionSetup, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                    <ui:SymbolIcon
+                                        Margin="4,0,6,0"
+                                        VerticalAlignment="Center"
+                                        FontSize="13"
+                                        Foreground="{StaticResource Nord.AccentBrush}"
+                                        Symbol="TextBulletListSquare24" />
+                                    <ComboBox
+                                        MinWidth="180"
+                                        VerticalAlignment="Center"
+                                        Background="Transparent"
+                                        BorderThickness="0"
+                                        DisplayMemberPath="Heading"
+                                        FontFamily="{StaticResource OK.FontFamily}"
+                                        FontSize="12"
+                                        ItemsSource="{Binding AvailableTaskTemplates}"
+                                        SelectedValue="{Binding SelectedDefaultTemplateId, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                        SelectedValuePath="Id">
+                                        <ComboBox.Resources>
+                                            <!-- Drop the Wpf.Ui filled-chip chrome so the
+                                                 task-instruction selector blends into the
+                                                 composer toolbar. Popup background is left
+                                                 alone so the open dropdown stays readable. -->
+                                            <SolidColorBrush x:Key="ControlFillColorDefaultBrush" Color="Transparent" />
+                                            <SolidColorBrush x:Key="ControlFillColorSecondaryBrush" Color="Transparent" />
+                                            <SolidColorBrush x:Key="ControlFillColorTertiaryBrush" Color="Transparent" />
+                                            <SolidColorBrush x:Key="ControlStrokeColorDefaultBrush" Color="Transparent" />
+                                            <SolidColorBrush x:Key="ControlStrokeColorSecondaryBrush" Color="Transparent" />
+                                            <SolidColorBrush x:Key="ComboBoxBackground" Color="Transparent" />
+                                            <SolidColorBrush x:Key="ComboBoxBackgroundPointerOver" Color="#1AFFFFFF" />
+                                            <SolidColorBrush x:Key="ComboBoxBackgroundFocused" Color="Transparent" />
+                                            <SolidColorBrush x:Key="ComboBoxBackgroundUnfocused" Color="Transparent" />
+                                            <SolidColorBrush x:Key="ComboBoxBackgroundDisabled" Color="Transparent" />
+                                            <SolidColorBrush x:Key="ComboBoxBorderBrush" Color="Transparent" />
+                                            <SolidColorBrush x:Key="ComboBoxBorderBrushPointerOver" Color="Transparent" />
+                                            <SolidColorBrush x:Key="ComboBoxBorderBrushFocused" Color="Transparent" />
+                                        </ComboBox.Resources>
+                                    </ComboBox>
+                                </StackPanel>
+
+                                <!-- Locked chip (session already started) -->
+                                <StackPanel
+                                    Orientation="Horizontal"
                                     VerticalAlignment="Center"
-                                    Background="Transparent"
-                                    BorderThickness="0"
-                                    DisplayMemberPath="Heading"
-                                    FontFamily="{StaticResource OK.FontFamily}"
-                                    FontSize="12"
-                                    ItemsSource="{Binding AvailableTaskTemplates}"
-                                    SelectedValue="{Binding SelectedDefaultTemplateId, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                    SelectedValuePath="Id"
-                                    ToolTip="Default task instruction (used for Ctrl+T)">
-                                    <ComboBox.Resources>
-                                        <!-- Drop the Wpf.Ui filled-chip chrome so the
-                                             task-instruction selector blends into the
-                                             composer toolbar. Popup background is left
-                                             alone so the open dropdown stays readable. -->
-                                        <SolidColorBrush x:Key="ControlFillColorDefaultBrush" Color="Transparent" />
-                                        <SolidColorBrush x:Key="ControlFillColorSecondaryBrush" Color="Transparent" />
-                                        <SolidColorBrush x:Key="ControlFillColorTertiaryBrush" Color="Transparent" />
-                                        <SolidColorBrush x:Key="ControlStrokeColorDefaultBrush" Color="Transparent" />
-                                        <SolidColorBrush x:Key="ControlStrokeColorSecondaryBrush" Color="Transparent" />
-                                        <SolidColorBrush x:Key="ComboBoxBackground" Color="Transparent" />
-                                        <SolidColorBrush x:Key="ComboBoxBackgroundPointerOver" Color="#1AFFFFFF" />
-                                        <SolidColorBrush x:Key="ComboBoxBackgroundFocused" Color="Transparent" />
-                                        <SolidColorBrush x:Key="ComboBoxBackgroundUnfocused" Color="Transparent" />
-                                        <SolidColorBrush x:Key="ComboBoxBackgroundDisabled" Color="Transparent" />
-                                        <SolidColorBrush x:Key="ComboBoxBorderBrush" Color="Transparent" />
-                                        <SolidColorBrush x:Key="ComboBoxBorderBrushPointerOver" Color="Transparent" />
-                                        <SolidColorBrush x:Key="ComboBoxBorderBrushFocused" Color="Transparent" />
-                                    </ComboBox.Resources>
-                                </ComboBox>
+                                    Visibility="{Binding IsSessionSetupLocked, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                    <ui:SymbolIcon
+                                        Margin="4,0,6,0"
+                                        VerticalAlignment="Center"
+                                        FontSize="13"
+                                        Foreground="{StaticResource Nord.AccentBrush}"
+                                        Symbol="LockClosed24" />
+                                    <TextBlock
+                                        MinWidth="180"
+                                        VerticalAlignment="Center"
+                                        FontFamily="{StaticResource OK.FontFamily}"
+                                        FontSize="12"
+                                        Padding="10,4,10,4"
+                                        TextTrimming="CharacterEllipsis"
+                                        Text="{Binding DisplayedTaskInstructionHeading}" />
+                                </StackPanel>
                             </StackPanel>
                         </Border>
 

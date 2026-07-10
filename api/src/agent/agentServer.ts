@@ -11,7 +11,7 @@ import { AgentSession } from '../models/agentSession';
 import { getAgentPrompt } from './agentPrompts';
 import { getPromptMcpsForSubscription } from './mcpPromptCache';
 import { getMcpToolsForSubscription, executeMcpTool, MCP_TOOL_PREFIX } from './mcpRuntime';
-import { getPromptForCommand } from '../featureRoutes';
+import { getPromptForCommand, getDefaultTaskTemplateSnapshot } from '../featureRoutes';
 import { executeTool } from '../web-search/web-search-provider';
 import { createLazyAuthContext } from './agentAuth';
 import { authMiddleware, AuthLocals } from '../authMiddleware';
@@ -549,10 +549,18 @@ async function getOrCreateSession(
   }
 
   // 2. Create a brand-new session and persist it to the DB.
-  const prompt = await getPromptForCommand(log, 'task', subscription).catch((err) => {
-    log.error('Failed to get system prompt for new agent session', { error: err });
-    return '';
+  // Snapshot the currently-default task template alongside the prompt so we
+  // can persist its id + heading on the session row. This binds the "locked
+  // task instruction" chip in the desktop clients to THIS session for its
+  // lifetime, regardless of whether the user later reassigns their default
+  // template in a different chat.
+  const templateSnapshot = await getDefaultTaskTemplateSnapshot(log, subscription).catch((err) => {
+    log.error('Failed to load default task template snapshot for new agent session', {
+      error: err,
+    });
+    return null;
   });
+  const prompt = templateSnapshot?.instructions ?? '';
 
   const installedMcps = await getPromptMcpsForSubscription(subscription.id, log);
 
@@ -613,6 +621,8 @@ ${prompt}
         groupLocked: Boolean(groupName),
         groupDescription: groupMeta.groupDescription,
         groupDescriptionUpdatedAt: groupMeta.groupDescriptionUpdatedAt,
+        taskInstructionId: templateSnapshot?.id ?? null,
+        taskInstructionHeading: templateSnapshot?.heading ?? null,
       },
     });
 
@@ -1651,6 +1661,8 @@ export function createAgentRouter(): express.Router {
           'lastPromptTokens',
           'groupName',
           'groupDescription',
+          'taskInstructionId',
+          'taskInstructionHeading',
           'lastActiveAt',
           'createdAt',
           'updatedAt',
@@ -1670,6 +1682,8 @@ export function createAgentRouter(): express.Router {
           contextBudget: contextWindowSize,
           groupName: s.groupName ?? null,
           groupDescription: s.groupDescription ?? null,
+          taskInstructionId: s.taskInstructionId ?? null,
+          taskInstructionHeading: s.taskInstructionHeading ?? null,
           lastActiveAt: s.lastActiveAt,
           createdAt: s.createdAt,
           updatedAt: s.updatedAt,

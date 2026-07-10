@@ -67,6 +67,58 @@ export async function getPromptForCommand(
   return '';
 }
 
+/**
+ * Snapshot of the subscription's currently-default task template, used when
+ * a brand-new agent session is created so the choice becomes tied to that
+ * session for its entire lifetime.
+ *
+ * Both `id` and `heading` may be `null` when the user has no default template
+ * configured — in which case the session was started with "No instruction".
+ */
+export interface TaskTemplateSnapshot {
+  id: string | null;
+  heading: string | null;
+  instructions: string;
+}
+
+/**
+ * Load the subscription's current default task template AND its identifying
+ * metadata in a single query so callers can persist the id + heading
+ * alongside the resolved instructions text.
+ *
+ * Returns `null` when no default template is configured. Failures are logged
+ * and treated as "no template" so a transient DB blip never blocks a new
+ * agent session from starting.
+ */
+export async function getDefaultTaskTemplateSnapshot(
+  logger: Logger,
+  subscription: Subscription,
+): Promise<TaskTemplateSnapshot | null> {
+  try {
+    const template = await SubscriptionTaskTemplate.findOne({
+      where: { subscriptionId: subscription.id, isDefault: true },
+      order: [['createdAt', 'ASC']],
+    });
+
+    if (!template) return null;
+
+    const decompressed = decompressString(template.instructions);
+    if (!decompressed) return null;
+
+    return {
+      id: template.id,
+      heading: template.heading ?? null,
+      instructions: decompressed,
+    };
+  } catch (err) {
+    logger.error(
+      'Error loading default task template snapshot; treating as "no template".',
+      { error: err, subscriptionId: subscription.id },
+    );
+    return null;
+  }
+}
+
 type CompletionUsage = {
   prompt_tokens?: number;
   completion_tokens?: number;

@@ -200,11 +200,36 @@ final class ChatModel: ObservableObject {
     }
 
 
+    /// The task-instruction label shown in the composer.
+    ///
+    /// While the session is still editable (`canChangeSessionSetup == true`)
+    /// the label tracks the subscription's current default template so the
+    /// user sees what the next send will use.
+    ///
+    /// Once a session has been started (or history has hydrated), the label
+    /// is LOCKED to that session. Preference order:
+    ///   1. `activeSession?.taskInstructionHeading` — server-persisted
+    ///      snapshot taken at session-create time. Authoritative and
+    ///      immutable, so renaming/replacing the default template
+    ///      elsewhere does not change what this session displays.
+    ///   2. `activeSessionTaskInstructionTitle` — best-effort heuristic
+    ///      derived from the persisted `<stored_instructions>` block, kept
+    ///      only as a fallback for pre-existing sessions created before the
+    ///      server started snapshotting the heading.
+    ///   3. `"No instruction"` — nothing was locked to this session.
+    ///
+    /// The current `defaultTaskTemplate?.heading` is intentionally NOT used
+    /// as a fallback for locked sessions — that was the source of the bug
+    /// where the label silently changed whenever the user picked a different
+    /// default template in another chat.
     var displayedTaskInstructionTitle: String {
         if canChangeSessionSetup {
             return defaultTaskTemplate?.heading ?? "No instruction"
         }
-        return activeSessionTaskInstructionTitle ?? defaultTaskTemplate?.heading ?? "No instruction"
+        if let locked = activeSession?.taskInstructionHeading, !locked.isEmpty {
+            return locked
+        }
+        return activeSessionTaskInstructionTitle ?? "No instruction"
     }
 
     var displayedProjectName: String {
@@ -775,6 +800,13 @@ final class ChatModel: ObservableObject {
         // Optimistically surface the session in the sidebar.
         if activeSessionId == nil {
             let placeholderTitle = String(text.prefix(60))
+            // Optimistically stamp the placeholder with the task
+            // instruction heading we just locked in. The next
+            // `refreshSessions()` will replace this row with the
+            // server-authoritative record; until then the composer chip
+            // reads the right value straight from the placeholder rather
+            // than falling through to `activeSessionTaskInstructionTitle`
+            // (which would be stale on the very first turn).
             let placeholder = AgentSessionInfo(
                 id: sessionId,
                 title: placeholderTitle.isEmpty ? "New Chat" : placeholderTitle,
@@ -785,6 +817,8 @@ final class ChatModel: ObservableObject {
                 contextBudget: 0,
                 groupName: selectedGroup?.groupName,
                 groupDescription: selectedGroup?.groupDescription,
+                taskInstructionId: defaultTaskTemplate?.id,
+                taskInstructionHeading: defaultTaskTemplate?.heading,
                 lastActiveAt: ISO8601DateFormatter().string(from: Date())
             )
             sessions.removeAll { $0.id == sessionId }

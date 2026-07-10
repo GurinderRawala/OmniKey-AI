@@ -188,6 +188,28 @@ namespace OmniKey.Windows.ViewModels
 
         public bool HasActiveSessionGroup => !string.IsNullOrEmpty(ActiveSessionGroup);
 
+        /// <summary>Mirrors <see cref="ChatModel.CanChangeSessionSetup"/>.
+        /// Drives the enable/disable + lock-icon state of the composer's
+        /// task-instruction and project chips.</summary>
+        public bool CanChangeSessionSetup => _model.CanChangeSessionSetup;
+
+        /// <summary>Inverse of <see cref="CanChangeSessionSetup"/>. Bound
+        /// as the ComboBox <c>Visibility</c> converter's negation so we
+        /// can show the locked read-only chip in its place.</summary>
+        public bool IsSessionSetupLocked => !_model.CanChangeSessionSetup;
+
+        /// <summary>Heading to display inside the composer's
+        /// task-instruction chip. Locked to the session's snapshot once
+        /// a session has been started — see
+        /// <see cref="ChatModel.DisplayedTaskInstructionHeading"/>.</summary>
+        public string DisplayedTaskInstructionHeading => _model.DisplayedTaskInstructionHeading;
+
+        /// <summary>Tooltip for the composer's task-instruction chip.
+        /// Explains why the picker is disabled after a session starts.</summary>
+        public string TaskInstructionTooltip => CanChangeSessionSetup
+            ? "Default task instruction (used for Ctrl+T)"
+            : "Task instructions are locked to this session";
+
         /// <summary>Fraction of the context window already consumed, 0..1.</summary>
         public double ContextUsedFraction
         {
@@ -414,6 +436,10 @@ namespace OmniKey.Windows.ViewModels
             OnPropertyChanged(nameof(ContextRingBrush));
             OnPropertyChanged(nameof(ActiveSessionGroup));
             OnPropertyChanged(nameof(HasActiveSessionGroup));
+            OnPropertyChanged(nameof(CanChangeSessionSetup));
+            OnPropertyChanged(nameof(IsSessionSetupLocked));
+            OnPropertyChanged(nameof(DisplayedTaskInstructionHeading));
+            OnPropertyChanged(nameof(TaskInstructionTooltip));
         }
 
         private static void ReplaceCollection<T>(ObservableCollection<T> target, IList<T> source)

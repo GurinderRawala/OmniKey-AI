@@ -44,6 +44,13 @@ struct AgentSessionInfo: Identifiable, Decodable, Equatable {
     let contextBudget: Int
     let groupName: String?
     let groupDescription: String?
+    /// Snapshot of the task-instruction template that was default when this
+    /// session was first created. Persisted server-side and never changed,
+    /// so the composer's "task instructions" chip can display the locked
+    /// choice for THIS session even after the user later renames or
+    /// replaces their default template in another chat.
+    let taskInstructionId: String?
+    let taskInstructionHeading: String?
     let lastActiveAt: String
 
     enum CodingKeys: String, CodingKey {
@@ -53,6 +60,8 @@ struct AgentSessionInfo: Identifiable, Decodable, Equatable {
         case contextBudget
         case groupName
         case groupDescription
+        case taskInstructionId
+        case taskInstructionHeading
         case lastActiveAt
     }
 }
