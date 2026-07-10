@@ -192,6 +192,22 @@ export async function initDatabase(logger: Logger): Promise<void> {
       await sequelize.sync({ alter: true });
       logger.info('Database connection established and models synchronized (alter: true).');
     }
+
+    // One-shot backfill for `task_instruction_id` + `task_instruction_heading`
+    // on sessions created before those columns existed. Skips itself on
+    // subsequent boots via a marker row in `system_meta`. Lazy-imported to
+    // sidestep a circular dep with the AgentSession model, which itself
+    // imports the `sequelize` instance from this file.
+    try {
+      const { backfillSessionTaskInstructions } = await import(
+        './agent/backfillTaskInstructions'
+      );
+      await backfillSessionTaskInstructions(logger);
+    } catch (err) {
+      logger.error('Backfill for session task instructions failed; continuing startup', {
+        error: err,
+      });
+    }
   } catch (err) {
     logger.error('Unable to connect to the database:', err);
     throw err;
