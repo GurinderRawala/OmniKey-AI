@@ -16,6 +16,7 @@ import { executeTool } from '../web-search/web-search-provider';
 import { createLazyAuthContext } from './agentAuth';
 import { authMiddleware, AuthLocals } from '../authMiddleware';
 import { executeImageGenerationTool } from './imageTool';
+import { isInjectedUserPrompt } from './injectedUserPrompts';
 import { runScript } from '../shellRunner';
 import {
   buildAvailableTools,
@@ -1575,6 +1576,15 @@ function buildTranscript(raw: RawHistoryMessage[]): TranscriptMessage[] {
     if (entry.role === 'system') return;
 
     if (entry.role === 'user') {
+      // Server-injected recovery prompts (see `pushToSessionHistory` with
+      // role: 'user' in this file) live in the persisted history so the
+      // model can react to them mid-turn — but they are not real user
+      // input and must not surface in the resumed transcript. Skipping
+      // them here (BEFORE the terminal-feedback check, which would still
+      // pass through unrecognised prose) is what stops "IMPORTANT: The
+      // web search tool failed..." from appearing as a chat bubble.
+      if (isInjectedUserPrompt(content)) return;
+
       const terminalText = terminalFeedbackText(content);
       if (terminalText) {
         appendAssistantBlock('terminalOutput', terminalText);
@@ -1841,3 +1851,10 @@ export function createAgentRouter(): express.Router {
 
   return router;
 }
+
+// ─── Test-only exports ───────────────────────────────────────────────────────
+// Internal helpers re-exposed for unit tests. Do not import from application
+// code — call the router or the WebSocket handler instead.
+export const __testing__ = {
+  buildTranscript,
+};

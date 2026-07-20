@@ -112,6 +112,17 @@ final class ChatModel: ObservableObject {
     /// the user types quickly into the sidebar search field.
     private var hydratingUserMessageSessionIds: Set<String> = []
 
+    /// Monotonically incrementing token per session used to discard
+    /// out-of-order `loadSessionHistory` responses. Each call bumps
+    /// the counter and captures the new value; when the async
+    /// response returns we ignore it if a newer request has been
+    /// fired for the same session. Without this a slow response from
+    /// a previous open of the same session can clobber the fresh
+    /// content the user is currently looking at — the symptom
+    /// reported as "chat order looks corrupted after reselecting an
+    /// older thread".
+    private var sessionHistoryLoadGeneration: [String: Int] = [:]
+
     /// The session the user is currently chatting in.
     /// `nil` means a brand-new session that has not been persisted yet —
     /// the backend will assign an ID on first turn.
@@ -538,6 +549,12 @@ final class ChatModel: ObservableObject {
             lastErrorMessage = "Sign in to load this chat history."
             return
         }
+        // Bump the load generation for this session BEFORE firing the
+        // request so any earlier in-flight request for the same
+        // session becomes stale and drops its result on arrival.
+        let generation = (sessionHistoryLoadGeneration[sessionId] ?? 0) + 1
+        sessionHistoryLoadGeneration[sessionId] = generation
+
         let url = APIClient.baseURL
             .appendingPathComponent("api/agent/sessions")
             .appendingPathComponent(sessionId)
@@ -548,22 +565,29 @@ final class ChatModel: ObservableObject {
         URLSession.shared.dataTask(with: request) { [weak self] data, _, _ in
             guard let self, let data else {
                 DispatchQueue.main.async {
-                    guard self?.activeSessionId == sessionId else { return }
-                    self?.isLoadingSessionHistory = false
+                    guard let self else { return }
+                    guard self.activeSessionId == sessionId,
+                          self.sessionHistoryLoadGeneration[sessionId] == generation else { return }
+                    self.isLoadingSessionHistory = false
                 }
                 return
             }
             struct Response: Decodable { let messages: [SessionHistoryEntry] }
             guard let body = try? JSONDecoder().decode(Response.self, from: data) else {
                 DispatchQueue.main.async {
-                    guard self.activeSessionId == sessionId else { return }
+                    guard self.activeSessionId == sessionId,
+                          self.sessionHistoryLoadGeneration[sessionId] == generation else { return }
                     self.isLoadingSessionHistory = false
                     self.lastErrorMessage = "Couldn't load this chat history."
                 }
                 return
             }
             DispatchQueue.main.async {
-                guard self.activeSessionId == sessionId else { return }
+                // Drop the response if the user has switched to another
+                // session OR if a newer fetch for this same session has
+                // already been fired (e.g. the user reselected the row).
+                guard self.activeSessionId == sessionId,
+                      self.sessionHistoryLoadGeneration[sessionId] == generation else { return }
                 let hydrated = ChatModel.hydrateTranscript(from: body.messages)
                 let overflow = max(0, hydrated.count - ChatModel.maxVisibleMessages)
                 let visible = overflow > 0 ? Array(hydrated.suffix(ChatModel.maxVisibleMessages)) : hydrated
@@ -618,6 +642,33 @@ final class ChatModel: ObservableObject {
         return firstMeaningfulLine ?? "Custom instructions"
     }
 
+    /// Prefixes of server-injected `role: 'user'` control prompts that
+    /// steer the model mid-turn (web-tool retry, over-length recovery,
+    /// untagged-response recovery, ...). The API's `buildTranscript`
+    /// filters these out before returning history, but we also filter
+    /// here so that:
+    ///   * self-hosted backends running an older API version do not
+    ///     leak the raw directive text into the chat as user bubbles;
+    ///   * intermediate `assistant` retries stay grouped with the real
+    ///     user turn instead of being split apart by a synthetic user
+    ///     entry — which is what previously made resumed transcripts
+    ///     look out-of-order after a failed web search.
+    private static let injectedUserPromptPrefixes: [String] = [
+        "IMPORTANT: The web search tool failed",
+        "Web research is complete",
+        "Your previous response exceeded the output length limit",
+        "Your response was plain text",
+        "Content was truncated",
+    ]
+
+    private static func isInjectedUserPrompt(_ text: String) -> Bool {
+        let head = text.drop(while: { $0.isWhitespace || $0.isNewline })
+        for prefix in injectedUserPromptPrefixes {
+            if head.hasPrefix(prefix) { return true }
+        }
+        return false
+    }
+
     /// The persisted agent history contains intermediate assistant messages
     /// as well as final answers. For chat resume, render each turn as a clean
     /// user message plus the last useful assistant response.
@@ -625,6 +676,7 @@ final class ChatModel: ObservableObject {
         if entries.contains(where: { ($0.blocks ?? []).isEmpty == false }) {
             return entries.compactMap { entry in
                 if entry.role == "user" {
+                    if ChatModel.isInjectedUserPrompt(entry.text) { return nil }
                     return ChatMessage.user(entry.text)
                 }
 
@@ -655,6 +707,7 @@ final class ChatModel: ObservableObject {
 
         for entry in entries {
             if entry.role == "user" {
+                if ChatModel.isInjectedUserPrompt(entry.text) { continue }
                 flushAssistant()
                 result.append(ChatMessage.user(entry.text))
             } else if entry.role == "assistant" {

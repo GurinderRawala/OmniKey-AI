@@ -1,3 +1,5 @@
+import { isInjectedUserPrompt } from '../../injectedUserPrompts';
+
 /**
  * Result of stripping injected wrappers. We keep the user-typed body and
  * the extracted context-root fallback lines as separate fields so the
@@ -75,12 +77,12 @@ export function extractUserInputs(historyJson: string): string[] {
       const raw = typeof msg.content === 'string' ? msg.content : '';
       if (!raw) continue;
 
-      // Skip injected feedback / control messages.
+      // Skip terminal-feedback turns (they are environment output the
+      // agent reasoned about, not user input) and any server-injected
+      // recovery prompt (see `isInjectedUserPrompt`).
       if (raw.startsWith('TERMINAL OUTPUT:')) continue;
       if (raw.startsWith('COMMAND ERROR:')) continue;
-      if (raw.startsWith('Web research is complete')) continue;
-      if (raw.startsWith('IMPORTANT: The web search tool failed')) continue;
-      if (raw.startsWith('Content was truncated')) continue;
+      if (isInjectedUserPrompt(raw)) continue;
 
       // Unwrap <user_input>, then strip injected wrappers from the inner
       // text. The body is capped at 400 chars; the fallback line is
