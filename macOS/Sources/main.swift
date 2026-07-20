@@ -53,6 +53,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
 
         AppDelegate.shared = self
 
+        // Kick off the passive "is a newer app version available?" checker.
+        // Independent of Sparkle's own update cycle — see AppUpdateChecker
+        // for the rationale. Driven from launch so the chat sidebar's
+        // "Update" button becomes available as soon as the sidebar mounts.
+        AppUpdateChecker.shared.start()
+
         // Observe every OmniKey window so we can show / hide the Dock
         // icon based on whether any user-facing window is on screen.
         // `nil` `object:` means "for any window in this process".

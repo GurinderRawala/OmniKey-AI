@@ -66,11 +66,27 @@ struct ChatSidebarView: View {
     @State private var collapsedGroups: Set<String> = []
     @State private var seenGroups: Set<String> = []
     @State private var isRefreshing: Bool = false
+    /// Drives the "Update available" button that appears above the sidebar
+    /// header when a newer app version is on the Sparkle appcast. The
+    /// button hides itself when there is nothing to update to.
+    @ObservedObject private var updateChecker: AppUpdateChecker = .shared
 
     private static let ungroupedName = "Other"
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            // ── Update available banner (only when the appcast shows a
+            //    newer version than what is currently installed) ─────────
+            if updateChecker.isUpdateAvailable {
+                ChatSidebarUpdateBanner(
+                    latestVersion: updateChecker.latestShortVersion,
+                    onUpdate: { AppDelegate.shared?.checkForUpdates() }
+                )
+                .padding(.horizontal, 10)
+                .padding(.top, 10)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+
             // ── Sidebar header ───────────────────────────────────────────
             HStack(alignment: .center, spacing: 4) {
                 Text("OmniAgent")
@@ -89,6 +105,10 @@ struct ChatSidebarView: View {
                         isRefreshing = true
                         model.refreshSessions { isRefreshing = false }
                         model.fetchGroups()
+                        // Also revalidate the "Update available" state
+                        // — the refresh button doubles as a manual
+                        // check for a newer app version.
+                        updateChecker.refreshNow()
                     }
                 }
                 SidebarIconButton(icon: "square.and.pencil", help: "New Chat") {
@@ -341,6 +361,64 @@ struct ChatSidebarView: View {
     }
 }
 
+
+// MARK: - Sidebar Update Banner
+
+/// Compact "Update available" pill shown above the sidebar header when
+/// `AppUpdateChecker` detects that a newer app version is published on
+/// the Sparkle appcast. Tapping the pill hands off to Sparkle's
+/// standard update flow (`AppDelegate.checkForUpdates`), which shows
+/// the familiar release-notes dialog and drives the download +
+/// install. Hidden entirely when there is nothing to update to — the
+/// view is only rendered when `isUpdateAvailable` is true, so no idle
+/// space is reserved.
+private struct ChatSidebarUpdateBanner: View {
+    let latestVersion: String?
+    let onUpdate: () -> Void
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var isHovering: Bool = false
+
+    var body: some View {
+        Button(action: onUpdate) {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.down.circle.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(NordTheme.accentAmber(colorScheme))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Update available")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(NordTheme.primaryText(colorScheme))
+                    if let v = latestVersion, !v.isEmpty {
+                        Text("Version \(v)")
+                            .font(.system(size: 10))
+                            .foregroundColor(NordTheme.secondaryText(colorScheme))
+                    }
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.7))
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(NordTheme.accentAmber(colorScheme).opacity(isHovering ? 0.16 : 0.10))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(NordTheme.accentAmber(colorScheme).opacity(0.35), lineWidth: 1)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .help(latestVersion.map { "Install OmniKey \($0)" } ?? "Install the latest OmniKey update")
+        .accessibilityLabel(latestVersion.map { "Update to version \($0)" } ?? "Update available")
+    }
+}
+
 // MARK: - Sidebar Search Field
 
 /// Compact, rounded search field shown at the top of the sidebar. It
@@ -533,23 +611,43 @@ struct ChatSidebarRailView: View {
     @ObservedObject var model: ChatModel
     var onExpand: () -> Void
     @Environment(\.colorScheme) private var colorScheme
+    /// Mirrors the expanded sidebar's update signal so a small amber
+    /// dot appears over the expand button when a new version is
+    /// available — the affordance survives sidebar collapse without
+    /// consuming a dedicated row.
+    @ObservedObject private var updateChecker: AppUpdateChecker = .shared
 
     var body: some View {
         VStack(spacing: 0) {
             // Expand button
             Button(action: onExpand) {
-                Image(systemName: "sidebar.left")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(NordTheme.secondaryText(colorScheme))
-                    .frame(width: 36, height: 36)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(Color.clear)
-                    )
-                    .contentShape(Rectangle())
+                ZStack(alignment: .topTrailing) {
+                    Image(systemName: "sidebar.left")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(NordTheme.secondaryText(colorScheme))
+                        .frame(width: 36, height: 36)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(Color.clear)
+                        )
+                        .contentShape(Rectangle())
+                    if updateChecker.isUpdateAvailable {
+                        // Amber dot in the corner of the expand
+                        // button — non-interactive, purely a hint
+                        // to expand the sidebar and click "Update".
+                        Circle()
+                            .fill(NordTheme.accentAmber(colorScheme))
+                            .frame(width: 7, height: 7)
+                            .overlay(
+                                Circle().strokeBorder(NordTheme.panelBackground(colorScheme), lineWidth: 1)
+                            )
+                            .offset(x: -6, y: 6)
+                            .accessibilityHidden(true)
+                    }
+                }
             }
             .buttonStyle(.plain)
-            .help("Expand sidebar")
+            .help(updateChecker.isUpdateAvailable ? "Update available — expand sidebar" : "Expand sidebar")
             .padding(.top, 16)
 
             // New chat button
