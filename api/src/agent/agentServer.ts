@@ -29,7 +29,11 @@ import {
   isContextLengthError,
   pruneHistoryForContextLimit,
 } from './utils';
-import { updateSessionGroup, buildProjectContext, GROUPING_SESSION_PREFIX } from './sessionGrouping';
+import {
+  updateSessionGroup,
+  buildProjectContext,
+  GROUPING_SESSION_PREFIX,
+} from './sessionGrouping';
 import {
   aiClient,
   AITool,
@@ -295,9 +299,7 @@ async function runToolLoop(
               isError,
               outputLength: output.length,
             });
-            const result = isError
-              ? `COMMAND ERROR:\n${output}`
-              : `TERMINAL OUTPUT:\n${output}`;
+            const result = isError ? `COMMAND ERROR:\n${output}` : `TERMINAL OUTPUT:\n${output}`;
             return { id: tc.id, name: tc.name, result };
           }
 
@@ -380,11 +382,22 @@ async function runToolLoop(
       });
     }
 
+    // Checkpoint only after the assistant tool_calls have their matching tool
+    // results. Persisting the assistant call alone would create an invalid
+    // provider history on resume, but waiting until final answer means a user
+    // stop can lose all completed work from this turn.
+    await persistSessionToDB(sessionId, session);
+
     // Call the AI again with the tool results in history to get the next response.
-    result = await completeWithContextRecovery(session, sessionId, {
-      tools: tools.length ? tools : undefined,
-      temperature: 0.2,
-    }, log);
+    result = await completeWithContextRecovery(
+      session,
+      sessionId,
+      {
+        tools: tools.length ? tools : undefined,
+        temperature: 0.2,
+      },
+      log,
+    );
     await onUsage(result);
   }
 
@@ -646,7 +659,7 @@ ${prompt}
         );
       }
       const effectiveGroupName = dbSession.groupName ?? (adoptUserGroup ? groupName! : null);
-      const effectiveGroupLocked = dbSession.groupLocked ?? false ? true : adoptUserGroup;
+      const effectiveGroupLocked = (dbSession.groupLocked ?? false) ? true : adoptUserGroup;
 
       const existingEntry: SessionState = {
         subscription,
@@ -835,6 +848,12 @@ async function runAgentTurnInternal(
         });
       }
     }
+
+    // Durable checkpoint for interrupted turns. New sessions are created with
+    // only the system/stored-instructions prompt; if the user stops the agent
+    // before a final answer, this is the write that preserves the actual chat
+    // message for the next turn in the same session.
+    await persistSessionToDB(sessionId, session);
   }
 
   const mcpBundle = await getMcpToolsForSubscription(subscription.id, log);
@@ -905,10 +924,15 @@ async function runAgentTurnInternal(
       historyLength: session.history.length,
     });
 
-    let result = await completeWithContextRecovery(session, sessionId, {
-      tools: tools?.length ? tools : undefined,
-      temperature: 0.2,
-    }, log);
+    let result = await completeWithContextRecovery(
+      session,
+      sessionId,
+      {
+        tools: tools?.length ? tools : undefined,
+        temperature: 0.2,
+      },
+      log,
+    );
 
     await recordUsage(result);
 
@@ -944,10 +968,16 @@ Respond immediately with exactly one of the following:
 
 Provide only a tool call or final answer. Do not include reasoning or explanation.`,
       });
-      result = await completeWithContextRecovery(session, sessionId, {
-        tools: tools?.length ? tools : undefined,
-        temperature: 0.2,
-      }, log);
+      await persistSessionToDB(sessionId, session);
+      result = await completeWithContextRecovery(
+        session,
+        sessionId,
+        {
+          tools: tools?.length ? tools : undefined,
+          temperature: 0.2,
+        },
+        log,
+      );
       await recordUsage(result);
     }
 
