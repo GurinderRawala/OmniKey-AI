@@ -237,4 +237,206 @@ describe('agent session persistence checkpoints', () => {
       ]),
     );
   });
+
+  it('removes stale injected recovery prompts before appending a real follow-up', async () => {
+    mocks.agentSession.findOne.mockResolvedValueOnce({
+      id: 'session-1',
+      historyJson: JSON.stringify([
+        { role: 'system', content: 'sys' },
+        { role: 'user', content: '<user_input>\nOriginal task\n</user_input>' },
+        { role: 'assistant', content: 'Work in progress.' },
+        {
+          role: 'user',
+          content:
+            'Web research is complete. The results are in the conversation above.\n\nNow respond.',
+        },
+        {
+          role: 'user',
+          content:
+            'Your previous response exceeded the output length limit and was cut off.\n\nRespond immediately.',
+        },
+      ]),
+      turns: 3,
+      groupName: null,
+      groupLocked: false,
+    });
+
+    mocks.complete.mockResolvedValueOnce({
+      assistantMessage: {
+        role: 'assistant',
+        content: '<final_answer>\nRecovered.\n</final_answer>',
+      },
+      content: '<final_answer>\nRecovered.\n</final_answer>',
+      finish_reason: 'stop',
+      model: 'test-model',
+    });
+
+    await runAgentTurn(
+      'session-1',
+      { id: 'subscription-1' } as any,
+      {
+        session_id: 'session-1',
+        sender: 'client',
+        content: 'Please continue from where you got stuck.',
+        platform: 'macos',
+      },
+      vi.fn(),
+      mocks.log as any,
+      { skipGrouping: true },
+    );
+
+    const history = parsedHistoryFromCall(historyUpdateCalls()[0]);
+    expect(history.some((msg) => msg.content.startsWith('Web research is complete'))).toBe(false);
+    expect(
+      history.some((msg) =>
+        msg.content.startsWith('Your previous response exceeded the output length limit'),
+      ),
+    ).toBe(false);
+    expect(history.at(-1)).toEqual(
+      expect.objectContaining({
+        role: 'user',
+        content: expect.stringContaining('Please continue from where you got stuck.'),
+      }),
+    );
+  });
+
+  it('recovers a length-truncated tool loop and continues tool work when requested', async () => {
+    const firstToolCall = {
+      id: 'call-1',
+      name: 'web_search',
+      arguments: { query: 'length regression' },
+    };
+    const recoveryToolCall = {
+      id: 'call-2',
+      name: 'web_search',
+      arguments: { query: 'continue after length' },
+    };
+    const send = vi.fn();
+
+    mocks.complete
+      .mockResolvedValueOnce({
+        assistantMessage: { role: 'assistant', content: '', tool_calls: [firstToolCall] },
+        content: '',
+        finish_reason: 'tool_calls',
+        model: 'test-model',
+        tool_calls: [firstToolCall],
+      })
+      .mockResolvedValueOnce({
+        assistantMessage: { role: 'assistant', content: '' },
+        content: '',
+        finish_reason: 'length',
+        model: 'test-model',
+      })
+      .mockResolvedValueOnce({
+        assistantMessage: { role: 'assistant', content: 'Partial recovery output' },
+        content: 'Partial recovery output',
+        finish_reason: 'length',
+        model: 'test-model',
+      })
+      .mockResolvedValueOnce({
+        assistantMessage: { role: 'assistant', content: '', tool_calls: [recoveryToolCall] },
+        content: '',
+        finish_reason: 'tool_calls',
+        model: 'test-model',
+        tool_calls: [recoveryToolCall],
+      })
+      .mockResolvedValueOnce({
+        assistantMessage: {
+          role: 'assistant',
+          content: '<final_answer>\nRecovered and continued.\n</final_answer>',
+        },
+        content: '<final_answer>\nRecovered and continued.\n</final_answer>',
+        finish_reason: 'stop',
+        model: 'test-model',
+      });
+
+    await runAgentTurn(
+      'session-1',
+      { id: 'subscription-1' } as any,
+      {
+        session_id: 'session-1',
+        sender: 'client',
+        content: 'Search, then answer concisely.',
+        platform: 'macos',
+      },
+      send,
+      mocks.log as any,
+      { skipGrouping: true },
+    );
+
+    const histories = historyUpdateCalls().map(parsedHistoryFromCall);
+    expect(
+      histories.some((history) =>
+        history.some((msg) => msg.content.startsWith('Web research is complete')),
+      ),
+    ).toBe(false);
+    expect(
+      histories.some((history) =>
+        history.some((msg) => msg.content.includes('- a tool call, if you need to keep working')),
+      ),
+    ).toBe(true);
+    expect(mocks.complete.mock.calls[2]?.[2]).toHaveProperty('tools');
+    expect(mocks.complete.mock.calls[3]?.[2]).toHaveProperty('tools');
+    expect(mocks.executeTool).toHaveBeenCalledTimes(2);
+    expect(
+      send.mock.calls.some(([msg]) => String(msg.content).includes('Recovered and continued.')),
+    ).toBe(true);
+    expect(
+      send.mock.calls.some(([msg]) => String(msg.content).includes('hit the output limit')),
+    ).toBe(false);
+  });
+
+  it('executes complete tool calls returned with a length finish reason', async () => {
+    const toolCall = {
+      id: 'call-1',
+      name: 'web_search',
+      arguments: { query: 'parsed tool call despite length' },
+    };
+    const send = vi.fn();
+
+    mocks.complete
+      .mockResolvedValueOnce({
+        assistantMessage: { role: 'assistant', content: '', tool_calls: [toolCall] },
+        content: '',
+        finish_reason: 'length',
+        model: 'test-model',
+        tool_calls: [toolCall],
+      })
+      .mockResolvedValueOnce({
+        assistantMessage: {
+          role: 'assistant',
+          content: '<final_answer>\nTool call completed.\n</final_answer>',
+        },
+        content: '<final_answer>\nTool call completed.\n</final_answer>',
+        finish_reason: 'stop',
+        model: 'test-model',
+      });
+
+    await runAgentTurn(
+      'session-1',
+      { id: 'subscription-1' } as any,
+      {
+        session_id: 'session-1',
+        sender: 'client',
+        content: 'Search once.',
+        platform: 'macos',
+      },
+      send,
+      mocks.log as any,
+      { skipGrouping: true },
+    );
+
+    const histories = historyUpdateCalls().map(parsedHistoryFromCall);
+    expect(
+      histories.some((history) =>
+        history.some((msg) =>
+          msg.content.startsWith('Your previous response exceeded the output length limit'),
+        ),
+      ),
+    ).toBe(false);
+    expect(mocks.executeTool).toHaveBeenCalledTimes(1);
+    expect(
+      send.mock.calls.some(([msg]) => String(msg.content).includes('Tool call completed.')),
+    ).toBe(true);
+  });
 });

@@ -11,7 +11,7 @@ import { AgentSession } from '../models/agentSession';
 import { getAgentPrompt } from './agentPrompts';
 import { getPromptMcpsForSubscription } from './mcpPromptCache';
 import { getMcpToolsForSubscription, executeMcpTool, MCP_TOOL_PREFIX } from './mcpRuntime';
-import { getPromptForCommand, getDefaultTaskTemplateSnapshot } from '../featureRoutes';
+import { getDefaultTaskTemplateSnapshot } from '../featureRoutes';
 import { executeTool } from '../web-search/web-search-provider';
 import { createLazyAuthContext } from './agentAuth';
 import { authMiddleware, AuthLocals } from '../authMiddleware';
@@ -69,6 +69,28 @@ const pendingShellScripts = new Map<string, (output: string) => void>();
 // unit (or compacts one message), so 12 is plenty to claw back from an overflow
 // while still terminating if the history somehow cannot be shrunk enough.
 const MAX_CONTEXT_RECOVERY_ATTEMPTS = 12;
+const MAX_OUTPUT_LENGTH_RECOVERY_ATTEMPTS = 3;
+const OUTPUT_LENGTH_FAILURE_MESSAGE =
+  'The agent hit the output limit repeatedly while trying to recover. The work so far has been saved, and your next message can continue from that checkpoint.';
+
+function createOutputLengthRecoveryDirective(attempt: number): string {
+  return [
+    'Your previous response exceeded the output length limit and was cut off.',
+    '',
+    'Do not repeat or continue the truncated response.',
+    'Continue the task from the conversation and tool results already available.',
+    attempt > 1
+      ? 'This is a repeated output-length recovery attempt, so choose a smaller next step.'
+      : null,
+    '',
+    'Respond immediately with exactly one of:',
+    '- a tool call, if you need to keep working',
+    '- <final_answer>...</final_answer>, if you have enough information to conclude',
+    'Keep any final answer concise. No plain text. No malformed partial output.',
+  ]
+    .filter((line): line is string => line !== null)
+    .join('\n');
+}
 
 /**
  * Wraps `aiClient.complete` with context-window overflow recovery. When the
@@ -141,6 +163,96 @@ async function completeWithContextRecovery(
       if (!pruned) throw err;
     }
   }
+}
+
+async function recoverOutputLengthResult(
+  result: AICompletionResult,
+  session: SessionState,
+  sessionId: string,
+  tools: AITool[],
+  log: typeof logger,
+  onUsage: (result: AICompletionResult) => Promise<void>,
+): Promise<AICompletionResult | null> {
+  let current = result;
+
+  for (
+    let attempt = 1;
+    current.finish_reason === 'length' && attempt <= MAX_OUTPUT_LENGTH_RECOVERY_ATTEMPTS;
+    attempt++
+  ) {
+    const parsedToolCalls = current.tool_calls?.length
+      ? current.tool_calls
+      : current.assistantMessage?.tool_calls;
+    if (parsedToolCalls?.length) {
+      log.warn('Length-truncated response contained complete tool calls; continuing tool loop', {
+        sessionId,
+        attempt,
+        tools: parsedToolCalls.map((tc) => tc.name),
+      });
+      return {
+        ...current,
+        finish_reason: 'tool_calls',
+        tool_calls: parsedToolCalls,
+        assistantMessage: {
+          ...current.assistantMessage,
+          tool_calls: parsedToolCalls,
+        },
+      };
+    }
+
+    log.warn(
+      'Agent response truncated at output limit; injecting continuation recovery directive',
+      {
+        sessionId,
+        attempt,
+        contentLength: current.content.length,
+      },
+    );
+
+    if (current.content.trim()) {
+      pushToSessionHistory(logger, session, { role: 'assistant', content: current.content });
+    }
+    pushToSessionHistory(logger, session, {
+      role: 'user',
+      content: createOutputLengthRecoveryDirective(attempt),
+    });
+    await persistSessionToDB(sessionId, session);
+
+    current = await completeWithContextRecovery(
+      session,
+      sessionId,
+      {
+        tools: tools?.length ? tools : undefined,
+        temperature: 0.2,
+      },
+      log,
+    );
+    await onUsage(current);
+  }
+
+  if (current.finish_reason === 'length') {
+    log.warn('Agent output-length recovery exhausted', {
+      sessionId,
+      contentLength: current.content.length,
+    });
+    return null;
+  }
+
+  return current;
+}
+
+function removeInjectedUserPromptsFromHistory(session: SessionState, log: typeof logger): number {
+  const before = session.history.length;
+  session.history = session.history.filter((message) => {
+    if (message.role !== 'user' || typeof message.content !== 'string') return true;
+    return !isInjectedUserPrompt(message.content);
+  });
+
+  const removed = before - session.history.length;
+  if (removed > 0) {
+    log.info('Removed stale injected recovery prompts before real user follow-up', { removed });
+  }
+  return removed;
 }
 
 // A server-side tool handler injected for a single agent invocation (see
@@ -821,6 +933,10 @@ async function runAgentTurnInternal(
   const isAssistance = isTerminalOutput || isErrorFlag;
 
   if (!clientMessage?.is_web_call) {
+    if (!isAssistance) {
+      removeInjectedUserPromptsFromHistory(session, log);
+    }
+
     // Terminal output and command errors are always user-role messages — they
     // represent environment feedback that the agent must reason about next.
     // Pushing them as 'assistant' would create two consecutive assistant turns
@@ -936,50 +1052,24 @@ async function runAgentTurnInternal(
 
     await recordUsage(result);
 
-    // When the model's output was cut off mid-generation (hit the provider's
-    // max-token ceiling), it may have produced a partial shell script or plain
-    // reasoning text with no closing tag.  Processing that as-is would either
-    // send a malformed script to the frontend or silently recurse without any
-    // recovery signal.  Instead, push the truncated fragment as an assistant
-    // message and inject a terse directive that forces the model to emit a
-    // valid tag on the very next call.
-    if (result.finish_reason === 'length') {
-      log.warn('Agent response truncated at output limit; injecting recovery directive', {
-        sessionId,
-        contentLength: result.content.length,
-      });
-      // The truncated turn may contain a partial `tool_use` block. Persisting
-      // the assistant message verbatim (with its tool_calls) and then following
-      // it with the user recovery directive below would leave a `tool_use` with
-      // no matching `tool_result` — Anthropic rejects that with a 400. Keep only
-      // the text fragment; the directive tells the model to start over anyway.
-      if (result.content.trim()) {
-        pushToSessionHistory(logger, session, { role: 'assistant', content: result.content });
-      }
+    const recoveredInitialResult = await recoverOutputLengthResult(
+      result,
+      session,
+      sessionId,
+      tools,
+      log,
+      recordUsage,
+    );
+    if (!recoveredInitialResult) {
       pushToSessionHistory(logger, session, {
-        role: 'user',
-        content: `Your previous response exceeded the output length limit and was cut off.
-
-Do not repeat or continue what you wrote.
-
-Respond immediately with exactly one of the following:
-- An external tool call (e.g., web_search, shell_script) if you need to fetch data or run commands
-- <final_answer>...</final_answer>
-
-Provide only a tool call or final answer. Do not include reasoning or explanation.`,
+        role: 'assistant',
+        content: `<final_answer>\n${OUTPUT_LENGTH_FAILURE_MESSAGE}\n</final_answer>`,
       });
       await persistSessionToDB(sessionId, session);
-      result = await completeWithContextRecovery(
-        session,
-        sessionId,
-        {
-          tools: tools?.length ? tools : undefined,
-          temperature: 0.2,
-        },
-        log,
-      );
-      await recordUsage(result);
+      sendFinalAnswer(send, sessionId, OUTPUT_LENGTH_FAILURE_MESSAGE, true);
+      return;
     }
+    result = recoveredInitialResult;
 
     let content = result.content.trim();
 
@@ -1002,7 +1092,7 @@ Provide only a tool call or final answer. Do not include reasoning or explanatio
         turn: session.turns,
       });
 
-      const toolLoopResult = await runToolLoop(
+      let toolLoopResult = await runToolLoop(
         result,
         session,
         sessionId,
@@ -1014,90 +1104,121 @@ Provide only a tool call or final answer. Do not include reasoning or explanatio
         Boolean(options?.isCronJob),
         options?.toolHandlers,
       );
-      const toolLoopContent = toolLoopResult.content.trim();
 
-      // shell_script runs as a native tool inside runToolLoop, so the loop only
-      // returns once the model produces text — either plain text or a
-      // <final_answer>, never a raw <shell_script> tag.
-      const toolLoopHasFinal = toolLoopContent.includes('<final_answer>');
-      const webToolFailed = session.history.some(
-        (msg) =>
-          msg.role === 'tool' &&
-          (msg.tool_name === 'web_search' || msg.tool_name === 'web_fetch') &&
-          typeof msg.content === 'string' &&
-          msg.content.startsWith('Error'),
-      );
-
-      if (toolLoopHasFinal && !webToolFailed) {
-        // The tool loop produced a final answer and no web tool failed — use it
-        // directly, avoiding a redundant AI call.
-        log.info('Tool loop produced final answer; processing inline', { sessionId });
-        content = toolLoopContent;
-        result = toolLoopResult;
-        // Fall through to the <final_answer> handling below.
-      } else {
-        // The tool loop returned either plain text or a <final_answer> produced
-        // after a web tool failed (404 / error) — the model tends to wrap a
-        // "please run this manually" message in <final_answer> in that case.
-        // We make one more AI turn so the model can correct itself. The
-        // directive below tells it to call the shell_script tool as a fallback
-        // instead of asking the user to run commands.
-        // The tool loop can return a turn that was truncated at max_tokens
-        // (finish_reason 'length') while it was still emitting a `tool_use`
-        // block. Persisting that assistant message verbatim and then following
-        // it with the user directive below would leave a `tool_use` with no
-        // matching `tool_result`, which Anthropic rejects with a 400. Strip the
-        // partial tool_calls and keep only the text — the directive makes the
-        // model produce a fresh tool call or final answer regardless. (When the
-        // loop exits with finish_reason 'stop' there are no tool_calls anyway,
-        // so this is a no-op for the normal path.)
-        if (toolLoopResult.assistantMessage?.content?.trim()) {
+      for (;;) {
+        const recoveredToolLoopResult = await recoverOutputLengthResult(
+          toolLoopResult,
+          session,
+          sessionId,
+          tools,
+          log,
+          recordUsage,
+        );
+        if (!recoveredToolLoopResult) {
           pushToSessionHistory(logger, session, {
             role: 'assistant',
-            content: toolLoopResult.assistantMessage.content,
+            content: `<final_answer>\n${OUTPUT_LENGTH_FAILURE_MESSAGE}\n</final_answer>`,
           });
+          await persistSessionToDB(sessionId, session);
+          sendFinalAnswer(send, sessionId, OUTPUT_LENGTH_FAILURE_MESSAGE, true);
+          return;
         }
 
-        pushToSessionHistory(logger, session, {
-          role: 'user',
-          content: webToolFailed
-            ? [
-                'IMPORTANT: The web search tool failed and is unavailable. Do NOT attempt any further web calls or ask the user to run commands manually.',
-                'You MUST retrieve any needed data by calling the shell_script tool to run terminal commands (curl, grep, cat, etc.).',
-                'The shell script output will be returned to you automatically.',
-                '',
-                'Respond with exactly one of:',
-                '- a shell_script tool call — to fetch or retrieve data via terminal commands',
-                '- <final_answer>...</final_answer> — only if you already have enough information',
-                'No plain text. No web tool calls. No other format.',
-              ].join('\n')
-            : [
-                'Web research is complete. The results are in the conversation above.',
-                '',
-                'Now respond with exactly one of:',
-                '- a shell_script tool call — to run terminal commands (output will be returned to you automatically)',
-                '- <final_answer>...</final_answer> — only if you genuinely have enough information',
-                'No plain text. No other format.',
-              ].join('\n'),
-        });
+        if (recoveredToolLoopResult.finish_reason === 'tool_calls') {
+          log.info('Output-length recovery requested more tools; continuing tool loop', {
+            sessionId,
+          });
+          toolLoopResult = await runToolLoop(
+            recoveredToolLoopResult,
+            session,
+            sessionId,
+            send,
+            log,
+            tools,
+            mcpBundle.dispatch,
+            recordUsage,
+            Boolean(options?.isCronJob),
+            options?.toolHandlers,
+          );
+          continue;
+        }
 
-        // DB-only session state: persist before recursive handoff so the
-        // follow-up turn reads the latest history and turn count.
-        await persistSessionToDB(sessionId, session);
-
-        return await runAgentTurnInternal(
-          sessionId,
-          subscription,
-          {
-            sender: 'agent',
-            session_id: sessionId,
-            content: '',
-            is_web_call: true,
-          },
-          send,
-          logger,
-          options,
+        const toolLoopContent = recoveredToolLoopResult.content.trim();
+        // shell_script runs as a native tool inside runToolLoop, so the loop only
+        // returns once the model produces text — either plain text or a
+        // <final_answer>, never a raw <shell_script> tag.
+        const toolLoopHasFinal = toolLoopContent.includes('<final_answer>');
+        const webToolFailed = session.history.some(
+          (msg) =>
+            msg.role === 'tool' &&
+            (msg.tool_name === 'web_search' || msg.tool_name === 'web_fetch') &&
+            typeof msg.content === 'string' &&
+            msg.content.startsWith('Error'),
         );
+
+        if (toolLoopHasFinal && !webToolFailed) {
+          // The tool loop produced a final answer and no web tool failed — use it
+          // directly, avoiding a redundant AI call.
+          log.info('Tool loop produced final answer; processing inline', { sessionId });
+          content = toolLoopContent;
+          result = recoveredToolLoopResult;
+          // Fall through to the <final_answer> handling below.
+          break;
+        } else {
+          // The tool loop returned either plain text or a <final_answer> produced
+          // after a web tool failed (404 / error) — the model tends to wrap a
+          // "please run this manually" message in <final_answer> in that case.
+          // We make one more AI turn so the model can correct itself. The
+          // directive below tells it to call the shell_script tool as a fallback
+          // instead of asking the user to run commands.
+          if (recoveredToolLoopResult.assistantMessage?.content?.trim()) {
+            pushToSessionHistory(logger, session, {
+              role: 'assistant',
+              content: recoveredToolLoopResult.assistantMessage.content,
+            });
+          }
+
+          pushToSessionHistory(logger, session, {
+            role: 'user',
+            content: webToolFailed
+              ? [
+                  'IMPORTANT: The web search tool failed and is unavailable. Do NOT attempt any further web calls or ask the user to run commands manually.',
+                  'You MUST retrieve any needed data by calling the shell_script tool to run terminal commands (curl, grep, cat, etc.).',
+                  'The shell script output will be returned to you automatically.',
+                  '',
+                  'Respond with exactly one of:',
+                  '- a shell_script tool call — to fetch or retrieve data via terminal commands',
+                  '- <final_answer>...</final_answer> — only if you already have enough information',
+                  'No plain text. No web tool calls. No other format.',
+                ].join('\n')
+              : [
+                  'Web research is complete. The results are in the conversation above.',
+                  '',
+                  'Now respond with exactly one of:',
+                  '- a shell_script tool call — to run terminal commands (output will be returned to you automatically)',
+                  '- <final_answer>...</final_answer> — only if you genuinely have enough information',
+                  'No plain text. No other format.',
+                ].join('\n'),
+          });
+
+          // DB-only session state: persist before recursive handoff so the
+          // follow-up turn reads the latest history and turn count.
+          await persistSessionToDB(sessionId, session);
+
+          return await runAgentTurnInternal(
+            sessionId,
+            subscription,
+            {
+              sender: 'agent',
+              session_id: sessionId,
+              content: '',
+              is_web_call: true,
+            },
+            send,
+            logger,
+            options,
+          );
+        }
       }
     }
 
