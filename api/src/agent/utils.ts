@@ -26,7 +26,13 @@ export const SHELL_SCRIPT_TOOL: AITool = {
     properties: {
       script: {
         type: 'string',
-        description: 'The shell script to execute on the user\'s machine.',
+        description: "The shell script to execute on the user's machine.",
+      },
+      filter_keywords: {
+        type: 'array',
+        items: { type: 'string' },
+        description:
+          'Optional keywords, filenames, test names, IDs, or error codes that should be prioritized when refining verbose terminal output before it is returned as the tool result.',
       },
     },
     required: ['script'],
@@ -54,7 +60,13 @@ export const SHELL_SCRIPT_TOOL_LIMITED: AITool = {
       script: {
         type: 'string',
         description:
-          "Read-only shell script. Restrict yourself to inspection commands; do not write, delete, install, configure, or otherwise mutate state.",
+          'Read-only shell script. Restrict yourself to inspection commands; do not write, delete, install, configure, or otherwise mutate state.',
+      },
+      filter_keywords: {
+        type: 'array',
+        items: { type: 'string' },
+        description:
+          'Optional keywords, filenames, test names, IDs, or error codes that should be prioritized when refining verbose terminal output before it is returned as the tool result.',
       },
     },
     required: ['script'],

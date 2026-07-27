@@ -261,6 +261,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         scheduledJobsItem.isEnabled = false
         menu.addItem(scheduledJobsItem)
         scheduledJobsMenuItem = scheduledJobsItem
+        // The Usage view is intentionally not exposed from the status-bar
+        // menu; it lives exclusively under the Usage tab in Settings so we
+        // keep the top menu focused on entry points that create or run work
+        // rather than analytics surfaces.
         let mcpServersItem = NSMenuItem(title: "MCP Servers", action: #selector(showMCPServersWindowFromMenu), keyEquivalent: "")
         mcpServersItem.target = self
         mcpServersItem.isEnabled = false

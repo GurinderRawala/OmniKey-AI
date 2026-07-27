@@ -91,6 +91,22 @@ const COLUMN_MIGRATIONS: ColumnMigration[] = [
     column: 'task_instruction_heading',
     definition: 'VARCHAR(255)',
   },
+  // Added: detailed usage dashboard metadata.
+  {
+    table: 'subscription_usages',
+    column: 'provider',
+    definition: "VARCHAR(255) NOT NULL DEFAULT 'unknown'",
+  },
+  {
+    table: 'subscription_usages',
+    column: 'mode',
+    definition: "VARCHAR(255) NOT NULL DEFAULT 'unknown'",
+  },
+  {
+    table: 'subscription_usages',
+    column: 'session_id',
+    definition: 'VARCHAR(255)',
+  },
 ];
 
 async function runSQLiteMigrations(logger: Logger): Promise<void> {
@@ -199,9 +215,7 @@ export async function initDatabase(logger: Logger): Promise<void> {
     // sidestep a circular dep with the AgentSession model, which itself
     // imports the `sequelize` instance from this file.
     try {
-      const { backfillSessionTaskInstructions } = await import(
-        './agent/backfillTaskInstructions'
-      );
+      const { backfillSessionTaskInstructions } = await import('./agent/backfillTaskInstructions');
       await backfillSessionTaskInstructions(logger);
     } catch (err) {
       logger.error('Backfill for session task instructions failed; continuing startup', {

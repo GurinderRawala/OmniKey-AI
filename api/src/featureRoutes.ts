@@ -12,10 +12,10 @@ import {
 import { config } from './config';
 import { AuthLocals, authMiddleware } from './authMiddleware';
 import { Subscription } from './models/subscription';
-import { SubscriptionUsage } from './models/subscriptionUsage';
 import { decompressString } from './compression';
 import { SubscriptionTaskTemplate } from './models/subscriptionTaskTemplate';
 import { aiClient, AIMessage, getDefaultModel } from './ai-client';
+import { recordTokenUsage, UsageMode } from './usageRecorder';
 
 function parseImprovedTextResponse(logger: Logger, response: string): string {
   const match = response.match(/<improved_text>([\s\S]*?)<\/improved_text>/);
@@ -111,10 +111,10 @@ export async function getDefaultTaskTemplateSnapshot(
       instructions: decompressed,
     };
   } catch (err) {
-    logger.error(
-      'Error loading default task template snapshot; treating as "no template".',
-      { error: err, subscriptionId: subscription.id },
-    );
+    logger.error('Error loading default task template snapshot; treating as "no template".', {
+      error: err,
+      subscriptionId: subscription.id,
+    });
     return null;
   }
 }
@@ -132,6 +132,10 @@ function getModelForCommand(cmd: EnhanceCommand): string {
   // upgrade to a newer flagship model.
   const tier: 'fast' | 'smart' = cmd === 'task' ? 'smart' : 'fast';
   return getDefaultModel(config.aiProvider, tier);
+}
+
+function usageModeForCommand(cmd: EnhanceCommand): UsageMode {
+  return cmd === 'task' ? 'custom-task' : cmd;
 }
 
 function createMessagesParams(cmd: EnhanceCommand, input: string, prompt: string): AIMessage[] {
@@ -217,29 +221,7 @@ async function enhanceText(
 
     const { rawResponse, usage, model } = result;
 
-    // Record token usage for this subscription and model, if usage
-    // data is available and we know which subscription made the call.
-    if (usage && subscription.id && !config.isSelfHosted) {
-      try {
-        await SubscriptionUsage.create({
-          subscriptionId: subscription.id,
-          model,
-          promptTokens: usage.prompt_tokens ?? 0,
-          completionTokens: usage.completion_tokens ?? 0,
-          totalTokens: usage.total_tokens ?? 0,
-        });
-
-        await Subscription.increment('totalTokensUsed', {
-          by: usage.total_tokens ?? 0,
-          where: { id: subscription.id },
-        });
-      } catch (err) {
-        logger.error('Failed to record subscription usage metrics.', {
-          error: err,
-          subscriptionId: subscription.id,
-        });
-      }
-    }
+    await recordTokenUsage(logger, subscription, usage, model, usageModeForCommand(cmd));
     const enhanced = rawResponse.trim();
 
     if (!enhanced) {
@@ -311,27 +293,7 @@ async function streamEnhanceResponse(
 
     const { usage, model } = result;
 
-    if (usage && subscription.id && !config.isSelfHosted) {
-      try {
-        await SubscriptionUsage.create({
-          subscriptionId: subscription.id,
-          model,
-          promptTokens: usage.prompt_tokens ?? 0,
-          completionTokens: usage.completion_tokens ?? 0,
-          totalTokens: usage.total_tokens ?? 0,
-        });
-
-        await Subscription.increment('totalTokensUsed', {
-          by: usage.total_tokens ?? 0,
-          where: { id: subscription.id },
-        });
-      } catch (err) {
-        logger.error('Failed to record subscription usage metrics during stream.', {
-          error: err,
-          subscriptionId: subscription.id,
-        });
-      }
-    }
+    await recordTokenUsage(logger, subscription, usage, model, usageModeForCommand(cmd));
 
     if (!headersSent) {
       ensureHeadersSent();

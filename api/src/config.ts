@@ -156,6 +156,14 @@ export const config = {
   // Setting it to true triggers `omnikey grant-browser-access` from the
   // settings endpoint (similar to `restart-daemon`).
   browserAccessEnabled: getBooleanEnv('BROWSER_ACCESS_ENABLED', false),
+  // usageRecordingEnabled controls whether detailed per-call token usage rows
+  // are persisted for the Usage dashboard. Cloud defaults to true to preserve
+  // existing accounting; self-hosted defaults to false for local privacy and
+  // storage until the user explicitly enables it in Settings.
+  usageRecordingEnabled: getBooleanEnv(
+    'USAGE_RECORDING_ENABLED',
+    !getBooleanEnv('IS_SELF_HOSTED', false),
+  ),
 
   // GCS download-count tracking (both must be set to enable counting)
   gcsBucketName: getEnv('GCS_BUCKET_NAME', false),

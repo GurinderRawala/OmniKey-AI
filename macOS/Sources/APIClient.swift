@@ -1178,6 +1178,7 @@ final class APIClient: @unchecked Sendable {
         let terminalAccess: TerminalAccessMode
         let webSearchEnabled: Bool
         let browserAccessEnabled: Bool
+        let usageRecordingEnabled: Bool
         let browserDebugBrowserName: String?
         let browserDebugPort: Int?
     }
@@ -1189,6 +1190,7 @@ final class APIClient: @unchecked Sendable {
         let terminalAccess: TerminalAccessMode
         let webSearchEnabled: Bool
         let browserAccessEnabled: Bool
+        let usageRecordingEnabled: Bool
         let browserDebugBrowserName: String?
         let browserDebugPort: Int?
     }
@@ -1198,6 +1200,7 @@ final class APIClient: @unchecked Sendable {
         let terminalAccess: TerminalAccessMode
         let webSearchEnabled: Bool
         let browserAccessEnabled: Bool
+        let usageRecordingEnabled: Bool?
         let restartScheduled: Bool?
         let message: String?
     }
@@ -1236,6 +1239,7 @@ final class APIClient: @unchecked Sendable {
                     terminalAccess: decoded.terminalAccess,
                     webSearchEnabled: decoded.webSearchEnabled,
                     browserAccessEnabled: decoded.browserAccessEnabled,
+                    usageRecordingEnabled: decoded.usageRecordingEnabled,
                     browserDebugBrowserName: decoded.browserDebugBrowserName,
                     browserDebugPort: decoded.browserDebugPort
                 )))
@@ -1250,6 +1254,7 @@ final class APIClient: @unchecked Sendable {
     func updateAppSettings(
         terminalAccess: TerminalAccessMode?,
         webSearchEnabled: Bool?,
+        usageRecordingEnabled: Bool? = nil,
         completion: @escaping @Sendable (Result<AppSettingsMutationResponse, Error>) -> Void
     ) {
         var request = URLRequest(url: appSettingsBaseURL)
@@ -1261,6 +1266,7 @@ final class APIClient: @unchecked Sendable {
         var payload: [String: Any] = [:]
         if let mode = terminalAccess { payload["terminalAccess"] = mode.rawValue }
         if let webSearch = webSearchEnabled { payload["webSearchEnabled"] = webSearch }
+        if let usageRecording = usageRecordingEnabled { payload["usageRecordingEnabled"] = usageRecording }
         guard !payload.isEmpty,
               let body = try? JSONSerialization.data(withJSONObject: payload) else {
             completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Nothing to update"])))
@@ -1282,6 +1288,145 @@ final class APIClient: @unchecked Sendable {
                 return
             }
             do { completion(.success(try JSONDecoder().decode(AppSettingsMutationResponse.self, from: data))) }
+            catch { completion(.failure(error)) }
+        }
+        task.resume()
+    }
+
+    // MARK: - Usage metrics
+
+    private var usageBaseURL: URL { APIClient.baseURL.appendingPathComponent("api/usage") }
+
+    struct UsageBucketDTO: Codable, Identifiable {
+        let key: String
+        let label: String
+        let promptTokens: Int
+        let completionTokens: Int
+        let totalTokens: Int
+        let requests: Int
+        let costUsd: Double
+
+        var id: String { key }
+    }
+
+    struct UsageRangeDTO: Codable {
+        let label: String
+        let from: String?
+        let to: String
+        let previousFrom: String?
+        let previousTo: String?
+        let days: Int
+    }
+
+    struct UsageComparisonDTO: Codable {
+        let tokenDeltaRatio: Double?
+        let tokenDelta: Int
+        let costDeltaUsd: Double
+    }
+
+    struct UsageEstimatesDTO: Codable {
+        let averageDailyTokens: Double
+        let averageDailyCostUsd: Double
+        let monthToDateTokens: Int
+        let monthToDateCostUsd: Double
+        let monthToDateAverageDailyCostUsd: Double
+        let monthElapsedDays: Int
+        let projectedEndOfMonthCostUsd: Double
+        let costAssumption: String
+    }
+
+    struct UsagePricingDTO: Codable {
+        let provider: String
+        let providerLabel: String
+        let customPricePerMillionTokensUsd: Double?
+    }
+
+    struct UsageThreadDTO: Codable, Identifiable {
+        let id: String
+        let title: String
+        let turns: Int
+        let totalTokens: Int
+        let lastActiveAt: String
+    }
+
+    struct UsageThreadsDTO: Codable {
+        let distinctThreads: Int
+        let averageTokensPerThread: Double
+        let topThreads: [UsageThreadDTO]
+    }
+
+    struct UsageEfficiencyPointDTO: Codable, Identifiable {
+        let date: String
+        let averageTokensPerRequest: Double
+        let outputShare: Double
+
+        var id: String { date }
+    }
+
+    struct UsageMetricsResponse: Codable {
+        let recordingEnabled: Bool
+        let generatedAt: String
+        let range: UsageRangeDTO
+        let pricing: UsagePricingDTO
+        let allTimeTotals: UsageBucketDTO
+        let totals: UsageBucketDTO
+        let previousTotals: UsageBucketDTO
+        let comparison: UsageComparisonDTO
+        let estimates: UsageEstimatesDTO
+        let threads: UsageThreadsDTO
+        let availableProviders: [UsageBucketDTO]
+        let byProvider: [UsageBucketDTO]
+        let byMode: [UsageBucketDTO]
+        let byModel: [UsageBucketDTO]
+        let daily: [UsageBucketDTO]
+        let hourly: [UsageBucketDTO]
+        let peakHours: [UsageBucketDTO]
+        let mostUsedFeatures: [UsageBucketDTO]
+        let efficiencyTrend: [UsageEfficiencyPointDTO]
+    }
+
+    func fetchUsageMetrics(
+        range: String,
+        provider: String? = nil,
+        pricePerMillionTokensUsd: Double? = nil,
+        completion: @escaping @Sendable (Result<UsageMetricsResponse, Error>) -> Void
+    ) {
+        var components = URLComponents(url: usageBaseURL, resolvingAgainstBaseURL: false)
+        var queryItems = [URLQueryItem(name: "range", value: range)]
+        if let provider, provider != "all" {
+            queryItems.append(URLQueryItem(name: "provider", value: provider))
+        }
+        if let pricePerMillionTokensUsd {
+            queryItems.append(URLQueryItem(
+                name: "pricePerMillionTokensUsd",
+                value: String(pricePerMillionTokensUsd)
+            ))
+        }
+        components?.queryItems = queryItems
+        guard let url = components?.url else {
+            completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid usage URL"])))
+            return
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        if let token = SubscriptionManager.shared.jwtToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        let task = URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error = error { completion(.failure(error)); return }
+            guard let httpResponse = response as? HTTPURLResponse else {
+                completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response"])))
+                return
+            }
+            guard (200...299).contains(httpResponse.statusCode) else {
+                completion(.failure(APIClient.makeBackendError(statusCode: httpResponse.statusCode, data: data)))
+                return
+            }
+            guard let data = data, !data.isEmpty else {
+                completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No data"])))
+                return
+            }
+            do { completion(.success(try JSONDecoder().decode(UsageMetricsResponse.self, from: data))) }
             catch { completion(.failure(error)) }
         }
         task.resume()

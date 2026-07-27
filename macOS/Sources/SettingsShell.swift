@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 private enum SettingsTab: String, CaseIterable, Identifiable {
-    case providers, agentAccess, updates, manual
+    case providers, agentAccess, usage, updates, manual
 
     var id: String { rawValue }
 
@@ -10,6 +10,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         switch self {
         case .providers:    return "AI Providers"
         case .agentAccess:  return "Agent Access"
+        case .usage:        return "Usage"
         case .updates:      return "Check for Updates"
         case .manual:       return "Manual"
         }
@@ -19,6 +20,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         switch self {
         case .providers:    return "key.fill"
         case .agentAccess:  return "lock.shield.fill"
+        case .usage:        return "chart.xyaxis.line"
         case .updates:      return "arrow.down.circle.fill"
         case .manual:       return "book.fill"
         }
@@ -28,6 +30,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         switch self {
         case .providers:    return "Manage API keys"
         case .agentAccess:  return "Terminal, web & browser"
+        case .usage:        return "Tokens & cost"
         case .updates:      return "App version & updates"
         case .manual:       return "Shortcuts & usage"
         }
@@ -132,6 +135,8 @@ struct SettingsView: View {
             AIProvidersSettingsView()
         case .agentAccess:
             AgentAccessSettingsView()
+        case .usage:
+            UsageView()
         case .updates:
             UpdatesSettingsView()
         case .manual:

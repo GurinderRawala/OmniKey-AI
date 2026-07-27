@@ -71,6 +71,7 @@ ${
 - **Keep each script short and atomic** — prefer under 30 lines, doing exactly one operation (check one thing, install one package, make one change, run one command). If a script would need more, split it into two turns.
 - Natural phase boundaries: **(1)** check or install dependencies → **(2)** inspect or probe current state → **(3)** make one targeted change → **(4)** verify the change took effect. Add a boundary wherever a failure would require a different next step than a success.
 - Single-step read-only queries ("list files", "show env") need no splitting — one script is fine.
+- When a command may produce verbose output, include \`filter_keywords\` in the \`shell_script\` tool call with the filenames, test names, symbols, IDs, or error codes you need. Terminal output is refined before it is returned to you, and matching lines plus nearby context are prioritized.
 
 **When to use web tools:**
 - Use the built-in \`web_fetch\` tool when the user provides a URL that must be retrieved.

@@ -7,6 +7,9 @@ interface SubscriptionUsageAttributes {
   id: string;
   subscriptionId: string;
   model: string;
+  provider: string;
+  mode: string;
+  sessionId?: string | null;
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
@@ -16,7 +19,15 @@ interface SubscriptionUsageAttributes {
 
 interface SubscriptionUsageCreationAttributes extends Optional<
   SubscriptionUsageAttributes,
-  'id' | 'promptTokens' | 'completionTokens' | 'totalTokens' | 'createdAt' | 'updatedAt'
+  | 'id'
+  | 'promptTokens'
+  | 'completionTokens'
+  | 'totalTokens'
+  | 'createdAt'
+  | 'updatedAt'
+  | 'provider'
+  | 'mode'
+  | 'sessionId'
 > {}
 
 export class SubscriptionUsage
@@ -26,6 +37,9 @@ export class SubscriptionUsage
   public id!: string;
   public subscriptionId!: string;
   public model!: string;
+  public provider!: string;
+  public mode!: string;
+  public sessionId?: string | null;
   public promptTokens!: number;
   public completionTokens!: number;
   public totalTokens!: number;
@@ -55,6 +69,21 @@ SubscriptionUsage.init(
     model: {
       type: DataTypes.STRING,
       allowNull: false,
+    },
+    provider: {
+      type: DataTypes.STRING,
+      allowNull: false,
+      defaultValue: 'unknown',
+    },
+    mode: {
+      type: DataTypes.STRING,
+      allowNull: false,
+      defaultValue: 'unknown',
+    },
+    sessionId: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      field: 'session_id',
     },
     promptTokens: {
       type: DataTypes.INTEGER,

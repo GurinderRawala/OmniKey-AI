@@ -3,11 +3,12 @@ import SwiftUI
 /// Settings pane that controls how broad the agent's machine access is:
 ///   • Terminal access mode  — Full vs. Limited (read-only) shell scripts.
 ///   • Web search             — Enable / disable web_search + web_fetch tools.
+///   • Usage recording        — Enable / disable persisted token usage rows.
 ///   • Authenticated browser  — Enable / disable browser session reading via
 ///                              the same `omnikey grant-browser-access` flow
 ///                              the CLI exposes.
 ///
-/// All three values are persisted to ~/.omnikey/config.json by the backend
+/// All four values are persisted to ~/.omnikey/config.json by the backend
 /// (see appSettingsRoutes.ts) and any change schedules a daemon restart so
 /// the running process picks them up. Enabling browser access spawns the
 /// interactive CLI in Terminal.app — the same prompts the user would see
@@ -17,6 +18,7 @@ struct AgentAccessSettingsView: View {
 
     @State private var terminalAccess: APIClient.TerminalAccessMode = .full
     @State private var webSearchEnabled: Bool = true
+    @State private var usageRecordingEnabled: Bool = !APIClient.isSelfHosted
     @State private var browserAccessEnabled: Bool = false
     @State private var browserDebugBrowserName: String? = nil
     @State private var browserDebugPort: Int? = nil
@@ -29,6 +31,7 @@ struct AgentAccessSettingsView: View {
     // require an explicit confirm step.
     @State private var pendingTerminalAccess: APIClient.TerminalAccessMode? = nil
     @State private var pendingWebSearch: Bool? = nil
+    @State private var pendingUsageRecording: Bool? = nil
     @State private var pendingBrowserAccess: Bool? = nil
 
     private let apiClient = APIClient()
@@ -52,6 +55,7 @@ struct AgentAccessSettingsView: View {
                     VStack(alignment: .leading, spacing: 14) {
                         terminalAccessCard
                         webSearchCard
+                        usageRecordingCard
                         browserAccessCard
                     }
                     .padding(.horizontal, 24)
@@ -106,6 +110,25 @@ struct AgentAccessSettingsView: View {
         } message: {
             let target = (pendingWebSearch == true) ? "enabled" : "disabled"
             Text("Web search and web fetch tools will be \(target). The daemon will restart to apply the change.")
+        }
+        .confirmationDialog(
+            "Change usage recording?",
+            isPresented: Binding(
+                get: { pendingUsageRecording != nil },
+                set: { if !$0 { pendingUsageRecording = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Apply & Restart Server") {
+                if let enabled = pendingUsageRecording {
+                    pendingUsageRecording = nil
+                    applyUsageRecording(enabled)
+                }
+            }
+            Button("Cancel", role: .cancel) { pendingUsageRecording = nil }
+        } message: {
+            let target = (pendingUsageRecording == true) ? "enabled" : "disabled"
+            Text("Detailed token usage recording will be \(target). The daemon will restart to apply the change.")
         }
         .confirmationDialog(
             (pendingBrowserAccess == true)
@@ -227,6 +250,42 @@ struct AgentAccessSettingsView: View {
 
     // MARK: - Browser access card
 
+    private var usageRecordingCard: some View {
+        settingCard(
+            icon: "chart.bar.doc.horizontal",
+            title: "Usage recording",
+            subtitle: "Persist per-call token usage so the Usage page can show consumption and cost trends."
+        ) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Toggle(isOn: Binding(
+                        get: { usageRecordingEnabled },
+                        set: { newValue in
+                            if newValue != usageRecordingEnabled {
+                                pendingUsageRecording = newValue
+                            }
+                        }
+                    )) {
+                        Text(usageRecordingEnabled ? "Enabled" : "Disabled")
+                    }
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+                    .disabled(isLoading)
+                    Text(usageRecordingEnabled ? "Enabled" : "Disabled")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(NordTheme.primaryText(colorScheme))
+                    Spacer()
+                }
+
+                Text(APIClient.isSelfHosted && !usageRecordingEnabled
+                     ? "Self-hosted installs keep detailed usage recording off by default. Enable it to populate the Usage page from this point forward."
+                     : "When enabled, OmniKey stores model, mode, thread, and token counts for each AI call. Existing context counters are unaffected.")
+                    .font(.system(size: 11))
+                    .foregroundColor(NordTheme.secondaryText(colorScheme))
+            }
+        }
+    }
+
     private var browserAccessCard: some View {
         settingCard(
             icon: "safari.fill",
@@ -320,6 +379,7 @@ struct AgentAccessSettingsView: View {
                 case .success(let response):
                     terminalAccess = response.terminalAccess
                     webSearchEnabled = response.webSearchEnabled
+                    usageRecordingEnabled = response.usageRecordingEnabled
                     browserAccessEnabled = response.browserAccessEnabled
                     browserDebugBrowserName = response.browserDebugBrowserName
                     browserDebugPort = response.browserDebugPort
@@ -357,6 +417,24 @@ struct AgentAccessSettingsView: View {
                 case .success(let resp):
                     webSearchEnabled = resp.webSearchEnabled
                     statusMessage = "Web search \(resp.webSearchEnabled ? "enabled" : "disabled"). Waiting for daemon restart…"
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { loadSettings() }
+                case .failure(let error):
+                    isLoading = false
+                    statusMessage = "Failed to apply: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    private func applyUsageRecording(_ enabled: Bool) {
+        isLoading = true
+        statusMessage = "Updating usage recording — server will restart…"
+        apiClient.updateAppSettings(terminalAccess: nil, webSearchEnabled: nil, usageRecordingEnabled: enabled) { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let resp):
+                    usageRecordingEnabled = resp.usageRecordingEnabled ?? enabled
+                    statusMessage = "Usage recording \(usageRecordingEnabled ? "enabled" : "disabled"). Waiting for daemon restart…"
                     DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { loadSettings() }
                 case .failure(let error):
                     isLoading = false

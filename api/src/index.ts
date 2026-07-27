@@ -12,6 +12,7 @@ import { scheduledJobRouter } from './scheduledJobRoutes';
 import { mcpServerRouter } from './mcpServerRoutes';
 import { aiProviderRouter } from './aiProviderRoutes';
 import { appSettingsRouter } from './appSettingsRoutes';
+import { createUsageRouter } from './usageRoutes';
 import { spawnWorker, type ManagedWorker } from './workers/spawn';
 import { setScheduledJobWorker } from './workers/scheduledJobWorkerClient';
 import { config } from './config';
@@ -47,6 +48,8 @@ app.use('/api/providers', aiProviderRouter());
 
 app.use('/api/app-settings', appSettingsRouter());
 
+app.use('/api/usage', createUsageRouter());
+
 app.use('/api/agent', createAgentRouter());
 
 app.get('/macos/download', (_req, res) => {
@@ -58,7 +61,9 @@ app.get('/macos/download', (_req, res) => {
   }
 
   let fileSize = 0;
-  try { fileSize = fs.statSync(dmgPath).size; } catch (_) {}
+  try {
+    fileSize = fs.statSync(dmgPath).size;
+  } catch (_) {}
 
   res.set({
     'Content-Type': 'application/octet-stream',
@@ -101,8 +106,8 @@ app.get('/macos/appcast', (req, res) => {
 
   // These should match the values embedded into the macOS app
   // Info.plist in macOS/build_release_dmg.sh.
-  const bundleVersion = '48';
-  const shortVersion = '1.2.0';
+  const bundleVersion = '49';
+  const shortVersion = '1.3.0';
 
   const xml = `<?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0"

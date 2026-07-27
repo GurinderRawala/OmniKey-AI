@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => {
     },
     complete: vi.fn(),
     executeTool: vi.fn(),
+    runScript: vi.fn(),
   };
 });
 
@@ -98,7 +99,7 @@ vi.mock('../agent/sessionGrouping', () => ({
 }));
 
 vi.mock('../shellRunner', () => ({
-  runScript: vi.fn(),
+  runScript: mocks.runScript,
 }));
 
 vi.mock('../ai-client', () => ({
@@ -140,6 +141,7 @@ describe('agent session persistence checkpoints', () => {
     mocks.agentSession.destroy.mockResolvedValue(0);
     mocks.agentSession.increment.mockResolvedValue([1]);
     mocks.executeTool.mockResolvedValue('tool result');
+    mocks.runScript.mockResolvedValue({ output: 'script output', isError: false });
   });
 
   it('persists the first user turn before calling the model', async () => {
@@ -236,6 +238,71 @@ describe('agent session persistence checkpoints', () => {
         }),
       ]),
     );
+  });
+
+  it('refines verbose shell_script output before storing the tool result', async () => {
+    const toolCall = {
+      id: 'call-shell-1',
+      name: 'shell_script',
+      arguments: {
+        script: 'printf "verbose test output"',
+        filter_keywords: ['KEEP_ME', 'needle.spec.ts'],
+      },
+    };
+    const noisyOutput = [
+      ...Array.from({ length: 80 }, (_, index) => `noise before ${index}`),
+      'KEEP_ME summary: selected result',
+      'nearby context line',
+      ...Array.from({ length: 80 }, (_, index) => `noise middle ${index}`),
+      'needle.spec.ts:42 failed expectation',
+      ...Array.from({ length: 80 }, (_, index) => `noise after ${index}`),
+    ].join('\n');
+
+    mocks.runScript.mockResolvedValueOnce({ output: noisyOutput, isError: false });
+    mocks.complete
+      .mockResolvedValueOnce({
+        assistantMessage: { role: 'assistant', content: '', tool_calls: [toolCall] },
+        content: '',
+        finish_reason: 'tool_calls',
+        model: 'test-model',
+        tool_calls: [toolCall],
+      })
+      .mockResolvedValueOnce({
+        assistantMessage: {
+          role: 'assistant',
+          content: '<final_answer>\nShell output reviewed.\n</final_answer>',
+        },
+        content: '<final_answer>\nShell output reviewed.\n</final_answer>',
+        finish_reason: 'stop',
+        model: 'test-model',
+      });
+
+    await runAgentTurn(
+      'session-1',
+      { id: 'subscription-1' } as any,
+      {
+        session_id: 'session-1',
+        sender: 'client',
+        content: 'Run the verbose shell command.',
+        platform: 'macos',
+      },
+      vi.fn(),
+      mocks.log as any,
+      { isCronJob: true, skipGrouping: true },
+    );
+
+    const histories = historyUpdateCalls().map(parsedHistoryFromCall);
+    const toolMessage = histories
+      .flat()
+      .find((msg) => msg.role === 'tool' && msg.tool_name === 'shell_script');
+
+    expect(toolMessage?.content).toContain('TERMINAL OUTPUT:');
+    expect(toolMessage?.content).toContain('terminal output refined');
+    expect(toolMessage?.content).toContain('KEEP_ME summary: selected result');
+    expect(toolMessage?.content).toContain('needle.spec.ts:42 failed expectation');
+    expect(toolMessage?.content).not.toContain('noise middle 40');
+    expect(toolMessage?.content.length ?? 0).toBeLessThan(noisyOutput.length);
+    expect(mocks.runScript).toHaveBeenCalledWith('printf "verbose test output"');
   });
 
   it('removes stale injected recovery prompts before appending a real follow-up', async () => {

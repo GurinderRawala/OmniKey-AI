@@ -30,6 +30,7 @@ const updateSchema = zod
   .object({
     terminalAccess: zod.enum(['full', 'limited']).optional(),
     webSearchEnabled: zod.boolean().optional(),
+    usageRecordingEnabled: zod.boolean().optional(),
   })
   .strict();
 
@@ -120,6 +121,15 @@ function readBrowserAccessEnabled(cfg: Record<string, any>): boolean {
   return Boolean(cfg.BROWSER_DEBUG_EXECUTABLE);
 }
 
+function readUsageRecordingEnabled(cfg: Record<string, any>): boolean {
+  // Mirrors config.ts: cloud defaults to true, self-hosted defaults to false.
+  if (cfg.USAGE_RECORDING_ENABLED === undefined || cfg.USAGE_RECORDING_ENABLED === null) {
+    return !config.isSelfHosted;
+  }
+  const v = String(cfg.USAGE_RECORDING_ENABLED).toLowerCase();
+  return v === 'true' || v === '1';
+}
+
 /**
  * Daemon restart scheduler — copied in spirit from aiProviderRoutes so the
  * three settings endpoints share the same restart contract. Detached spawn
@@ -159,7 +169,10 @@ function scheduleDaemonRestart(reason: string): void {
  */
 function launchGrantBrowserAccessInteractive(): { launched: boolean; error?: string } {
   if (process.platform !== 'darwin') {
-    return { launched: false, error: 'Interactive browser-access setup is only wired for macOS in the Settings UI.' };
+    return {
+      launched: false,
+      error: 'Interactive browser-access setup is only wired for macOS in the Settings UI.',
+    };
   }
 
   const omnikeyCli = path.resolve(__dirname, '../dist/index.js');
@@ -169,8 +182,7 @@ function launchGrantBrowserAccessInteractive(): { launched: boolean; error?: str
   }
 
   // Escape for embedding inside the AppleScript string literal.
-  const escapeForAppleScript = (s: string): string =>
-    s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  const escapeForAppleScript = (s: string): string => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 
   const command = `clear; "${escapeForAppleScript(node)}" "${escapeForAppleScript(omnikeyCli)}" grant-browser-access; echo; echo "[Press Enter to close]"; read`;
   const appleScript = `tell application "Terminal"
@@ -232,6 +244,7 @@ export function appSettingsRouter(): express.Router {
         terminalAccess: readTerminalAccess(cfg),
         webSearchEnabled: readWebSearchEnabled(cfg),
         browserAccessEnabled: readBrowserAccessEnabled(cfg),
+        usageRecordingEnabled: readUsageRecordingEnabled(cfg),
         browserDebugBrowserName: cfg.BROWSER_DEBUG_BROWSER_NAME ?? null,
         browserDebugPort:
           typeof cfg.BROWSER_DEBUG_PORT === 'number'
@@ -244,6 +257,7 @@ export function appSettingsRouter(): express.Router {
         runtime: {
           terminalAccess: config.terminalAccess,
           webSearchEnabled: config.webSearchEnabled,
+          usageRecordingEnabled: config.usageRecordingEnabled,
           browserAccessEnabled:
             config.browserAccessEnabled || Boolean(config.browserDebugExecutable),
         },
@@ -255,9 +269,9 @@ export function appSettingsRouter(): express.Router {
   });
 
   /**
-   * PATCH /api/app-settings — partial update of terminalAccess and/or
-   * webSearchEnabled. Always restarts the daemon so the new values land in
-   * `config` before the next agent turn.
+   * PATCH /api/app-settings — partial update of terminalAccess, webSearchEnabled,
+   * or usageRecordingEnabled. Always restarts the daemon so the new values land
+   * in `config` before the next agent turn.
    */
   router.patch('/', authMiddleware, async (req, res) => {
     const { logger: reqLogger } = res.locals;
@@ -265,7 +279,8 @@ export function appSettingsRouter(): express.Router {
       const parsed = updateSchema.parse(req.body);
       if (
         parsed.terminalAccess === undefined &&
-        parsed.webSearchEnabled === undefined
+        parsed.webSearchEnabled === undefined &&
+        parsed.usageRecordingEnabled === undefined
       ) {
         return res.status(400).json({ error: 'No supported fields supplied.' });
       }
@@ -280,12 +295,17 @@ export function appSettingsRouter(): express.Router {
         cfg.WEB_SEARCH_ENABLED = parsed.webSearchEnabled;
         reasons.push(`webSearchEnabled=${parsed.webSearchEnabled}`);
       }
+      if (parsed.usageRecordingEnabled !== undefined) {
+        cfg.USAGE_RECORDING_ENABLED = parsed.usageRecordingEnabled;
+        reasons.push(`usageRecordingEnabled=${parsed.usageRecordingEnabled}`);
+      }
       writeConfigFile(cfg);
 
       res.json({
         terminalAccess: readTerminalAccess(cfg),
         webSearchEnabled: readWebSearchEnabled(cfg),
         browserAccessEnabled: readBrowserAccessEnabled(cfg),
+        usageRecordingEnabled: readUsageRecordingEnabled(cfg),
         restartScheduled: true,
         message: 'Settings updated. Server will restart shortly to apply the change.',
       });
@@ -328,9 +348,7 @@ export function appSettingsRouter(): express.Router {
           cfg.BROWSER_ACCESS_ENABLED = false;
           writeConfigFile(cfg);
           return res.status(500).json({
-            error:
-              launch.error ||
-              'Failed to launch the interactive browser-access setup.',
+            error: launch.error || 'Failed to launch the interactive browser-access setup.',
           });
         }
 
