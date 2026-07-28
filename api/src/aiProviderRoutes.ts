@@ -7,6 +7,13 @@ import { spawn } from 'child_process';
 import { authMiddleware } from './authMiddleware';
 import { config } from './config';
 import { logger } from './logger';
+import {
+  agentModelOptionsForProvider,
+  getAgentSettings,
+  modelFieldForProvider,
+  selectedAgentModelForProvider,
+  updateAgentSettings,
+} from './agentSettingsStore';
 
 /**
  * Settings endpoint for managing AI provider API keys stored in
@@ -14,7 +21,8 @@ import { logger } from './logger';
  * source of truth and is the same file the daemon reads via `dotenv` on
  * startup. Changing the active provider rewrites `AI_PROVIDER` and exits
  * the process so the supervising launchd / NSSM relaunches the daemon with
- * the new env.
+ * the new env. Agent model selection is DB-backed through `agent_settings`
+ * and does not require a daemon restart.
  */
 
 export type AIProviderType = 'openai' | 'anthropic' | 'gemini' | 'nemotron';
@@ -89,8 +97,13 @@ function readProviderKey(cfg: Record<string, any>, provider: AIProviderType): st
   return undefined;
 }
 
-function describeProvider(provider: AIProviderType, cfg: Record<string, any>) {
+function describeProvider(
+  provider: AIProviderType,
+  cfg: Record<string, any>,
+  settings: Awaited<ReturnType<typeof getAgentSettings>>,
+) {
   const key = readProviderKey(cfg, provider);
+  const modelOptions = agentModelOptionsForProvider(provider);
   return {
     provider,
     isConfigured: Boolean(key),
@@ -98,11 +111,10 @@ function describeProvider(provider: AIProviderType, cfg: Record<string, any>) {
     baseUrl: provider === 'nemotron'
       ? (typeof cfg.NEMOTRON_BASE_URL === 'string' ? cfg.NEMOTRON_BASE_URL : null)
       : null,
-    // OpenAI only: the currently selected model (OPENAI_MODEL in config.json).
-    // null means the server will use the default smart-tier model (gpt-5.5).
-    model: provider === 'openai'
-      ? (typeof cfg.OPENAI_MODEL === 'string' && cfg.OPENAI_MODEL ? cfg.OPENAI_MODEL : null)
-      : null,
+    model: selectedAgentModelForProvider(settings, provider),
+    modelOptions,
+    supportsModelSelection: modelOptions.length > 0,
+    supportsCustomModel: true,
   };
 }
 
@@ -161,12 +173,15 @@ export function aiProviderRouter(): express.Router {
   router.get('/', authMiddleware, async (_req, res) => {
     const { logger: reqLogger } = res.locals;
     try {
-      const cfg = readConfigFile();
+      const [cfg, settings] = await Promise.all([readConfigFile(), getAgentSettings()]);
       const providers: AIProviderType[] = ['openai', 'anthropic', 'gemini', 'nemotron'];
       const active = readActiveProvider(cfg);
       res.json({
-        providers: providers.map((p) => describeProvider(p, cfg)),
+        providers: providers.map((p) => describeProvider(p, cfg, settings)),
         activeProvider: active,
+        activeModel: selectedAgentModelForProvider(settings, active),
+        modelOptions: agentModelOptionsForProvider(active),
+        supportsCustomModel: true,
         // The in-process provider may differ from cfg.AI_PROVIDER if the user
         // changed config.json out of band — surface both so the UI can warn.
         runtimeProvider: config.aiProvider,
@@ -220,7 +235,7 @@ export function aiProviderRouter(): express.Router {
       }
 
       res.json({
-        ...describeProvider(provider, cfg),
+        ...describeProvider(provider, cfg, await getAgentSettings()),
         restartScheduled,
       });
     } catch (err: any) {
@@ -267,7 +282,7 @@ export function aiProviderRouter(): express.Router {
     }
   });
 
-  /** PATCH /api/providers/:provider/model — update the model for a provider (OpenAI only). */
+  /** PATCH /api/providers/:provider/model — update the agent model for a provider. */
   router.patch('/:provider/model', authMiddleware, async (req, res) => {
     const { logger: reqLogger } = res.locals;
     const providerParam = providerEnum.safeParse(req.params.provider);
@@ -275,27 +290,31 @@ export function aiProviderRouter(): express.Router {
       return res.status(400).json({ error: 'Unknown provider.' });
     }
     const provider = providerParam.data;
-    if (provider !== 'openai') {
-      return res.status(400).json({ error: 'Model selection is only supported for the OpenAI provider.' });
-    }
 
     const model = req.body?.model;
     if (!model || typeof model !== 'string' || model.trim().length === 0 || model.length > 200) {
       return res.status(400).json({ error: 'Invalid model name.' });
     }
+    const normalizedModel = model.trim();
+    if (/[\u0000-\u001f\u007f\s]/.test(normalizedModel)) {
+      return res.status(400).json({
+        error: 'Model names cannot contain whitespace or control characters.',
+        modelOptions: agentModelOptionsForProvider(provider),
+        supportsCustomModel: true,
+      });
+    }
 
     try {
       const cfg = readConfigFile();
-      cfg.OPENAI_MODEL = model.trim();
-      writeConfigFile(cfg);
+      const field = modelFieldForProvider(provider);
+      const settings = await updateAgentSettings({ [field]: normalizedModel });
 
       res.json({
-        ...describeProvider(provider, cfg),
-        restartScheduled: true,
-        message: 'Model updated. Server will restart shortly to apply the change.',
+        ...describeProvider(provider, cfg, settings),
+        activeModel: selectedAgentModelForProvider(settings, readActiveProvider(cfg)),
+        restartScheduled: false,
+        message: 'Model updated.',
       });
-
-      scheduleDaemonRestart(`updated OpenAI model to ${model.trim()}`);
     } catch (err) {
       reqLogger.error('Error updating provider model.', { error: err });
       res.status(500).json({ error: 'Failed to update model.' });

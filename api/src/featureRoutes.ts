@@ -9,7 +9,7 @@ import {
   TASK_OUTPUT_FORMAT_INSTRUCTION,
   taskPromptSystemInstruction,
 } from './prompts';
-import { config } from './config';
+import { AIProvider, config } from './config';
 import { AuthLocals, authMiddleware } from './authMiddleware';
 import { Subscription } from './models/subscription';
 import { decompressString } from './compression';
@@ -125,13 +125,23 @@ type CompletionUsage = {
   total_tokens?: number;
 };
 
+const PROMPT_ENHANCEMENT_MODEL_BY_PROVIDER: Record<AIProvider, string> = {
+  openai: 'gpt-4o-mini',
+  anthropic: 'claude-haiku-4-5-20251001',
+  gemini: 'gemini-2.5-flash',
+  nemotron: 'nvidia/nemotron-3-nano-30b-a3b',
+};
+
 function getModelForCommand(cmd: EnhanceCommand): string {
-  // 'task' is the custom-task command and routes to the smart-tier model.
-  // 'enhance' and 'grammar' use the fast tier. The actual model strings live
-  // in ai-client.ts (DEFAULT_MODELS) so all callers stay in sync when we
-  // upgrade to a newer flagship model.
-  const tier: 'fast' | 'smart' = cmd === 'task' ? 'smart' : 'fast';
-  return getDefaultModel(config.aiProvider, tier);
+  // Prompt enhancement and grammar are latency/cost-sensitive helpers, not
+  // agent turns. Keep them pinned to cheap provider-specific models so custom
+  // or expensive agent model selections never affect keyboard enhancement.
+  if (cmd === 'enhance' || cmd === 'grammar') {
+    return PROMPT_ENHANCEMENT_MODEL_BY_PROVIDER[config.aiProvider];
+  }
+
+  // 'task' is the custom-task command and still routes to the smart tier.
+  return getDefaultModel(config.aiProvider, 'smart');
 }
 
 function usageModeForCommand(cmd: EnhanceCommand): UsageMode {

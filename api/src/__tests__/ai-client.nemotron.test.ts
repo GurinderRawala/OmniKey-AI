@@ -124,7 +124,13 @@ describe('NemotronAdapter', () => {
     );
 
     expect(received.join('')).toBe('hello');
-    expect(usage).toEqual({ prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 });
+    expect(usage).toEqual({
+      prompt_tokens: 3,
+      completion_tokens: 2,
+      total_tokens: 5,
+      cached_tokens: 0,
+      cache_write_tokens: 0,
+    });
     const body = mocks.openaiCreate.mock.calls[0][0];
     expect(body).toMatchObject({ stream: true });
   });

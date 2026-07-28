@@ -7,16 +7,22 @@ import { getDefaultTaskTemplateSnapshot } from '../../featureRoutes';
 import { estimateHistoryTokens } from '../../ai-client';
 import { getAgentPrompt } from '../agentPrompts';
 import { getPromptMcpsForSubscription } from '../mcpPromptCache';
+import { getAgentSettings } from '../../agentSettingsStore';
 import type { SessionState } from '../types';
+import { buildCompactedHistoryForRequest } from './sessionMemory';
 import { userHistoryHasProjectContext } from './transcript';
 
 export async function persistSessionToDB(sessionId: string, state: SessionState): Promise<void> {
   try {
     const historyJson = JSON.stringify(state.history);
+    const estimatedPromptTokens = estimateHistoryTokens(buildCompactedHistoryForRequest(state));
     await AgentSession.update(
       {
         historyJson,
         turns: state.turns,
+        sessionMemory: state.sessionMemory ?? null,
+        sessionMemoryHistoryLength: state.sessionMemoryHistoryLength ?? 0,
+        sessionMemoryUpdatedAt: state.sessionMemoryUpdatedAt ?? null,
         lastActiveAt: new Date(),
         // Refresh the "context remaining" signal from the history we're actually
         // persisting — including any pruning that just happened — so the UI
@@ -24,7 +30,7 @@ export async function persistSessionToDB(sessionId: string, state: SessionState)
         // successful call's usage left the figure stale after a turn that failed
         // on overflow: the oversized message never got counted, so the UI kept
         // showing a half-empty window.
-        lastPromptTokens: estimateHistoryTokens(state.history),
+        lastPromptTokens: Math.max(estimatedPromptTokens, state.lastModelPromptTokens ?? 0),
       },
       { where: { id: sessionId } },
     );
@@ -110,6 +116,9 @@ export async function getOrCreateSession(
         history,
         turns: dbSession.turns,
         groupName: dbSession.groupName ?? null,
+        sessionMemory: dbSession.sessionMemory ?? null,
+        sessionMemoryHistoryLength: dbSession.sessionMemoryHistoryLength ?? 0,
+        sessionMemoryUpdatedAt: dbSession.sessionMemoryUpdatedAt ?? null,
         groupLocked: dbSession.groupLocked ?? false,
       };
       log.info('Resumed agent session from DB', {
@@ -151,7 +160,13 @@ export async function getOrCreateSession(
 
   const installedMcps = await getPromptMcpsForSubscription(subscription.id, log);
 
-  const systemPrompt = getAgentPrompt(platform, !isCronJob && !!prompt, installedMcps);
+  const agentSettings = await getAgentSettings();
+  const systemPrompt = getAgentPrompt(
+    platform,
+    !isCronJob && !!prompt,
+    installedMcps,
+    agentSettings,
+  );
 
   const entry: SessionState = {
     subscription,
@@ -181,6 +196,9 @@ ${prompt}
     // it. When no group is supplied the session stays unlocked and is
     // classified once at the end of its first turn.
     groupName: groupName ?? null,
+    sessionMemory: null,
+    sessionMemoryHistoryLength: 0,
+    sessionMemoryUpdatedAt: null,
     groupLocked: Boolean(groupName),
   };
 
@@ -207,6 +225,9 @@ ${prompt}
         groupLocked: Boolean(groupName),
         groupDescription: groupMeta.groupDescription,
         groupDescriptionUpdatedAt: groupMeta.groupDescriptionUpdatedAt,
+        sessionMemory: null,
+        sessionMemoryHistoryLength: 0,
+        sessionMemoryUpdatedAt: null,
         taskInstructionId: templateSnapshot?.id ?? null,
         taskInstructionHeading: templateSnapshot?.heading ?? null,
       },
@@ -238,6 +259,9 @@ ${prompt}
         history,
         turns: dbSession.turns,
         groupName: effectiveGroupName,
+        sessionMemory: dbSession.sessionMemory ?? null,
+        sessionMemoryHistoryLength: dbSession.sessionMemoryHistoryLength ?? 0,
+        sessionMemoryUpdatedAt: dbSession.sessionMemoryUpdatedAt ?? null,
         groupLocked: effectiveGroupLocked,
       };
 

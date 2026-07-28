@@ -17,6 +17,7 @@ export async function runToolLoop(
   initialResult: AICompletionResult,
   session: SessionState,
   sessionId: string,
+  model: string,
   send: AgentSendFn,
   log: Logger,
   tools: AITool[],
@@ -240,11 +241,13 @@ export async function runToolLoop(
     result = await completeWithContextRecovery(
       session,
       sessionId,
+      model,
       {
         tools: tools.length ? tools : undefined,
         temperature: 0.2,
       },
       log,
+      onUsage,
     );
     await onUsage(result);
   }

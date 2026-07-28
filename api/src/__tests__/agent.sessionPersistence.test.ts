@@ -46,6 +46,21 @@ vi.mock('../agent/agentPrompts', () => ({
   getAgentPrompt: vi.fn(() => 'system prompt'),
 }));
 
+vi.mock('../agentSettingsStore', () => ({
+  getAgentSettings: vi.fn(async () => ({
+    id: 'default',
+    terminalAccess: 'full',
+    webSearchEnabled: true,
+    usageRecordingEnabled: true,
+    browserAccessEnabled: false,
+    openaiModel: 'test-model',
+    anthropicModel: 'test-model',
+    geminiModel: 'test-model',
+    nemotronModel: 'test-model',
+  })),
+  selectedAgentModelForProvider: vi.fn(() => 'test-model'),
+}));
+
 vi.mock('../agent/mcpPromptCache', () => ({
   getPromptMcpsForSubscription: vi.fn(async () => []),
 }));

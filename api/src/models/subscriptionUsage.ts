@@ -13,6 +13,8 @@ interface SubscriptionUsageAttributes {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
+  cachedPromptTokens: number;
+  cacheWritePromptTokens: number;
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -23,6 +25,8 @@ interface SubscriptionUsageCreationAttributes extends Optional<
   | 'promptTokens'
   | 'completionTokens'
   | 'totalTokens'
+  | 'cachedPromptTokens'
+  | 'cacheWritePromptTokens'
   | 'createdAt'
   | 'updatedAt'
   | 'provider'
@@ -43,6 +47,8 @@ export class SubscriptionUsage
   public promptTokens!: number;
   public completionTokens!: number;
   public totalTokens!: number;
+  public cachedPromptTokens!: number;
+  public cacheWritePromptTokens!: number;
   public readonly createdAt!: Date;
   public readonly updatedAt!: Date;
 }
@@ -102,6 +108,18 @@ SubscriptionUsage.init(
       allowNull: false,
       defaultValue: 0,
       field: 'total_tokens',
+    },
+    cachedPromptTokens: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 0,
+      field: 'cached_prompt_tokens',
+    },
+    cacheWritePromptTokens: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 0,
+      field: 'cache_write_prompt_tokens',
     },
   },
   {

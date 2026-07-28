@@ -4,6 +4,7 @@ import { logger } from '../logger';
 import { fetchWithPlaywright, isBrowserOpenWithUrl } from './browser-playwright';
 import { isPageAuthenticated } from './llm-auth-check';
 import type { AITool } from '../ai-client';
+import { getAgentSettings } from '../agentSettingsStore';
 
 export const WEB_FETCH_TOOL: AITool = {
   name: 'web_fetch',
@@ -185,6 +186,7 @@ const BASE_FETCH_HEADERS: Record<string, string> = {
 async function fetchPlainHttp(
   url: string,
   log: typeof logger,
+  browserSessionEnabled: boolean,
 ): Promise<{ html: string | null; authBlocked: boolean; finalUrl: string }> {
   try {
     const response = await axios.get<string>(url, {
@@ -207,7 +209,7 @@ async function fetchPlainHttp(
     // sites use redirects, 302s, custom error pages, or soft-blocks
     // rather than a clean 401/403, so checking status codes alone is
     // unreliable. Fall through to the browser-session path instead.
-    if (isSelfHostedWithBrowserSession && (await isBrowserOpenWithUrl(url, log))) {
+    if (browserSessionEnabled && (await isBrowserOpenWithUrl(url, log))) {
       return { html: null, authBlocked: true, finalUrl: url };
     }
     if (status === 401 || status === 403) {
@@ -237,16 +239,17 @@ async function fetchFromActiveTab(url: string, log: typeof logger): Promise<stri
   return fetchWithPlaywright(url, log);
 }
 
-const isSelfHostedWithBrowserSession = config.isSelfHosted;
 async function executeWebFetch(url: string, log: typeof logger): Promise<string> {
   log.info('Executing web_fetch tool', { url });
+  const settings = await getAgentSettings();
+  const browserSessionEnabled = config.isSelfHosted && settings.browserAccessEnabled;
 
   // ── Step 1: plain HTTP request ────────────────────────────────────────────
-  const { html, authBlocked, finalUrl } = await fetchPlainHttp(url, log);
+  const { html, authBlocked, finalUrl } = await fetchPlainHttp(url, log, browserSessionEnabled);
 
   const plainText = html ? stripHtml(html) : '';
 
-  if (!isSelfHostedWithBrowserSession) {
+  if (!browserSessionEnabled) {
     if (authBlocked) {
       log.warn(
         'Error: page requires authentication. Run OmniKey in self-hosted mode on macOS or Windows to enable browser-session access.',

@@ -301,36 +301,25 @@ struct AgentThinkingView: View {
 
         case .terminalOutput:
             let amber = NordTheme.accentAmber(colorScheme)
-            let lines = entry.text.components(separatedBy: "\n")
-            let header = lines.first ?? ""
-            let body = lines.dropFirst().joined(separator: "\n")
+            let summary = AgentTimelineSummarizer.expandedSummary(kind: entry.kind, text: entry.text)
             sectionCard(icon: "terminal", title: "Terminal", accentColor: amber) {
-                VStack(alignment: .leading, spacing: 4) {
-                    if !header.isEmpty {
-                        Text(header)
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundColor(amber)
-                    }
-                    if !body.isEmpty {
-                        CollapsibleText(
-                            text: body,
-                            font: .system(size: 12, design: .monospaced),
-                            foregroundColor: NordTheme.primaryText(colorScheme),
-                            accentColor: amber
-                        )
-                        .padding(8)
-                        .background(RoundedRectangle(cornerRadius: 6).fill(NordTheme.sectionFill(accent: amber, scheme: colorScheme)))
-                        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(NordTheme.sectionBorder(accent: amber, scheme: colorScheme), lineWidth: 1))
-                    }
-                }
+                CollapsibleText(
+                    text: summary,
+                    font: .system(size: 12),
+                    foregroundColor: NordTheme.primaryText(colorScheme),
+                    accentColor: amber
+                )
+                .padding(8)
+                .background(RoundedRectangle(cornerRadius: 6).fill(NordTheme.sectionFill(accent: amber, scheme: colorScheme)))
+                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(NordTheme.sectionBorder(accent: amber, scheme: colorScheme), lineWidth: 1))
             }
 
         case .webCall:
             let cyan = NordTheme.accent(colorScheme)
             sectionCard(icon: "globe", title: "Web Search", accentColor: cyan) {
                 CollapsibleText(
-                    text: entry.text,
-                    font: .system(size: 12, design: .monospaced),
+                    text: AgentTimelineSummarizer.expandedSummary(kind: entry.kind, text: entry.text),
+                    font: .system(size: 12),
                     foregroundColor: NordTheme.primaryText(colorScheme),
                     accentColor: cyan
                 )
@@ -357,8 +346,8 @@ struct AgentThinkingView: View {
             let green = NordTheme.accentGreen(colorScheme)
             sectionCard(icon: "server.rack", title: "MCP Tool Call", accentColor: green) {
                 CollapsibleText(
-                    text: entry.text,
-                    font: .system(size: 12, design: .monospaced),
+                    text: AgentTimelineSummarizer.expandedSummary(kind: entry.kind, text: entry.text),
+                    font: .system(size: 12),
                     foregroundColor: NordTheme.primaryText(colorScheme),
                     accentColor: green
                 )
@@ -1058,4 +1047,3 @@ private struct CollapsibleText: View {
         }
     }
 }
-

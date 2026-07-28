@@ -183,6 +183,13 @@ final class ChatModel: ObservableObject {
     /// avoid stacked POSTs from impatient clicks.
     @Published var isUpdatingDefaultTaskTemplate: Bool = false
 
+    /// Active AI provider/model for OmniAgent turns. These come from
+    /// GET /api/providers and can be changed directly from the composer.
+    @Published var activeAIProvider: String = "openai"
+    @Published var activeAgentModel: String = "gpt-5.5"
+    @Published var activeAgentModelOptions: [APIClient.AgentModelOptionDTO] = []
+    @Published var isUpdatingAgentModel: Bool = false
+
     // ── Project group state ───────────────────────────────────────────────────
     /// Distinct project groups fetched from GET /api/agent/groups.
     @Published var availableGroups: [AgentGroupInfo] = []
@@ -208,6 +215,11 @@ final class ChatModel: ObservableObject {
     /// conversation cannot silently switch context mid-thread.
     var canChangeSessionSetup: Bool {
         activeSessionId == nil && messages.isEmpty && !isRunning && !isLoadingSessionHistory
+    }
+
+    var activeAgentModelLabel: String {
+        activeAgentModelOptions.first(where: { $0.id == activeAgentModel })?.label
+        ?? prettyModelLabel(activeAgentModel)
     }
 
 
@@ -991,6 +1003,111 @@ final class ChatModel: ObservableObject {
         s?.streamingAssistantIndex = nil
         isRunning = false
     }
+
+    // MARK: - Agent model selection
+
+    private func fallbackAgentModelOptions(for provider: String) -> [APIClient.AgentModelOptionDTO] {
+        switch provider {
+        case "anthropic":
+            return [
+                APIClient.AgentModelOptionDTO(id: "claude-opus-4-5", label: "Claude Opus 4.5"),
+                APIClient.AgentModelOptionDTO(id: "claude-opus-4-7", label: "Claude Opus 4.7"),
+                APIClient.AgentModelOptionDTO(id: "claude-opus-5", label: "Claude Opus 5.0"),
+                APIClient.AgentModelOptionDTO(id: "claude-sonnet-4-5", label: "Claude Sonnet 4.5"),
+                APIClient.AgentModelOptionDTO(id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6"),
+                APIClient.AgentModelOptionDTO(id: "claude-sonnet-5", label: "Claude Sonnet 5.0"),
+                APIClient.AgentModelOptionDTO(id: "claude-fable-5", label: "Claude Fable 5.0")
+            ]
+        case "gemini":
+            return [
+                APIClient.AgentModelOptionDTO(id: "gemini-2.5-pro", label: "Gemini 2.5 Pro"),
+                APIClient.AgentModelOptionDTO(id: "gemini-2.5-flash", label: "Gemini 2.5 Flash")
+            ]
+        case "nemotron":
+            return [
+                APIClient.AgentModelOptionDTO(
+                    id: "nvidia/nemotron-3-ultra-550b-a55b",
+                    label: "nvidia/nemotron-3-ultra-550b-a55b"
+                ),
+                APIClient.AgentModelOptionDTO(
+                    id: "nvidia/nemotron-3-super-120b-a12b",
+                    label: "nvidia/nemotron-3-super-120b-a12b"
+                ),
+                APIClient.AgentModelOptionDTO(
+                    id: "nvidia/nemotron-3-nano-30b-a3b",
+                    label: "nvidia/nemotron-3-nano-30b-a3b"
+                )
+            ]
+        default:
+            return [
+                APIClient.AgentModelOptionDTO(id: "gpt-5.6", label: "GPT 5.6"),
+                APIClient.AgentModelOptionDTO(id: "gpt-5.5", label: "GPT 5.5"),
+                APIClient.AgentModelOptionDTO(id: "gpt-5.1", label: "GPT 5.1"),
+                APIClient.AgentModelOptionDTO(id: "gpt-4.1", label: "GPT 4.1")
+            ]
+        }
+    }
+
+    private func prettyModelLabel(_ model: String) -> String {
+        if model.isEmpty { return "Model" }
+        if model.hasPrefix("gpt-") {
+            return model.replacingOccurrences(of: "gpt-", with: "GPT ")
+        }
+        if model.hasPrefix("nvidia/") { return model }
+        if model.contains("opus") { return "Opus" }
+        if model.contains("fable") { return "Fable" }
+        if model.contains("sonnet") { return "Sonnet" }
+        return model
+    }
+
+    func fetchAgentModelOptions() {
+        guard let token = SubscriptionManager.shared.jwtToken, !token.isEmpty else { return }
+        apiClient.fetchAIProviders { [weak self] result in
+            Task { @MainActor in
+                guard let self else { return }
+                switch result {
+                case .success(let response):
+                    let provider = response.activeProvider
+                    let options = response.modelOptions.isEmpty
+                        ? self.fallbackAgentModelOptions(for: provider)
+                        : response.modelOptions
+                    self.activeAIProvider = provider
+                    self.activeAgentModelOptions = options
+                    self.activeAgentModel = response.activeModel ?? options.first?.id ?? self.activeAgentModel
+                case .failure(let error):
+                    self.lastErrorMessage = "Failed to load model options: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    func setAgentModel(_ modelId: String) {
+        guard !modelId.isEmpty, modelId != activeAgentModel else { return }
+        guard !isUpdatingAgentModel else { return }
+
+        let provider = activeAIProvider
+        let previousModel = activeAgentModel
+        activeAgentModel = modelId
+        isUpdatingAgentModel = true
+
+        apiClient.updateProviderModel(provider: provider, model: modelId) { [weak self] result in
+            Task { @MainActor in
+                guard let self else { return }
+                self.isUpdatingAgentModel = false
+                switch result {
+                case .success(let response):
+                    self.activeAgentModel = response.activeModel ?? response.model ?? modelId
+                    if let options = response.modelOptions, !options.isEmpty {
+                        self.activeAgentModelOptions = options
+                    }
+                case .failure(let error):
+                    self.activeAgentModel = previousModel
+                    self.lastErrorMessage = "Failed to change model: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
     // MARK: - Project groups
 
     /// Fetch distinct project groups for the subscription and populate

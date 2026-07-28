@@ -11,6 +11,19 @@ export interface SessionState {
   // the grouping classifier. Used to skip redundant re-classification work at
   // the end of each agent turn.
   groupName?: string | null;
+  // Compact memory for the active session. history remains the full raw
+  // transcript; this summary is injected into model requests after older turns
+  // have been compacted.
+  sessionMemory?: string | null;
+  sessionMemoryHistoryLength?: number;
+  sessionMemoryUpdatedAt?: Date | null;
+  // Latest provider-reported prompt tokens for this active session. Used only
+  // as an in-memory hint so persisted context remaining includes tool schemas
+  // after a model call; compacted-history estimate remains the pre-call fallback.
+  lastModelPromptTokens?: number;
+  // Model selected from agent_settings for the active turn. Helpers use this
+  // to derive hot-reloaded context and per-message budgets.
+  activeModel?: string;
   // True when the user explicitly chose this session's group. Locked sessions
   // are never (re)classified — we only ever attach them to the chosen group.
   groupLocked?: boolean;

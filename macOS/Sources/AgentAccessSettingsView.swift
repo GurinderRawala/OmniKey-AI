@@ -8,11 +8,10 @@ import SwiftUI
 ///                              the same `omnikey grant-browser-access` flow
 ///                              the CLI exposes.
 ///
-/// All four values are persisted to ~/.omnikey/config.json by the backend
-/// (see appSettingsRoutes.ts) and any change schedules a daemon restart so
-/// the running process picks them up. Enabling browser access spawns the
-/// interactive CLI in Terminal.app — the same prompts the user would see
-/// from `omnikey grant-browser-access`.
+/// Agent Access values are persisted in the backend's agent_settings table
+/// and are read by the agent at turn time, so simple changes do not restart
+/// the daemon. Enabling browser access spawns the interactive CLI in
+/// Terminal.app because the browser/profile prompts still live there.
 struct AgentAccessSettingsView: View {
     @Environment(\.colorScheme) private var colorScheme
 
@@ -27,8 +26,8 @@ struct AgentAccessSettingsView: View {
     @State private var statusMessage: String = ""
 
     // Pending dialog state — mirrors the confirmation pattern used by the
-    // AI Providers pane so destructive / restart-inducing changes always
-    // require an explicit confirm step.
+    // AI Providers pane so capability changes always require an explicit
+    // confirm step.
     @State private var pendingTerminalAccess: APIClient.TerminalAccessMode? = nil
     @State private var pendingWebSearch: Bool? = nil
     @State private var pendingUsageRecording: Bool? = nil
@@ -81,7 +80,7 @@ struct AgentAccessSettingsView: View {
             ),
             titleVisibility: .visible
         ) {
-            Button("Apply & Restart Server") {
+            Button("Apply") {
                 if let mode = pendingTerminalAccess {
                     pendingTerminalAccess = nil
                     applyTerminalAccess(mode)
@@ -90,7 +89,7 @@ struct AgentAccessSettingsView: View {
             Button("Cancel", role: .cancel) { pendingTerminalAccess = nil }
         } message: {
             let target = pendingTerminalAccess == .limited ? "Limited (read-only)" : "Full"
-            Text("TERMINAL_ACCESS will be set to \"\(target)\" in ~/.omnikey/config.json and the OmniKey daemon will restart. In-flight agent sessions will be interrupted.")
+            Text("Terminal access will be set to \(target) in agent settings and will apply on the next agent turn.")
         }
         .confirmationDialog(
             "Change web search setting?",
@@ -100,7 +99,7 @@ struct AgentAccessSettingsView: View {
             ),
             titleVisibility: .visible
         ) {
-            Button("Apply & Restart Server") {
+            Button("Apply") {
                 if let enabled = pendingWebSearch {
                     pendingWebSearch = nil
                     applyWebSearch(enabled)
@@ -109,7 +108,7 @@ struct AgentAccessSettingsView: View {
             Button("Cancel", role: .cancel) { pendingWebSearch = nil }
         } message: {
             let target = (pendingWebSearch == true) ? "enabled" : "disabled"
-            Text("Web search and web fetch tools will be \(target). The daemon will restart to apply the change.")
+            Text("Web search and web fetch tools will be \(target) on the next agent turn.")
         }
         .confirmationDialog(
             "Change usage recording?",
@@ -119,7 +118,7 @@ struct AgentAccessSettingsView: View {
             ),
             titleVisibility: .visible
         ) {
-            Button("Apply & Restart Server") {
+            Button("Apply") {
                 if let enabled = pendingUsageRecording {
                     pendingUsageRecording = nil
                     applyUsageRecording(enabled)
@@ -128,7 +127,7 @@ struct AgentAccessSettingsView: View {
             Button("Cancel", role: .cancel) { pendingUsageRecording = nil }
         } message: {
             let target = (pendingUsageRecording == true) ? "enabled" : "disabled"
-            Text("Detailed token usage recording will be \(target). The daemon will restart to apply the change.")
+            Text("Detailed token usage recording will be \(target) immediately for future AI calls.")
         }
         .confirmationDialog(
             (pendingBrowserAccess == true)
@@ -177,7 +176,7 @@ struct AgentAccessSettingsView: View {
                 .disabled(isLoading)
             }
 
-            Text("Control which capabilities OmniKey's agent can use on this machine. Changes are saved to ~/.omnikey/config.json and the daemon is restarted to apply them.")
+            Text("Control which capabilities OmniKey's agent can use on this machine. Changes are saved to agent settings and apply without restarting the daemon.")
                 .font(.system(size: 13))
                 .foregroundColor(NordTheme.secondaryText(colorScheme))
         }
@@ -392,14 +391,14 @@ struct AgentAccessSettingsView: View {
 
     private func applyTerminalAccess(_ mode: APIClient.TerminalAccessMode) {
         isLoading = true
-        statusMessage = "Applying terminal access = \(mode.rawValue) — server will restart…"
+        statusMessage = "Applying terminal access = \(mode.rawValue)…"
         apiClient.updateAppSettings(terminalAccess: mode, webSearchEnabled: nil) { result in
             DispatchQueue.main.async {
                 switch result {
                 case .success(let resp):
                     terminalAccess = resp.terminalAccess
-                    statusMessage = "Terminal access set to \(resp.terminalAccess.rawValue). Waiting for daemon restart…"
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { loadSettings() }
+                    statusMessage = "Terminal access set to \(resp.terminalAccess.rawValue)."
+                    loadSettings()
                 case .failure(let error):
                     isLoading = false
                     statusMessage = "Failed to apply: \(error.localizedDescription)"
@@ -410,14 +409,14 @@ struct AgentAccessSettingsView: View {
 
     private func applyWebSearch(_ enabled: Bool) {
         isLoading = true
-        statusMessage = "Updating web search — server will restart…"
+        statusMessage = "Updating web search…"
         apiClient.updateAppSettings(terminalAccess: nil, webSearchEnabled: enabled) { result in
             DispatchQueue.main.async {
                 switch result {
                 case .success(let resp):
                     webSearchEnabled = resp.webSearchEnabled
-                    statusMessage = "Web search \(resp.webSearchEnabled ? "enabled" : "disabled"). Waiting for daemon restart…"
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { loadSettings() }
+                    statusMessage = "Web search \(resp.webSearchEnabled ? "enabled" : "disabled")."
+                    loadSettings()
                 case .failure(let error):
                     isLoading = false
                     statusMessage = "Failed to apply: \(error.localizedDescription)"
@@ -428,14 +427,14 @@ struct AgentAccessSettingsView: View {
 
     private func applyUsageRecording(_ enabled: Bool) {
         isLoading = true
-        statusMessage = "Updating usage recording — server will restart…"
+        statusMessage = "Updating usage recording…"
         apiClient.updateAppSettings(terminalAccess: nil, webSearchEnabled: nil, usageRecordingEnabled: enabled) { result in
             DispatchQueue.main.async {
                 switch result {
                 case .success(let resp):
                     usageRecordingEnabled = resp.usageRecordingEnabled ?? enabled
-                    statusMessage = "Usage recording \(usageRecordingEnabled ? "enabled" : "disabled"). Waiting for daemon restart…"
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { loadSettings() }
+                    statusMessage = "Usage recording \(usageRecordingEnabled ? "enabled" : "disabled")."
+                    loadSettings()
                 case .failure(let error):
                     isLoading = false
                     statusMessage = "Failed to apply: \(error.localizedDescription)"
@@ -448,7 +447,7 @@ struct AgentAccessSettingsView: View {
         isLoading = true
         statusMessage = enabled
             ? "Launching browser-access setup in Terminal…"
-            : "Disabling browser access — server will restart…"
+            : "Disabling browser access…"
         apiClient.setBrowserAccessEnabled(enabled) { result in
             DispatchQueue.main.async {
                 switch result {
@@ -461,10 +460,13 @@ struct AgentAccessSettingsView: View {
                             ? "Browser access setup started in Terminal."
                             : "Browser access disabled."
                     }
-                    // Give the daemon and (when enabling) the Terminal-based
-                    // setup a moment before reloading so the UI reflects the
-                    // updated BROWSER_DEBUG_* values.
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { loadSettings() }
+                    // When enabling, the user still needs to finish the
+                    // Terminal-based prompts before BROWSER_DEBUG_* values are
+                    // present. A short refresh delay makes that progress show
+                    // up if they complete it quickly.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + (enabled ? 3.0 : 0.1)) {
+                        loadSettings()
+                    }
                 case .failure(let error):
                     isLoading = false
                     statusMessage = "Failed to toggle browser access: \(error.localizedDescription)"

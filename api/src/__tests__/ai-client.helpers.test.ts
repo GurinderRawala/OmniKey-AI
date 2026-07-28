@@ -7,6 +7,7 @@ import {
   getMaxMessageContentLength,
   estimateHistoryTokens,
   getInputTokenBudget,
+  modelUsesOpenAIResponsesApi,
 } from '../ai-client';
 import type { AIMessage } from '../ai-client';
 
@@ -26,6 +27,7 @@ describe('modelSupportsTemperature', () => {
       ['gpt-5-mini', false],
       ['gpt-5.1', false],
       ['gpt-5.5', false],
+      ['gpt-5.6', false],
       ['GPT-5.5', false], // case-insensitive
     ])('rejects temperature for GPT-5 family member %s', (model, expected) => {
       expect(modelSupportsTemperature(model)).toBe(expected);
@@ -70,7 +72,11 @@ describe('modelSupportsTemperature', () => {
       ['claude-opus-4-7', false],
       ['claude-opus-4-7-20260101', false],
       ['CLAUDE-OPUS-4-7', false], // case-insensitive
-    ])('rejects temperature for opus-4-7 variant %s', (model, expected) => {
+      ['claude-opus-5', false],
+      ['claude-fable-5', false],
+      ['claude-sonnet-5', false],
+      ['claude-sonnet-4-6', false],
+    ])('rejects temperature for adaptive-thinking Claude variant %s', (model, expected) => {
       expect(modelSupportsTemperature(model)).toBe(expected);
     });
   });
@@ -100,8 +106,8 @@ describe('getDefaultModel', () => {
       openai: false,
       // Gemini smart tier accepts temperature.
       gemini: true,
-      // Anthropic smart tier is claude-opus-4-7 → no temperature.
-      anthropic: false,
+      // Anthropic smart tier is currently claude-opus-4-5.
+      anthropic: true,
     };
 
     for (const provider of Object.keys(expectations) as Array<keyof typeof expectations>) {
@@ -120,7 +126,12 @@ describe('getContextWindowSize', () => {
   it('returns realistic per-model windows for the configured smart tiers', () => {
     // The window is resolved from each provider's active smart-tier model.
     expect(getContextWindowSize('openai', 'gpt-5.5')).toBe(1_000_000);
+    expect(getContextWindowSize('openai', 'gpt-5.6')).toBe(1_000_000);
+    expect(getContextWindowSize('anthropic', 'claude-opus-4-5')).toBe(1_000_000);
     expect(getContextWindowSize('anthropic', 'claude-opus-4-7')).toBe(1_000_000);
+    expect(getContextWindowSize('anthropic', 'claude-opus-5')).toBe(1_000_000);
+    expect(getContextWindowSize('anthropic', 'claude-fable-5')).toBe(1_000_000);
+    expect(getContextWindowSize('anthropic', 'claude-sonnet-5')).toBe(1_000_000);
     expect(getContextWindowSize('gemini', 'gemini-2.5-pro')).toBe(1_048_576);
     // Nemotron's stock NIM endpoint serves 256K natively, NOT 1M — this is the
     // value that keeps the char budget from over-promising and overflowing.
@@ -147,6 +158,14 @@ describe('getContextWindowSize', () => {
   it('falls back to a conservative window for unknown models', () => {
     expect(getContextWindowSize('openai', 'some-future-model')).toBe(128_000);
     expect(getContextWindowSize('anthropic', 'some-future-claude')).toBe(200_000);
+  });
+});
+
+describe('modelUsesOpenAIResponsesApi', () => {
+  it('routes GPT 5.5 and GPT 5.6 through Responses API', () => {
+    expect(modelUsesOpenAIResponsesApi('gpt-5.5')).toBe(true);
+    expect(modelUsesOpenAIResponsesApi('gpt-5.6')).toBe(true);
+    expect(modelUsesOpenAIResponsesApi('gpt-5.1')).toBe(false);
   });
 });
 

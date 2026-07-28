@@ -976,14 +976,21 @@ final class APIClient: @unchecked Sendable {
 
     private var aiProvidersBaseURL: URL { APIClient.baseURL.appendingPathComponent("api/providers") }
 
+    struct AgentModelOptionDTO: Codable, Identifiable, Equatable {
+        let id: String
+        let label: String
+    }
+
     struct AIProviderDTO: Codable, Identifiable {
         let provider: String
         let isConfigured: Bool
         let apiKeyMasked: String?
         let baseUrl: String?
-        /// OpenAI only: the model currently configured in OPENAI_MODEL.
-        /// nil means the server default (gpt-5.5) is in use.
+        /// Agent model selected for this provider in the DB-backed agent settings.
         let model: String?
+        let modelOptions: [AgentModelOptionDTO]?
+        let supportsModelSelection: Bool?
+        let supportsCustomModel: Bool?
 
         var id: String { provider }
     }
@@ -991,6 +998,9 @@ final class APIClient: @unchecked Sendable {
     struct AIProviderListResponse {
         let providers: [AIProviderDTO]
         let activeProvider: String
+        let activeModel: String?
+        let modelOptions: [AgentModelOptionDTO]
+        let supportsCustomModel: Bool
         let runtimeProvider: String?
     }
 
@@ -1005,6 +1015,10 @@ final class APIClient: @unchecked Sendable {
         let apiKeyMasked: String?
         let baseUrl: String?
         let activeProvider: String?
+        let activeModel: String?
+        let model: String?
+        let modelOptions: [AgentModelOptionDTO]?
+        let supportsCustomModel: Bool?
         let restartScheduled: Bool?
         let message: String?
     }
@@ -1026,19 +1040,25 @@ final class APIClient: @unchecked Sendable {
                 return
             }
             guard let data = data, !data.isEmpty else {
-                completion(.success(AIProviderListResponse(providers: [], activeProvider: "openai", runtimeProvider: nil)))
+                completion(.success(AIProviderListResponse(providers: [], activeProvider: "openai", activeModel: nil, modelOptions: [], supportsCustomModel: true, runtimeProvider: nil)))
                 return
             }
             do {
                 struct Envelope: Codable {
                     let providers: [AIProviderDTO]
                     let activeProvider: String
+                    let activeModel: String?
+                    let modelOptions: [AgentModelOptionDTO]?
+                    let supportsCustomModel: Bool?
                     let runtimeProvider: String?
                 }
                 let decoded = try JSONDecoder().decode(Envelope.self, from: data)
                 completion(.success(AIProviderListResponse(
                     providers: decoded.providers,
                     activeProvider: decoded.activeProvider,
+                    activeModel: decoded.activeModel,
+                    modelOptions: decoded.modelOptions ?? [],
+                    supportsCustomModel: decoded.supportsCustomModel ?? true,
                     runtimeProvider: decoded.runtimeProvider
                 )))
             } catch { completion(.failure(error)) }
@@ -1166,7 +1186,7 @@ final class APIClient: @unchecked Sendable {
     private var appSettingsBaseURL: URL { APIClient.baseURL.appendingPathComponent("api/app-settings") }
 
     /// Terminal access mode, mirroring the backend's TerminalAccessMode type.
-    /// Persisted to TERMINAL_ACCESS in ~/.omnikey/config.json.
+    /// Persisted in the DB-backed agent settings row.
     enum TerminalAccessMode: String, Codable, CaseIterable, Identifiable {
         case full
         case limited
@@ -1297,6 +1317,16 @@ final class APIClient: @unchecked Sendable {
 
     private var usageBaseURL: URL { APIClient.baseURL.appendingPathComponent("api/usage") }
 
+    /// Token counters for the selected range. Cost fields were removed from
+    /// `GET /api/usage` along with the price override, so the usage tab reports
+    /// only figures derived directly from recorded token counts.
+    struct UsageTotalsDTO: Codable {
+        let promptTokens: Int
+        let completionTokens: Int
+        let totalTokens: Int
+        let requests: Int
+    }
+
     struct UsageBucketDTO: Codable, Identifiable {
         let key: String
         let label: String
@@ -1304,7 +1334,6 @@ final class APIClient: @unchecked Sendable {
         let completionTokens: Int
         let totalTokens: Int
         let requests: Int
-        let costUsd: Double
 
         var id: String { key }
     }
@@ -1313,35 +1342,19 @@ final class APIClient: @unchecked Sendable {
         let label: String
         let from: String?
         let to: String
-        let previousFrom: String?
-        let previousTo: String?
         let days: Int
     }
 
-    struct UsageComparisonDTO: Codable {
-        let tokenDeltaRatio: Double?
-        let tokenDelta: Int
-        let costDeltaUsd: Double
+    struct UsageProviderDTO: Codable {
+        let provider: String
+        let providerLabel: String
     }
 
     struct UsageEstimatesDTO: Codable {
         let averageDailyTokens: Double
-        let averageDailyCostUsd: Double
-        let monthToDateTokens: Int
-        let monthToDateCostUsd: Double
-        let monthToDateAverageDailyCostUsd: Double
-        let monthElapsedDays: Int
-        let projectedEndOfMonthCostUsd: Double
-        let costAssumption: String
     }
 
-    struct UsagePricingDTO: Codable {
-        let provider: String
-        let providerLabel: String
-        let customPricePerMillionTokensUsd: Double?
-    }
-
-    struct UsageThreadDTO: Codable, Identifiable {
+    struct UsageSessionDTO: Codable, Identifiable {
         let id: String
         let title: String
         let turns: Int
@@ -1349,58 +1362,28 @@ final class APIClient: @unchecked Sendable {
         let lastActiveAt: String
     }
 
-    struct UsageThreadsDTO: Codable {
-        let distinctThreads: Int
-        let averageTokensPerThread: Double
-        let topThreads: [UsageThreadDTO]
-    }
-
-    struct UsageEfficiencyPointDTO: Codable, Identifiable {
-        let date: String
-        let averageTokensPerRequest: Double
-        let outputShare: Double
-
-        var id: String { date }
-    }
-
     struct UsageMetricsResponse: Codable {
         let recordingEnabled: Bool
         let generatedAt: String
         let range: UsageRangeDTO
-        let pricing: UsagePricingDTO
-        let allTimeTotals: UsageBucketDTO
-        let totals: UsageBucketDTO
-        let previousTotals: UsageBucketDTO
-        let comparison: UsageComparisonDTO
+        let provider: UsageProviderDTO
+        let totals: UsageTotalsDTO
         let estimates: UsageEstimatesDTO
-        let threads: UsageThreadsDTO
-        let availableProviders: [UsageBucketDTO]
         let byProvider: [UsageBucketDTO]
-        let byMode: [UsageBucketDTO]
         let byModel: [UsageBucketDTO]
         let daily: [UsageBucketDTO]
-        let hourly: [UsageBucketDTO]
-        let peakHours: [UsageBucketDTO]
-        let mostUsedFeatures: [UsageBucketDTO]
-        let efficiencyTrend: [UsageEfficiencyPointDTO]
+        let recentSessions: [UsageSessionDTO]
     }
 
     func fetchUsageMetrics(
         range: String,
         provider: String? = nil,
-        pricePerMillionTokensUsd: Double? = nil,
         completion: @escaping @Sendable (Result<UsageMetricsResponse, Error>) -> Void
     ) {
         var components = URLComponents(url: usageBaseURL, resolvingAgainstBaseURL: false)
         var queryItems = [URLQueryItem(name: "range", value: range)]
         if let provider, provider != "all" {
             queryItems.append(URLQueryItem(name: "provider", value: provider))
-        }
-        if let pricePerMillionTokensUsd {
-            queryItems.append(URLQueryItem(
-                name: "pricePerMillionTokensUsd",
-                value: String(pricePerMillionTokensUsd)
-            ))
         }
         components?.queryItems = queryItems
         guard let url = components?.url else {

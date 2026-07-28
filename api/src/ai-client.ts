@@ -40,6 +40,8 @@ export interface AIUsage {
   prompt_tokens: number;
   completion_tokens: number;
   total_tokens: number;
+  cached_tokens?: number;
+  cache_write_tokens?: number;
 }
 
 export interface AICompletionResult {
@@ -56,6 +58,9 @@ export interface CompletionOptions {
   temperature?: number;
   tools?: AITool[];
   maxTokens?: number;
+  promptCacheKey?: string;
+  promptCacheRetention?: 'in_memory' | '24h';
+  enablePromptCache?: boolean;
 }
 
 /**
@@ -95,7 +100,7 @@ const DEFAULT_MODELS: Record<AIProvider, { fast: string; smart: string }> = {
   // `modelSupportsTemperature` accordingly.
   openai: { fast: 'gpt-4o-mini', smart: 'gpt-5.5' },
   gemini: { fast: 'gemini-2.5-flash', smart: 'gemini-2.5-pro' },
-  anthropic: { fast: 'claude-haiku-4-5-20251001', smart: 'claude-opus-4-7' },
+  anthropic: { fast: 'claude-haiku-4-5-20251001', smart: 'claude-opus-4-5' },
   // NVIDIA Nemotron is exposed through the OpenAI-compatible NIM endpoint at
   // https://integrate.api.nvidia.com/v1. The "fast" tier maps to Nemotron Nano
   // for high-throughput sub-agent workloads; the "smart" tier maps to Nemotron
@@ -130,9 +135,9 @@ export function getDefaultModel(provider: AIProvider, tier: 'fast' | 'smart'): s
  *    supported for the same reason.
  *  - OpenAI GPT-4 / GPT-4o / GPT-3.5: supported.
  *  - Google Gemini (2.x and 3.x families): supported via `generationConfig`.
- *  - Anthropic Claude (Sonnet, Haiku, and Opus 4.x): supported, with the
- *    exception of `claude-opus-4-7` (and its dated revisions) which rejects
- *    `temperature` just like the OpenAI GPT-5 family.
+ *  - Anthropic Claude: older Sonnet/Haiku/Opus 4.x models generally support
+ *    temperature, while Claude 5 models and newer adaptive-thinking models
+ *    reject non-default sampling parameters.
  */
 export function modelSupportsTemperature(model: string): boolean {
   // OpenAI GPT-5 family (gpt-5, gpt-5-mini, gpt-5.1, gpt-5.5, …) only
@@ -142,10 +147,9 @@ export function modelSupportsTemperature(model: string): boolean {
   // OpenAI o-series reasoning models (o1, o3, o4-mini, …) likewise drop the
   // `temperature` knob.
   if (/^o[134](\b|[-_])/i.test(model)) return false;
-  // Anthropic's Claude Opus 4.7 line (and its dated revisions like
-  // `claude-opus-4-7-20260101`) does not accept `temperature`; the rest of
-  // the Claude 4.x family (Sonnet, Haiku, Opus 4.5/4.6) does.
-  if (/^claude-opus-4-7(\b|[-_])/i.test(model)) return false;
+  if (/^claude-(opus|fable|sonnet)-5(\b|[-_])/i.test(model)) return false;
+  if (/^claude-opus-4-[78](\b|[-_])/i.test(model)) return false;
+  if (/^claude-sonnet-4-6(\b|[-_])/i.test(model)) return false;
   return true;
 }
 
@@ -158,12 +162,12 @@ export function modelSupportsTemperature(model: string): boolean {
  * the length-based trimming never fires and the provider rejects the turn with
  * a context-length error instead. Numbers verified against provider docs
  * (July 2026):
- *   - GPT-5.5 / GPT-5.4:          ~1,000,000 tok API window (400K in Codex)
+ *   - GPT-5.6 / GPT-5.5 / GPT-5.4: ~1,000,000 tok API window (400K in Codex)
  *   - GPT-5 / 5.1 (base):         400,000 tok (272K input cap historically)
  *   - GPT-4.1:                    1,000,000 tok
  *   - GPT-4o / 4o-mini / 4-turbo: 128,000 tok
  *   - o1 / o3 / o4 reasoning:     200,000 tok
- *   - Claude Opus 4.7:            1,000,000 tok (1M is the default, no beta hdr)
+ *   - Claude Opus 4.5/4.7/5:      1,000,000 tok (1M is the default, no beta hdr)
  *   - Other Claude 4.x / Haiku:   200,000 tok (1M only via beta header)
  *   - Gemini 1.5/2.5 (all tiers): 1,048,576 tok
  *   - Nemotron 3 (Ultra/Super/Nano): 262,144 tok NATIVE via NIM. 1M is only
@@ -175,7 +179,7 @@ function contextWindowForModel(model: string, provider: AIProvider): number {
   const m = model.toLowerCase();
 
   // OpenAI
-  if (/^gpt-5\.[45]/.test(m)) return 1_000_000;
+  if (/^gpt-5\.[456]/.test(m)) return 1_000_000;
   if (/^gpt-5(\b|[.\-])/.test(m)) return 400_000;
   if (/^gpt-4\.1/.test(m)) return 1_000_000;
   if (/^gpt-4o/.test(m) || /^gpt-4-turbo/.test(m) || /^gpt-4/.test(m)) return 128_000;
@@ -183,9 +187,11 @@ function contextWindowForModel(model: string, provider: AIProvider): number {
   if (/^o[134](\b|[-_])/.test(m)) return 200_000;
   if (/^codex/.test(m)) return 400_000;
 
-  // Anthropic Claude — Opus 4.7 defaults to 1M; every other Claude is 200K
-  // unless the caller opts into the 1M beta (which this app does not).
-  if (/^claude-opus-4-7/.test(m)) return 1_000_000;
+  // Anthropic Claude — Claude 5 family and Opus 4.5+ default to 1M; older
+  // Claude models are 200K unless the caller opts into the 1M beta (which this
+  // app does not).
+  if (/^claude-(opus|fable|sonnet)-5/.test(m)) return 1_000_000;
+  if (/^claude-opus-4-[5678]/.test(m)) return 1_000_000;
   if (/^claude/.test(m)) return 200_000;
 
   // Google Gemini — 1.5 and 2.5 families expose a ~1M-token window.
@@ -290,6 +296,77 @@ export function getInputTokenBudget(provider: AIProvider, model?: string): numbe
   return Math.max(0, getContextWindowSize(provider, model) - OUTPUT_TOKEN_RESERVE);
 }
 
+function readCacheTokens(details: any): { cached_tokens: number; cache_write_tokens: number } {
+  return {
+    cached_tokens: details?.cached_tokens ?? details?.cachedContentTokenCount ?? 0,
+    cache_write_tokens: details?.cache_write_tokens ?? details?.cacheWriteTokens ?? 0,
+  };
+}
+
+function usageFromOpenAIChatUsage(usage: any): AIUsage | undefined {
+  if (!usage) return undefined;
+  return {
+    prompt_tokens: usage.prompt_tokens ?? 0,
+    completion_tokens: usage.completion_tokens ?? 0,
+    total_tokens: usage.total_tokens ?? 0,
+    ...readCacheTokens(usage.prompt_tokens_details),
+  };
+}
+
+function usageFromOpenAIResponsesUsage(usage: any): AIUsage | undefined {
+  if (!usage) return undefined;
+  return {
+    prompt_tokens: usage.input_tokens ?? 0,
+    completion_tokens: usage.output_tokens ?? 0,
+    total_tokens: usage.total_tokens ?? 0,
+    ...readCacheTokens(usage.input_tokens_details),
+  };
+}
+
+function usageFromAnthropicUsage(usage: any): AIUsage {
+  const uncachedInput = usage?.input_tokens ?? 0;
+  const cacheRead = usage?.cache_read_input_tokens ?? 0;
+  const cacheWrite = usage?.cache_creation_input_tokens ?? 0;
+  const promptTokens = uncachedInput + cacheRead + cacheWrite;
+  const completionTokens = usage?.output_tokens ?? 0;
+
+  return {
+    prompt_tokens: promptTokens,
+    completion_tokens: completionTokens,
+    total_tokens: promptTokens + completionTokens,
+    cached_tokens: cacheRead,
+    cache_write_tokens: cacheWrite,
+  };
+}
+
+function usageFromGeminiMetadata(usageMeta: any): AIUsage | undefined {
+  if (!usageMeta) return undefined;
+  const cachedTokens =
+    usageMeta.totalCachedTokens ??
+    usageMeta.total_cached_tokens ??
+    usageMeta.cachedContentTokenCount ??
+    usageMeta.cached_content_token_count ??
+    0;
+
+  return {
+    prompt_tokens: usageMeta.promptTokenCount ?? 0,
+    completion_tokens: usageMeta.candidatesTokenCount ?? 0,
+    total_tokens: usageMeta.totalTokenCount ?? 0,
+    cached_tokens: cachedTokens,
+    cache_write_tokens: 0,
+  };
+}
+
+function openAICacheRequestOptions(options: CompletionOptions): Record<string, unknown> {
+  if (!options.enablePromptCache) return {};
+  return {
+    ...(options.promptCacheKey ? { prompt_cache_key: options.promptCacheKey } : {}),
+    ...(options.promptCacheRetention
+      ? { prompt_cache_retention: options.promptCacheRetention }
+      : {}),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // OpenAI adapter
 // ---------------------------------------------------------------------------
@@ -315,7 +392,8 @@ class OpenAIAdapter {
       tools: tools?.length ? tools : undefined,
       ...(modelSupportsTemperature(model) ? { temperature: options.temperature ?? 0.2 } : {}),
       max_tokens: options.maxTokens,
-    });
+      ...openAICacheRequestOptions(options),
+    } as any);
 
     const choice = completion.choices[0];
     const msg = choice.message;
@@ -343,13 +421,7 @@ class OpenAIAdapter {
           ? 'length'
           : 'stop';
 
-    const usage = completion.usage
-      ? {
-          prompt_tokens: completion.usage.prompt_tokens,
-          completion_tokens: completion.usage.completion_tokens,
-          total_tokens: completion.usage.total_tokens,
-        }
-      : undefined;
+    const usage = usageFromOpenAIChatUsage(completion.usage);
 
     const assistantMessage: AIMessage = {
       role: 'assistant',
@@ -368,27 +440,24 @@ class OpenAIAdapter {
   ): Promise<{ usage?: AIUsage; model: string }> {
     const oaiMessages = toOpenAIMessages(messages);
 
-    const stream = await this.client.chat.completions.create({
+    const stream = (await this.client.chat.completions.create({
       model,
       messages: oaiMessages,
       ...(modelSupportsTemperature(model) ? { temperature: options.temperature ?? 0.3 } : {}),
       stream: true,
       stream_options: { include_usage: true },
-    });
+      ...openAICacheRequestOptions(options),
+    } as any)) as unknown as AsyncIterable<any>;
 
     let usage: AIUsage | undefined;
 
-    for await (const part of stream as AsyncIterable<any>) {
+    for await (const part of stream) {
       const delta = part.choices?.[0]?.delta?.content ?? '';
       if (delta) {
         onDelta(delta);
       }
       if (part.usage) {
-        usage = {
-          prompt_tokens: part.usage.prompt_tokens ?? 0,
-          completion_tokens: part.usage.completion_tokens ?? 0,
-          total_tokens: part.usage.total_tokens ?? 0,
-        };
+        usage = usageFromOpenAIChatUsage(part.usage);
       }
     }
 
@@ -453,7 +522,8 @@ class AnthropicAdapter {
       messages: anthropicMessages,
       ...(tools?.length ? { tools } : {}),
       ...(modelSupportsTemperature(model) ? { temperature: options.temperature ?? 0.2 } : {}),
-    });
+      ...(options.enablePromptCache ? { cache_control: { type: 'ephemeral' } } : {}),
+    } as any);
 
     const textContent = response.content
       .filter((b) => b.type === 'text')
@@ -478,11 +548,7 @@ class AnthropicAdapter {
           ? 'length'
           : 'stop';
 
-    const usage: AIUsage = {
-      prompt_tokens: response.usage.input_tokens,
-      completion_tokens: response.usage.output_tokens,
-      total_tokens: response.usage.input_tokens + response.usage.output_tokens,
-    };
+    const usage = usageFromAnthropicUsage(response.usage);
 
     const assistantMessage: AIMessage = {
       role: 'assistant',
@@ -514,7 +580,8 @@ class AnthropicAdapter {
       ...(system ? { system } : {}),
       messages: anthropicMessages,
       ...(modelSupportsTemperature(model) ? { temperature: options.temperature ?? 0.3 } : {}),
-    });
+      ...(options.enablePromptCache ? { cache_control: { type: 'ephemeral' } } : {}),
+    } as any);
 
     for await (const event of stream) {
       if (
@@ -527,11 +594,7 @@ class AnthropicAdapter {
     }
 
     const finalMsg = await stream.finalMessage();
-    const usage: AIUsage = {
-      prompt_tokens: finalMsg.usage.input_tokens,
-      completion_tokens: finalMsg.usage.output_tokens,
-      total_tokens: finalMsg.usage.input_tokens + finalMsg.usage.output_tokens,
-    };
+    const usage = usageFromAnthropicUsage(finalMsg.usage);
 
     return { usage, model };
   }
@@ -546,6 +609,10 @@ class AnthropicAdapter {
  * Completions so it can use native function-calling semantics.
  */
 export const RESPONSES_API_MODEL = 'gpt-5.5';
+
+export function modelUsesOpenAIResponsesApi(model: string): boolean {
+  return /^gpt-5\.[56](\b|[-_])/i.test(model);
+}
 
 /**
  * Translates our generic AIMessage[] history into the Responses API input
@@ -667,13 +734,7 @@ function fromResponsesOutput(response: any, modelName: string): AICompletionResu
   const finishReason: 'stop' | 'tool_calls' | 'length' =
     tool_calls.length > 0 ? 'tool_calls' : response.status === 'incomplete' ? 'length' : 'stop';
 
-  const usage: AIUsage | undefined = response.usage
-    ? {
-        prompt_tokens: response.usage.input_tokens ?? 0,
-        completion_tokens: response.usage.output_tokens ?? 0,
-        total_tokens: response.usage.total_tokens ?? 0,
-      }
-    : undefined;
+  const usage = usageFromOpenAIResponsesUsage(response.usage);
 
   const assistantMessage: AIMessage = {
     role: 'assistant',
@@ -714,8 +775,7 @@ async function http1Fetch(
         : (input as Request).url;
   const url = new URL(urlStr);
 
-  const method =
-    init?.method ?? (input instanceof Request ? (input as Request).method : 'GET');
+  const method = init?.method ?? (input instanceof Request ? (input as Request).method : 'GET');
 
   const rawHeaders: Record<string, string> = {};
   if (input instanceof Request) {
@@ -726,7 +786,9 @@ async function http1Fetch(
   const ih = init?.headers;
   if (ih) {
     if (ih instanceof Headers) {
-      ih.forEach((v, k) => { rawHeaders[k] = v; });
+      ih.forEach((v, k) => {
+        rawHeaders[k] = v;
+      });
     } else if (Array.isArray(ih)) {
       for (const [k, v] of ih) rawHeaders[k] = v;
     } else {
@@ -734,8 +796,7 @@ async function http1Fetch(
     }
   }
 
-  const bodySource =
-    init?.body ?? (input instanceof Request ? (input as Request).body : null);
+  const bodySource = init?.body ?? (input instanceof Request ? (input as Request).body : null);
   let bodyBuf: Buffer | null = null;
   if (bodySource != null) {
     if (typeof bodySource === 'string') {
@@ -820,6 +881,7 @@ class OpenAIResponsesAdapter {
       ...(instructions ? { instructions } : {}),
       input,
       tools,
+      ...openAICacheRequestOptions(options),
     });
     return fromResponsesOutput(response, model);
   }
@@ -827,7 +889,7 @@ class OpenAIResponsesAdapter {
   async streamComplete(
     model: string,
     messages: AIMessage[],
-    _options: CompletionOptions,
+    options: CompletionOptions,
     onDelta: (delta: string) => void,
   ): Promise<{ usage?: AIUsage; model: string }> {
     const { instructions, input } = toResponsesInput(messages);
@@ -836,6 +898,7 @@ class OpenAIResponsesAdapter {
       model,
       ...(instructions ? { instructions } : {}),
       input,
+      ...openAICacheRequestOptions(options),
     });
 
     for await (const event of stream as AsyncIterable<any>) {
@@ -848,11 +911,7 @@ class OpenAIResponsesAdapter {
     try {
       const finalResponse = await stream.finalResponse();
       if (finalResponse?.usage) {
-        usage = {
-          prompt_tokens: finalResponse.usage.input_tokens ?? 0,
-          completion_tokens: finalResponse.usage.output_tokens ?? 0,
-          total_tokens: finalResponse.usage.total_tokens ?? 0,
-        };
+        usage = usageFromOpenAIResponsesUsage(finalResponse.usage);
       }
     } catch {
       // finalResponse may throw if the stream was already consumed
@@ -933,13 +992,7 @@ class NemotronAdapter {
           ? 'length'
           : 'stop';
 
-    const usage = completion.usage
-      ? {
-          prompt_tokens: completion.usage.prompt_tokens,
-          completion_tokens: completion.usage.completion_tokens,
-          total_tokens: completion.usage.total_tokens,
-        }
-      : undefined;
+    const usage = usageFromOpenAIChatUsage(completion.usage);
 
     const assistantMessage: AIMessage = {
       role: 'assistant',
@@ -974,11 +1027,7 @@ class NemotronAdapter {
         onDelta(delta);
       }
       if (part.usage) {
-        usage = {
-          prompt_tokens: part.usage.prompt_tokens ?? 0,
-          completion_tokens: part.usage.completion_tokens ?? 0,
-          total_tokens: part.usage.total_tokens ?? 0,
-        };
+        usage = usageFromOpenAIChatUsage(part.usage);
       }
     }
 
@@ -1039,14 +1088,7 @@ class GeminiAdapter {
           ? 'tool_calls'
           : 'stop';
 
-    const usageMeta = response.usageMetadata;
-    const usage: AIUsage | undefined = usageMeta
-      ? {
-          prompt_tokens: usageMeta.promptTokenCount ?? 0,
-          completion_tokens: usageMeta.candidatesTokenCount ?? 0,
-          total_tokens: usageMeta.totalTokenCount ?? 0,
-        }
-      : undefined;
+    const usage = usageFromGeminiMetadata(response.usageMetadata);
 
     const assistantMessage: AIMessage = {
       role: 'assistant',
@@ -1089,11 +1131,7 @@ class GeminiAdapter {
         onDelta(text);
       }
       if (chunk.usageMetadata) {
-        usage = {
-          prompt_tokens: chunk.usageMetadata.promptTokenCount ?? 0,
-          completion_tokens: chunk.usageMetadata.candidatesTokenCount ?? 0,
-          total_tokens: chunk.usageMetadata.totalTokenCount ?? 0,
-        };
+        usage = usageFromGeminiMetadata(chunk.usageMetadata);
       }
     }
 
@@ -1159,9 +1197,9 @@ export class AIClient {
   constructor(provider: AIProvider, apiKey: string, options: { nemotronBaseURL?: string } = {}) {
     this.provider = provider;
     if (provider === 'openai') {
-      // Instantiate both adapters so routing can be selected per request. GPT-5.5
-      // must use Responses API, while GPT-5.1 and older chat models continue to
-      // use Chat Completions.
+      // Instantiate both adapters so routing can be selected per request.
+      // GPT-5.5+ agent models use Responses API, while GPT-5.1 and older chat
+      // models continue to use Chat Completions.
       this.openaiResponses = new OpenAIResponsesAdapter(apiKey);
       this.openai = new OpenAIAdapter(apiKey);
     } else if (provider === 'anthropic') {
@@ -1185,7 +1223,7 @@ export class AIClient {
     messages: AIMessage[],
     options: CompletionOptions = {},
   ): Promise<AICompletionResult> {
-    if (this.provider === 'openai' && model === RESPONSES_API_MODEL && this.openaiResponses) {
+    if (this.provider === 'openai' && modelUsesOpenAIResponsesApi(model) && this.openaiResponses) {
       return this.openaiResponses.complete(model, messages, options);
     }
     if (this.provider === 'openai' && this.openai) {
@@ -1209,7 +1247,7 @@ export class AIClient {
     options: CompletionOptions = {},
     onDelta: (delta: string) => void,
   ): Promise<{ usage?: AIUsage; model: string }> {
-    if (this.provider === 'openai' && model === RESPONSES_API_MODEL && this.openaiResponses) {
+    if (this.provider === 'openai' && modelUsesOpenAIResponsesApi(model) && this.openaiResponses) {
       return this.openaiResponses.streamComplete(model, messages, options, onDelta);
     }
     if (this.provider === 'openai' && this.openai) {

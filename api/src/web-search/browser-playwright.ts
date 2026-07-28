@@ -7,6 +7,7 @@ import * as os from 'os';
 import * as path from 'path';
 import pw from 'playwright-core';
 import type { Logger } from 'winston';
+import { readBrowserDebugConfig } from '../agentSettingsStore';
 import { config } from '../config';
 
 // ─── Browser catalogue ────────────────────────────────────────────────────────
@@ -354,13 +355,14 @@ async function getWorkingCdpPorts(browsersWithUrl: Set<string>, log: Logger): Pr
     if (!candidatePorts.includes(p)) candidatePorts.push(p);
   }
 
+  const configuredPort = readBrowserDebugConfig().browserDebugPort;
   // User-configured port (set via `omnikey grant-browser-access`) gets tried first.
-  if (config.browserDebugPort && !candidatePorts.includes(config.browserDebugPort)) {
-    candidatePorts.unshift(config.browserDebugPort);
-  } else if (config.browserDebugPort) {
+  if (configuredPort && !candidatePorts.includes(configuredPort)) {
+    candidatePorts.unshift(configuredPort);
+  } else if (configuredPort) {
     // Already in the list — move it to the front so it is tried before auto-detected ports.
-    candidatePorts.splice(candidatePorts.indexOf(config.browserDebugPort), 1);
-    candidatePorts.unshift(config.browserDebugPort);
+    candidatePorts.splice(candidatePorts.indexOf(configuredPort), 1);
+    candidatePorts.unshift(configuredPort);
   }
 
   const workingPorts: number[] = [];
@@ -495,7 +497,8 @@ async function isBrowserOpenWithUrlWindows(url: string, log: Logger): Promise<bo
   if (getRunningBrowserNames().size === 0) return false;
 
   const candidatePorts: number[] = [];
-  if (config.browserDebugPort) candidatePorts.push(config.browserDebugPort);
+  const configuredPort = readBrowserDebugConfig().browserDebugPort;
+  if (configuredPort) candidatePorts.push(configuredPort);
   for (const p of [9222, 9229, 9333]) {
     if (!candidatePorts.includes(p)) candidatePorts.push(p);
   }

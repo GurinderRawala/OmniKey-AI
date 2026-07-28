@@ -68,6 +68,20 @@ const COLUMN_MIGRATIONS: ColumnMigration[] = [
   // rewritten by every new session's LLM enrichment, wiping out accumulated
   // context from older sessions.
   { table: 'agent_sessions', column: 'session_summary', definition: 'TEXT' },
+  // Added: active-session memory used by the agent hot path to avoid replaying
+  // old raw history on every model call. history_json remains the full transcript
+  // for UI/audit; these fields describe the compact prefix sent back to the model.
+  { table: 'agent_sessions', column: 'session_memory', definition: 'TEXT' },
+  {
+    table: 'agent_sessions',
+    column: 'session_memory_history_length',
+    definition: 'INTEGER NOT NULL DEFAULT 0',
+  },
+  {
+    table: 'agent_sessions',
+    column: 'session_memory_updated_at',
+    definition: 'DATETIME',
+  },
   // Added: locks a session to a user-chosen group so it is never
   // (re)classified or moved between groups by the grouping cron.
   {
@@ -106,6 +120,16 @@ const COLUMN_MIGRATIONS: ColumnMigration[] = [
     table: 'subscription_usages',
     column: 'session_id',
     definition: 'VARCHAR(255)',
+  },
+  {
+    table: 'subscription_usages',
+    column: 'cached_prompt_tokens',
+    definition: 'INTEGER NOT NULL DEFAULT 0',
+  },
+  {
+    table: 'subscription_usages',
+    column: 'cache_write_prompt_tokens',
+    definition: 'INTEGER NOT NULL DEFAULT 0',
   },
 ];
 

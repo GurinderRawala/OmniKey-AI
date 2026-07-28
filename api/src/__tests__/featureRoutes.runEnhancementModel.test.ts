@@ -1,9 +1,9 @@
 /**
  * Tests for the temperature-handling change in `runEnhancementModel`.
  *
- * - 'enhance' → { temperature: 0.3 }
- * - 'grammar' → { temperature: 0.3 }
- * - 'task'    → {}   (no temperature; smart-tier model decides for itself)
+ * - 'enhance' → pinned cheap model + { temperature: 0.3 }
+ * - 'grammar' → pinned cheap model + { temperature: 0.3 }
+ * - 'task'    → smart-tier model + {} (no temperature)
  *
  * Mocks `./ai-client` and `./models/subscriptionTaskTemplate` so the test
  * stays a pure unit test and never touches the database or any SDK.
@@ -22,6 +22,14 @@ vi.mock('../ai-client', () => ({
   aiClient: { streamComplete: mocks.streamComplete },
   getDefaultModel: mocks.getDefaultModel,
 }));
+
+vi.mock('../config', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../config')>();
+  return {
+    ...actual,
+    config: { ...actual.config, aiProvider: 'openai' },
+  };
+});
 
 vi.mock('../models/subscriptionTaskTemplate', () => ({
   SubscriptionTaskTemplate: { findOne: mocks.findOne },
@@ -96,12 +104,12 @@ describe('runEnhancementModel — temperature per command', () => {
     expect(options).not.toHaveProperty('temperature');
   });
 
-  it("selects the smart-tier model for cmd='task' and fast-tier for enhance/grammar", async () => {
+  it("selects the smart-tier model for cmd='task' and pinned cheap model for enhance/grammar", async () => {
     await runEnhancementModel(makeLogger(), 'a', 'task', fakeSubscription);
     await runEnhancementModel(makeLogger(), 'b', 'enhance', fakeSubscription);
     await runEnhancementModel(makeLogger(), 'c', 'grammar', fakeSubscription);
 
     const modelsCalled = mocks.streamComplete.mock.calls.map(([model]) => model);
-    expect(modelsCalled).toEqual(['smart-model-mock', 'fast-model-mock', 'fast-model-mock']);
+    expect(modelsCalled).toEqual(['smart-model-mock', 'gpt-4o-mini', 'gpt-4o-mini']);
   });
 });

@@ -1,5 +1,7 @@
 import { providerSupportsImageGeneration } from '../ai-client';
 import { config } from '../config';
+import { readBrowserDebugConfig } from '../agentSettingsStore';
+import type { AgentSettingsSnapshot } from '../agentSettingsStore';
 
 // MCP server names and descriptions are user-controlled and embedded into the agent
 // system prompt. Sanitize them to mitigate prompt-injection: strip control characters
@@ -25,14 +27,34 @@ export function getAgentPrompt(
   platform: string | undefined,
   hasTaskInstructions: boolean,
   installedMcps: Array<{ name: string; description?: string | null; transport: string }> = [],
+  settings?: Pick<
+    AgentSettingsSnapshot,
+    'terminalAccess' | 'webSearchEnabled' | 'browserAccessEnabled'
+  >,
 ): string {
   const isWindows =
     config.terminalPlatform?.toLowerCase() === 'windows' || platform?.toLowerCase() === 'windows';
+  const debugConfig = readBrowserDebugConfig();
+  const webToolsEnabled = settings?.webSearchEnabled ?? config.webSearchEnabled;
+  const browserAccessEnabled =
+    settings?.browserAccessEnabled ??
+    (config.browserAccessEnabled || debugConfig.browserAccessConfigured);
+  const browserAutomationEnabled =
+    browserAccessEnabled && debugConfig.browserDebugPort !== undefined;
+  const imageGenerationEnabled = providerSupportsImageGeneration(config.aiProvider);
+  const terminalAccessLimited = settings?.terminalAccess === 'limited';
+  const nativeToolNames = [
+    webToolsEnabled ? 'web_search' : null,
+    webToolsEnabled ? 'web_fetch' : null,
+    imageGenerationEnabled ? 'generate_image' : null,
+  ]
+    .filter((name): name is string => Boolean(name))
+    .join('`, `');
 
   return `
 You are an AI agent with the following capabilities:
-- **Shell execution** (\`shell_script\` tool) — call this native function with \`{ "script": "..." }\` to run commands on the user's machine; the terminal output is returned to you automatically as the tool result.
-- **Web tools** — call \`web_search\` and \`web_fetch\` via native function calling to retrieve live information from the internet.${providerSupportsImageGeneration(config.aiProvider) ? '\n- **Image generation** — call `generate_image` via native function calling to produce images.' : ''}${config.browserDebugPort !== undefined ? "\n- **Browser automation** — control the user's running browser via Playwright scripts passed to the `shell_script` tool." : ''}
+- **Shell execution** (\`shell_script\` tool) — call this native function with \`{ "script": "..." }\` to run commands on the user's machine; the terminal output is returned to you automatically as the tool result.${terminalAccessLimited ? ' Terminal access is LIMITED to read-only inspection commands.' : ''}
+${webToolsEnabled ? '- **Web tools** — call `web_search` and `web_fetch` via native function calling to retrieve live information from the internet.' : '- **Web tools disabled** — do not call `web_search` or `web_fetch`; use `shell_script` for retrieval if live data is required.'}${imageGenerationEnabled ? '\n- **Image generation** — call `generate_image` via native function calling to produce images.' : ''}${browserAutomationEnabled ? "\n- **Browser automation** — control the user's running browser via Playwright scripts passed to the `shell_script` tool." : ''}
 ${installedMcps.length > 0 ? '- **MCP tools** — native function calls for integrations; see installed servers below.' : ''}
 
 Use these capabilities to take real action. Default to doing rather than asking.
@@ -47,18 +69,17 @@ ${
 
 **When to use shell scripts:**
 - Default to calling \`shell_script\` for anything involving the machine, network, files, processes, environment variables, or system state — never answer from training data alone.
-- **Read vs. write:** For open-ended or ambiguous requests, run safe read-only commands first to understand the current state. When the user **explicitly** asks to create, update, delete, configure, or run something, do it directly; no need to ask for confirmation unless the scope is genuinely unclear.
-- **Package installation:** Install any package required to complete the task. Include the install step as its own phase so you can confirm it succeeded before building on it. Prefer project-local or user scope; avoid \`sudo\`/admin unless the user explicitly asks.
+${terminalAccessLimited ? '- **Limited terminal access:** Use only read-only inspection commands. Do not write, delete, install, configure, restart services, kill processes, or make mutating network calls. If the task requires mutation, respond with `<final_answer>` explaining that terminal access is limited.' : '- **Read vs. write:** For open-ended or ambiguous requests, run safe read-only commands first to understand the current state. When the user **explicitly** asks to create, update, delete, configure, or run something, do it directly; no need to ask for confirmation unless the scope is genuinely unclear.\n- **Package installation:** Install any package required to complete the task. Include the install step as its own phase so you can confirm it succeeded before building on it. Prefer project-local or user scope; avoid `sudo`/admin unless the user explicitly asks.'}
 ${
-  config.browserDebugPort !== undefined
+  browserAutomationEnabled
     ? `- **Browser automation:** Use browser automation proactively when needed to complete the task.
   - Do NOT wait for explicit user wording like "use browser" if interaction is obviously required to get the final result.
   - If \`web_search\` or \`web_fetch\` do not provide enough usable context (blocked pages, incomplete data, client-rendered content, authentication walls, dynamic tables, hidden details, or repeated low-value fetch results), immediately switch to Playwright-based browser interaction.
   - Call the \`shell_script\` tool with Node.js + \`playwright-core\` scripts — one phase at a time (phasing rules below apply).
   - **Phase 1 — ensure dependencies:** Check and install \`playwright-core\` if missing:
     \`node -e "require('/tmp/playwright-runner/node_modules/playwright-core')" 2>/dev/null || npm install --prefix /tmp/playwright-runner playwright-core --silent\`
-  - **Phase 2 — connect and navigate:** Connect to the running browser via CDP at \`http://localhost:${config.browserDebugPort}\`. If CDP fails, fall back to launching a persistent context using the debug profile at \`${config.browserDebugUserDataDir}\` with the executable at \`${config.browserDebugExecutable}\` (headless: false). Once connected, navigate to any URL required by the task — open any page needed, reusing an existing tab if the URL already matches or creating a new one if not. There is no restriction on which sites or pages you can visit; open whatever is necessary to complete the task.
-  - **Phase 3 — one action per script:** Each subsequent script reconnects via the same CDP endpoint (\`http://localhost:${config.browserDebugPort}\`) or profile fallback, finds the already-open tab (or reopens it), performs exactly one action (click, type, select, scroll, screenshot, read text, extract data, fill forms, etc.), prints the result to stdout, then calls \`browser.disconnect()\` (CDP) or exits (profile launch). You may perform any interaction the task requires — reading content, extracting structured data, submitting forms, navigating between pages, or capturing screenshots.
+  - **Phase 2 — connect and navigate:** Connect to the running browser via CDP at \`http://localhost:${debugConfig.browserDebugPort}\`. If CDP fails, fall back to launching a persistent context using the debug profile at \`${debugConfig.browserDebugUserDataDir}\` with the executable at \`${debugConfig.browserDebugExecutable}\` (headless: false). Once connected, navigate to any URL required by the task — open any page needed, reusing an existing tab if the URL already matches or creating a new one if not. There is no restriction on which sites or pages you can visit; open whatever is necessary to complete the task.
+  - **Phase 3 — one action per script:** Each subsequent script reconnects via the same CDP endpoint (\`http://localhost:${debugConfig.browserDebugPort}\`) or profile fallback, finds the already-open tab (or reopens it), performs exactly one action (click, type, select, scroll, screenshot, read text, extract data, fill forms, etc.), prints the result to stdout, then calls \`browser.disconnect()\` (CDP) or exits (profile launch). You may perform any interaction the task requires — reading content, extracting structured data, submitting forms, navigating between pages, or capturing screenshots.
   - Always inline Node.js via a bash heredoc so the script is self-contained. Print structured output to stdout so it returns as \`TERMINAL OUTPUT:\`.`
     : ''
 }
@@ -88,7 +109,7 @@ ${
 - Always tell the user the exact path where the configuration was saved in your \`<final_answer>\`.
 
 ${
-  !providerSupportsImageGeneration(config.aiProvider)
+  !imageGenerationEnabled
     ? `**Image generation:**
 - No image-generation tool is available in this environment. Do **not** call any tool whose name suggests image, picture, render, draw, or visual asset creation (e.g., \`generate_image\`, \`image_generate\`, \`create_image\`). If the user asks for an image, respond in \`<final_answer>\` explaining that image generation is not supported with the current provider.
 `
@@ -140,7 +161,7 @@ ${installedMcps
 
 **Response format — every response must be exactly one of:**
 1. A \`shell_script\` **native function call** — call this tool with \`{ "script": "..." }\` to run shell commands on the user's machine. The terminal output is returned to you automatically as the tool result. Use this for any machine, file, process, or network operation. Do NOT wrap scripts in XML tags or any other envelope.
-2. ${providerSupportsImageGeneration(config.aiProvider) ? 'A `web_search`, `web_fetch`, or `generate_image`' : 'A `web_search` or `web_fetch`'} **native function call** — use the function-calling API for these; do NOT wrap them in XML tags.${installedMcps.length > 0 ? ' Same for MCP tools (`mcp_<server>__<tool>`).' : ''}
+2. ${nativeToolNames ? `A \`${nativeToolNames}\`` : 'An available'} **native function call** — use the function-calling API for these; do NOT wrap them in XML tags.${webToolsEnabled ? '' : ' Web-search tools are disabled.'}${installedMcps.length > 0 ? ' Same for MCP tools (`mcp_<server>__<tool>`).' : ''}
 3. \`<final_answer>...</final_answer>\` — your conclusion once you have enough information. This tag must be the **entire** text content of your response — no text before or after it.
 
 **Critical rule — act immediately, no planning preamble:**

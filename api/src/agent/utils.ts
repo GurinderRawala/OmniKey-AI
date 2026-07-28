@@ -9,6 +9,7 @@ import { AgentSendFn, SessionState } from './types';
 import { config } from '../config';
 import { Logger } from 'winston';
 import { IMAGE_GENERATE_TOOL } from './imageTool';
+import type { AgentSettingsSnapshot } from '../agentSettingsStore';
 
 /**
  * Tool definition for shell script execution. Registered as a native function
@@ -76,8 +77,8 @@ export const SHELL_SCRIPT_TOOL_LIMITED: AITool = {
 /**
  * Returns the set of web tools available to the agent for every turn.
  *
- * `web_search` is always included because DuckDuckGo is used as a free
- * fallback when no third-party search key is configured.
+ * Web tools are included when the current DB-backed Agent Access settings
+ * allow them.
  *
  * `generate_image` is omitted for providers without image-generation
  * support (currently Anthropic and Nemotron) because the underlying
@@ -88,19 +89,20 @@ export const SHELL_SCRIPT_TOOL_LIMITED: AITool = {
  *
  * @returns An array of `AITool` definitions ready to pass to the AI client.
  */
-export function buildAvailableTools(extraTools: AITool[] = []): AITool[] {
+export function buildAvailableTools(
+  settings: Pick<AgentSettingsSnapshot, 'webSearchEnabled'>,
+  extraTools: AITool[] = [],
+): AITool[] {
   // Web tools are registered only when the user has not opted out via the
-  // Settings UI (WEB_SEARCH_ENABLED in ~/.omnikey/config.json). Removing the
+  // Settings UI. Removing the
   // tool definitions outright — rather than keeping them and refusing at the
   // dispatch layer — keeps the model from being tempted to call them and
   // matches how MCP-only tools are gated elsewhere in the agent.
-  const baseTools: AITool[] = config.webSearchEnabled
-    ? [WEB_FETCH_TOOL, WEB_SEARCH_TOOL]
-    : [];
+  const baseTools: AITool[] = settings.webSearchEnabled ? [WEB_FETCH_TOOL, WEB_SEARCH_TOOL] : [];
   if (providerSupportsImageGeneration(config.aiProvider)) {
     baseTools.push(IMAGE_GENERATE_TOOL);
   }
-  return [...baseTools, ...extraTools];
+  return [...baseTools, ...extraTools].sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /**
@@ -159,8 +161,6 @@ export function sendFinalAnswer(
   });
 }
 
-// Per-message hard string limit enforced by the provider API.
-const MAX_MESSAGE_CONTENT = getMaxMessageContentLength(config.aiProvider);
 // Head/tail chars kept when a single message exceeds the per-message cap.
 const OVER_CAP_HEAD_RATIO = 0.6;
 
@@ -168,9 +168,9 @@ const OVER_CAP_HEAD_RATIO = 0.6;
  * Pushes a message onto the session history.
  *
  * The only limit enforced here is the provider's **per-message** hard cap
- * (`MAX_MESSAGE_CONTENT` — e.g. Anthropic's ~10 MB per content string). A single
- * message larger than that is compacted in the middle (keeping a head and tail)
- * so the request is still accepted while retaining the most useful context.
+ * (e.g. Anthropic's ~10 MB per content string). A single message larger than
+ * that is compacted in the middle (keeping a head and tail) so the request is
+ * still accepted while retaining the most useful context.
  *
  * Fitting the *whole* history inside the model's context window is deliberately
  * NOT done here. `completeWithContextRecovery` proactively trims the oldest
@@ -192,13 +192,14 @@ export function pushToSessionHistory(
   }
 
   let content = message.content;
+  const maxMessageContent = getMaxMessageContentLength(config.aiProvider, session.activeModel);
 
   // Per-message content cap. Compact the middle rather than dropping the tail so
   // a huge single message keeps a useful head and tail. This is a safety net
   // only — terminal output is already bounded upstream by truncateTerminalOutput.
-  if (content.length > MAX_MESSAGE_CONTENT) {
-    const head = Math.floor(MAX_MESSAGE_CONTENT * OVER_CAP_HEAD_RATIO);
-    const tail = Math.max(0, MAX_MESSAGE_CONTENT - head - 200);
+  if (content.length > maxMessageContent) {
+    const head = Math.floor(maxMessageContent * OVER_CAP_HEAD_RATIO);
+    const tail = Math.max(0, maxMessageContent - head - 200);
     const dropped = content.length - head - tail;
     content =
       content.slice(0, head) +
@@ -214,8 +215,7 @@ export function pushToSessionHistory(
   // is a function_call item). Skipping them leaves an orphaned
   // function_call_output on the next turn, which the API rejects with
   // "No tool call found for function call output with call_id ...".
-  const hasFunctionData =
-    (message.tool_calls?.length ?? 0) > 0 || message.role === 'tool';
+  const hasFunctionData = (message.tool_calls?.length ?? 0) > 0 || message.role === 'tool';
   if (content.length > 0 || hasFunctionData) {
     session.history.push({ ...message, content });
   }
@@ -355,10 +355,7 @@ export function pruneHistoryForContextLimit(session: SessionState, log: Logger):
   // that carries tool_calls owns the tool-result messages that immediately
   // follow it — drop them together so we never orphan a tool_call or a result.
   let unitEnd = systemEnd + 1;
-  if (
-    history[systemEnd].role === 'assistant' &&
-    (history[systemEnd].tool_calls?.length ?? 0) > 0
-  ) {
+  if (history[systemEnd].role === 'assistant' && (history[systemEnd].tool_calls?.length ?? 0) > 0) {
     while (unitEnd < history.length && history[unitEnd].role === 'tool') unitEnd++;
   }
   unitEnd = Math.min(unitEnd, protectedStart);

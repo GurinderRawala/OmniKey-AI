@@ -18,10 +18,11 @@ import { setScheduledJobWorker } from './workers/scheduledJobWorkerClient';
 import { config } from './config';
 import { attachAgentWebSocketServer, createAgentRouter } from './agent/agentServer';
 import { AppDownload } from './models/appDownload';
-// Importing AgentSession and ScheduledJob ensures the models are registered with Sequelize before initDatabase().
+// Importing models ensures they are registered with Sequelize before initDatabase().
 import './models/agentSession';
 import './models/scheduledJob';
 import './models/mcpServer';
+import './models/agentSettings';
 import { incrementDownloadCount, getDownloadCounts } from './bucket-adapter';
 
 const app = express();
@@ -106,8 +107,8 @@ app.get('/macos/appcast', (req, res) => {
 
   // These should match the values embedded into the macOS app
   // Info.plist in macOS/build_release_dmg.sh.
-  const bundleVersion = '49';
-  const shortVersion = '1.3.0';
+  const bundleVersion = '50';
+  const shortVersion = '1.4.0';
 
   const xml = `<?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0"

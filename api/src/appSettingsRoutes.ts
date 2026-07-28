@@ -5,16 +5,20 @@ import os from 'os';
 import path from 'path';
 import { spawn } from 'child_process';
 import { authMiddleware } from './authMiddleware';
-import { config } from './config';
 import { logger } from './logger';
+import {
+  getAgentSettings,
+  readBrowserDebugConfig,
+  readLocalConfigFile,
+  updateAgentSettings,
+  writeLocalConfigFile,
+} from './agentSettingsStore';
 
 /**
  * Settings endpoint for "Agent Access" controls (terminal access mode, web
- * search toggle, authenticated browser session reading). The persistence
- * model is identical to aiProviderRoutes: ~/.omnikey/config.json is the
- * source of truth, the running daemon reads it via dotenv on startup, and
- * any change that affects already-loaded config triggers a detached
- * `omnikey restart-daemon` so the new values take effect.
+ * search toggle, usage recording, authenticated browser session reading).
+ * Runtime toggles live in the `agent_settings` DB row so they take effect on
+ * the next agent turn without bouncing the daemon.
  *
  * Browser access is special — enabling it spawns the interactive
  * `omnikey grant-browser-access` command in a new Terminal window so the
@@ -41,124 +45,6 @@ const MACOS_LAUNCH_AGENT_PATH = path.join(
   'LaunchAgents',
   `${MACOS_LAUNCH_AGENT_LABEL}.plist`,
 );
-
-function getConfigPath(): string {
-  const home = process.env.HOME || process.env.USERPROFILE || os.homedir();
-  return path.join(home, '.omnikey', 'config.json');
-}
-
-function readConfigFile(): Record<string, any> {
-  const configPath = getConfigPath();
-  // Missing file is the only safe "empty config" case. A truncated or
-  // malformed file must abort the request — otherwise a PATCH/POST would
-  // silently overwrite the rest of the user's saved keys with the few
-  // fields the handler is touching. See CodeRabbit PR #18 review.
-  if (!fs.existsSync(configPath)) {
-    return {};
-  }
-  let raw: string;
-  try {
-    raw = fs.readFileSync(configPath, 'utf-8');
-  } catch (err) {
-    logger.error('Failed to read ~/.omnikey/config.json.', { error: err, configPath });
-    throw new Error(
-      `Could not read config file at ${configPath}: ${err instanceof Error ? err.message : String(err)}`,
-    );
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    logger.error('Failed to parse ~/.omnikey/config.json — refusing to mutate.', {
-      error: err,
-      configPath,
-    });
-    throw new Error(
-      `Config file at ${configPath} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
-    );
-  }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    logger.error('~/.omnikey/config.json is not a JSON object — refusing to mutate.', {
-      configPath,
-    });
-    throw new Error(`Config file at ${configPath} is not a JSON object.`);
-  }
-  return parsed as Record<string, any>;
-}
-
-function writeConfigFile(data: Record<string, any>): void {
-  const configPath = getConfigPath();
-  fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  fs.writeFileSync(configPath, JSON.stringify(data, null, 2), 'utf-8');
-}
-
-function readTerminalAccess(cfg: Record<string, any>): TerminalAccessMode {
-  return cfg.TERMINAL_ACCESS === 'limited' ? 'limited' : 'full';
-}
-
-function readWebSearchEnabled(cfg: Record<string, any>): boolean {
-  // Mirrors the getBooleanEnv default in config.ts: undefined → true.
-  if (cfg.WEB_SEARCH_ENABLED === undefined || cfg.WEB_SEARCH_ENABLED === null) {
-    return true;
-  }
-  const v = String(cfg.WEB_SEARCH_ENABLED).toLowerCase();
-  return v === 'true' || v === '1';
-}
-
-function readBrowserAccessEnabled(cfg: Record<string, any>): boolean {
-  // BROWSER_ACCESS_ENABLED, when explicitly set, is the source of truth. This
-  // matters during the enable flow: we write BROWSER_ACCESS_ENABLED=true the
-  // moment the user toggles the switch, but the CLI does not write the
-  // BROWSER_DEBUG_* keys until the user finishes the Terminal prompts. Without
-  // the explicit-true short-circuit, a GET refresh during that window would
-  // report `browserAccessEnabled: false` and bounce the UI toggle back off.
-  // Falls back to "do the debug keys exist?" when the flag is not set.
-  if (cfg.BROWSER_ACCESS_ENABLED !== undefined) {
-    const v = String(cfg.BROWSER_ACCESS_ENABLED).toLowerCase();
-    if (v === 'false' || v === '0') return false;
-    if (v === 'true' || v === '1') return true;
-  }
-  return Boolean(cfg.BROWSER_DEBUG_EXECUTABLE);
-}
-
-function readUsageRecordingEnabled(cfg: Record<string, any>): boolean {
-  // Mirrors config.ts: cloud defaults to true, self-hosted defaults to false.
-  if (cfg.USAGE_RECORDING_ENABLED === undefined || cfg.USAGE_RECORDING_ENABLED === null) {
-    return !config.isSelfHosted;
-  }
-  const v = String(cfg.USAGE_RECORDING_ENABLED).toLowerCase();
-  return v === 'true' || v === '1';
-}
-
-/**
- * Daemon restart scheduler — copied in spirit from aiProviderRoutes so the
- * three settings endpoints share the same restart contract. Detached spawn
- * keeps the new process alive after the parent (current API server) exits.
- */
-function scheduleDaemonRestart(reason: string): void {
-  setTimeout(() => {
-    const port = config.port;
-    const home = process.env.HOME || os.homedir();
-    const logFile = path.join(home, '.omnikey', 'restart-daemon.log');
-    const omnikeyCli = path.resolve(__dirname, '../dist/index.js');
-
-    logger.info(`Spawning detached \`omnikey restart-daemon --port ${port}\` (${reason})`);
-
-    try {
-      fs.mkdirSync(path.dirname(logFile), { recursive: true });
-      const out = fs.openSync(logFile, 'a');
-      const child = spawn(
-        process.execPath,
-        [omnikeyCli, 'restart-daemon', '--port', String(port)],
-        { detached: true, stdio: ['ignore', out, out] },
-      );
-      child.unref();
-      fs.closeSync(out);
-    } catch (err) {
-      logger.error('Failed to spawn restart-daemon process.', { error: err });
-    }
-  }, 500);
-}
 
 /**
  * Spawns `omnikey grant-browser-access` inside a new Terminal.app window so
@@ -218,7 +104,7 @@ function disableBrowserAccess(cfg: Record<string, any>): void {
   delete cfg.BROWSER_DEBUG_EXECUTABLE;
   delete cfg.BROWSER_DEBUG_USER_DATA_DIR;
   cfg.BROWSER_ACCESS_ENABLED = false;
-  writeConfigFile(cfg);
+  writeLocalConfigFile(cfg);
 
   if (process.platform !== 'darwin') return;
   if (!fs.existsSync(MACOS_LAUNCH_AGENT_PATH)) return;
@@ -239,28 +125,22 @@ export function appSettingsRouter(): express.Router {
   router.get('/', authMiddleware, async (_req, res) => {
     const { logger: reqLogger } = res.locals;
     try {
-      const cfg = readConfigFile();
+      const settings = await getAgentSettings();
+      const debug = readBrowserDebugConfig();
       res.json({
-        terminalAccess: readTerminalAccess(cfg),
-        webSearchEnabled: readWebSearchEnabled(cfg),
-        browserAccessEnabled: readBrowserAccessEnabled(cfg),
-        usageRecordingEnabled: readUsageRecordingEnabled(cfg),
-        browserDebugBrowserName: cfg.BROWSER_DEBUG_BROWSER_NAME ?? null,
-        browserDebugPort:
-          typeof cfg.BROWSER_DEBUG_PORT === 'number'
-            ? cfg.BROWSER_DEBUG_PORT
-            : Number.isFinite(Number(cfg.BROWSER_DEBUG_PORT))
-              ? Number(cfg.BROWSER_DEBUG_PORT)
-              : null,
-        // Runtime view so the UI can warn if config.json drifted from the
-        // values currently loaded into the process.
+        terminalAccess: settings.terminalAccess,
+        webSearchEnabled: settings.webSearchEnabled,
+        browserAccessEnabled: settings.browserAccessEnabled || debug.browserAccessConfigured,
+        usageRecordingEnabled: settings.usageRecordingEnabled,
+        browserDebugBrowserName: debug.browserDebugBrowserName ?? null,
+        browserDebugPort: debug.browserDebugPort ?? null,
         runtime: {
-          terminalAccess: config.terminalAccess,
-          webSearchEnabled: config.webSearchEnabled,
-          usageRecordingEnabled: config.usageRecordingEnabled,
-          browserAccessEnabled:
-            config.browserAccessEnabled || Boolean(config.browserDebugExecutable),
+          terminalAccess: settings.terminalAccess,
+          webSearchEnabled: settings.webSearchEnabled,
+          usageRecordingEnabled: settings.usageRecordingEnabled,
+          browserAccessEnabled: settings.browserAccessEnabled || debug.browserAccessConfigured,
         },
+        source: 'database',
       });
     } catch (err) {
       reqLogger.error('Error reading app settings.', { error: err });
@@ -270,8 +150,8 @@ export function appSettingsRouter(): express.Router {
 
   /**
    * PATCH /api/app-settings — partial update of terminalAccess, webSearchEnabled,
-   * or usageRecordingEnabled. Always restarts the daemon so the new values land
-   * in `config` before the next agent turn.
+   * or usageRecordingEnabled. Values are persisted in DB and are read by the
+   * agent hot path on each turn, so no daemon restart is required.
    */
   router.patch('/', authMiddleware, async (req, res) => {
     const { logger: reqLogger } = res.locals;
@@ -285,32 +165,31 @@ export function appSettingsRouter(): express.Router {
         return res.status(400).json({ error: 'No supported fields supplied.' });
       }
 
-      const cfg = readConfigFile();
-      const reasons: string[] = [];
+      const patch: {
+        terminalAccess?: TerminalAccessMode;
+        webSearchEnabled?: boolean;
+        usageRecordingEnabled?: boolean;
+      } = {};
       if (parsed.terminalAccess !== undefined) {
-        cfg.TERMINAL_ACCESS = parsed.terminalAccess;
-        reasons.push(`terminalAccess=${parsed.terminalAccess}`);
+        patch.terminalAccess = parsed.terminalAccess;
       }
       if (parsed.webSearchEnabled !== undefined) {
-        cfg.WEB_SEARCH_ENABLED = parsed.webSearchEnabled;
-        reasons.push(`webSearchEnabled=${parsed.webSearchEnabled}`);
+        patch.webSearchEnabled = parsed.webSearchEnabled;
       }
       if (parsed.usageRecordingEnabled !== undefined) {
-        cfg.USAGE_RECORDING_ENABLED = parsed.usageRecordingEnabled;
-        reasons.push(`usageRecordingEnabled=${parsed.usageRecordingEnabled}`);
+        patch.usageRecordingEnabled = parsed.usageRecordingEnabled;
       }
-      writeConfigFile(cfg);
+      const settings = await updateAgentSettings(patch);
+      const debug = readBrowserDebugConfig();
 
       res.json({
-        terminalAccess: readTerminalAccess(cfg),
-        webSearchEnabled: readWebSearchEnabled(cfg),
-        browserAccessEnabled: readBrowserAccessEnabled(cfg),
-        usageRecordingEnabled: readUsageRecordingEnabled(cfg),
-        restartScheduled: true,
-        message: 'Settings updated. Server will restart shortly to apply the change.',
+        terminalAccess: settings.terminalAccess,
+        webSearchEnabled: settings.webSearchEnabled,
+        browserAccessEnabled: settings.browserAccessEnabled || debug.browserAccessConfigured,
+        usageRecordingEnabled: settings.usageRecordingEnabled,
+        restartScheduled: false,
+        message: 'Settings updated.',
       });
-
-      scheduleDaemonRestart(`updated app settings (${reasons.join(', ')})`);
     } catch (err: any) {
       reqLogger.error('Error updating app settings.', { error: err });
       if (err instanceof zod.ZodError) {
@@ -333,51 +212,41 @@ export function appSettingsRouter(): express.Router {
     const bodySchema = zod.object({ enabled: zod.boolean() });
     try {
       const { enabled } = bodySchema.parse(req.body);
-      const cfg = readConfigFile();
+      const cfg = readLocalConfigFile();
 
       if (enabled) {
-        // Mark intent in config so the GET endpoint reflects "enabling" even
-        // before the user finishes the Terminal prompts. The CLI itself will
-        // overwrite BROWSER_DEBUG_* on completion.
-        cfg.BROWSER_ACCESS_ENABLED = true;
-        writeConfigFile(cfg);
+        // Mark intent in DB so the GET endpoint reflects "enabling" even
+        // before the user finishes the Terminal prompts. The CLI writes the
+        // debug profile fields to config.json on completion; the backend reads
+        // those dynamically, so no daemon restart is needed.
+        await updateAgentSettings({ browserAccessEnabled: true });
 
         const launch = launchGrantBrowserAccessInteractive();
         if (!launch.launched) {
-          // Revert the intent flag so the toggle does not stay on incorrectly.
-          cfg.BROWSER_ACCESS_ENABLED = false;
-          writeConfigFile(cfg);
+          await updateAgentSettings({ browserAccessEnabled: false });
           return res.status(500).json({
             error: launch.error || 'Failed to launch the interactive browser-access setup.',
           });
         }
 
-        // NOTE: We deliberately do NOT call scheduleDaemonRestart() here. The
-        // user has not yet finished the interactive prompts in Terminal, so
-        // BROWSER_DEBUG_* keys are not in config.json yet — restarting now
-        // would just bounce the daemon against the pre-setup config. The
-        // omnikey grant-browser-access flow itself schedules a daemon restart
-        // once it has successfully written the debug-profile fields, so the
-        // running process picks up the new browser config without a second
-        // round-trip through this endpoint. See CodeRabbit PR #18 review.
         res.json({
           browserAccessEnabled: true,
           launched: true,
           message:
-            'Follow the prompts in the Terminal window to finish setting up authenticated browser access. The daemon will restart automatically once setup is complete.',
+            'Follow the prompts in the Terminal window to finish setting up authenticated browser access.',
           restartScheduled: false,
         });
         return;
       }
 
+      await updateAgentSettings({ browserAccessEnabled: false });
       disableBrowserAccess(cfg);
       res.json({
         browserAccessEnabled: false,
         launched: false,
         message: 'Authenticated browser access disabled.',
-        restartScheduled: true,
+        restartScheduled: false,
       });
-      scheduleDaemonRestart('disabled browser access');
     } catch (err: any) {
       reqLogger.error('Error toggling browser access.', { error: err });
       if (err instanceof zod.ZodError) {

@@ -2,11 +2,14 @@ import type { Logger } from 'winston';
 import { config } from './config';
 import { Subscription } from './models/subscription';
 import { SubscriptionUsage } from './models/subscriptionUsage';
+import { getAgentSettings } from './agentSettingsStore';
 
 export type TokenUsagePayload = {
   prompt_tokens?: number;
   completion_tokens?: number;
   total_tokens?: number;
+  cached_tokens?: number;
+  cache_write_tokens?: number;
 };
 
 export type UsageMode = 'agent' | 'scheduled-agent' | 'enhance' | 'grammar' | 'custom-task';
@@ -19,9 +22,12 @@ export async function recordTokenUsage(
   mode: UsageMode,
   sessionId?: string,
 ): Promise<void> {
-  if (!usage || !subscription.id || !config.usageRecordingEnabled) return;
+  if (!usage || !subscription.id) return;
 
   try {
+    const settings = await getAgentSettings();
+    if (!settings.usageRecordingEnabled) return;
+
     const totalTokens = usage.total_tokens ?? 0;
     await SubscriptionUsage.create({
       subscriptionId: subscription.id,
@@ -32,6 +38,8 @@ export async function recordTokenUsage(
       promptTokens: usage.prompt_tokens ?? 0,
       completionTokens: usage.completion_tokens ?? 0,
       totalTokens,
+      cachedPromptTokens: usage.cached_tokens ?? 0,
+      cacheWritePromptTokens: usage.cache_write_tokens ?? 0,
     });
 
     await Subscription.increment('totalTokensUsed', {

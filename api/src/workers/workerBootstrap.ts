@@ -8,6 +8,7 @@ import type { WorkerCommand } from './spawn';
 import '../models/agentSession';
 import '../models/scheduledJob';
 import '../models/mcpServer';
+import '../models/agentSettings';
 
 export interface BootstrapOptions {
   /**

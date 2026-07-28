@@ -49,6 +49,7 @@ struct ChatView: View {
             model.refreshSessions()
             model.fetchDefaultTaskTemplate()
             model.fetchGroups()
+            model.fetchAgentModelOptions()
         }
     }
 }
@@ -1542,6 +1543,8 @@ private struct LandingInputComposer: View {
                     .transition(.opacity)
                 }
 
+                AgentModelMenu(model: model)
+
                 // Send / Stop
                 // • Has text → always send (even mid-run; server queues it)
                 // • No text + running → stop button
@@ -1625,6 +1628,101 @@ private struct LandingInputComposer: View {
     private var sendButtonShadowColor: Color {
         if isStopState { return Color.red.opacity(0.35) }
         return NordTheme.accent(colorScheme).opacity(0.35)
+    }
+}
+
+// MARK: - Agent Model Menu
+
+private struct AgentModelMenu: View {
+    @ObservedObject var model: ChatModel
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var showsCustomModelPopover = false
+    @State private var customModelInput = ""
+
+    private var menuOptions: [APIClient.AgentModelOptionDTO] {
+        var options = model.activeAgentModelOptions
+        if !model.activeAgentModel.isEmpty,
+           !options.contains(where: { $0.id == model.activeAgentModel }) {
+            options.insert(
+                APIClient.AgentModelOptionDTO(
+                    id: model.activeAgentModel,
+                    label: "Custom: \(model.activeAgentModel)"
+                ),
+                at: 0
+            )
+        }
+        return options
+    }
+
+    var body: some View {
+        if !menuOptions.isEmpty {
+            Menu {
+                ForEach(menuOptions) { option in
+                    Button {
+                        model.setAgentModel(option.id)
+                    } label: {
+                        if option.id == model.activeAgentModel {
+                            Label(option.label, systemImage: "checkmark")
+                        } else {
+                            Text(option.label)
+                        }
+                    }
+                }
+                Divider()
+                Button("Custom model…") {
+                    customModelInput = model.activeAgentModel
+                    showsCustomModelPopover = true
+                }
+            } label: {
+                ComposerPillLabel(
+                    icon: model.isUpdatingAgentModel ? "hourglass" : "cpu",
+                    title: model.activeAgentModelLabel,
+                    isActive: true,
+                    activeColor: NordTheme.accentPurple(colorScheme),
+                    colorScheme: colorScheme
+                )
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .disabled(model.isRunning || model.isUpdatingAgentModel)
+            .help(model.isRunning ? "Model is locked while a turn is running" : "Choose agent model")
+            .popover(isPresented: $showsCustomModelPopover) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Custom model")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(NordTheme.primaryText(colorScheme))
+
+                    TextField("provider-model-id", text: $customModelInput)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 280)
+
+                    Text("Use the exact model ID for \(model.activeAIProvider).")
+                        .font(.system(size: 11))
+                        .foregroundColor(NordTheme.secondaryText(colorScheme))
+
+                    HStack {
+                        Button("Cancel") {
+                            showsCustomModelPopover = false
+                        }
+                        .buttonStyle(.bordered)
+
+                        Spacer()
+
+                        Button("Apply") {
+                            let trimmed = customModelInput.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if !trimmed.isEmpty {
+                                showsCustomModelPopover = false
+                                model.setAgentModel(trimmed)
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(NordTheme.accent(colorScheme))
+                        .disabled(customModelInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                }
+                .padding(16)
+            }
+        }
     }
 }
 
@@ -1967,8 +2065,9 @@ struct UserBubbleView: View {
         if trimmed.contains("\n") { return true }
         if trimmed.contains("```") { return true }
         if trimmed.contains("`") { return true }
-        let structuralPrefixes = ["# ", "## ", "### ", "#### ", "##### ", "###### ", "- ", "* ", "> "]
+        let structuralPrefixes = ["# ", "## ", "### ", "#### ", "##### ", "###### ", "- ", "* ", "+ ", "• ", "> "]
         for prefix in structuralPrefixes where trimmed.hasPrefix(prefix) { return true }
+        if trimmed.range(of: #"^\d+[\.\)]\s+"#, options: .regularExpression) != nil { return true }
         if trimmed.contains("**") || trimmed.contains("__") { return true }
         // Inline links: [text](url)
         if trimmed.contains("](") { return true }
@@ -2217,14 +2316,9 @@ private struct ThinkingTimelineRow: View {
         }
     }
 
-    // First non-empty line of block text, capped at 120 chars
+    // Concise display summary for raw tool/script blocks.
     private var summary: String {
-        let raw = block.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !raw.isEmpty else { return "" }
-        let line = raw.components(separatedBy: "\n")
-            .first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) ?? ""
-        let s = line.trimmingCharacters(in: .whitespaces)
-        return s.isEmpty ? String(raw.prefix(120)) : s
+        AgentTimelineSummarizer.collapsedSummary(kind: block.kind, text: block.text)
     }
 
     var body: some View {
@@ -2334,14 +2428,12 @@ private struct ThinkingTimelineRow: View {
     private var expandedDetail: some View {
         let trimmed = block.text.trimmingCharacters(in: .whitespacesAndNewlines)
         switch block.kind {
-        case .shellCommand, .terminalOutput:
-            ScrollView(.horizontal, showsIndicators: false) {
-                Text(trimmed)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(NordTheme.primaryText(colorScheme).opacity(0.82))
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: true, vertical: true)
-            }
+        case .shellCommand, .terminalOutput, .webCall, .mcpCall:
+            ChatMarkdownView(
+                text: AgentTimelineSummarizer.expandedSummary(kind: block.kind, text: trimmed),
+                baseFontSize: 11.5
+            )
+            .opacity(0.88)
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -2504,35 +2596,36 @@ struct ChatMarkdownView: View, @MainActor Equatable {
 
     var body: some View {
         let parsed = ChatMarkdownCache.shared.blocks(for: text)
-        VStack(alignment: .leading, spacing: 9) {
+        VStack(alignment: .leading, spacing: 10) {
             ForEach(Array(parsed.enumerated()), id: \.offset) { _, block in
                 switch block {
                 case let .code(language, code):
-                    ChatCodeBlockView(language: language, code: code)
+                    ChatCodeBlockView(language: language, code: code, baseFontSize: baseFontSize)
                 case let .heading(level, content):
                     markdownText(content, size: headingSize(level), weight: .semibold)
-                        .padding(.top, level == 1 ? 4 : 2)
+                        .padding(.top, level == 1 ? 5 : 2)
+                        .padding(.bottom, level <= 2 ? 1 : 0)
                 case let .paragraph(content):
                     markdownText(content)
-                case let .unorderedList(items):
-                    listView(items: items, ordered: false)
-                case let .orderedList(items):
-                    listView(items: items, ordered: true)
+                case let .list(items):
+                    listView(items: items)
                 case let .quote(content):
                     HStack(alignment: .top, spacing: 9) {
                         RoundedRectangle(cornerRadius: 1)
                             .fill(NordTheme.accent(colorScheme).opacity(0.35))
                             .frame(width: 3)
-                        markdownText(content, size: baseFontSize - 1)
+                        ChatMarkdownView(text: content, baseFontSize: max(baseFontSize - 0.5, 10.5))
                             .foregroundColor(NordTheme.secondaryText(colorScheme))
+                            .padding(.vertical, 1)
                     }
+                    .padding(.vertical, 1)
                 case .divider:
                     Rectangle()
                         .fill(NordTheme.border(colorScheme))
                         .frame(height: 1)
-                        .padding(.vertical, 3)
+                        .padding(.vertical, 4)
                 case let .table(header, rows):
-                    MarkdownTableView(header: header, rows: rows)
+                    MarkdownTableView(header: header, rows: rows, baseFontSize: baseFontSize)
                 }
             }
         }
@@ -2549,26 +2642,48 @@ struct ChatMarkdownView: View, @MainActor Equatable {
         // which is non-trivial. Cache the result so repeated body
         // evaluations for the same prose (extremely common during streaming
         // — most historical paragraphs never change) reuse the same value.
-        let attributed = ChatMarkdownCache.shared.inlineAttributed(prose)
+        let resolvedSize = size ?? baseFontSize
+        let attributed = ChatMarkdownCache.shared.inlineAttributed(
+            prose,
+            baseFontSize: resolvedSize,
+            colorScheme: colorScheme
+        )
         Text(attributed)
-            .font(.system(size: size ?? baseFontSize, weight: weight))
+            .font(.system(size: resolvedSize, weight: weight))
             .foregroundColor(NordTheme.primaryText(colorScheme))
+            .tint(NordTheme.accentBlue(colorScheme))
+            .lineSpacing(2)
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func listView(items: [String], ordered: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
+    private func listView(items: [MarkdownListItem]) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
             ForEach(Array(items.enumerated()), id: \.offset) { index, item in
                 HStack(alignment: .top, spacing: 8) {
-                    Text(ordered ? "\(index + 1)." : "•")
-                        .font(.system(size: baseFontSize, weight: .medium))
-                        .foregroundColor(NordTheme.secondaryText(colorScheme))
-                        .frame(width: ordered ? 24 : 14, alignment: .trailing)
-                    markdownText(item)
+                    listMarker(item, fallbackIndex: index)
+                    markdownText(item.text)
                 }
+                .padding(.leading, CGFloat(item.level) * 18)
             }
+        }
+        .padding(.vertical, 1)
+    }
+
+    @ViewBuilder
+    private func listMarker(_ item: MarkdownListItem, fallbackIndex: Int) -> some View {
+        if let checked = item.checked {
+            Image(systemName: checked ? "checkmark.square.fill" : "square")
+                .font(.system(size: max(baseFontSize - 0.5, 10), weight: .medium))
+                .foregroundColor(checked ? NordTheme.accentGreen(colorScheme) : NordTheme.secondaryText(colorScheme))
+                .frame(width: 17, alignment: .trailing)
+                .padding(.top, 1)
+        } else {
+            Text(item.marker ?? "\(fallbackIndex + 1).")
+                .font(.system(size: baseFontSize, weight: .medium))
+                .foregroundColor(NordTheme.secondaryText(colorScheme))
+                .frame(width: item.markerWidth, alignment: .trailing)
         }
     }
 
@@ -2595,17 +2710,31 @@ struct ChatMarkdownView: View, @MainActor Equatable {
     fileprivate enum MarkdownBlock {
         case paragraph(String)
         case heading(Int, String)
-        case unorderedList([String])
-        case orderedList([String])
+        case list([MarkdownListItem])
         case quote(String)
         case code(String?, String)
         case divider
         case table([String], [[String]])
     }
 
+    fileprivate struct MarkdownListItem: Equatable {
+        let level: Int
+        let marker: String?
+        let checked: Bool?
+        let text: String
+
+        var markerWidth: CGFloat {
+            guard let marker else { return 17 }
+            return min(max(CGFloat(marker.count) * 7, 17), 36)
+        }
+    }
+
     fileprivate static func parseBlocks(from text: String) -> [MarkdownBlock] {
         var result: [MarkdownBlock] = []
-        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let normalizedText = text
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+        let lines = normalizedText.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         var i = 0
 
         while i < lines.count {
@@ -2617,16 +2746,16 @@ struct ChatMarkdownView: View, @MainActor Equatable {
                 continue
             }
 
-            if line.hasPrefix("```") {
-                let lang = String(line.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+            if let fence = parseFenceStart(trimmed) {
+                let lang = fence.info.trimmingCharacters(in: .whitespaces)
                 var codeLines: [String] = []
                 i += 1
-                while i < lines.count && !lines[i].hasPrefix("```") {
+                while i < lines.count && !isFenceEnd(lines[i].trimmingCharacters(in: .whitespaces), marker: fence.marker) {
                     codeLines.append(lines[i])
                     i += 1
                 }
                 result.append(.code(lang.isEmpty ? nil : lang, codeLines.joined(separator: "\n")))
-                i += 1
+                if i < lines.count { i += 1 }
                 continue
             }
 
@@ -2649,28 +2778,10 @@ struct ChatMarkdownView: View, @MainActor Equatable {
                 continue
             }
 
-            if isUnorderedListLine(trimmed) {
-                var items: [String] = []
-                while i < lines.count {
-                    let current = lines[i].trimmingCharacters(in: .whitespaces)
-                    guard isUnorderedListLine(current) else { break }
-                    items.append(String(current.dropFirst(2)).trimmingCharacters(in: .whitespaces))
-                    i += 1
-                }
-                result.append(.unorderedList(items))
-                continue
-            }
-
-            if let firstOrdered = orderedListText(trimmed) {
-                var items = [firstOrdered]
-                i += 1
-                while i < lines.count {
-                    let current = lines[i].trimmingCharacters(in: .whitespaces)
-                    guard let item = orderedListText(current) else { break }
-                    items.append(item)
-                    i += 1
-                }
-                result.append(.orderedList(items))
+            if parseListLine(line) != nil {
+                let list = parseList(startingAt: i, lines: lines)
+                result.append(.list(list.items))
+                i = list.nextIndex
                 continue
             }
 
@@ -2678,7 +2789,14 @@ struct ChatMarkdownView: View, @MainActor Equatable {
                 var quoteLines: [String] = []
                 while i < lines.count {
                     let current = lines[i].trimmingCharacters(in: .whitespaces)
-                    guard current.hasPrefix(">") else { break }
+                    guard current.hasPrefix(">") else {
+                        if current.isEmpty {
+                            quoteLines.append("")
+                            i += 1
+                            continue
+                        }
+                        break
+                    }
                     quoteLines.append(String(current.dropFirst()).trimmingCharacters(in: .whitespaces))
                     i += 1
                 }
@@ -2692,12 +2810,11 @@ struct ChatMarkdownView: View, @MainActor Equatable {
                 let current = lines[i]
                 let currentTrimmed = current.trimmingCharacters(in: .whitespaces)
                 if currentTrimmed.isEmpty ||
-                    current.hasPrefix("```") ||
+                    parseFenceStart(currentTrimmed) != nil ||
                     parseHeading(currentTrimmed) != nil ||
                     isDivider(currentTrimmed) ||
                     isTableStart(at: i, lines: lines) ||
-                    isUnorderedListLine(currentTrimmed) ||
-                    orderedListText(currentTrimmed) != nil ||
+                    parseListLine(current) != nil ||
                     currentTrimmed.hasPrefix(">")
                 {
                     break
@@ -2705,10 +2822,46 @@ struct ChatMarkdownView: View, @MainActor Equatable {
                 paragraphLines.append(current)
                 i += 1
             }
-            result.append(.paragraph(paragraphLines.joined(separator: "\n")))
+            result.append(.paragraph(paragraphText(from: paragraphLines)))
         }
 
         return result
+    }
+
+    fileprivate static func paragraphText(from lines: [String]) -> String {
+        var rendered = ""
+        for rawLine in lines {
+            let backslashBreak = rawLine.hasSuffix("\\")
+            let hardBreak = rawLine.hasSuffix("  ") || backslashBreak
+            var line = rawLine.trimmingCharacters(in: .whitespaces)
+            if backslashBreak, line.hasSuffix("\\") {
+                line.removeLast()
+            }
+            if rendered.isEmpty {
+                rendered = hardBreak ? line + "\n" : line
+            } else if rendered.hasSuffix("\n") {
+                rendered += hardBreak ? line + "\n" : line
+            } else {
+                rendered += hardBreak ? " " + line + "\n" : " " + line
+            }
+        }
+        return rendered.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    fileprivate static func parseFenceStart(_ line: String) -> (marker: String, info: String)? {
+        guard let first = line.first, first == "`" || first == "~" else { return nil }
+        let count = line.prefix { $0 == first }.count
+        guard count >= 3 else { return nil }
+        let marker = String(repeating: String(first), count: count)
+        let info = String(line.dropFirst(count))
+        return (marker, info)
+    }
+
+    fileprivate static func isFenceEnd(_ line: String, marker: String) -> Bool {
+        guard let first = marker.first, line.first == first else { return false }
+        let count = line.prefix { $0 == first }.count
+        guard count >= marker.count else { return false }
+        return line.dropFirst(count).trimmingCharacters(in: .whitespaces).isEmpty
     }
 
     fileprivate static func parseHeading(_ line: String) -> (level: Int, text: String)? {
@@ -2729,24 +2882,156 @@ struct ChatMarkdownView: View, @MainActor Equatable {
     }
 
     fileprivate static func isDivider(_ line: String) -> Bool {
-        line.count >= 3 && (
-            line.allSatisfy { $0 == "-" } ||
-            line.allSatisfy { $0 == "*" } ||
-            line.allSatisfy { $0 == "_" }
+        let compact = line.replacingOccurrences(of: " ", with: "")
+        return compact.count >= 3 && (
+            compact.allSatisfy { $0 == "-" } ||
+            compact.allSatisfy { $0 == "*" } ||
+            compact.allSatisfy { $0 == "_" }
         )
     }
 
-    fileprivate static func isUnorderedListLine(_ line: String) -> Bool {
-        line.hasPrefix("- ") || line.hasPrefix("* ") || line.hasPrefix("• ")
+    fileprivate static func parseList(
+        startingAt index: Int,
+        lines: [String]
+    ) -> (items: [MarkdownListItem], nextIndex: Int) {
+        struct Builder {
+            let indent: Int
+            let level: Int
+            let marker: String?
+            let checked: Bool?
+            var text: String
+        }
+
+        var items: [MarkdownListItem] = []
+        var current: Builder?
+        var i = index
+
+        func flushCurrent() {
+            guard let item = current else { return }
+            let rendered = paragraphText(from: item.text.components(separatedBy: "\n"))
+            items.append(MarkdownListItem(
+                level: item.level,
+                marker: item.marker,
+                checked: item.checked,
+                text: rendered
+            ))
+            current = nil
+        }
+
+        while i < lines.count {
+            let line = lines[i]
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+
+            if trimmed.isEmpty {
+                break
+            }
+
+            if let parsed = parseListLine(line) {
+                flushCurrent()
+                current = Builder(
+                    indent: parsed.indent,
+                    level: parsed.level,
+                    marker: parsed.marker,
+                    checked: parsed.checked,
+                    text: parsed.text
+                )
+                i += 1
+                continue
+            }
+
+            if let existing = current,
+               leadingWhitespaceColumn(line) > existing.indent,
+               parseFenceStart(trimmed) == nil,
+               parseHeading(trimmed) == nil,
+               !isDivider(trimmed),
+               !isTableStart(at: i, lines: lines),
+               !trimmed.hasPrefix(">")
+            {
+                var updated = existing
+                updated.text += "\n" + trimmed
+                current = updated
+                i += 1
+                continue
+            }
+
+            break
+        }
+
+        flushCurrent()
+        return (items, i)
     }
 
-    fileprivate static func orderedListText(_ line: String) -> String? {
-        guard let dotIndex = line.firstIndex(where: { $0 == "." || $0 == ")" }) else { return nil }
-        let prefix = line[..<dotIndex]
+    fileprivate static func parseListLine(
+        _ line: String
+    ) -> (indent: Int, level: Int, marker: String?, checked: Bool?, text: String)? {
+        let indent = leadingWhitespaceColumn(line)
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return nil }
+
+        let markerAndText: (marker: String?, body: String)?
+        if let first = trimmed.first,
+           Set<Character>(["-", "*", "+", "•"]).contains(first),
+           trimmed.dropFirst().first == " "
+        {
+            markerAndText = ("•", String(trimmed.dropFirst(2)))
+        } else if let ordered = orderedListMarkerAndText(trimmed) {
+            markerAndText = ordered
+        } else {
+            markerAndText = nil
+        }
+
+        guard let markerAndText else { return nil }
+        let task = taskStateAndText(markerAndText.body)
+        return (
+            indent,
+            min(indent / 2, 5),
+            markerAndText.marker,
+            task.checked,
+            task.text.trimmingCharacters(in: .whitespaces)
+        )
+    }
+
+    fileprivate static func orderedListMarkerAndText(_ line: String) -> (marker: String?, body: String)? {
+        guard let delimiterIndex = line.firstIndex(where: { $0 == "." || $0 == ")" }) else { return nil }
+        let prefix = line[..<delimiterIndex]
         guard !prefix.isEmpty, prefix.allSatisfy(\.isNumber) else { return nil }
-        let after = line.index(after: dotIndex)
+        let after = line.index(after: delimiterIndex)
         guard after < line.endIndex, line[after] == " " else { return nil }
-        return String(line[line.index(after: after)...]).trimmingCharacters(in: .whitespaces)
+        let marker = String(prefix) + String(line[delimiterIndex])
+        let body = String(line[line.index(after: after)...])
+        return (marker, body)
+    }
+
+    fileprivate static func taskStateAndText(_ raw: String) -> (checked: Bool?, text: String) {
+        let trimmed = raw.trimmingCharacters(in: .whitespaces)
+        let lower = trimmed.lowercased()
+        if lower.hasPrefix("[x] ") {
+            return (true, String(trimmed.dropFirst(4)))
+        }
+        if lower == "[x]" {
+            return (true, "")
+        }
+        if lower.hasPrefix("[ ] ") {
+            return (false, String(trimmed.dropFirst(4)))
+        }
+        if lower == "[ ]" {
+            return (false, "")
+        }
+        return (nil, raw)
+    }
+
+    fileprivate static func leadingWhitespaceColumn(_ line: String) -> Int {
+        var count = 0
+        for character in line {
+            if character == " " {
+                count += 1
+            } else if character == "\t" {
+                count += 4
+            } else {
+                break
+            }
+        }
+        return count
     }
 
     fileprivate static func isTableStart(at index: Int, lines: [String]) -> Bool {
@@ -2787,8 +3072,47 @@ struct ChatMarkdownView: View, @MainActor Equatable {
         var trimmed = line.trimmingCharacters(in: .whitespaces)
         if trimmed.hasPrefix("|") { trimmed.removeFirst() }
         if trimmed.hasSuffix("|") { trimmed.removeLast() }
-        return trimmed.split(separator: "|", omittingEmptySubsequences: false)
-            .map { String($0).trimmingCharacters(in: .whitespaces) }
+        var cells: [String] = []
+        var current = ""
+        var isEscaped = false
+        var inCodeSpan = false
+        var index = trimmed.startIndex
+
+        while index < trimmed.endIndex {
+            let character = trimmed[index]
+            if isEscaped {
+                current.append(character)
+                isEscaped = false
+                index = trimmed.index(after: index)
+                continue
+            }
+
+            if character == "\\" {
+                isEscaped = true
+                index = trimmed.index(after: index)
+                continue
+            }
+
+            if character == "`" {
+                inCodeSpan.toggle()
+                while index < trimmed.endIndex, trimmed[index] == "`" {
+                    current.append(trimmed[index])
+                    index = trimmed.index(after: index)
+                }
+                continue
+            }
+
+            if character == "|", !inCodeSpan {
+                cells.append(current.trimmingCharacters(in: .whitespaces))
+                current = ""
+            } else {
+                current.append(character)
+            }
+            index = trimmed.index(after: index)
+        }
+
+        cells.append(current.trimmingCharacters(in: .whitespaces))
+        return cells
     }
 }
 
@@ -2797,6 +3121,7 @@ struct ChatMarkdownView: View, @MainActor Equatable {
 private struct MarkdownTableView: View {
     let header: [String]
     let rows: [[String]]
+    let baseFontSize: CGFloat
     @Environment(\.colorScheme) private var colorScheme
 
     /// Pre-computed column layout. Building the table used to walk every
@@ -2806,10 +3131,11 @@ private struct MarkdownTableView: View {
     /// Computing this once at init time keeps per-frame work constant.
     private let layout: TableLayout
 
-    init(header: [String], rows: [[String]]) {
+    init(header: [String], rows: [[String]], baseFontSize: CGFloat = 13) {
         self.header = header
         self.rows = rows
-        layout = TableLayout(header: header, rows: rows)
+        self.baseFontSize = baseFontSize
+        layout = TableLayout(header: header, rows: rows, baseFontSize: baseFontSize)
     }
 
     var body: some View {
@@ -2839,12 +3165,10 @@ private struct MarkdownTableView: View {
         let lastColumnIndex = layout.columnCount - 1
         return HStack(spacing: 0) {
             ForEach(0 ..< layout.columnCount, id: \.self) { index in
-                Text(index < cells.count ? cells[index] : "")
-                    .font(.system(size: 12, weight: isHeader ? .semibold : .regular))
+                tableCellText(index < cells.count ? cells[index] : "", isHeader: isHeader)
                     .foregroundColor(
                         isHeader ? NordTheme.primaryText(colorScheme) : NordTheme.secondaryText(colorScheme)
                     )
-                    .lineLimit(3)
                     .frame(width: layout.widths[index], alignment: .leading)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 7)
@@ -2872,6 +3196,20 @@ private struct MarkdownTableView: View {
         }
     }
 
+    private func tableCellText(_ raw: String, isHeader: Bool) -> some View {
+        let attributed = ChatMarkdownCache.shared.inlineAttributed(
+            raw,
+            baseFontSize: max(baseFontSize - 1, 10.5),
+            colorScheme: colorScheme
+        )
+        return Text(attributed)
+            .font(.system(size: max(baseFontSize - 1, 10.5), weight: isHeader ? .semibold : .regular))
+            .tint(NordTheme.accentBlue(colorScheme))
+            .lineSpacing(1.5)
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
     /// Immutable layout descriptor — column count plus pre-computed widths
     /// for each column. Computing widths once (instead of inside `body`)
     /// keeps `MarkdownTableView` cheap to redraw during window resize.
@@ -2879,7 +3217,7 @@ private struct MarkdownTableView: View {
         let columnCount: Int
         let widths: [CGFloat]
 
-        init(header: [String], rows: [[String]]) {
+        init(header: [String], rows: [[String]], baseFontSize: CGFloat) {
             let count = max(header.count, rows.map(\.count).max() ?? 0)
             columnCount = count
             guard count > 0 else {
@@ -2894,7 +3232,8 @@ private struct MarkdownTableView: View {
                 for row in allRows where index < row.count {
                     if row[index].count > longest { longest = row[index].count }
                 }
-                widths.append(min(max(CGFloat(longest) * 7 + 24, 96), 220))
+                let characterWidth = max(baseFontSize * 0.54, 6.2)
+                widths.append(min(max(CGFloat(longest) * characterWidth + 24, 96), 260))
             }
             self.widths = widths
         }
@@ -2906,6 +3245,7 @@ private struct MarkdownTableView: View {
 struct ChatCodeBlockView: View {
     let language: String?
     let code: String
+    var baseFontSize: CGFloat = 13
     @Environment(\.colorScheme) private var colorScheme
     @State private var copied = false
 
@@ -2913,7 +3253,7 @@ struct ChatCodeBlockView: View {
         VStack(alignment: .leading, spacing: 0) {
             // Top bar: language + copy button
             HStack {
-                Text(language ?? "code")
+                Text(languageLabel)
                     .font(OKFont.eyebrow)
                     .foregroundColor(NordTheme.secondaryText(colorScheme))
                 Spacer()
@@ -2929,6 +3269,7 @@ struct ChatCodeBlockView: View {
                     )
                 }
                 .buttonStyle(.plain)
+                .help(copied ? "Copied" : "Copy code")
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
@@ -2938,10 +3279,11 @@ struct ChatCodeBlockView: View {
                 .fill(NordTheme.border(colorScheme))
                 .frame(height: 1)
 
-            ScrollView(.horizontal, showsIndicators: false) {
+            ScrollView(.horizontal, showsIndicators: true) {
                 Text(code)
-                    .font(OKFont.monoBlock)
+                    .font(.system(size: max(baseFontSize - 0.25, 10.5), weight: .regular, design: .monospaced))
                     .foregroundColor(NordTheme.primaryText(colorScheme))
+                    .lineSpacing(2)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: true, vertical: true)
                     .padding(12)
@@ -2968,6 +3310,12 @@ struct ChatCodeBlockView: View {
                 .strokeBorder(NordTheme.border(colorScheme), lineWidth: 1)
         )
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var languageLabel: String {
+        let raw = language?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !raw.isEmpty else { return "code" }
+        return raw.lowercased()
     }
 
     private func doCopy() {
@@ -3218,10 +3566,9 @@ private extension String {
 // MARK: - Markdown Parse Cache
 
 /// Process-wide cache for parsed markdown. Stores both the block list for a
-/// full message body and the per-paragraph `AttributedString` result, keyed
-/// by the source string. `NSCache` evicts entries automatically under memory
-/// pressure, so this never holds onto stale strings beyond the system's
-/// comfort threshold.
+/// full message body and the per-paragraph `AttributedString` result. Inline
+/// strings are cached with their visual style key because links and code spans
+/// carry theme-specific colors.
 @MainActor
 private final class ChatMarkdownCache {
     static let shared = ChatMarkdownCache()
@@ -3258,8 +3605,13 @@ private final class ChatMarkdownCache {
         return parsed
     }
 
-    func inlineAttributed(_ prose: String) -> AttributedString {
-        let key = prose as NSString
+    func inlineAttributed(
+        _ prose: String,
+        baseFontSize: CGFloat,
+        colorScheme: ColorScheme
+    ) -> AttributedString {
+        let styleKey = "\(colorScheme == .dark ? "dark" : "light")|\(Int((baseFontSize * 10).rounded()))|"
+        let key = (styleKey + prose) as NSString
         if let hit = attrCache.object(forKey: key) {
             return hit.value
         }
@@ -3268,9 +3620,29 @@ private final class ChatMarkdownCache {
             interpretedSyntax: .inlineOnlyPreservingWhitespace,
             failurePolicy: .returnPartiallyParsedIfPossible
         )
-        let attributed = (try? AttributedString(markdown: prose, options: opts)) ?? AttributedString(prose)
+        var attributed = (try? AttributedString(markdown: prose, options: opts)) ?? AttributedString(prose)
+        let codeFill = NordTheme.badgeFill(colorScheme)
+        let codeText = NordTheme.primaryText(colorScheme)
+        let linkColor = NordTheme.accentBlue(colorScheme)
+
+        for run in attributed.runs {
+            if let intent = run.inlinePresentationIntent, intent.contains(.code) {
+                attributed[run.range].font = .system(
+                    size: max(baseFontSize - 0.25, 10.5),
+                    weight: .regular,
+                    design: .monospaced
+                )
+                attributed[run.range].foregroundColor = codeText
+                attributed[run.range].backgroundColor = codeFill
+            }
+
+            if run.link != nil {
+                attributed[run.range].foregroundColor = linkColor
+                attributed[run.range].underlineStyle = .single
+            }
+        }
+
         attrCache.setObject(AttrBox(attributed), forKey: key)
         return attributed
     }
 }
-

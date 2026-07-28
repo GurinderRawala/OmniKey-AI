@@ -18,6 +18,9 @@ export interface AgentSessionAttributes {
   groupDescription?: string | null;
   groupDescriptionUpdatedAt?: Date | null;
   sessionSummary?: string | null;
+  sessionMemory?: string | null;
+  sessionMemoryHistoryLength: number;
+  sessionMemoryUpdatedAt?: Date | null;
   // True when the user explicitly chose this session's group at the start of
   // the session. Locked sessions are never (re)classified and are never moved
   // between groups by the grouping cron — we only ever attach them to the
@@ -51,6 +54,9 @@ interface AgentSessionCreationAttributes extends Optional<
   | 'groupDescription'
   | 'groupDescriptionUpdatedAt'
   | 'sessionSummary'
+  | 'sessionMemory'
+  | 'sessionMemoryHistoryLength'
+  | 'sessionMemoryUpdatedAt'
   | 'groupLocked'
   | 'taskInstructionId'
   | 'taskInstructionHeading'
@@ -77,6 +83,9 @@ export class AgentSession
   public groupDescription?: string | null;
   public groupDescriptionUpdatedAt?: Date | null;
   public sessionSummary?: string | null;
+  public sessionMemory?: string | null;
+  public sessionMemoryHistoryLength!: number;
+  public sessionMemoryUpdatedAt?: Date | null;
   public groupLocked?: boolean;
   public taskInstructionId?: string | null;
   public taskInstructionHeading?: string | null;
@@ -167,6 +176,22 @@ AgentSession.init(
       type: DataTypes.TEXT,
       allowNull: true,
       field: 'session_summary',
+    },
+    sessionMemory: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      field: 'session_memory',
+    },
+    sessionMemoryHistoryLength: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 0,
+      field: 'session_memory_history_length',
+    },
+    sessionMemoryUpdatedAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: 'session_memory_updated_at',
     },
     groupLocked: {
       type: DataTypes.BOOLEAN,

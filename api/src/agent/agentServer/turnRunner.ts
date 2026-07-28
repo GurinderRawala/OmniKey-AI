@@ -5,8 +5,11 @@ import { AgentSession } from '../../models/agentSession';
 import { Subscription } from '../../models/subscription';
 import type { AITool, AICompletionResult } from '../../ai-client';
 import { recordTokenUsage } from '../../usageRecorder';
+import { getAgentSettings, selectedAgentModelForProvider } from '../../agentSettingsStore';
+import { getAgentPrompt } from '../agentPrompts';
 import { buildProjectContext, updateSessionGroup } from '../sessionGrouping';
 import { getMcpToolsForSubscription } from '../mcpRuntime';
+import { getPromptMcpsForSubscription } from '../mcpPromptCache';
 import {
   buildAvailableTools,
   createUserContent,
@@ -19,7 +22,6 @@ import {
 import type { AgentMessage, AgentSendFn } from '../types';
 import type { AgentTurnOptions } from './serverTypes';
 import {
-  AI_MODEL,
   completeWithContextRecovery,
   OUTPUT_LENGTH_FAILURE_MESSAGE,
   recoverOutputLengthResult,
@@ -53,13 +55,37 @@ async function runAgentTurnInternal(
 
   // Count this call as one agent iteration.
   session.turns += 1;
+  const agentSettings = await getAgentSettings();
+  const agentModel = selectedAgentModelForProvider(agentSettings, config.aiProvider);
+  session.activeModel = agentModel;
 
   log.info('Starting agent turn', {
     sessionId,
     subscriptionId: subscription.id,
     turn: session.turns,
     contextExists,
+    model: agentModel,
   });
+
+  if (!clientMessage.is_web_call) {
+    try {
+      const installedMcps = await getPromptMcpsForSubscription(subscription.id, log);
+      const systemPrompt = getAgentPrompt(
+        clientMessage.platform,
+        hasStoredPrompt,
+        installedMcps,
+        agentSettings,
+      );
+      const systemIndex = session.history.findIndex((message) => message.role === 'system');
+      if (systemIndex >= 0) {
+        session.history[systemIndex] = { ...session.history[systemIndex], content: systemPrompt };
+      } else {
+        session.history.unshift({ role: 'system', content: systemPrompt });
+      }
+    } catch (err) {
+      log.warn('Failed to refresh agent system prompt with latest settings', { error: err });
+    }
+  }
 
   // Append the client message as user content, marking terminal
   // output and errors in the text so the agent can reason about them.
@@ -135,6 +161,7 @@ async function runAgentTurnInternal(
             `</user_input>`,
           ].join('\n'),
     });
+    session.lastModelPromptTokens = undefined;
 
     // Use the first real user message (turn 1) as the session title.
     if (session.turns === 1 && !isAssistance) {
@@ -154,9 +181,9 @@ async function runAgentTurnInternal(
   const mcpBundle = await getMcpToolsForSubscription(subscription.id, log);
   // All providers receive shell_script as a native function tool.
   const shellTool =
-    config.terminalAccess === 'limited' ? SHELL_SCRIPT_TOOL_LIMITED : SHELL_SCRIPT_TOOL;
+    agentSettings.terminalAccess === 'limited' ? SHELL_SCRIPT_TOOL_LIMITED : SHELL_SCRIPT_TOOL;
   const shellTools: AITool[] = [shellTool];
-  const tools = buildAvailableTools([
+  const tools = buildAvailableTools(agentSettings, [
     ...shellTools,
     ...mcpBundle.aiTools,
     ...(options?.extraTools ?? []),
@@ -165,6 +192,7 @@ async function runAgentTurnInternal(
   const recordUsage = async (result: AICompletionResult) => {
     const usage = result.usage;
     if (!usage) return;
+    session.lastModelPromptTokens = usage.prompt_tokens;
 
     // Update the cumulative per-session token counters in the DB. The
     // "context remaining" signal is refreshed from stored history in
@@ -196,7 +224,7 @@ async function runAgentTurnInternal(
     log.debug('Calling AI provider for agent turn', {
       sessionId,
       provider: config.aiProvider,
-      model: AI_MODEL,
+      model: agentModel,
       turn: session.turns,
       historyLength: session.history.length,
     });
@@ -204,11 +232,13 @@ async function runAgentTurnInternal(
     let result = await completeWithContextRecovery(
       session,
       sessionId,
+      agentModel,
       {
         tools: tools?.length ? tools : undefined,
         temperature: 0.2,
       },
       log,
+      recordUsage,
     );
 
     await recordUsage(result);
@@ -217,6 +247,7 @@ async function runAgentTurnInternal(
       result,
       session,
       sessionId,
+      agentModel,
       tools,
       log,
       recordUsage,
@@ -255,6 +286,7 @@ async function runAgentTurnInternal(
         result,
         session,
         sessionId,
+        agentModel,
         send,
         log,
         tools,
@@ -269,6 +301,7 @@ async function runAgentTurnInternal(
           toolLoopResult,
           session,
           sessionId,
+          agentModel,
           tools,
           log,
           recordUsage,
@@ -291,6 +324,7 @@ async function runAgentTurnInternal(
             recoveredToolLoopResult,
             session,
             sessionId,
+            agentModel,
             send,
             log,
             tools,

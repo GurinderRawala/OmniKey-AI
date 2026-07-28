@@ -3,17 +3,18 @@ import { config } from '../../config';
 import { logger } from '../../logger';
 import {
   aiClient,
+  AIMessage,
   AITool,
   AICompletionResult,
   CompletionOptions,
   estimateHistoryTokens,
-  getDefaultModel,
   getInputTokenBudget,
 } from '../../ai-client';
 import { isContextLengthError, pruneHistoryForContextLimit, pushToSessionHistory } from '../utils';
 import { isInjectedUserPrompt } from '../injectedUserPrompts';
 import type { SessionState } from '../types';
 import { persistSessionToDB } from './sessionStore';
+import { buildCompactedHistoryForRequest, ensureSessionMemory } from './sessionMemory';
 
 // Upper bound on prune-and-retry cycles per completion. Each cycle removes one
 // unit (or compacts one message), so 12 is plenty to claw back from an overflow
@@ -23,8 +24,6 @@ const MAX_OUTPUT_LENGTH_RECOVERY_ATTEMPTS = 3;
 
 export const OUTPUT_LENGTH_FAILURE_MESSAGE =
   'The agent hit the output limit repeatedly while trying to recover. The work so far has been saved, and your next message can continue from that checkpoint.';
-
-export const AI_MODEL = getDefaultModel(config.aiProvider, 'smart');
 
 function createOutputLengthRecoveryDirective(attempt: number): string {
   return [
@@ -55,42 +54,98 @@ const PROACTIVE_TRIM_RATIO = 0.9;
  * an over-window turn. Reactive recovery remains the backstop for the rare case
  * where the real token count still exceeds our estimate.
  */
-function trimHistoryToBudget(session: SessionState, sessionId: string, log: Logger): void {
-  const budget = Math.floor(getInputTokenBudget(config.aiProvider) * PROACTIVE_TRIM_RATIO);
-  if (budget <= 0) return;
+function trimHistoryToBudget(
+  history: AIMessage[],
+  sessionId: string,
+  model: string,
+  log: Logger,
+): AIMessage[] {
+  const budget = Math.floor(getInputTokenBudget(config.aiProvider, model) * PROACTIVE_TRIM_RATIO);
+  if (budget <= 0) return history;
 
+  const scratchSession = { subscription: {} as any, history, turns: 0 };
   let guard = 0;
-  while (estimateHistoryTokens(session.history) > budget && guard < 200) {
+  while (estimateHistoryTokens(scratchSession.history) > budget && guard < 200) {
     guard++;
-    if (!pruneHistoryForContextLimit(session, log)) break;
+    if (!pruneHistoryForContextLimit(scratchSession, log)) break;
   }
 
   if (guard > 0) {
     log.info('Proactively trimmed history to fit context budget before sending', {
       sessionId,
       steps: guard,
-      estimatedTokens: estimateHistoryTokens(session.history),
+      estimatedTokens: estimateHistoryTokens(scratchSession.history),
       budget,
     });
   }
+
+  return scratchSession.history;
+}
+
+function cacheableOptions(
+  session: SessionState,
+  model: string,
+  options: CompletionOptions,
+): CompletionOptions {
+  const keyBase = `${config.aiProvider}:${model}:${session.subscription?.id ?? 'unknown'}`;
+  const promptCacheRetention =
+    config.aiProvider === 'openai' && openAISupportsExtendedPromptCache(model)
+      ? '24h'
+      : undefined;
+  return {
+    ...options,
+    enablePromptCache: true,
+    promptCacheKey:
+      options.promptCacheKey ??
+      `omnikey-agent-${Buffer.from(keyBase).toString('base64url').slice(0, 48)}`,
+    ...(options.promptCacheRetention || !promptCacheRetention ? {} : { promptCacheRetention }),
+  };
+}
+
+function openAISupportsExtendedPromptCache(model: string): boolean {
+  const m = model.toLowerCase();
+  return (
+    /^gpt-5\.6/.test(m) ||
+    /^gpt-5\.5/.test(m) ||
+    /^gpt-5\.4/.test(m) ||
+    /^gpt-5\.2/.test(m) ||
+    /^gpt-5\.1/.test(m) ||
+    /^gpt-5($|-)/.test(m) ||
+    /^gpt-4\.1/.test(m)
+  );
 }
 
 export async function completeWithContextRecovery(
   session: SessionState,
   sessionId: string,
+  model: string,
   options: CompletionOptions,
   log: Logger,
+  onUsage?: (result: AICompletionResult) => Promise<void>,
 ): Promise<AICompletionResult> {
-  trimHistoryToBudget(session, sessionId, log);
+  await ensureSessionMemory(session, sessionId, log, onUsage);
+  let requestHistory = trimHistoryToBudget(
+    buildCompactedHistoryForRequest(session),
+    sessionId,
+    model,
+    log,
+  );
+  const requestOptions = cacheableOptions(session, model, options);
 
   let attempt = 0;
   for (;;) {
     try {
-      return await aiClient.complete(AI_MODEL, session.history, options);
+      return await aiClient.complete(model, requestHistory, requestOptions);
     } catch (err) {
       if (!isContextLengthError(err) || attempt >= MAX_CONTEXT_RECOVERY_ATTEMPTS) throw err;
       attempt++;
-      const pruned = pruneHistoryForContextLimit(session, log);
+      const scratchSession = {
+        subscription: session.subscription,
+        history: requestHistory,
+        turns: session.turns,
+      };
+      const pruned = pruneHistoryForContextLimit(scratchSession, log);
+      requestHistory = scratchSession.history;
       log.warn('Context-length error from provider; pruned history and retrying', {
         sessionId,
         attempt,
@@ -108,6 +163,7 @@ export async function recoverOutputLengthResult(
   result: AICompletionResult,
   session: SessionState,
   sessionId: string,
+  model: string,
   tools: AITool[],
   log: Logger,
   onUsage: (result: AICompletionResult) => Promise<void>,
@@ -160,11 +216,13 @@ export async function recoverOutputLengthResult(
     current = await completeWithContextRecovery(
       session,
       sessionId,
+      model,
       {
         tools: tools?.length ? tools : undefined,
         temperature: 0.2,
       },
       log,
+      onUsage,
     );
     await onUsage(current);
   }

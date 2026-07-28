@@ -218,7 +218,14 @@ describe('AnthropicAdapter temperature handling', () => {
     expect(body).toHaveProperty('temperature', 0.5);
   });
 
-  it.each(['claude-opus-4-7', 'claude-opus-4-7-20260101'])(
+  it.each([
+    'claude-opus-4-7',
+    'claude-opus-4-7-20260101',
+    'claude-opus-5',
+    'claude-fable-5',
+    'claude-sonnet-5',
+    'claude-sonnet-4-6',
+  ])(
     'complete: omits temperature for unsupported model %s',
     async (model) => {
       mockCompleteResponse();
@@ -237,10 +244,10 @@ describe('AnthropicAdapter temperature handling', () => {
     expect(body).toHaveProperty('temperature', 0.6);
   });
 
-  it('streamComplete: omits temperature for claude-opus-4-7', async () => {
+  it('streamComplete: omits temperature for claude-opus-5', async () => {
     mockStreamResponse();
     const client = new AIClient('anthropic', 'sk-anthropic-test');
-    await client.streamComplete('claude-opus-4-7', messages, { temperature: 0.6 }, () => {});
+    await client.streamComplete('claude-opus-5', messages, { temperature: 0.6 }, () => {});
     const body = mocks.anthropicStream.mock.calls[0][0];
     expect(body).not.toHaveProperty('temperature');
   });
