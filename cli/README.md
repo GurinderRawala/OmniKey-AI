@@ -262,6 +262,8 @@ The `omnikey telegram` command group runs a Telegram bot as a persistent backgro
 
 For setup instructions (creating a bot, finding your chat ID, and configuring credentials) see the [Telegram README](../telegram/README.md).
 
+Inside Telegram, use `/cmd` to start or resume an agent task, `/model` to pick the active provider's agent model, `/task` to check progress or fetch the last result, and `/stop` to abort the running session. The `/cmd` wizard also includes a model-selection step before collecting the prompt.
+
 ### `omnikey telegram start`
 
 Installs and starts the daemon. If `TELEGRAM_BOT_TOKEN` or `TELEGRAM_CHAT_ID` are not yet saved, the CLI prompts for them, validates the token against the Telegram API, and saves them to `~/.omnikey/config.json` before installing the service. On macOS the bot runs as a **launchd agent**; on Windows as an **NSSM service**. Both auto-restart on crash and start automatically on login.

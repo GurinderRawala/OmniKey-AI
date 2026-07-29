@@ -619,6 +619,7 @@
               <strong>Telegram</strong> from your phone or any device. Run the daemon and the
               Telegram client on your machine, leave it running, and drive entire agent sessions
               from Telegram. Use <code>/cmd</code> to start or resume a task via a guided wizard,
+              <code>/model</code> to choose the active provider&rsquo;s agent model,
               <code>/task</code> to check progress or fetch the last result, and <code>/stop</code>
               to abort a running session. The bot runs as a persistent background daemon (launchd on
               macOS, NSSM on Windows) managed entirely through the CLI.
@@ -993,7 +994,14 @@ omnikey mcp update &lt;id&gt;</code></pre>
                 are accepted only from your configured chat ID.
               </p>
               <ul class="provider-list">
-                <li><code>/cmd</code> — guided wizard to start or resume an agent session</li>
+                <li>
+                  <code>/cmd</code> — guided wizard to start or resume an agent session, including
+                  model selection before the prompt
+                </li>
+                <li>
+                  <code>/model</code> — choose the active provider&rsquo;s agent model without
+                  starting a task
+                </li>
                 <li>
                   <code>/cmd --verbose</code> — stream shell output, web calls, and MCP events as
                   they happen

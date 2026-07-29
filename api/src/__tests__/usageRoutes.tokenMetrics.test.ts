@@ -16,6 +16,7 @@
 
 import express from 'express';
 import request from 'supertest';
+import { Op } from 'sequelize';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import winston from 'winston';
 
@@ -172,6 +173,47 @@ describe('GET /api/usage — token metrics', () => {
       expect.objectContaining({ id: 'sess_recent', totalTokens: 4_000, turns: 3 }),
       expect.objectContaining({ id: 'sess_old', totalTokens: 1_500, turns: 1 }),
     ]);
+  });
+
+  it('buckets daily usage with the requested local time zone', async () => {
+    mocks.usageFindAll.mockResolvedValue([usageRow(900, 100, '2026-07-29T00:30:00Z')]);
+
+    const res = await request(makeApp()).get(
+      '/api/usage?range=7d&to=2026-07-29T00:45:00Z&timeZone=America/Toronto',
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.range.timeZone).toBe('America/Toronto');
+    expect(res.body.daily).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: '2026-07-28',
+          promptTokens: 900,
+          completionTokens: 100,
+          totalTokens: 1_000,
+          requests: 1,
+        }),
+      ]),
+    );
+    expect(
+      res.body.daily.some(
+        (bucket: { key: string; totalTokens: number }) =>
+          bucket.key === '2026-07-29' && bucket.totalTokens > 0,
+      ),
+    ).toBe(false);
+  });
+
+  it('uses local month boundaries for range=month', async () => {
+    const res = await request(makeApp()).get(
+      '/api/usage?range=month&to=2026-07-29T00:30:00Z&timeZone=America/Toronto',
+    );
+
+    const where = mocks.usageFindAll.mock.calls[0][0].where as Record<string, any>;
+    const createdAt = where.createdAt as Record<symbol, Date>;
+    expect(createdAt[Op.gte].toISOString()).toBe('2026-07-01T04:00:00.000Z');
+    expect(createdAt[Op.lt].toISOString()).toBe('2026-07-29T00:30:00.000Z');
+    expect(res.body.range.days).toBe(28);
+    expect(res.body.range.timeZone).toBe('America/Toronto');
   });
 
   it('reports zeroed totals and no NaN average when there is no usage', async () => {
