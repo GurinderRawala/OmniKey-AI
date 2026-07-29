@@ -127,6 +127,22 @@
 
                 <Button
                     Command="{Binding SelectSectionCommand}"
+                    CommandParameter="{x:Static vm:SettingsSection.Usage}"
+                    Style="{StaticResource SidebarNavButton}"
+                    Tag="{Binding IsUsageSelected}">
+                    <StackPanel Orientation="Horizontal">
+                        <ui:SymbolIcon
+                            Margin="0,0,10,0"
+                            VerticalAlignment="Center"
+                            FontSize="16"
+                            Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                            Symbol="DataUsage24" />
+                        <TextBlock VerticalAlignment="Center" Text="Usage" />
+                    </StackPanel>
+                </Button>
+
+                <Button
+                    Command="{Binding SelectSectionCommand}"
                     CommandParameter="{x:Static vm:SettingsSection.Updates}"
                     Style="{StaticResource SidebarNavButton}"
                     Tag="{Binding IsUpdatesSelected}">
@@ -388,7 +404,18 @@
                             FontFamily="{StaticResource OK.FontFamily}"
                             FontSize="{StaticResource OK.Font.Body}"
                             Foreground="{StaticResource Nord.SecondaryTextBrush}"
-                            Text="Control what agent sessions are allowed to do. Save to apply — the daemon restarts to pick up changes."
+                            Text="Control what agent sessions are allowed to do. Save to apply."
+                            TextWrapping="Wrap" />
+                        <!--  Settings moved out of environment variables into the
+                              agent_settings table, so there is no daemon restart
+                              any more. Surface where they live so the change in
+                              behaviour is discoverable.  -->
+                        <TextBlock
+                            Margin="0,6,0,0"
+                            FontFamily="{StaticResource OK.FontFamily}"
+                            FontSize="{StaticResource OK.Font.CaptionSmall}"
+                            Foreground="{StaticResource Nord.AccentBlueBrush}"
+                            Text="{Binding SettingsSourceSummary}"
                             TextWrapping="Wrap" />
                     </StackPanel>
 
@@ -458,6 +485,47 @@
                         </Grid>
                     </Border>
 
+                    <!--  Usage recording  -->
+                    <Border
+                        Margin="0,0,0,14"
+                        Padding="18,16"
+                        Background="{StaticResource Nord.PanelBackgroundBrush}"
+                        CornerRadius="14">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                                <TextBlock
+                                    FontFamily="{StaticResource OK.FontFamily}"
+                                    FontSize="{StaticResource OK.Font.Headline}"
+                                    FontWeight="SemiBold"
+                                    Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                                    Text="Usage recording" />
+                                <TextBlock
+                                    Margin="0,4,0,0"
+                                    FontFamily="{StaticResource OK.FontFamily}"
+                                    FontSize="{StaticResource OK.Font.Caption}"
+                                    Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                                    Text="Persist per-call token counts so the Usage page can show consumption trends."
+                                    TextWrapping="Wrap" />
+                                <TextBlock
+                                    Margin="0,6,0,0"
+                                    FontFamily="{StaticResource OK.FontFamily}"
+                                    FontSize="{StaticResource OK.Font.CaptionSmall}"
+                                    Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                                    Text="Turning this off keeps existing rows but stops recording new ones."
+                                    TextWrapping="Wrap" />
+                            </StackPanel>
+                            <ui:ToggleSwitch
+                                Grid.Column="1"
+                                VerticalAlignment="Center"
+                                AutomationProperties.Name="Usage recording"
+                                IsChecked="{Binding PendingUsageRecordingEnabled, Mode=TwoWay}" />
+                        </Grid>
+                    </Border>
+
                     <!--  Browser access  -->
                     <Border
                         Margin="0,0,0,16"
@@ -506,6 +574,14 @@
                         Icon="{ui:SymbolIcon Symbol=Save24}" />
                 </StackPanel>
             </ScrollViewer>
+
+            <!--  =========== Usage (hosted page) ===========  -->
+            <Frame
+                x:Name="UsageFrame"
+                Grid.Row="0"
+                Background="Transparent"
+                NavigationUIVisibility="Hidden"
+                Visibility="{Binding IsUsageSelected, Converter={StaticResource BooleanToVisibilityConverter}}" />
 
             <!--  =========== Updates (hosted page) ===========  -->
             <Frame

@@ -22,6 +22,7 @@ namespace OmniKey.Windows.ViewModels
         private bool _suppressSelectionFeedback;
         private bool _suppressDefaultTemplateFeedback;
         private bool _suppressSelectedGroupFeedback;
+        private bool _suppressAgentModelFeedback;
 
         public ObservableCollection<AgentSessionInfo> Sessions { get; } = new();
         public ObservableCollection<ChatMessageRow> Messages { get; } = new();
@@ -39,6 +40,12 @@ namespace OmniKey.Windows.ViewModels
         /// fetches groups. Mirrors the task-template pattern next to it.</summary>
         public ObservableCollection<AgentGroupInfo> AvailableProjectGroups { get; } =
             new() { NoProjectSentinel };
+
+        /// <summary>Model options offered by the composer's model pill for the
+        /// currently activated provider. Populated from
+        /// <see cref="ChatModel.ActiveAgentModelOptions"/> (server-curated, with
+        /// a local fallback) so the picker mirrors the macOS AgentModelMenu.</summary>
+        public ObservableCollection<AgentModelOptionDto> AvailableAgentModels { get; } = new();
 
         // Seed with the sentinel so the ComboBox can resolve its SelectedValue
         // (which defaults to "" for "no template active") on the very first
@@ -140,6 +147,47 @@ namespace OmniKey.Windows.ViewModels
                 };
             }
         }
+
+        // ── Agent model pill ───────────────────────────────────────
+
+        /// <summary>Id-based two-way binding for the composer's model ComboBox.
+        /// Bound by id (not reference) for the same reason as the template and
+        /// project pickers: the model rebuilds its option DTOs on every refresh,
+        /// which would orphan a reference-based SelectedItem and fire a spurious
+        /// change back through the setter.</summary>
+        public string? SelectedAgentModelId
+        {
+            get => _model.ActiveAgentModel;
+            set
+            {
+                if (_suppressAgentModelFeedback) return;
+                if (string.IsNullOrWhiteSpace(value)) return;
+                if (string.Equals(_model.ActiveAgentModel, value, StringComparison.Ordinal)) return;
+                _model.SetAgentModel(value);
+            }
+        }
+
+        /// <summary>Friendly label shown on the pill when it is disabled (a turn
+        /// is running or a change is in flight).</summary>
+        public string ActiveAgentModelLabel => _model.ActiveAgentModelLabel;
+
+        /// <summary>The provider the model list belongs to — used in the pill's
+        /// tooltip so users know which vendor's ids are valid.</summary>
+        public string ActiveAIProvider => _model.ActiveAIProvider;
+
+        public bool IsUpdatingAgentModel => _model.IsUpdatingAgentModel;
+
+        /// <summary>The picker is hidden entirely when there is nothing to pick
+        /// (no provider activated yet / offline first load).</summary>
+        public bool HasAgentModelOptions => AvailableAgentModels.Count > 0;
+
+        /// <summary>Model is locked mid-turn so the request and the recorded
+        /// usage row can't disagree about which model served it.</summary>
+        public bool CanChangeAgentModel => !_model.IsRunning && !_model.IsUpdatingAgentModel;
+
+        public string AgentModelTooltip => _model.IsRunning
+            ? "Model is locked while a turn is running"
+            : $"Choose the {_model.ActiveAIProvider} model for the next turn";
 
         public string InputText
         {
@@ -281,6 +329,9 @@ namespace OmniKey.Windows.ViewModels
         {
             _model.RefreshSessions();
             _model.FetchDefaultTaskTemplate();
+            // Populate the composer's model pill. Mirrors macOS ChatView.onAppear
+            // calling fetchAgentModelOptions().
+            _model.FetchAgentModelOptions();
         }
 
         [RelayCommand]
@@ -418,6 +469,20 @@ namespace OmniKey.Windows.ViewModels
                 _suppressSelectedGroupFeedback = false;
             }
 
+            // Agent models — same suppression window: rebuilding the items
+            // transiently leaves the ComboBox with no match, and its auto-fired
+            // SelectionChanged would otherwise PATCH a model the user never picked.
+            _suppressAgentModelFeedback = true;
+            try
+            {
+                SyncAgentModels(_model.ActiveAgentModelOptions);
+                OnPropertyChanged(nameof(SelectedAgentModelId));
+            }
+            finally
+            {
+                _suppressAgentModelFeedback = false;
+            }
+
             // Scalar properties
             ActiveSessionTitle = _model.ActiveSessionTitle;
             IsRunning = _model.IsRunning;
@@ -440,6 +505,34 @@ namespace OmniKey.Windows.ViewModels
             OnPropertyChanged(nameof(IsSessionSetupLocked));
             OnPropertyChanged(nameof(DisplayedTaskInstructionHeading));
             OnPropertyChanged(nameof(TaskInstructionTooltip));
+            OnPropertyChanged(nameof(ActiveAgentModelLabel));
+            OnPropertyChanged(nameof(ActiveAIProvider));
+            OnPropertyChanged(nameof(IsUpdatingAgentModel));
+            OnPropertyChanged(nameof(HasAgentModelOptions));
+            OnPropertyChanged(nameof(CanChangeAgentModel));
+            OnPropertyChanged(nameof(AgentModelTooltip));
+        }
+
+        /// <summary>Diff the model-option list by id so a realized ComboBox keeps
+        /// its item containers (and its open dropdown) across refresh ticks.
+        /// Only rebuilds when the ids actually differ.</summary>
+        private void SyncAgentModels(IList<AgentModelOptionDto> source)
+        {
+            bool sameIds = AvailableAgentModels.Count == source.Count;
+            if (sameIds)
+            {
+                for (int i = 0; i < source.Count; i++)
+                {
+                    if (string.Equals(AvailableAgentModels[i].Id, source[i].Id, StringComparison.Ordinal))
+                        continue;
+                    sameIds = false;
+                    break;
+                }
+            }
+            if (sameIds) return;
+
+            AvailableAgentModels.Clear();
+            foreach (var option in source) AvailableAgentModels.Add(option);
         }
 
         private static void ReplaceCollection<T>(ObservableCollection<T> target, IList<T> source)

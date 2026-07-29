@@ -55,7 +55,11 @@ namespace OmniKey.Windows.Views.Pages
         {
             if (e.PropertyName != nameof(SettingsViewModel.SelectedSection)) return;
 
-            if (_vm.SelectedSection == SettingsSection.Updates && UpdatesFrame.Content is null)
+            // Lazy-navigate on first open so we don't fire UpdatesPage's version
+            // check or the Usage page's /api/usage fetch until they're asked for.
+            if (_vm.SelectedSection == SettingsSection.Usage && UsageFrame.Content is null)
+                UsageFrame.Navigate(new UsagePage());
+            else if (_vm.SelectedSection == SettingsSection.Updates && UpdatesFrame.Content is null)
                 UpdatesFrame.Navigate(new UpdatesPage());
             else if (_vm.SelectedSection == SettingsSection.Manual && ManualFrame.Content is null)
                 ManualFrame.Navigate(new ManualPage());
