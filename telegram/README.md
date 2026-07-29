@@ -101,9 +101,12 @@ Opens a guided wizard to start a new session or resume a recent one.
 **Wizard steps:**
 
 1. **Session** — pick a recent session to resume, or start a new one.
-2. **Instructions** — pick a saved task template to set as the active default, or skip.
-3. **Project** — pick a project for context, or skip.
-4. **Prompt** — send your prompt as the next plain-text message.
+2. **Model** — pick the model for the active provider, or keep the current model.
+3. **Instructions** — pick a saved task template to set as the active default, or skip.
+4. **Project** — pick a project for context, or skip.
+5. **Prompt** — send your prompt as the next plain-text message.
+
+When resuming an existing session, the wizard picks a model first and then goes straight to the prompt.
 
 Each step is presented as an inline keyboard. Tap **✕ Cancel** at any point to abort.
 
@@ -115,6 +118,16 @@ Add `--verbose` (or `-v`) to also receive shell commands, terminal output, web c
 
 ```
 /cmd --verbose
+```
+
+---
+
+### `/model` — Change the agent model
+
+Shows an inline picker for the currently active AI provider. Choosing a model updates that provider's agent model in the OmniKey daemon, so the next Telegram agent turn uses the selected model.
+
+```
+/model
 ```
 
 ---
@@ -150,4 +163,3 @@ Sends an abort signal to the running agent turn. The session stops cleanly and y
 | Commands are silently ignored | Message is coming from a chat ID that doesn't match `TELEGRAM_CHAT_ID` |
 | Daemon not running | Check `omnikey telegram status` and `omnikey telegram logs` |
 | Nothing listening on port | Confirm `omnikey daemon` is running; check `omnikey status` |
-

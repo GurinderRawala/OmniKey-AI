@@ -38,13 +38,11 @@ namespace OmniKey.Windows.ViewModels
         [ObservableProperty] private string text = "";
         [ObservableProperty] private bool isExpanded;
 
-        /// <summary>
-        /// First non-empty line of <see cref="Text"/>, trimmed to ~80
-        /// characters. Shown next to the label when the row is
-        /// collapsed so the user can scan the timeline without
-        /// expanding every step.
-        /// </summary>
-        public string Summary => BuildSummary(Text);
+        /// <summary>Concise preview shown when the row is collapsed.</summary>
+        public string Summary => AgentTimelineSummarizer.CollapsedSummary(Kind, Text);
+
+        /// <summary>Expanded detail stays summarized so raw tool payloads do not dominate the UI.</summary>
+        public string ExpandedSummary => AgentTimelineSummarizer.ExpandedSummary(Kind, Text);
 
         public AgentTimelineRow(TimelineKind kind, string text)
         {
@@ -63,7 +61,11 @@ namespace OmniKey.Windows.ViewModels
         [RelayCommand]
         private void Toggle() => IsExpanded = !IsExpanded;
 
-        partial void OnTextChanged(string value) => OnPropertyChanged(nameof(Summary));
+        partial void OnTextChanged(string value)
+        {
+            OnPropertyChanged(nameof(Summary));
+            OnPropertyChanged(nameof(ExpandedSummary));
+        }
 
         private static Brush ResolveBrush(string key, Brush fallback)
         {
@@ -71,18 +73,6 @@ namespace OmniKey.Windows.ViewModels
             return fallback;
         }
 
-        private static string BuildSummary(string text)
-        {
-            if (string.IsNullOrWhiteSpace(text)) return "";
-            // Skip leading blank lines, take the first content line.
-            foreach (var raw in text.Split('\n'))
-            {
-                var trimmed = raw.Trim();
-                if (trimmed.Length == 0) continue;
-                return trimmed.Length > 80 ? trimmed[..80] + "…" : trimmed;
-            }
-            return "";
-        }
     }
 
     /// <summary>

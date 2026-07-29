@@ -196,7 +196,8 @@ struct ManualView: View {
                             bulletRow(text: "Install and start the Telegram bot daemon:")
                             examplePill("omnikey telegram start")
                             bulletRow(text: "On first run the CLI asks for your bot token (from @BotFather) and chat ID, validates the token, and saves both to ~/.omnikey/config.json.")
-                            bulletRow(text: "/cmd — start or resume a task via a guided wizard.")
+                            bulletRow(text: "/cmd — start or resume a task via a guided wizard with model selection.")
+                            bulletRow(text: "/model — change the active provider's agent model.")
                             bulletRow(text: "/task — check progress or fetch the last result.")
                             bulletRow(text: "/stop — abort a running session.")
                         }

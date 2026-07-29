@@ -64,6 +64,8 @@ A quick reference of the core capabilities and the commands or shortcuts that dr
   omnikey telegram stop
   ```
 
+  In Telegram, use `/cmd` to start or resume an agent task, `/model` to change the active provider's agent model, `/task` to fetch progress or the last result, and `/stop` to abort a running session.
+
 - **Scheduled Jobs** — automate recurring or one-time prompt runs from the desktop app or the CLI (`omnikey schedule add` / `list` / `remove`).
 
 ## The @omniAgent

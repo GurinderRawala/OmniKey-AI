@@ -15,6 +15,7 @@ namespace OmniKey.Windows.ViewModels
     {
         Providers,
         AgentAccess,
+        Usage,
         Updates,
         Manual,
     }
@@ -150,11 +151,20 @@ namespace OmniKey.Windows.ViewModels
         [ObservableProperty] private string terminalAccess = "limited";
         [ObservableProperty] private bool webSearchEnabled;
         [ObservableProperty] private bool browserAccessEnabled;
+        [ObservableProperty] private bool usageRecordingEnabled;
         [ObservableProperty] private string browserAccessSummary = "Not loaded";
 
         [ObservableProperty] private string pendingTerminalAccess = "limited";
         [ObservableProperty] private bool pendingWebSearchEnabled;
         [ObservableProperty] private bool pendingBrowserAccessEnabled;
+        [ObservableProperty] private bool pendingUsageRecordingEnabled;
+
+        /// <summary>Where the daemon loaded these settings from. The backend
+        /// now serves them out of the <c>agent_settings</c> table instead of
+        /// environment variables, so edits apply on the next agent turn with no
+        /// restart. Shown as a footnote on the Agent Access pane.</summary>
+        [ObservableProperty] private string settingsSourceSummary =
+            "Settings are stored in the agent database and apply on the next turn.";
 
         // Status / busy --------------------------------------------------------
         [ObservableProperty] private bool isBusy;
@@ -194,13 +204,15 @@ namespace OmniKey.Windows.ViewModels
         public bool AgentAccessDirty =>
             PendingTerminalAccess != TerminalAccess
             || PendingWebSearchEnabled != WebSearchEnabled
-            || PendingBrowserAccessEnabled != BrowserAccessEnabled;
+            || PendingBrowserAccessEnabled != BrowserAccessEnabled
+            || PendingUsageRecordingEnabled != UsageRecordingEnabled;
 
         public bool CanSaveAgentAccess => !IsBusy && AgentAccessDirty;
 
         // ---- Sidebar selection helpers (bool bindings for sidebar buttons) ---
         public bool IsProvidersSelected => SelectedSection == SettingsSection.Providers;
         public bool IsAgentAccessSelected => SelectedSection == SettingsSection.AgentAccess;
+        public bool IsUsageSelected => SelectedSection == SettingsSection.Usage;
         public bool IsUpdatesSelected => SelectedSection == SettingsSection.Updates;
         public bool IsManualSelected => SelectedSection == SettingsSection.Manual;
 
@@ -223,6 +235,7 @@ namespace OmniKey.Windows.ViewModels
             ProvidersMode = ProvidersMode.List;
             OnPropertyChanged(nameof(IsProvidersSelected));
             OnPropertyChanged(nameof(IsAgentAccessSelected));
+            OnPropertyChanged(nameof(IsUsageSelected));
             OnPropertyChanged(nameof(IsUpdatesSelected));
             OnPropertyChanged(nameof(IsManualSelected));
             OnPropertyChanged(nameof(IsProvidersList));
@@ -267,9 +280,11 @@ namespace OmniKey.Windows.ViewModels
         partial void OnTerminalAccessChanged(string value) => RefreshAgentAccessDirty();
         partial void OnWebSearchEnabledChanged(bool value) => RefreshAgentAccessDirty();
         partial void OnBrowserAccessEnabledChanged(bool value) => RefreshAgentAccessDirty();
+        partial void OnUsageRecordingEnabledChanged(bool value) => RefreshAgentAccessDirty();
         partial void OnPendingTerminalAccessChanged(string value) => RefreshAgentAccessDirty();
         partial void OnPendingWebSearchEnabledChanged(bool value) => RefreshAgentAccessDirty();
         partial void OnPendingBrowserAccessEnabledChanged(bool value) => RefreshAgentAccessDirty();
+        partial void OnPendingUsageRecordingEnabledChanged(bool value) => RefreshAgentAccessDirty();
 
         private void RefreshAgentAccessDirty()
         {
@@ -321,12 +336,19 @@ namespace OmniKey.Windows.ViewModels
                 TerminalAccess = settings.TerminalAccess;
                 WebSearchEnabled = settings.WebSearchEnabled;
                 BrowserAccessEnabled = settings.BrowserAccessEnabled;
+                UsageRecordingEnabled = settings.UsageRecordingEnabled;
                 // Reset the pending values to whatever's persisted so the
                 // Save button only lights up after the user actually changes
                 // something.
                 PendingTerminalAccess = TerminalAccess;
                 PendingWebSearchEnabled = WebSearchEnabled;
                 PendingBrowserAccessEnabled = BrowserAccessEnabled;
+                PendingUsageRecordingEnabled = UsageRecordingEnabled;
+                // The backend reports "database" now that agent_settings backs
+                // these values; older daemons omit the field entirely.
+                SettingsSourceSummary = string.Equals(settings.Source, "database", StringComparison.OrdinalIgnoreCase)
+                    ? "Stored in the agent database — changes apply on the next agent turn, no restart needed."
+                    : "Stored by the agent daemon — update the daemon to get database-backed settings.";
                 BrowserAccessSummary = settings.BrowserAccessEnabled
                     ? $"Configured: {settings.BrowserDebugBrowserName ?? "browser"}" + (settings.BrowserDebugPort is int port ? $" • port {port}" : string.Empty)
                     : "Disabled";
@@ -393,11 +415,17 @@ namespace OmniKey.Windows.ViewModels
             {
                 string? termArg = PendingTerminalAccess != TerminalAccess ? PendingTerminalAccess : null;
                 bool? webArg = PendingWebSearchEnabled != WebSearchEnabled ? PendingWebSearchEnabled : (bool?)null;
+                bool? usageArg = PendingUsageRecordingEnabled != UsageRecordingEnabled
+                    ? PendingUsageRecordingEnabled
+                    : (bool?)null;
 
-                if (termArg is not null || webArg is not null)
+                if (termArg is not null || webArg is not null || usageArg is not null)
                 {
-                    var result = await _api.UpdateAppSettingsAsync(termArg, webArg);
-                    SetStatus(result.Message ?? "Agent access updated. Restart scheduled.", StatusKind.Positive);
+                    // Single PATCH covers all three: they all live in the
+                    // agent_settings row, and the agent re-reads them per turn,
+                    // so there's no restart to schedule any more.
+                    var result = await _api.UpdateAppSettingsAsync(termArg, webArg, usageArg);
+                    SetStatus(result.Message ?? "Agent access updated.", StatusKind.Positive);
                 }
 
                 bool launchingBrowserWizard = false;

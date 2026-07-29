@@ -43,6 +43,15 @@ type AgentSessionSummary = {
   lastActiveAt: Date;
 };
 
+type ZonedDateParts = {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  second: number;
+};
+
 function normalizeProvider(provider: string | null | undefined): string {
   return provider && provider.trim() ? provider.trim() : 'unknown';
 }
@@ -104,31 +113,140 @@ function addToBucket(bucket: UsageBucket, row: UsageRow): void {
   bucket.requests += 1;
 }
 
-function startOfDay(date: Date): Date {
-  const d = new Date(date);
-  d.setHours(0, 0, 0, 0);
-  return d;
-}
-
-function addDays(date: Date, days: number): Date {
-  const d = new Date(date);
-  d.setDate(d.getDate() + days);
-  return d;
-}
-
-function daysBetween(start: Date, end: Date): number {
-  const ms = Math.max(0, end.getTime() - start.getTime());
-  return Math.max(1, Math.ceil(ms / 86_400_000));
-}
-
 function parseDateValue(value: unknown): Date | null {
   if (typeof value !== 'string') return null;
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
-function dayKey(date: Date): string {
-  return date.toISOString().slice(0, 10);
+function parseTimeZone(query: express.Request['query']): string {
+  const fallback = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  const value = typeof query.timeZone === 'string' ? query.timeZone.trim() : '';
+  if (!value) return fallback;
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: value }).format(new Date());
+    return value;
+  } catch {
+    return fallback;
+  }
+}
+
+function zonedParts(date: Date, timeZone: string): ZonedDateParts {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date);
+
+  const get = (type: string): number => {
+    const value = parts.find((part) => part.type === type)?.value;
+    return value ? Number(value) : 0;
+  };
+
+  return {
+    year: get('year'),
+    month: get('month'),
+    day: get('day'),
+    hour: get('hour'),
+    minute: get('minute'),
+    second: get('second'),
+  };
+}
+
+function pad2(value: number): string {
+  return String(value).padStart(2, '0');
+}
+
+function localDayKeyFromParts(parts: Pick<ZonedDateParts, 'year' | 'month' | 'day'>): string {
+  return `${parts.year}-${pad2(parts.month)}-${pad2(parts.day)}`;
+}
+
+function dayKey(date: Date, timeZone: string): string {
+  return localDayKeyFromParts(zonedParts(date, timeZone));
+}
+
+function parseDayKey(key: string): Pick<ZonedDateParts, 'year' | 'month' | 'day'> {
+  const [year, month, day] = key.split('-').map(Number);
+  return { year, month, day };
+}
+
+function addCalendarDays(key: string, days: number): string {
+  const { year, month, day } = parseDayKey(key);
+  const date = new Date(Date.UTC(year, month - 1, day + days));
+  return localDayKeyFromParts({
+    year: date.getUTCFullYear(),
+    month: date.getUTCMonth() + 1,
+    day: date.getUTCDate(),
+  });
+}
+
+function calendarDaysBetween(startKey: string, endKey: string): number {
+  const start = parseDayKey(startKey);
+  const end = parseDayKey(endKey);
+  const startMs = Date.UTC(start.year, start.month - 1, start.day);
+  const endMs = Date.UTC(end.year, end.month - 1, end.day);
+  return Math.floor((endMs - startMs) / 86_400_000);
+}
+
+function zonedDateTimeToUtc(
+  parts: Pick<ZonedDateParts, 'year' | 'month' | 'day'> &
+    Partial<Pick<ZonedDateParts, 'hour' | 'minute' | 'second'>>,
+  timeZone: string,
+): Date {
+  const target = {
+    year: parts.year,
+    month: parts.month,
+    day: parts.day,
+    hour: parts.hour ?? 0,
+    minute: parts.minute ?? 0,
+    second: parts.second ?? 0,
+  };
+  const targetAsUtc = Date.UTC(
+    target.year,
+    target.month - 1,
+    target.day,
+    target.hour,
+    target.minute,
+    target.second,
+  );
+  let utcMs = targetAsUtc;
+
+  for (let i = 0; i < 3; i++) {
+    const actual = zonedParts(new Date(utcMs), timeZone);
+    const actualAsUtc = Date.UTC(
+      actual.year,
+      actual.month - 1,
+      actual.day,
+      actual.hour,
+      actual.minute,
+      actual.second,
+    );
+    const diff = actualAsUtc - targetAsUtc;
+    if (diff === 0) break;
+    utcMs -= diff;
+  }
+
+  return new Date(utcMs);
+}
+
+function addLocalDays(date: Date, days: number, timeZone: string): Date {
+  const parts = zonedParts(date, timeZone);
+  const shifted = parseDayKey(addCalendarDays(localDayKeyFromParts(parts), days));
+  return zonedDateTimeToUtc(
+    { ...shifted, hour: parts.hour, minute: parts.minute, second: parts.second },
+    timeZone,
+  );
+}
+
+function localDaySpan(from: Date, to: Date, timeZone: string): number {
+  const startKey = dayKey(from, timeZone);
+  const endKey = dayKey(to, timeZone);
+  return Math.max(1, calendarDaysBetween(startKey, endKey) + 1);
 }
 
 function aggregateBy(
@@ -146,16 +264,21 @@ function aggregateBy(
   return Array.from(map.values()).sort((a, b) => b.totalTokens - a.totalTokens);
 }
 
-function buildDaily(rows: UsageRow[], from: Date | null, to: Date): UsageBucket[] {
+function buildDaily(
+  rows: UsageRow[],
+  from: Date | null,
+  to: Date,
+  timeZone: string,
+): UsageBucket[] {
   const map = new Map<string, UsageBucket>();
   if (from) {
-    for (let d = startOfDay(from); d <= to; d = addDays(d, 1)) {
-      const key = dayKey(d);
+    const endKey = dayKey(to, timeZone);
+    for (let key = dayKey(from, timeZone); key <= endKey; key = addCalendarDays(key, 1)) {
       map.set(key, emptyBucket(key, key));
     }
   }
   for (const row of rows) {
-    const key = dayKey(row.createdAt);
+    const key = dayKey(row.createdAt, timeZone);
     const bucket = map.get(key) ?? emptyBucket(key, key);
     addToBucket(bucket, row);
     map.set(key, bucket);
@@ -191,7 +314,10 @@ function buildRecentSessions(
     }));
 }
 
-function parseRange(query: express.Request['query']): {
+function parseRange(
+  query: express.Request['query'],
+  timeZone: string,
+): {
   label: string;
   from: Date | null;
   to: Date;
@@ -203,7 +329,12 @@ function parseRange(query: express.Request['query']): {
   const range = typeof query.range === 'string' ? query.range : '30d';
 
   if (explicitFrom) {
-    return { label: 'Custom', from: explicitFrom, to, days: daysBetween(explicitFrom, to) };
+    return {
+      label: 'Custom',
+      from: explicitFrom,
+      to,
+      days: localDaySpan(explicitFrom, to, timeZone),
+    };
   }
 
   if (range === 'all') {
@@ -213,13 +344,14 @@ function parseRange(query: express.Request['query']): {
   }
 
   if (range === 'month') {
-    const from = new Date(to.getFullYear(), to.getMonth(), 1);
-    return { label: 'This month', from, to, days: daysBetween(from, to) };
+    const parts = zonedParts(to, timeZone);
+    const from = zonedDateTimeToUtc({ year: parts.year, month: parts.month, day: 1 }, timeZone);
+    return { label: 'This month', from, to, days: localDaySpan(from, to, timeZone) };
   }
 
   const match = range.match(/^(\d+)d$/);
   const days = match ? Math.max(1, Math.min(365, Number(match[1]))) : 30;
-  return { label: `Last ${days} days`, from: addDays(to, -days), to, days };
+  return { label: `Last ${days} days`, from: addLocalDays(to, -days, timeZone), to, days };
 }
 
 function parseProviderFilter(query: express.Request['query']): string | null {
@@ -257,9 +389,9 @@ function toUsageRows(rawRows: SubscriptionUsage[]): UsageRow[] {
  * length; "all time" falls back to the number of distinct days that actually
  * have recorded usage so a single old call does not flatten the average.
  */
-function countedDays(rows: UsageRow[], rangeDays: number): number {
+function countedDays(rows: UsageRow[], rangeDays: number, timeZone: string): number {
   if (rangeDays > 0) return rangeDays;
-  const distinctDays = new Set(rows.map((row) => dayKey(startOfDay(row.createdAt)))).size;
+  const distinctDays = new Set(rows.map((row) => dayKey(row.createdAt, timeZone))).size;
   return Math.max(1, distinctDays);
 }
 
@@ -268,7 +400,8 @@ export function createUsageRouter(): express.Router {
 
   router.get('/', authMiddleware, async (req, res) => {
     const { subscription, logger: log } = res.locals;
-    const range = parseRange(req.query);
+    const timeZone = parseTimeZone(req.query);
+    const range = parseRange(req.query, timeZone);
     const providerFilter = parseProviderFilter(req.query);
 
     try {
@@ -297,8 +430,8 @@ export function createUsageRouter(): express.Router {
 
       const rows = toUsageRows(rawRows);
       const totals = summarizeRows(rows);
-      const days = countedDays(rows, range.days);
-      const daily = buildDaily(rows, range.from, range.to);
+      const days = countedDays(rows, range.days, timeZone);
+      const daily = buildDaily(rows, range.from, range.to, timeZone);
 
       res.json({
         recordingEnabled: agentSettings.usageRecordingEnabled,
@@ -308,6 +441,7 @@ export function createUsageRouter(): express.Router {
           from: range.from?.toISOString() ?? null,
           to: range.to.toISOString(),
           days,
+          timeZone,
         },
         provider: {
           provider: providerFilter ?? 'all',

@@ -112,6 +112,104 @@ export async function listProjectGroups(logger: Logger): Promise<ProjectGroup[]>
   return resp.data?.groups ?? [];
 }
 
+export interface AgentModelOption {
+  readonly id: string;
+  readonly label: string;
+}
+
+export interface AIProviderListResponse {
+  readonly activeProvider: string;
+  readonly activeModel?: string | null;
+  readonly modelOptions?: AgentModelOption[];
+  readonly supportsCustomModel?: boolean;
+}
+
+export interface AIProviderMutationResponse {
+  readonly provider: string;
+  readonly model?: string | null;
+  readonly activeModel?: string | null;
+  readonly modelOptions?: AgentModelOption[];
+  readonly supportsCustomModel?: boolean;
+}
+
+const FALLBACK_AGENT_MODEL_OPTIONS: Record<string, AgentModelOption[]> = {
+  openai: [
+    { id: 'gpt-5.6', label: 'GPT 5.6' },
+    { id: 'gpt-5.5', label: 'GPT 5.5' },
+    { id: 'gpt-5.1', label: 'GPT 5.1' },
+    { id: 'gpt-4.1', label: 'GPT 4.1' },
+  ],
+  anthropic: [
+    { id: 'claude-opus-4-5', label: 'Claude Opus 4.5' },
+    { id: 'claude-opus-4-7', label: 'Claude Opus 4.7' },
+    { id: 'claude-opus-5', label: 'Claude Opus 5.0' },
+    { id: 'claude-sonnet-4-5', label: 'Claude Sonnet 4.5' },
+    { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
+    { id: 'claude-sonnet-5', label: 'Claude Sonnet 5.0' },
+    { id: 'claude-fable-5', label: 'Claude Fable 5.0' },
+  ],
+  gemini: [
+    { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
+    { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
+  ],
+  nemotron: [
+    {
+      id: 'nvidia/nemotron-3-ultra-550b-a55b',
+      label: 'nvidia/nemotron-3-ultra-550b-a55b',
+    },
+    {
+      id: 'nvidia/nemotron-3-super-120b-a12b',
+      label: 'nvidia/nemotron-3-super-120b-a12b',
+    },
+    {
+      id: 'nvidia/nemotron-3-nano-30b-a3b',
+      label: 'nvidia/nemotron-3-nano-30b-a3b',
+    },
+  ],
+};
+
+function fallbackModelOptions(provider: string): AgentModelOption[] {
+  return FALLBACK_AGENT_MODEL_OPTIONS[provider] ?? FALLBACK_AGENT_MODEL_OPTIONS.openai;
+}
+
+export async function fetchAIProviders(logger: Logger): Promise<AIProviderListResponse> {
+  const token = await fetchJwtToken(logger);
+  const url = `${omnikeyBaseUrl()}/api/providers`;
+  const resp = await axios.get<AIProviderListResponse>(url, {
+    timeout: 10_000,
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const activeProvider = resp.data?.activeProvider || 'openai';
+  const modelOptions =
+    resp.data?.modelOptions && resp.data.modelOptions.length > 0
+      ? resp.data.modelOptions
+      : fallbackModelOptions(activeProvider);
+  return {
+    ...resp.data,
+    activeProvider,
+    modelOptions,
+    activeModel: resp.data?.activeModel ?? modelOptions[0]?.id ?? null,
+  };
+}
+
+export async function updateProviderModel(
+  logger: Logger,
+  provider: string,
+  model: string,
+): Promise<AIProviderMutationResponse> {
+  const token = await fetchJwtToken(logger);
+  const url = `${omnikeyBaseUrl()}/api/providers/${encodeURIComponent(provider)}/model`;
+  const resp = await axios.patch<AIProviderMutationResponse>(
+    url,
+    { model },
+    {
+      timeout: 10_000,
+      headers: { Authorization: `Bearer ${token}` },
+    },
+  );
+  return resp.data;
+}
+
 // Wire-format mirrors omnikey-ai/src/agent/types.ts AgentMessage.
 interface AgentWireMessage {
   session_id: string;
@@ -171,6 +269,12 @@ function extractTagged(content: string, tag: string): string | null {
   return m?.[1]?.trim() || null;
 }
 
+function extractTaggedRaw(content: string, tag: string): string | null {
+  const re = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, 'i');
+  const m = content.match(re);
+  return m ? m[1] : null;
+}
+
 function stripTagged(content: string, tag: string): string {
   return content.replace(new RegExp(`<${tag}[^>]*>[\\s\\S]*?<\\/${tag}>`, 'gi'), '');
 }
@@ -184,6 +288,7 @@ function cleanReasoning(content: string): string {
 
 const SHELL_TIMEOUT_MS = 20 * 60 * 1000;
 const SHELL_OUTPUT_MAX = 64 * 1024;
+const AGENT_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 
 // Mirrors WINDOWS_SHELL_CANDIDATES in src/agent/mcpRuntime.ts
 const WINDOWS_SHELL_CANDIDATES = [
@@ -337,9 +442,26 @@ export async function runAgentTurn(logger: Logger, opts: RunAgentOptions): Promi
     });
 
     let settled = false;
+    let idleTimer: NodeJS.Timeout | null = null;
+
+    const resetIdleTimer = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        logger.warn('Agent WebSocket run timed out with no progress', {
+          sessionId,
+          timeoutMs: AGENT_IDLE_TIMEOUT_MS,
+        });
+        finish(new Error('Agent run timed out with no progress. Try again or send /task to inspect the latest session state.'));
+      }, AGENT_IDLE_TIMEOUT_MS);
+    };
+
     const finish = (err: Error | null, result?: RunAgentResult) => {
       if (settled) return;
       settled = true;
+      if (idleTimer) {
+        clearTimeout(idleTimer);
+        idleTimer = null;
+      }
       if (opts.signal && onAbort) {
         opts.signal.removeEventListener('abort', onAbort);
       }
@@ -370,6 +492,7 @@ export async function runAgentTurn(logger: Logger, opts: RunAgentOptions): Promi
 
     ws.on('open', () => {
       logger.info('Agent WebSocket open', { sessionId });
+      resetIdleTimer();
       send({
         session_id: sessionId,
         sender: 'client',
@@ -393,6 +516,7 @@ export async function runAgentTurn(logger: Logger, opts: RunAgentOptions): Promi
       }
 
       const content = msg.content || '';
+      resetIdleTimer();
 
       if (msg.is_error) {
         finish(new Error(content || 'Agent reported an error'));
@@ -419,10 +543,31 @@ export async function runAgentTurn(logger: Logger, opts: RunAgentOptions): Promi
         return;
       }
 
-      const shellScript = extractTagged(content, 'shell_script');
-      if (shellScript) {
+      const rawShellScript = extractTaggedRaw(content, 'shell_script');
+      if (rawShellScript !== null) {
+        const shellScript = rawShellScript.trim();
         const reasoning = cleanReasoning(stripTagged(content, 'shell_script'));
         if (reasoning) await opts.onBlock({ kind: 'reasoning', text: reasoning });
+
+        if (!shellScript) {
+          const message =
+            'COMMAND ERROR: The agent requested an empty shell_script. No command was executed. Please respond with a corrected non-empty shell_script or a <final_answer>.';
+          logger.warn('Agent requested empty shell_script; returning command error', { sessionId });
+          await opts.onBlock({
+            kind: 'terminalOutput',
+            text: `[terminal error]\n${message}`,
+          });
+          send({
+            session_id: sessionId,
+            sender: 'client',
+            content: message,
+            is_terminal_output: true,
+            is_error: true,
+            platform: PLATFORM,
+          });
+          return;
+        }
+
         await opts.onBlock({ kind: 'shellCommand', text: shellScript });
 
         try {

@@ -20,6 +20,15 @@ namespace OmniKey.Windows
         public bool IsDefault { get; set; }
     }
 
+    /// <summary>One selectable agent model for the active provider. Mirrors
+    /// the server's <c>AgentModelOption</c> (see api/src/agentSettingsStore.ts
+    /// AGENT_MODEL_OPTIONS) and macOS <c>APIClient.AgentModelOptionDTO</c>.</summary>
+    internal sealed class AgentModelOptionDto
+    {
+        public string Id { get; set; } = "";
+        public string Label { get; set; } = "";
+    }
+
     internal sealed class AIProviderDto
     {
         public string Provider { get; set; } = "";
@@ -27,6 +36,18 @@ namespace OmniKey.Windows
         public string? ApiKeyMasked { get; set; }
         public string? BaseUrl { get; set; }
         public string? Model { get; set; }
+
+        /// <summary>Models the server offers for this provider. Empty means the
+        /// provider has no curated list (the caller falls back to a local one).</summary>
+        public List<AgentModelOptionDto> ModelOptions { get; set; } = new();
+
+        /// <summary>Server flag: whether a model picker should be shown at all.
+        /// Derived from <c>modelOptions.length &gt; 0</c> server-side.</summary>
+        public bool SupportsModelSelection { get; set; }
+
+        /// <summary>Server flag: whether an arbitrary model id may be typed in
+        /// (all providers currently allow it).</summary>
+        public bool SupportsCustomModel { get; set; } = true;
     }
 
     internal sealed class AIProviderListResponse
@@ -34,6 +55,15 @@ namespace OmniKey.Windows
         public List<AIProviderDto> Providers { get; set; } = new();
         public string ActiveProvider { get; set; } = "openai";
         public string? RuntimeProvider { get; set; }
+
+        /// <summary>Model currently persisted (in the agent_settings table) for
+        /// the active provider. Drives the chat composer's model pill.</summary>
+        public string? ActiveModel { get; set; }
+
+        /// <summary>Curated options for the *active* provider only.</summary>
+        public List<AgentModelOptionDto> ModelOptions { get; set; } = new();
+
+        public bool SupportsCustomModel { get; set; } = true;
     }
 
     internal sealed class AIProviderMutationResponse
@@ -45,6 +75,14 @@ namespace OmniKey.Windows
         public string? ActiveProvider { get; set; }
         public bool? RestartScheduled { get; set; }
         public string? Message { get; set; }
+
+        /// <summary>Echo of the model that was saved (PATCH .../model).</summary>
+        public string? Model { get; set; }
+
+        /// <summary>Model now active for the active provider after the mutation.</summary>
+        public string? ActiveModel { get; set; }
+
+        public List<AgentModelOptionDto>? ModelOptions { get; set; }
     }
 
     internal sealed class AppSettingsDto
@@ -52,8 +90,19 @@ namespace OmniKey.Windows
         public string TerminalAccess { get; set; } = "limited";
         public bool WebSearchEnabled { get; set; }
         public bool BrowserAccessEnabled { get; set; }
+
+        /// <summary>Whether per-call token rows are persisted. Backed by the
+        /// <c>agent_settings.usage_recording_enabled</c> column (no longer an
+        /// environment variable) and read by the Usage page.</summary>
+        public bool UsageRecordingEnabled { get; set; }
+
         public string? BrowserDebugBrowserName { get; set; }
         public int? BrowserDebugPort { get; set; }
+
+        /// <summary>Where the daemon read these values from. The backend now
+        /// reports "database"; older builds reported the config file. Surfaced
+        /// in the UI so users can tell the DB-backed store is live.</summary>
+        public string? Source { get; set; }
     }
 
     internal sealed class AppSettingsMutationResponse
@@ -61,8 +110,73 @@ namespace OmniKey.Windows
         public string TerminalAccess { get; set; } = "limited";
         public bool WebSearchEnabled { get; set; }
         public bool BrowserAccessEnabled { get; set; }
+        public bool UsageRecordingEnabled { get; set; }
         public bool? RestartScheduled { get; set; }
         public string? Message { get; set; }
+    }
+
+    // ─── Usage metrics (GET /api/usage) ───────────────────────────────
+    // Shapes mirror macOS APIClient.Usage*DTO one-for-one. Cost fields were
+    // deliberately dropped server-side, so these are token counters only.
+
+    internal sealed class UsageTotalsDto
+    {
+        public int PromptTokens { get; set; }
+        public int CompletionTokens { get; set; }
+        public int TotalTokens { get; set; }
+        public int Requests { get; set; }
+    }
+
+    internal sealed class UsageBucketDto
+    {
+        public string Key { get; set; } = "";
+        public string Label { get; set; } = "";
+        public int PromptTokens { get; set; }
+        public int CompletionTokens { get; set; }
+        public int TotalTokens { get; set; }
+        public int Requests { get; set; }
+    }
+
+    internal sealed class UsageRangeDto
+    {
+        public string Label { get; set; } = "";
+        public string? From { get; set; }
+        public string To { get; set; } = "";
+        public int Days { get; set; }
+    }
+
+    internal sealed class UsageProviderDto
+    {
+        public string Provider { get; set; } = "all";
+        public string ProviderLabel { get; set; } = "All Providers";
+    }
+
+    internal sealed class UsageEstimatesDto
+    {
+        public double AverageDailyTokens { get; set; }
+    }
+
+    internal sealed class UsageSessionDto
+    {
+        public string Id { get; set; } = "";
+        public string Title { get; set; } = "";
+        public int Turns { get; set; }
+        public int TotalTokens { get; set; }
+        public string LastActiveAt { get; set; } = "";
+    }
+
+    internal sealed class UsageMetricsResponse
+    {
+        public bool RecordingEnabled { get; set; }
+        public string GeneratedAt { get; set; } = "";
+        public UsageRangeDto Range { get; set; } = new();
+        public UsageProviderDto Provider { get; set; } = new();
+        public UsageTotalsDto Totals { get; set; } = new();
+        public UsageEstimatesDto Estimates { get; set; } = new();
+        public List<UsageBucketDto> ByProvider { get; set; } = new();
+        public List<UsageBucketDto> ByModel { get; set; } = new();
+        public List<UsageBucketDto> Daily { get; set; } = new();
+        public List<UsageSessionDto> RecentSessions { get; set; } = new();
     }
 
     internal sealed class BrowserAccessMutationResponse
@@ -573,19 +687,41 @@ namespace OmniKey.Windows
                    ?? new AppSettingsDto();
         }
 
-        /// <summary>PATCH /api/app-settings — partial update of terminalAccess
-        /// and/or webSearchEnabled (each omitted when null).</summary>
+        /// <summary>PATCH /api/app-settings — partial update of terminalAccess,
+        /// webSearchEnabled and/or usageRecordingEnabled (each omitted when null).
+        /// All three are now persisted in the <c>agent_settings</c> table rather
+        /// than written back as environment variables, so no daemon restart is
+        /// required — the agent re-reads them on every turn.</summary>
         public async Task<AppSettingsMutationResponse> UpdateAppSettingsAsync(
-            string? terminalAccess, bool? webSearchEnabled)
+            string? terminalAccess, bool? webSearchEnabled, bool? usageRecordingEnabled = null)
         {
             using var req = BuildRequest(HttpMethod.Patch, "/api/app-settings");
             var body = new Dictionary<string, object?>();
-            if (terminalAccess != null)        body["terminalAccess"]   = terminalAccess;
-            if (webSearchEnabled.HasValue)     body["webSearchEnabled"] = webSearchEnabled.Value;
+            if (terminalAccess != null)          body["terminalAccess"]        = terminalAccess;
+            if (webSearchEnabled.HasValue)       body["webSearchEnabled"]      = webSearchEnabled.Value;
+            if (usageRecordingEnabled.HasValue)  body["usageRecordingEnabled"] = usageRecordingEnabled.Value;
             req.Content = JsonContent.Create(body);
             using var resp = await Http.SendAsync(req);
             await EnsureSuccessAsync(resp);
             return ParseAppSettingsMutation(await resp.Content.ReadAsStringAsync());
+        }
+
+        /// <summary>GET /api/usage?range=&amp;provider= — token counters for the
+        /// selected window. <paramref name="range"/> accepts the same tokens as
+        /// macOS ("7d" / "30d" / "90d" / "month" / "all"); <paramref name="provider"/>
+        /// of null or "all" omits the filter so every provider is aggregated.</summary>
+        public async Task<UsageMetricsResponse> FetchUsageMetricsAsync(
+            string range, string? provider = null)
+        {
+            string path = $"/api/usage?range={Uri.EscapeDataString(range)}";
+            if (!string.IsNullOrWhiteSpace(provider) && provider != "all")
+                path += $"&provider={Uri.EscapeDataString(provider)}";
+
+            using var req  = BuildRequest(HttpMethod.Get, path);
+            using var resp = await Http.SendAsync(req);
+            await EnsureSuccessAsync(resp);
+            return await resp.Content.ReadFromJsonAsync<UsageMetricsResponse>()
+                   ?? new UsageMetricsResponse();
         }
 
         /// <summary>POST /api/app-settings/browser-access — enable/disable
@@ -654,8 +790,30 @@ namespace OmniKey.Windows
                 BaseUrl = ReadString(root, "baseUrl"),
                 ActiveProvider = ReadString(root, "activeProvider"),
                 RestartScheduled = ReadNullableBool(root, "restartScheduled"),
-                Message = ReadString(root, "message")
+                Message = ReadString(root, "message"),
+                Model = ReadString(root, "model"),
+                ActiveModel = ReadString(root, "activeModel"),
+                ModelOptions = ReadModelOptions(root, "modelOptions")
             };
+        }
+
+        /// <summary>Reads a <c>modelOptions</c> array off a mutation response.
+        /// Returns null (rather than an empty list) when the key is absent so
+        /// callers can tell "server didn't say" from "server says none" and keep
+        /// the previously-loaded options instead of blanking the picker.</summary>
+        private static List<AgentModelOptionDto>? ReadModelOptions(JsonElement el, string name)
+        {
+            if (!el.TryGetProperty(name, out var arr) || arr.ValueKind != JsonValueKind.Array)
+                return null;
+
+            var options = new List<AgentModelOptionDto>();
+            foreach (var item in arr.EnumerateArray())
+            {
+                string id = ReadString(item, "id") ?? "";
+                if (id.Length == 0) continue;
+                options.Add(new AgentModelOptionDto { Id = id, Label = ReadString(item, "label") ?? id });
+            }
+            return options;
         }
 
         private static AppSettingsMutationResponse ParseAppSettingsMutation(string body)
@@ -667,6 +825,7 @@ namespace OmniKey.Windows
                 TerminalAccess = ReadString(root, "terminalAccess") ?? "limited",
                 WebSearchEnabled = ReadBool(root, "webSearchEnabled"),
                 BrowserAccessEnabled = ReadBool(root, "browserAccessEnabled"),
+                UsageRecordingEnabled = ReadBool(root, "usageRecordingEnabled"),
                 RestartScheduled = ReadNullableBool(root, "restartScheduled"),
                 Message = ReadString(root, "message")
             };

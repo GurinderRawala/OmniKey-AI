@@ -97,6 +97,15 @@
                         <ui:SymbolIcon Symbol="Server24" />
                     </ui:NavigationViewItem.Icon>
                 </ui:NavigationViewItem>
+                <!--  Also reachable from Settings › Usage; promoted to the main
+                      rail because token spend is a routine check, not a setting.  -->
+                <ui:NavigationViewItem
+                    Content="Usage"
+                    TargetPageType="{x:Type pages:UsagePage}">
+                    <ui:NavigationViewItem.Icon>
+                        <ui:SymbolIcon Symbol="DataUsage24" />
+                    </ui:NavigationViewItem.Icon>
+                </ui:NavigationViewItem>
             </ui:NavigationView.MenuItems>
             <ui:NavigationView.FooterMenuItems>
                 <ui:NavigationViewItem

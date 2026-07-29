@@ -2,12 +2,15 @@ import TelegramBot from 'node-telegram-bot-api';
 import type { Logger } from 'winston';
 import {
   AgentAbortError,
+  fetchAIProviders,
   getSessionMessages,
   listProjectGroups,
   listRecentSessions,
   listTaskTemplates,
   runAgentTurn,
   setDefaultTaskTemplate,
+  updateProviderModel,
+  type AgentModelOption,
   type AgentSessionSummary,
   type ProjectGroup,
   type TaskTemplate,
@@ -52,7 +55,7 @@ export async function notify(
 
 // ─── /cmd flow state ─────────────────────────────────────────────────────────
 
-type WizardPhase = 'selectInstruction' | 'selectProject' | 'awaitPrompt';
+type WizardPhase = 'selectModel' | 'selectInstruction' | 'selectProject' | 'awaitPrompt';
 
 interface PendingPromptState {
   phase: WizardPhase;
@@ -63,10 +66,14 @@ interface PendingPromptState {
   /** Cached lists so callbacks can resolve indices without size-limited tokens. */
   templates: TaskTemplate[];
   groups: ProjectGroup[];
+  modelOptions: AgentModelOption[];
+  activeProvider: string;
+  activeModel: string | null;
   /** Resolved selections, applied when the user finally sends the prompt. */
   chosenInstructions: string | null;
   chosenInstructionsHeading: string | null;
   chosenGroupName: string | null;
+  chosenModelLabel: string | null;
   /** When true, surface every agent block (shell/web/mcp/image) instead of
    *  only reasoning + final answer. Toggled by `/cmd --verbose`. */
   verbose: boolean;
@@ -80,12 +87,20 @@ interface RunningSessionState {
   stoppedByUser: boolean;
 }
 
+interface ModelSelectionState {
+  activeProvider: string;
+  activeModel: string | null;
+  modelOptions: AgentModelOption[];
+}
+
 const pendingPrompts = new Map<number, PendingPromptState>();
 const runningSessions = new Map<number, RunningSessionState>();
 
 // Callback-data prefixes. Telegram limits callback_data to 64 bytes — using
 // short prefixes + indices keeps every payload comfortably under the cap.
 const CB_SESSION = 's:'; // session picker; "s:new" or "s:<idx>"
+const CB_MODEL = 'm:'; // model picker;   "m:skip" or "m:<idx>"
+const CB_MODEL_ONLY = 'mo:'; // standalone /model picker; "mo:skip" or "mo:<idx>"
 const CB_INSTRUCTION = 't:'; // instruction picker; "t:skip" or "t:<idx>"
 const CB_PROJECT = 'g:'; // project picker;     "g:skip" or "g:<idx>"
 const CB_CANCEL = 'x:cancel';
@@ -336,6 +351,35 @@ function buildProjectKeyboard(groups: ProjectGroup[]): TelegramBot.InlineKeyboar
   return rows;
 }
 
+function buildModelKeyboard(
+  options: AgentModelOption[],
+  activeModel: string | null,
+  prefix = CB_MODEL,
+): TelegramBot.InlineKeyboardButton[][] {
+  const rows: TelegramBot.InlineKeyboardButton[][] = [];
+  options.forEach((option, idx) => {
+    const marker = option.id === activeModel ? '✓' : '🤖';
+    rows.push([
+      {
+        text: `${marker}  ${truncate(option.label || option.id, 50)}`,
+        callback_data: `${prefix}${idx}`,
+      },
+    ]);
+  });
+  rows.push([{ text: '⏭  Keep current model', callback_data: `${prefix}skip` }]);
+  rows.push([{ text: '✕  Cancel', callback_data: CB_CANCEL }]);
+  return rows;
+}
+
+function modelLabelFor(state: PendingPromptState, model: string | null): string {
+  if (!model) return 'current model';
+  return state.modelOptions.find((option) => option.id === model)?.label ?? model;
+}
+
+function wizardStep(state: PendingPromptState, step: number): string {
+  return `Step ${step} of ${state.sessionId ? 2 : 4}`;
+}
+
 // ─── Wizard step rendering ───────────────────────────────────────────────────
 
 interface WizardCopy {
@@ -343,14 +387,38 @@ interface WizardCopy {
   readonly keyboard: TelegramBot.InlineKeyboardButton[][];
 }
 
+function renderModelStep(state: PendingPromptState): WizardCopy {
+  const currentLabel = modelLabelFor(state, state.activeModel);
+  const heading = `*${wizardStep(state, 1)} · Model*`;
+  const contextLine = state.sessionId ? `Resuming session \`${state.sessionId}\`.` : 'Starting a new session.';
+  const text = [
+    heading,
+    contextLine,
+    `Active provider: *${state.activeProvider}*`,
+    `Current model: *${currentLabel}*`,
+    '',
+    state.modelOptions.length > 0
+      ? 'Pick the model for the next turn, or keep the current one.'
+      : 'No model list was returned. Keep the current model to continue.',
+  ].join('\n');
+
+  return {
+    text,
+    keyboard: buildModelKeyboard(state.modelOptions, state.activeModel),
+  };
+}
+
 function renderInstructionStep(state: PendingPromptState): WizardCopy {
   if (state.templates.length === 0) {
     return {
       text: [
-        '*Step 1 of 3 · Task instructions*',
+        `*${wizardStep(state, 2)} · Task instructions*`,
+        state.chosenModelLabel ? `✓ Model: *${state.chosenModelLabel}*` : '',
         '',
         '_No saved templates. Skip to continue._',
-      ].join('\n'),
+      ]
+        .filter(Boolean)
+        .join('\n'),
       keyboard: [
         [
           {
@@ -364,10 +432,13 @@ function renderInstructionStep(state: PendingPromptState): WizardCopy {
   }
   return {
     text: [
-      '*Step 1 of 3 · Task instructions*',
+      `*${wizardStep(state, 2)} · Task instructions*`,
+      state.chosenModelLabel ? `✓ Model: *${state.chosenModelLabel}*` : '',
       '',
       'Pick a saved template to prepend to your prompt, or skip.',
-    ].join('\n'),
+    ]
+      .filter(Boolean)
+      .join('\n'),
     keyboard: buildInstructionKeyboard(state.templates),
   };
 }
@@ -379,9 +450,15 @@ function renderProjectStep(state: PendingPromptState): WizardCopy {
 
   if (state.groups.length === 0) {
     return {
-      text: ['*Step 2 of 3 · Project*', heading, '', '_No projects yet. Skip to continue._'].join(
-        '\n',
-      ),
+      text: [
+        `*${wizardStep(state, 3)} · Project*`,
+        state.chosenModelLabel ? `✓ Model: *${state.chosenModelLabel}*` : '',
+        heading,
+        '',
+        '_No projects yet. Skip to continue._',
+      ]
+        .filter(Boolean)
+        .join('\n'),
       keyboard: [
         [{ text: '⏭  Skip project', callback_data: `${CB_PROJECT}skip` }],
         [{ text: '✕  Cancel', callback_data: CB_CANCEL }],
@@ -389,25 +466,38 @@ function renderProjectStep(state: PendingPromptState): WizardCopy {
     };
   }
   return {
-    text: ['*Step 2 of 3 · Project*', heading, '', 'Pick a project for context, or skip.'].join(
-      '\n',
-    ),
+    text: [
+      `*${wizardStep(state, 3)} · Project*`,
+      state.chosenModelLabel ? `✓ Model: *${state.chosenModelLabel}*` : '',
+      heading,
+      '',
+      'Pick a project for context, or skip.',
+    ]
+      .filter(Boolean)
+      .join('\n'),
     keyboard: buildProjectKeyboard(state.groups),
   };
 }
 
 function renderPromptStep(state: PendingPromptState): WizardCopy {
   const lines = [
-    '*Step 3 of 3 · Prompt*',
-    state.chosenInstructionsHeading
+    `*${wizardStep(state, state.sessionId ? 2 : 4)} · Prompt*`,
+    state.chosenModelLabel ? `✓ Model: *${state.chosenModelLabel}*` : '',
+    !state.sessionId && state.chosenInstructionsHeading
       ? `✓ Instructions: *${state.chosenInstructionsHeading}*`
-      : '✓ Instructions: _skipped_',
-    state.chosenGroupName ? `✓ Project: *${state.chosenGroupName}*` : '✓ Project: _skipped_',
+      : !state.sessionId
+        ? '✓ Instructions: _skipped_'
+        : '',
+    !state.sessionId && state.chosenGroupName
+      ? `✓ Project: *${state.chosenGroupName}*`
+      : !state.sessionId
+        ? '✓ Project: _skipped_'
+        : '',
     '',
     'Send your prompt as the next message.',
   ];
   return {
-    text: lines.join('\n'),
+    text: lines.filter(Boolean).join('\n'),
     keyboard: [[{ text: '✕  Cancel', callback_data: CB_CANCEL }]],
   };
 }
@@ -415,11 +505,13 @@ function renderPromptStep(state: PendingPromptState): WizardCopy {
 async function showStep(logger: Logger, chatId: number, state: PendingPromptState): Promise<void> {
   if (!bot) return;
   const copy =
-    state.phase === 'selectInstruction'
-      ? renderInstructionStep(state)
-      : state.phase === 'selectProject'
-        ? renderProjectStep(state)
-        : renderPromptStep(state);
+    state.phase === 'selectModel'
+      ? renderModelStep(state)
+      : state.phase === 'selectInstruction'
+        ? renderInstructionStep(state)
+        : state.phase === 'selectProject'
+          ? renderProjectStep(state)
+          : renderPromptStep(state);
 
   if (state.wizardMessageId == null) {
     const sent = await bot.sendMessage(chatId, copy.text, {
@@ -497,6 +589,7 @@ async function sendSessionPicker(
 
 async function handleCmdCommand(logger: Logger, chatId: number, verbose: boolean) {
   pendingPrompts.delete(chatId);
+  modelSelectionCache.delete(chatId);
   pendingVerbose.set(chatId, verbose);
   try {
     const sessions = await listRecentSessions(logger, 5);
@@ -517,6 +610,62 @@ const sessionListCache = new Map<number, AgentSessionSummary[]>();
 // chatId -> verbose flag captured at /cmd time, applied when the user picks
 // a session (new or resume) so the flag survives the async picker step.
 const pendingVerbose = new Map<number, boolean>();
+
+// chatId -> last standalone /model option list shown, for index resolution.
+const modelSelectionCache = new Map<number, ModelSelectionState>();
+
+async function loadModelSelection(logger: Logger): Promise<ModelSelectionState> {
+  try {
+    const providerState = await fetchAIProviders(logger);
+    return {
+      activeProvider: providerState.activeProvider || 'openai',
+      activeModel: providerState.activeModel ?? providerState.modelOptions?.[0]?.id ?? null,
+      modelOptions: providerState.modelOptions ?? [],
+    };
+  } catch (err) {
+    logger.warn('Failed to load model options for Telegram wizard', {
+      error: (err as Error).message,
+    });
+    return {
+      activeProvider: 'openai',
+      activeModel: null,
+      modelOptions: [],
+    };
+  }
+}
+
+async function handleModelCommand(logger: Logger, chatId: number) {
+  if (!bot) return;
+  const selection = await loadModelSelection(logger);
+  modelSelectionCache.set(chatId, selection);
+  const currentLabel =
+    selection.modelOptions.find((option) => option.id === selection.activeModel)?.label ??
+    selection.activeModel ??
+    'current model';
+
+  await bot.sendMessage(
+    chatId,
+    [
+      '*Agent model*',
+      `Active provider: *${selection.activeProvider}*`,
+      `Current model: *${currentLabel}*`,
+      '',
+      selection.modelOptions.length > 0
+        ? 'Pick a model for the next agent turn.'
+        : 'No model list was returned by the daemon.',
+    ].join('\n'),
+    {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: buildModelKeyboard(
+          selection.modelOptions,
+          selection.activeModel,
+          CB_MODEL_ONLY,
+        ),
+      },
+    },
+  );
+}
 
 async function handleTaskCommand(logger: Logger, chatId: number) {
   // 1. If a session is currently running for this chat, show last reasoning.
@@ -586,8 +735,11 @@ async function startNewSessionWizard(logger: Logger, chatId: number) {
   if (!bot) return;
   let templates: TaskTemplate[] = [];
   let groups: ProjectGroup[] = [];
+  let activeProvider = 'openai';
+  let activeModel: string | null = null;
+  let modelOptions: AgentModelOption[] = [];
   try {
-    [templates, groups] = await Promise.all([
+    const [templateRows, groupRows, modelSelection] = await Promise.all([
       listTaskTemplates(logger).catch((e) => {
         logger.warn('Failed to load task templates', {
           error: (e as Error).message,
@@ -600,7 +752,13 @@ async function startNewSessionWizard(logger: Logger, chatId: number) {
         });
         return [] as ProjectGroup[];
       }),
+      loadModelSelection(logger),
     ]);
+    templates = templateRows;
+    groups = groupRows;
+    activeProvider = modelSelection.activeProvider;
+    activeModel = modelSelection.activeModel;
+    modelOptions = modelSelection.modelOptions;
   } catch (err) {
     logger.error('Failed to load wizard data', {
       error: (err as Error).message,
@@ -608,14 +766,18 @@ async function startNewSessionWizard(logger: Logger, chatId: number) {
   }
 
   const state: PendingPromptState = {
-    phase: 'selectInstruction',
+    phase: 'selectModel',
     sessionId: null,
     wizardMessageId: null,
     templates,
     groups,
+    modelOptions,
+    activeProvider,
+    activeModel,
     chosenInstructions: null,
     chosenInstructionsHeading: null,
     chosenGroupName: null,
+    chosenModelLabel: null,
     verbose: pendingVerbose.get(chatId) ?? false,
   };
   pendingPrompts.set(chatId, state);
@@ -625,32 +787,24 @@ async function startNewSessionWizard(logger: Logger, chatId: number) {
 async function startResumeSession(logger: Logger, chatId: number, sessionId: string) {
   if (!bot) return;
   const verbose = pendingVerbose.get(chatId) ?? false;
+  const modelSelection = await loadModelSelection(logger);
   const state: PendingPromptState = {
-    phase: 'awaitPrompt',
+    phase: 'selectModel',
     sessionId,
     wizardMessageId: null,
     templates: [],
     groups: [],
+    modelOptions: modelSelection.modelOptions,
+    activeProvider: modelSelection.activeProvider,
+    activeModel: modelSelection.activeModel,
     chosenInstructions: null,
     chosenInstructionsHeading: null,
     chosenGroupName: null,
+    chosenModelLabel: null,
     verbose,
   };
   pendingPrompts.set(chatId, state);
-  await bot.sendMessage(
-    chatId,
-    [
-      `*Resuming session* \`${sessionId}\`${verbose ? ' · 🔍 _verbose_' : ''}`,
-      '',
-      'Send your prompt as the next message.',
-    ].join('\n'),
-    {
-      parse_mode: 'Markdown',
-      reply_markup: {
-        inline_keyboard: [[{ text: '✕  Cancel', callback_data: CB_CANCEL }]],
-      },
-    },
-  );
+  await showStep(logger, chatId, state);
 }
 
 async function handleCallbackQuery(logger: Logger, query: TelegramBot.CallbackQuery) {
@@ -668,6 +822,7 @@ async function handleCallbackQuery(logger: Logger, query: TelegramBot.CallbackQu
     pendingPrompts.delete(chatId);
     sessionListCache.delete(chatId);
     pendingVerbose.delete(chatId);
+    modelSelectionCache.delete(chatId);
     if (state?.wizardMessageId) {
       await finishWizardMessage(chatId, state, '✕  Cancelled.');
     }
@@ -697,7 +852,121 @@ async function handleCallbackQuery(logger: Logger, query: TelegramBot.CallbackQu
     return;
   }
 
-  // Step 1 — instruction picker
+  // Standalone /model picker
+  if (data.startsWith(CB_MODEL_ONLY)) {
+    const state = modelSelectionCache.get(chatId);
+    if (!state) {
+      await bot.answerCallbackQuery(query.id, { text: 'Model picker expired' });
+      return;
+    }
+
+    const tok = data.slice(CB_MODEL_ONLY.length);
+    if (tok === 'skip') {
+      modelSelectionCache.delete(chatId);
+      await bot.answerCallbackQuery(query.id, { text: 'Kept current model' });
+      if (query.message) {
+        await bot.editMessageReplyMarkup(
+          { inline_keyboard: [] },
+          { chat_id: chatId, message_id: query.message.message_id },
+        ).catch(() => undefined);
+      }
+      return;
+    }
+
+    const idx = Number(tok);
+    const option = Number.isInteger(idx) ? state.modelOptions[idx] : undefined;
+    if (!option) {
+      await bot.answerCallbackQuery(query.id, { text: 'Model not found' });
+      return;
+    }
+
+    try {
+      const response = await updateProviderModel(logger, state.activeProvider, option.id);
+      const activeModel = response.activeModel ?? response.model ?? option.id;
+      const options =
+        response.modelOptions && response.modelOptions.length > 0
+          ? response.modelOptions
+          : state.modelOptions;
+      const label =
+        options.find((candidate) => candidate.id === activeModel)?.label ??
+        option.label ??
+        activeModel;
+      modelSelectionCache.delete(chatId);
+      await bot.answerCallbackQuery(query.id, { text: 'Model updated' });
+      if (query.message) {
+        await bot.editMessageText(
+          [
+            '✅ *Agent model updated*',
+            `Active provider: *${state.activeProvider}*`,
+            `Model: *${label}*`,
+          ].join('\n'),
+          {
+            chat_id: chatId,
+            message_id: query.message.message_id,
+            parse_mode: 'Markdown',
+            reply_markup: { inline_keyboard: [] },
+          },
+        );
+      }
+    } catch (err) {
+      logger.error('Failed to update Telegram /model selection', {
+        provider: state.activeProvider,
+        model: option.id,
+        error: (err as Error).message,
+      });
+      await bot.answerCallbackQuery(query.id, { text: 'Failed to update model' });
+    }
+    return;
+  }
+
+  // Wizard step 1 — model picker
+  if (data.startsWith(CB_MODEL)) {
+    const state = pendingPrompts.get(chatId);
+    if (!state || state.phase !== 'selectModel') {
+      await bot.answerCallbackQuery(query.id, { text: 'Step expired' });
+      return;
+    }
+
+    const tok = data.slice(CB_MODEL.length);
+    if (tok === 'skip') {
+      state.chosenModelLabel = modelLabelFor(state, state.activeModel);
+    } else {
+      const idx = Number(tok);
+      const option = Number.isInteger(idx) ? state.modelOptions[idx] : undefined;
+      if (!option) {
+        await bot.answerCallbackQuery(query.id, { text: 'Model not found' });
+        return;
+      }
+
+      try {
+        if (option.id !== state.activeModel) {
+          const response = await updateProviderModel(logger, state.activeProvider, option.id);
+          state.activeModel = response.activeModel ?? response.model ?? option.id;
+          if (response.modelOptions && response.modelOptions.length > 0) {
+            state.modelOptions = response.modelOptions;
+          }
+        } else {
+          state.activeModel = option.id;
+        }
+        state.chosenModelLabel = modelLabelFor(state, state.activeModel) || option.label || option.id;
+      } catch (err) {
+        logger.error('Failed to update Telegram-selected model', {
+          provider: state.activeProvider,
+          model: option.id,
+          error: (err as Error).message,
+        });
+        await bot.answerCallbackQuery(query.id, { text: 'Failed to update model' });
+        return;
+      }
+    }
+
+    state.phase = state.sessionId ? 'awaitPrompt' : 'selectInstruction';
+    await bot.answerCallbackQuery(query.id);
+    await showStep(logger, chatId, state);
+    return;
+  }
+
+  // Wizard step 2 — instruction picker
   if (data.startsWith(CB_INSTRUCTION)) {
     const state = pendingPrompts.get(chatId);
     if (!state || state.phase !== 'selectInstruction') {
@@ -741,7 +1010,7 @@ async function handleCallbackQuery(logger: Logger, query: TelegramBot.CallbackQu
     return;
   }
 
-  // Step 2 — project picker
+  // Wizard step 3 — project picker
   if (data.startsWith(CB_PROJECT)) {
     const state = pendingPrompts.get(chatId);
     if (!state || state.phase !== 'selectProject') {
@@ -786,10 +1055,17 @@ async function runAgentForChat(
   if (pending.wizardMessageId) {
     const summary = [
       '✅ *Session started*',
-      pending.chosenInstructionsHeading
+      pending.chosenModelLabel ? `🤖 Model: *${pending.chosenModelLabel}*` : '',
+      !pending.sessionId && pending.chosenInstructionsHeading
         ? `📝 Instructions: *${pending.chosenInstructionsHeading}*`
-        : '📝 Instructions: _none_',
-      pending.chosenGroupName ? `📁 Project: *${pending.chosenGroupName}*` : '📁 Project: _none_',
+        : !pending.sessionId
+          ? '📝 Instructions: _none_'
+          : '',
+      !pending.sessionId && pending.chosenGroupName
+        ? `📁 Project: *${pending.chosenGroupName}*`
+        : !pending.sessionId
+          ? '📁 Project: _none_'
+          : '',
       pending.verbose ? '🔍 Verbose: *on*' : '',
     ]
       .filter(Boolean)
@@ -1001,6 +1277,11 @@ export function setupMessageListener(logger: Logger, bot: TelegramBot) {
 
     if (lower === '/task') {
       await handleTaskCommand(logger, chatId);
+      return;
+    }
+
+    if (lower === '/model') {
+      await handleModelCommand(logger, chatId);
       return;
     }
 

@@ -1381,7 +1381,10 @@ final class APIClient: @unchecked Sendable {
         completion: @escaping @Sendable (Result<UsageMetricsResponse, Error>) -> Void
     ) {
         var components = URLComponents(url: usageBaseURL, resolvingAgainstBaseURL: false)
-        var queryItems = [URLQueryItem(name: "range", value: range)]
+        var queryItems = [
+            URLQueryItem(name: "range", value: range),
+            URLQueryItem(name: "timeZone", value: TimeZone.current.identifier),
+        ]
         if let provider, provider != "all" {
             queryItems.append(URLQueryItem(name: "provider", value: provider))
         }

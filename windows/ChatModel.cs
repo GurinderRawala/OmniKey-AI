@@ -115,6 +115,168 @@ namespace OmniKey.Windows
         /// for the active subscription. Drives the sidebar group filter pills.</summary>
         public List<AgentGroupInfo> AvailableGroups { get; private set; } = new();
 
+        // ── Agent model selection ────────────────────────────────────
+        // Mirrors macOS ChatModel.activeAIProvider / activeAgentModel /
+        // activeAgentModelOptions. The model now lives in the agent_settings
+        // table (openai_model / anthropic_model / …), so changing it is a
+        // PATCH /api/providers/{provider}/model and takes effect on the next
+        // turn with no daemon restart.
+
+        /// <summary>Provider whose key is currently activated server-side.</summary>
+        public string ActiveAIProvider { get; private set; } = "openai";
+
+        /// <summary>Model id the agent will use for the next turn.</summary>
+        public string ActiveAgentModel { get; private set; } = "gpt-5.5";
+
+        /// <summary>Curated model list for <see cref="ActiveAIProvider"/>.</summary>
+        public List<AgentModelOptionDto> ActiveAgentModelOptions { get; private set; } = new();
+
+        /// <summary>True while a model change is in flight; the composer pill
+        /// disables itself so two PATCHes can't race.</summary>
+        public bool IsUpdatingAgentModel { get; private set; }
+
+        /// <summary>Friendly label for the active model — the server-supplied
+        /// label when the id is in the curated list, otherwise a prettified
+        /// form of the raw id (so custom models still read well).</summary>
+        public string ActiveAgentModelLabel
+        {
+            get
+            {
+                var match = ActiveAgentModelOptions
+                    .Find(o => string.Equals(o.Id, ActiveAgentModel, StringComparison.Ordinal));
+                return match?.Label ?? PrettyModelLabel(ActiveAgentModel);
+            }
+        }
+
+        /// <summary>Local fallback list used when the server returns no
+        /// <c>modelOptions</c> (older daemon). Kept byte-identical to
+        /// AGENT_MODEL_OPTIONS in api/src/agentSettingsStore.ts and to the
+        /// macOS fallbackAgentModelOptions(for:) switch.</summary>
+        private static List<AgentModelOptionDto> FallbackAgentModelOptions(string provider) => provider switch
+        {
+            "anthropic" => new()
+            {
+                new() { Id = "claude-opus-4-5",   Label = "Claude Opus 4.5" },
+                new() { Id = "claude-opus-4-7",   Label = "Claude Opus 4.7" },
+                new() { Id = "claude-opus-5",     Label = "Claude Opus 5.0" },
+                new() { Id = "claude-sonnet-4-5", Label = "Claude Sonnet 4.5" },
+                new() { Id = "claude-sonnet-4-6", Label = "Claude Sonnet 4.6" },
+                new() { Id = "claude-sonnet-5",   Label = "Claude Sonnet 5.0" },
+                new() { Id = "claude-fable-5",    Label = "Claude Fable 5.0" },
+            },
+            "gemini" => new()
+            {
+                new() { Id = "gemini-2.5-pro",   Label = "Gemini 2.5 Pro" },
+                new() { Id = "gemini-2.5-flash", Label = "Gemini 2.5 Flash" },
+            },
+            "nemotron" => new()
+            {
+                new() { Id = "nvidia/nemotron-3-ultra-550b-a55b", Label = "nvidia/nemotron-3-ultra-550b-a55b" },
+                new() { Id = "nvidia/nemotron-3-super-120b-a12b", Label = "nvidia/nemotron-3-super-120b-a12b" },
+                new() { Id = "nvidia/nemotron-3-nano-30b-a3b",    Label = "nvidia/nemotron-3-nano-30b-a3b" },
+            },
+            _ => new()
+            {
+                new() { Id = "gpt-5.6", Label = "GPT 5.6" },
+                new() { Id = "gpt-5.5", Label = "GPT 5.5" },
+                new() { Id = "gpt-5.1", Label = "GPT 5.1" },
+                new() { Id = "gpt-4.1", Label = "GPT 4.1" },
+            },
+        };
+
+        private static string PrettyModelLabel(string model)
+        {
+            if (string.IsNullOrEmpty(model)) return "Model";
+            if (model.StartsWith("gpt-", StringComparison.Ordinal))
+                return model.Replace("gpt-", "GPT ", StringComparison.Ordinal);
+            if (model.StartsWith("nvidia/", StringComparison.Ordinal)) return model;
+            if (model.Contains("opus",   StringComparison.Ordinal)) return "Opus";
+            if (model.Contains("fable",  StringComparison.Ordinal)) return "Fable";
+            if (model.Contains("sonnet", StringComparison.Ordinal)) return "Sonnet";
+            return model;
+        }
+
+        /// <summary>Load the active provider, its persisted model and the
+        /// curated option list. Fire-and-forget; failures leave the previous
+        /// selection intact so the composer never loses its pill.</summary>
+        public void FetchAgentModelOptions() => _ = FetchAgentModelOptionsAsync();
+
+        private async Task FetchAgentModelOptionsAsync()
+        {
+            try
+            {
+                var response = await _apiClient.FetchAIProvidersAsync();
+                RunOnUi(() =>
+                {
+                    string provider = string.IsNullOrEmpty(response.ActiveProvider)
+                        ? ActiveAIProvider
+                        : response.ActiveProvider;
+                    var options = response.ModelOptions.Count > 0
+                        ? response.ModelOptions
+                        : FallbackAgentModelOptions(provider);
+
+                    ActiveAIProvider = provider;
+                    ActiveAgentModelOptions = options;
+                    ActiveAgentModel = !string.IsNullOrEmpty(response.ActiveModel)
+                        ? response.ActiveModel!
+                        : (options.Count > 0 ? options[0].Id : ActiveAgentModel);
+                    NotifyStateChanged();
+                });
+            }
+            catch
+            {
+                // Non-fatal: the pill keeps whatever it last showed. A model
+                // list is a convenience, not a precondition for chatting.
+            }
+        }
+
+        /// <summary>Persist a new model for the active provider. Optimistically
+        /// updates the pill, then rolls back and surfaces an error if the PATCH
+        /// fails — mirrors macOS setAgentModel(_:).</summary>
+        public void SetAgentModel(string modelId)
+        {
+            if (string.IsNullOrWhiteSpace(modelId)) return;
+            modelId = modelId.Trim();
+            if (string.Equals(modelId, ActiveAgentModel, StringComparison.Ordinal)) return;
+            if (IsUpdatingAgentModel) return;
+            _ = SetAgentModelAsync(modelId);
+        }
+
+        private async Task SetAgentModelAsync(string modelId)
+        {
+            string provider = ActiveAIProvider;
+            string previousModel = ActiveAgentModel;
+
+            ActiveAgentModel = modelId;
+            IsUpdatingAgentModel = true;
+            NotifyStateChanged();
+
+            try
+            {
+                var response = await _apiClient.UpdateProviderModelAsync(provider, modelId);
+                RunOnUi(() =>
+                {
+                    IsUpdatingAgentModel = false;
+                    ActiveAgentModel = response.ActiveModel ?? response.Model ?? modelId;
+                    // Null means "server didn't report options" — keep the current
+                    // list rather than emptying the picker.
+                    if (response.ModelOptions is { Count: > 0 } options)
+                        ActiveAgentModelOptions = options;
+                    NotifyStateChanged();
+                });
+            }
+            catch (Exception ex)
+            {
+                RunOnUi(() =>
+                {
+                    IsUpdatingAgentModel = false;
+                    ActiveAgentModel = previousModel;
+                    LastErrorMessage = $"Failed to change model: {ex.Message}";
+                    NotifyStateChanged();
+                });
+            }
+        }
+
         /// <summary>The project group the user picked in the composer.
         /// When set, its <c>GroupName</c> is sent with the next chat turn
         /// so the backend can stamp the new session with that group.
@@ -205,18 +367,18 @@ namespace OmniKey.Windows
             get
             {
                 if (CanChangeSessionSetup)
-                    return DefaultTaskTemplate?.Heading ?? "No instruction";
+                    return DefaultTaskTemplate?.Heading ?? "No task instructions";
 
                 var locked = ActiveSession?.TaskInstructionHeading;
                 if (!string.IsNullOrEmpty(locked))
                     return locked!;
 
-                return "No instruction";
+                return "No task instructions";
             }
         }
 
         public bool HasDisplayedTaskInstruction =>
-            DisplayedTaskInstructionHeading != "No instruction";
+            DisplayedTaskInstructionHeading != "No task instructions";
 
 
         /// <summary>One-shot signal consumed by the sidebar: when set, the
