@@ -216,7 +216,7 @@
                         FontFamily="{StaticResource OK.MonoFontFamily}"
                         FontSize="11.5"
                         Foreground="#FFDCDCE0"
-                        Text="{Binding Text}"
+                        Text="{Binding ExpandedSummary}"
                         TextWrapping="Wrap" />
                 </Border>
             </Grid>
@@ -1156,14 +1156,14 @@
                     <!-- Bottom toolbar: task chip + context indicator + send/stop -->
                     <Grid Grid.Row="1" Margin="12,4,12,12">
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
 
                         <!-- Composer pickers cluster (task instruction + project) -->
-                        <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                        <WrapPanel Grid.Column="0" VerticalAlignment="Center">
 
                                                 <!-- Task-instruction pill.
                                                      Two mutually-exclusive faces:
@@ -1194,14 +1194,14 @@
                                         Foreground="{StaticResource Nord.AccentBrush}"
                                         Symbol="TextBulletListSquare24" />
                                     <ComboBox
-                                        MinWidth="180"
+                                        Width="148"
                                         VerticalAlignment="Center"
                                         Background="Transparent"
                                         BorderThickness="0"
-                                        DisplayMemberPath="Heading"
                                         FontFamily="{StaticResource OK.FontFamily}"
                                         FontSize="12"
                                         ItemsSource="{Binding AvailableTaskTemplates}"
+                                        SelectedIndex="0"
                                         SelectedValue="{Binding SelectedDefaultTemplateId, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                         SelectedValuePath="Id">
                                         <ComboBox.Resources>
@@ -1223,6 +1223,14 @@
                                             <SolidColorBrush x:Key="ComboBoxBorderBrushPointerOver" Color="Transparent" />
                                             <SolidColorBrush x:Key="ComboBoxBorderBrushFocused" Color="Transparent" />
                                         </ComboBox.Resources>
+                                        <ComboBox.ItemTemplate>
+                                            <DataTemplate>
+                                                <TextBlock
+                                                    MaxWidth="220"
+                                                    Text="{Binding Heading}"
+                                                    TextTrimming="CharacterEllipsis" />
+                                            </DataTemplate>
+                                        </ComboBox.ItemTemplate>
                                     </ComboBox>
                                 </StackPanel>
 
@@ -1238,7 +1246,7 @@
                                         Foreground="{StaticResource Nord.AccentBrush}"
                                         Symbol="LockClosed24" />
                                     <TextBlock
-                                        MinWidth="180"
+                                        Width="148"
                                         VerticalAlignment="Center"
                                         FontFamily="{StaticResource OK.FontFamily}"
                                         FontSize="12"
@@ -1268,14 +1276,14 @@
                                     Symbol="Folder24"
                                     ToolTip="Project for this chat" />
                                 <ComboBox
-                                    MinWidth="160"
+                                    Width="128"
                                     VerticalAlignment="Center"
                                     Background="Transparent"
                                     BorderThickness="0"
-                                    DisplayMemberPath="DisplayName"
                                     FontFamily="{StaticResource OK.FontFamily}"
                                     FontSize="12"
                                     ItemsSource="{Binding AvailableProjectGroups}"
+                                    SelectedIndex="0"
                                     SelectedValue="{Binding SelectedProjectGroupName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                     SelectedValuePath="GroupName"
                                     ToolTip="Project this chat belongs to (mirrors macOS)">
@@ -1297,6 +1305,14 @@
                                         <SolidColorBrush x:Key="ComboBoxBorderBrushPointerOver" Color="Transparent" />
                                         <SolidColorBrush x:Key="ComboBoxBorderBrushFocused" Color="Transparent" />
                                     </ComboBox.Resources>
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <TextBlock
+                                                MaxWidth="220"
+                                                Text="{Binding DisplayName}"
+                                                TextTrimming="CharacterEllipsis" />
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
                                 </ComboBox>
                             </StackPanel>
                         </Border>
@@ -1334,12 +1350,11 @@
                                     IsIndeterminate="True"
                                     Visibility="{Binding IsUpdatingAgentModel, Converter={StaticResource BooleanToVisibilityConverter}}" />
                                 <ComboBox
-                                    MinWidth="150"
+                                    Width="124"
                                     VerticalAlignment="Center"
                                     AutomationProperties.Name="Agent model"
                                     Background="Transparent"
                                     BorderThickness="0"
-                                    DisplayMemberPath="Label"
                                     FontFamily="{StaticResource OK.FontFamily}"
                                     FontSize="12"
                                     IsEnabled="{Binding CanChangeAgentModel}"
@@ -1364,14 +1379,22 @@
                                         <SolidColorBrush x:Key="ComboBoxBorderBrushPointerOver" Color="Transparent" />
                                         <SolidColorBrush x:Key="ComboBoxBorderBrushFocused" Color="Transparent" />
                                     </ComboBox.Resources>
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <TextBlock
+                                                MaxWidth="260"
+                                                Text="{Binding Label}"
+                                                TextTrimming="CharacterEllipsis" />
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
                                 </ComboBox>
                             </StackPanel>
                         </Border>
 
-                        </StackPanel>
+                        </WrapPanel>
 
                         <!-- Spacer between left chip and right cluster -->
-                        <Border Grid.Column="1" />
+                        <Border Grid.Column="1" Width="8" />
 
                         <!-- Remaining context window — compact ring; tooltip
                              shows the exact tokens-left numbers. -->

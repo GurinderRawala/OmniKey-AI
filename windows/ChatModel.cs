@@ -367,18 +367,18 @@ namespace OmniKey.Windows
             get
             {
                 if (CanChangeSessionSetup)
-                    return DefaultTaskTemplate?.Heading ?? "No instruction";
+                    return DefaultTaskTemplate?.Heading ?? "No task instructions";
 
                 var locked = ActiveSession?.TaskInstructionHeading;
                 if (!string.IsNullOrEmpty(locked))
                     return locked!;
 
-                return "No instruction";
+                return "No task instructions";
             }
         }
 
         public bool HasDisplayedTaskInstruction =>
-            DisplayedTaskInstructionHeading != "No instruction";
+            DisplayedTaskInstructionHeading != "No task instructions";
 
 
         /// <summary>One-shot signal consumed by the sidebar: when set, the

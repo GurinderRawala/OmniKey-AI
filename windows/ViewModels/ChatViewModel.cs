@@ -328,6 +328,7 @@ namespace OmniKey.Windows.ViewModels
         private void Load()
         {
             _model.RefreshSessions();
+            _model.FetchGroups();
             _model.FetchDefaultTaskTemplate();
             // Populate the composer's model pill. Mirrors macOS ChatView.onAppear
             // calling fetchAgentModelOptions().
@@ -961,20 +962,11 @@ namespace OmniKey.Windows.ViewModels
             _ => "Circle24",
         };
 
-        /// <summary>Compact preview (first non-empty line, capped at 120 chars).</summary>
-        public string Summary
-        {
-            get
-            {
-                var raw = Text?.Trim() ?? string.Empty;
-                if (raw.Length == 0) return string.Empty;
-                var firstLine = raw.Split('\n', StringSplitOptions.RemoveEmptyEntries)
-                                   .FirstOrDefault(line => !string.IsNullOrWhiteSpace(line)) ?? string.Empty;
-                var s = firstLine.Trim();
-                if (s.Length == 0) s = raw;
-                return s.Length > 120 ? s[..120] + "…" : s;
-            }
-        }
+        /// <summary>Concise preview for raw tool/script blocks.</summary>
+        public string Summary => AgentTimelineSummarizer.CollapsedSummary(Kind, Text);
+
+        /// <summary>Expanded detail still shows a readable summary, not raw payload text.</summary>
+        public string ExpandedSummary => AgentTimelineSummarizer.ExpandedSummary(Kind, Text);
 
         public Brush AccentBrush => Kind switch
         {

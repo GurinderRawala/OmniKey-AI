@@ -173,7 +173,7 @@
                         FontFamily="{StaticResource OK.MonoFontFamily}"
                         FontSize="11.5"
                         Foreground="#FFDCDCE0"
-                        Text="{Binding Text}"
+                        Text="{Binding ExpandedSummary}"
                         TextWrapping="Wrap" />
                 </Border>
             </Grid>
