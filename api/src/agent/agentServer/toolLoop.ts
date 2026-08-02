@@ -13,10 +13,7 @@ import { persistSessionToDB } from './sessionStore';
 import { buildShellToolResult, collectShellOutputFilterKeywords } from './terminalOutput';
 import { completeWithContextRecovery } from './completionRecovery';
 
-const MAX_TOOL_ITERATIONS = 20;
 const MAX_TOOL_CALLS_PER_ITERATION = 8;
-const TOOL_LOOP_LIMIT_MESSAGE =
-  'The agent stopped because it made too many tool calls in one turn. The work so far has been saved; please send a narrower follow-up or ask it to continue from the latest result.';
 
 function isWebTool(name: string): boolean {
   return name === 'web_search' || name === 'web_fetch';
@@ -26,7 +23,7 @@ function isToolFailureResult(result: string): boolean {
   return result.trimStart().startsWith('Error');
 }
 
-function toolLoopLimitResult(model: string, message = TOOL_LOOP_LIMIT_MESSAGE): AICompletionResult {
+function toolLoopLimitResult(model: string, message: string): AICompletionResult {
   const content = `<final_answer>\n${message}\n</final_answer>`;
   return {
     content,
@@ -71,14 +68,6 @@ export async function runToolLoop(
     toolIterations++;
 
     const toolCalls = result.tool_calls ?? [];
-
-    if (toolIterations > MAX_TOOL_ITERATIONS) {
-      log.warn('Agent tool loop exceeded maximum iterations; stopping turn', {
-        sessionId,
-        maxToolIterations: MAX_TOOL_ITERATIONS,
-      });
-      return toolLoopLimitResult(model);
-    }
 
     // If the model claims tool_calls but sent none, treat it as a normal text
     // response — pushing an assistant message with no following tool results

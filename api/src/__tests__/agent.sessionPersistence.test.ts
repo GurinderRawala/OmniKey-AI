@@ -605,20 +605,31 @@ describe('agent session persistence checkpoints', () => {
     ).toBe(true);
   });
 
-  it('stops a runaway tool loop after a bounded number of iterations', async () => {
-    const toolCall = {
-      id: 'call-loop',
-      name: 'web_search',
-      arguments: { query: 'loop forever' },
-    };
+  it('allows long valid tool loops to continue past twenty iterations', async () => {
     const send = vi.fn();
 
-    mocks.complete.mockResolvedValue({
-      assistantMessage: { role: 'assistant', content: '', tool_calls: [toolCall] },
-      content: '',
-      finish_reason: 'tool_calls',
+    for (let i = 0; i < 21; i++) {
+      const toolCall = {
+        id: `call-${i}`,
+        name: 'web_search',
+        arguments: { query: `valid lookup ${i}` },
+      };
+      mocks.complete.mockResolvedValueOnce({
+        assistantMessage: { role: 'assistant', content: '', tool_calls: [toolCall] },
+        content: '',
+        finish_reason: 'tool_calls',
+        model: 'test-model',
+        tool_calls: [toolCall],
+      });
+    }
+    mocks.complete.mockResolvedValueOnce({
+      assistantMessage: {
+        role: 'assistant',
+        content: '<final_answer>\nFinished after extended tool work.\n</final_answer>',
+      },
+      content: '<final_answer>\nFinished after extended tool work.\n</final_answer>',
+      finish_reason: 'stop',
       model: 'test-model',
-      tool_calls: [toolCall],
     });
 
     await runAgentTurn(
@@ -635,10 +646,15 @@ describe('agent session persistence checkpoints', () => {
       { skipGrouping: true },
     );
 
-    expect(mocks.executeTool.mock.calls.length).toBeLessThanOrEqual(20);
+    expect(mocks.executeTool).toHaveBeenCalledTimes(21);
+    expect(
+      send.mock.calls.some(([msg]) =>
+        String(msg.content).includes('Finished after extended tool work.'),
+      ),
+    ).toBe(true);
     expect(
       send.mock.calls.some(([msg]) => String(msg.content).includes('too many tool calls')),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it('interrupts repeated web-tool failure and recovers with shell_script fallback', async () => {
