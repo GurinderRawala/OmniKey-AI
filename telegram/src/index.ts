@@ -125,7 +125,12 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
   hardExit.unref();
 
   await stopTelegram(logger);
-  await new Promise<void>((resolve) => server.close(() => resolve()));
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
+    if (typeof server.closeAllConnections === 'function') {
+      server.closeAllConnections();
+    }
+  });
   clearTimeout(hardExit);
   process.exit(0);
 }

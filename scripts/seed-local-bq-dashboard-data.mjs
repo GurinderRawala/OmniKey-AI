@@ -1,26 +1,37 @@
 #!/usr/bin/env node
 
 import { readFileSync, readdirSync } from "node:fs"
-import { join } from "node:path"
+import { dirname, join, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
 
-const ENDPOINT = (
-	process.env.BIGQUERY_API_ENDPOINT ?? "http://localhost:9050"
-).replace(/\/$/, "")
+const ENDPOINT = (process.env.BIGQUERY_API_ENDPOINT ?? "http://localhost:9050").replace(/\/+$/, "")
 const PROJECT_ID = process.env.BIGQUERY_PROJECT_ID ?? "123"
 const DATASET = process.env.BIGQUERY_DATASET ?? "coderabbit_prod_db_public"
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"])
 
-const ORG_ID =
-	process.env.SEED_ORG_ID ?? "fef3aa20-3c61-11ee-ad56-f7d4f84f4906"
-const WORKSPACE_ID =
-	process.env.SEED_WORKSPACE_ID ?? "29b07494-e730-4aaf-bbc6-99f81b5064fd"
+let endpointUrl
+try {
+	endpointUrl = new URL(ENDPOINT)
+} catch (err) {
+	throw new Error(`invalid BIGQUERY_API_ENDPOINT ${ENDPOINT}: ${err.message}`)
+}
+if (!LOOPBACK_HOSTS.has(endpointUrl.hostname) && process.env.SEED_ALLOW_REMOTE !== "true") {
+	throw new Error(
+		`refusing to seed non-local endpoint ${ENDPOINT}; set SEED_ALLOW_REMOTE=true to override`,
+	)
+}
+
+const ORG_ID = process.env.SEED_ORG_ID ?? "fef3aa20-3c61-11ee-ad56-f7d4f84f4906"
+const WORKSPACE_ID = process.env.SEED_WORKSPACE_ID ?? "29b07494-e730-4aaf-bbc6-99f81b5064fd"
 const ORG_NAME = process.env.SEED_ORG_NAME ?? "coderabbitai"
 
-const DASHBOARDS_DIR = "coderabbitHandler/src/grafana-proxy/dashboards"
+const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url))
+const DASHBOARDS_DIR = resolve(SCRIPT_DIR, "..", "coderabbitHandler/src/grafana-proxy/dashboards")
 
 const now = new Date()
-const daysAgo = days => new Date(now.getTime() - days * 24 * 60 * 60 * 1000)
-const iso = date => date.toISOString()
-const dateOnly = date => date.toISOString().slice(0, 10)
+const daysAgo = (days) => new Date(now.getTime() - days * 24 * 60 * 60 * 1000)
+const iso = (date) => date.toISOString()
+const dateOnly = (date) => date.toISOString().slice(0, 10)
 
 const subscriptionId = 1
 const teamId = "team-platform"
@@ -56,9 +67,7 @@ async function request(path, options = {}) {
 		// Keep plain text.
 	}
 	if (!response.ok) {
-		const err = new Error(
-			`${options.method ?? "GET"} ${path} failed: ${response.status} ${text}`,
-		)
+		const err = new Error(`${options.method ?? "GET"} ${path} failed: ${response.status} ${text}`)
 		err.status = response.status
 		err.body = body
 		throw err
@@ -70,21 +79,29 @@ async function ignoreNotFound(promise) {
 	try {
 		return await promise
 	} catch (err) {
-		if (err.status === 404 || /not found/i.test(String(err.message))) return null
+		const status = typeof err === "object" && err ? err.status : undefined
+		const message = typeof err === "object" && err ? err.message : err
+		if (status === 404) return null
+		if (status === undefined && /not found/i.test(String(message))) return null
 		throw err
 	}
 }
 
 function extractDashboardColumns() {
 	const tables = new Map()
+	const datasetPattern = DATASET.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+	const aliasKeywordPattern =
+		"JOIN|WHERE|ON|GROUP|ORDER|HAVING|LIMIT|UNION|LEFT|RIGHT|INNER|FULL|CROSS|OUTER"
 	const add = (table, column) => {
 		if (!tables.has(table)) tables.set(table, new Set())
 		tables.get(table).add(column.replace(/`/g, ""))
 	}
-	const scanSql = sql => {
+	const scanSql = (sql) => {
 		const aliasMap = new Map()
-		const tableRe =
-			/(?:FROM|JOIN)\s+`?coderabbit_prod_db_public`?\.`?([A-Za-z_][A-Za-z0-9_]*)`?(?:\s+(?:AS\s+)?([A-Za-z_][A-Za-z0-9_]*))?/gi
+		const tableRe = new RegExp(
+			`(?:FROM|JOIN)\\s+\`?${datasetPattern}\`?\\.\`?([A-Za-z_][A-Za-z0-9_]*)\`?(?:\\s+(?:AS\\s+)?(?!(?:${aliasKeywordPattern})\\b)([A-Za-z_][A-Za-z0-9_]*))?`,
+			"gi",
+		)
 		for (const match of sql.matchAll(tableRe)) {
 			const table = match[1]
 			const alias = match[2] ?? table
@@ -102,7 +119,7 @@ function extractDashboardColumns() {
 			}
 		}
 	}
-	const walkPanel = panel => {
+	const walkPanel = (panel) => {
 		for (const target of panel.targets ?? []) {
 			if (typeof target.rawSql === "string" && target.rawSql.trim()) {
 				scanSql(target.rawSql)
@@ -110,8 +127,13 @@ function extractDashboardColumns() {
 		}
 		for (const child of panel.panels ?? []) walkPanel(child)
 	}
-	for (const file of readdirSync(DASHBOARDS_DIR).filter(f => f.endsWith(".json"))) {
-		const dashboard = JSON.parse(readFileSync(join(DASHBOARDS_DIR, file), "utf8"))
+	for (const file of readdirSync(DASHBOARDS_DIR).filter((f) => f.endsWith(".json"))) {
+		let dashboard
+		try {
+			dashboard = JSON.parse(readFileSync(join(DASHBOARDS_DIR, file), "utf8"))
+		} catch (err) {
+			throw new Error(`failed to parse dashboard ${file}: ${err.message}`)
+		}
 		for (const panel of dashboard.panels ?? []) walkPanel(panel)
 		for (const variable of dashboard.templating?.list ?? []) {
 			const query =
@@ -120,7 +142,7 @@ function extractDashboardColumns() {
 					: typeof variable.definition === "string"
 						? variable.definition
 						: ""
-			if (query.includes("coderabbit_prod_db_public")) scanSql(query)
+			if (query.includes(DATASET)) scanSql(query)
 		}
 	}
 	return tables
@@ -135,106 +157,111 @@ function addRowColumns(tables, rowsByTable) {
 	}
 }
 
+const TIMESTAMP_COLUMNS = new Set([
+	"createdAt",
+	"updatedAt",
+	"created_at",
+	"updated_at",
+	"last_used_at",
+	"pr_created",
+	"ready_for_review",
+	"pr_merged",
+	"pr_closed",
+	"last_commit_timestamp",
+	"first_comment_timestamp",
+	"comment_timestamp",
+	"created",
+])
+const TIMESTAMP_SUFFIXES = ["_at", "_timestamp"]
+const BOOL_COLUMNS = new Set([
+	"accepted",
+	"cr_reviewed",
+	"inconclusive",
+	"is_active",
+	"is_bot",
+	"is_overridden",
+	"is_pr_blocked",
+	"private_repo",
+	"pro_legacy",
+	"schedule_success",
+	"schedule_status",
+	"trial_as_pro",
+])
+const INT_ID_TABLES = new Set(["repositories", "subscription_user", "subscriptions"])
+const INT_COLUMNS = new Set([
+	"subscription_id",
+	"subscription_user_id",
+	"num_seats",
+	"user_level",
+	"file_total",
+	"file_selected",
+	"estimated_complexity",
+	"estimated_review_minutes",
+	"hunks",
+	"actionable_cmnts",
+	"suppressed_cmnts",
+	"issue_cmnts",
+	"refactor_cmnts",
+	"nitpick_cmnts",
+	"comments_count",
+	"line_number",
+	"total_cmnts",
+	"total_suggestions",
+	"total_learnings_created",
+	"total_issue_cmnts",
+	"total_refactor_cmnts",
+	"total_nitpick_cmnts",
+	"accepted_issue_cmnts",
+	"accepted_refactor_cmnts",
+	"accepted_nitpick_cmnts",
+	"scripts_executed",
+	"tool_call_count",
+	"server_error_count",
+	"insights_count",
+	"action_performed",
+	"billable_files_count",
+	"files_billed",
+	"unit_price_cents",
+])
+const INT_SUFFIXES = ["_count", "_posted", "_accepted", "_comments"]
+const FLOAT_COLUMNS = new Set([
+	"wait_time_ms",
+	"dynamic_reviews_per_hour",
+	"categorized_confidence",
+])
+
 function typeForColumn(table, column) {
 	if (
-		column === "createdAt" ||
-		column === "updatedAt" ||
-		column === "created_at" ||
-		column === "updated_at" ||
-		column === "last_used_at" ||
-		column === "pr_created" ||
-		column === "ready_for_review" ||
-		column === "pr_merged" ||
-		column === "pr_closed" ||
-		column === "last_commit_timestamp" ||
-		column === "first_comment_timestamp" ||
-		column === "comment_timestamp" ||
-		column === "created" ||
-		column.endsWith("_at") ||
-		column.endsWith("_timestamp")
+		TIMESTAMP_COLUMNS.has(column) ||
+		TIMESTAMP_SUFFIXES.some((suffix) => column.endsWith(suffix))
 	) {
 		return "TIMESTAMP"
 	}
-	if (
-		column === "accepted" ||
-		column === "cr_reviewed" ||
-		column === "inconclusive" ||
-		column === "is_active" ||
-		column === "is_bot" ||
-		column === "is_overridden" ||
-		column === "is_pr_blocked" ||
-		column === "private_repo" ||
-		column === "pro_legacy" ||
-		column === "schedule_success" ||
-		column === "schedule_status" ||
-		column === "trial_as_pro" ||
-		(table === "pre_merge_checks_results" && column === "status")
-	) {
+	if (BOOL_COLUMNS.has(column) || (table === "pre_merge_checks_results" && column === "status")) {
 		return "BOOL"
 	}
-	if (
-		column === "id" &&
-		["repositories", "subscription_user", "subscriptions"].includes(table)
-	) {
+	if (column === "id" && INT_ID_TABLES.has(table)) {
 		return "INT64"
 	}
-	if (
-		column === "subscription_id" ||
-		column === "subscription_user_id" ||
-		column === "num_seats" ||
-		column === "user_level" ||
-		column === "file_total" ||
-		column === "file_selected" ||
-		column === "estimated_complexity" ||
-		column === "estimated_review_minutes" ||
-		column === "hunks" ||
-		column === "actionable_cmnts" ||
-		column === "suppressed_cmnts" ||
-		column === "issue_cmnts" ||
-		column === "refactor_cmnts" ||
-		column === "nitpick_cmnts" ||
-		column === "comments_count" ||
-		column === "line_number" ||
-		column === "total_cmnts" ||
-		column === "total_suggestions" ||
-		column === "total_learnings_created" ||
-		column === "total_issue_cmnts" ||
-		column === "total_refactor_cmnts" ||
-		column === "total_nitpick_cmnts" ||
-		column === "accepted_issue_cmnts" ||
-		column === "accepted_refactor_cmnts" ||
-		column === "accepted_nitpick_cmnts" ||
-		column === "scripts_executed" ||
-		column === "tool_call_count" ||
-		column === "server_error_count" ||
-		column === "insights_count" ||
-		column === "action_performed" ||
-		column === "billable_files_count" ||
-		column === "files_billed" ||
-		column === "unit_price_cents" ||
-		column.endsWith("_count") ||
-		column.endsWith("_posted") ||
-		column.endsWith("_accepted") ||
-		column.endsWith("_comments")
-	) {
+	if (INT_COLUMNS.has(column) || INT_SUFFIXES.some((suffix) => column.endsWith(suffix))) {
 		return "INT64"
 	}
-	if (
-		column === "wait_time_ms" ||
-		column === "dynamic_reviews_per_hour" ||
-		column === "categorized_confidence"
-	) {
+	if (FLOAT_COLUMNS.has(column)) {
 		return "FLOAT64"
 	}
 	return "STRING"
 }
 
 async function ensureDataset() {
-	await ignoreNotFound(
+	const existing = await ignoreNotFound(
 		request(`/bigquery/v2/projects/${PROJECT_ID}/datasets/${DATASET}`, {
 			method: "GET",
 		}),
 	)
+	if (existing) {
+		log(`dataset ${PROJECT_ID}.${DATASET} already exists`)
+		return
+	}
 	try {
 		await request(`/bigquery/v2/projects/${PROJECT_ID}/datasets`, {
 			method: "POST",
@@ -245,30 +272,33 @@ async function ensureDataset() {
 		})
 		log(`created dataset ${PROJECT_ID}.${DATASET}`)
 	} catch (err) {
-		if (!/already/i.test(String(err.message))) throw err
+		if (err.status !== 409 && !/already/i.test(String(err.message))) throw err
 	}
 }
 
 async function recreateTable(table, columns) {
+	const fields = [...(columns ?? [])].sort().map((column) => ({
+		name: column,
+		type: typeForColumn(table, column),
+		mode: "NULLABLE",
+	}))
+	if (fields.length === 0) {
+		log(`skipping ${table}: no columns resolved from dashboards or seed rows`)
+		return false
+	}
 	await ignoreNotFound(
-		request(
-			`/bigquery/v2/projects/${PROJECT_ID}/datasets/${DATASET}/tables/${table}`,
-			{ method: "DELETE" },
-		),
+		request(`/bigquery/v2/projects/${PROJECT_ID}/datasets/${DATASET}/tables/${table}`, {
+			method: "DELETE",
+		}),
 	)
 	await request(`/bigquery/v2/projects/${PROJECT_ID}/datasets/${DATASET}/tables`, {
 		method: "POST",
 		body: JSON.stringify({
 			tableReference: { projectId: PROJECT_ID, datasetId: DATASET, tableId: table },
-			schema: {
-				fields: [...columns].sort().map(column => ({
-					name: column,
-					type: typeForColumn(table, column),
-					mode: "NULLABLE",
-				})),
-			},
+			schema: { fields },
 		}),
 	})
+	return true
 }
 
 async function insertRows(table, rows) {
@@ -287,9 +317,7 @@ async function insertRows(table, rows) {
 		},
 	)
 	if (response.insertErrors?.length) {
-		throw new Error(
-			`insertAll ${table} returned errors: ${JSON.stringify(response.insertErrors)}`,
-		)
+		throw new Error(`insertAll ${table} returned errors: ${JSON.stringify(response.insertErrors)}`)
 	}
 }
 
@@ -638,7 +666,7 @@ function makeRows() {
 			private_repo: index % 2 === 0,
 			stars_count: 40 + index * 11,
 			programming_languages: JSON.stringify({ TypeScript: 78, Go: 12 }),
-			subscription_id: String(subscriptionId),
+			subscription_id: subscriptionId,
 		})),
 		pr_metrics: prMetrics,
 		review_event: reviewEvents,
@@ -821,7 +849,16 @@ async function validate() {
 		method: "POST",
 		body: JSON.stringify({ query, useLegacySql: false }),
 	})
-	log("validation counts", JSON.stringify(response.rows?.[0]?.f?.map(f => f.v)))
+	const names = response.schema?.fields?.map((field) => field.name) ?? []
+	const values = response.rows?.[0]?.f?.map((field) => Number(field.v)) ?? []
+	const counts = Object.fromEntries(names.map((name, index) => [name, values[index]]))
+	log("validation counts", JSON.stringify(counts))
+	const empty = Object.entries(counts)
+		.filter(([, count]) => !Number.isFinite(count) || count === 0)
+		.map(([name]) => name)
+	if (empty.length > 0) {
+		throw new Error(`validation failed: no rows in ${empty.join(", ")}`)
+	}
 }
 
 async function main() {
@@ -832,7 +869,7 @@ async function main() {
 	await ensureDataset()
 
 	for (const table of [...columnsByTable.keys()].sort()) {
-		await recreateTable(table, columnsByTable.get(table))
+		if (!(await recreateTable(table, columnsByTable.get(table)))) continue
 		const rows = rowsByTable[table] ?? []
 		await insertRows(table, rows)
 		log(`seeded ${table}: ${rows.length} rows`)
@@ -842,7 +879,7 @@ async function main() {
 	log(`done: ${PROJECT_ID}.${DATASET} at ${ENDPOINT}`)
 }
 
-main().catch(err => {
+main().catch((err) => {
 	console.error("[seed-local-bq-dashboard-data] fatal", err)
 	process.exit(1)
 })

@@ -6,6 +6,7 @@ import { AgentSettings } from './models/agentSettings';
 import { logger } from './logger';
 
 export const DEFAULT_AGENT_SETTINGS_ID = 'default';
+let agentSettingsVersion = 0;
 
 export type AgentModelOption = {
   id: string;
@@ -136,14 +137,12 @@ function legacyDefaults(): Omit<AgentSettingsSnapshot, 'id'> {
   return {
     terminalAccess: readTerminalAccess(cfg.TERMINAL_ACCESS ?? config.terminalAccess),
     webSearchEnabled: readBoolean(cfg.WEB_SEARCH_ENABLED, config.webSearchEnabled),
-    usageRecordingEnabled: readBoolean(
-      cfg.USAGE_RECORDING_ENABLED,
-      config.usageRecordingEnabled,
-    ),
+    usageRecordingEnabled: readBoolean(cfg.USAGE_RECORDING_ENABLED, config.usageRecordingEnabled),
     browserAccessEnabled:
       readBoolean(cfg.BROWSER_ACCESS_ENABLED, config.browserAccessEnabled) ||
       Boolean(cfg.BROWSER_DEBUG_EXECUTABLE ?? config.browserDebugExecutable),
-    openaiModel: firstString(cfg.OPENAI_MODEL, config.openaiModel) ?? defaultModelForProvider('openai'),
+    openaiModel:
+      firstString(cfg.OPENAI_MODEL, config.openaiModel) ?? defaultModelForProvider('openai'),
     anthropicModel: firstString(cfg.ANTHROPIC_MODEL) ?? defaultModelForProvider('anthropic'),
     geminiModel: firstString(cfg.GEMINI_MODEL) ?? defaultModelForProvider('gemini'),
     nemotronModel: firstString(cfg.NEMOTRON_MODEL) ?? defaultModelForProvider('nemotron'),
@@ -210,7 +209,12 @@ export async function updateAgentSettings(
   await AgentSettings.update(patch, { where: { id: DEFAULT_AGENT_SETTINGS_ID } });
   const row = await AgentSettings.findByPk(DEFAULT_AGENT_SETTINGS_ID);
   if (!row) throw new Error('Agent settings row was not found after update.');
+  agentSettingsVersion++;
   return rowToSnapshot(row);
+}
+
+export function getAgentSettingsVersion(): number {
+  return agentSettingsVersion;
 }
 
 export function agentModelOptionsForProvider(provider: AIProvider): AgentModelOption[] {

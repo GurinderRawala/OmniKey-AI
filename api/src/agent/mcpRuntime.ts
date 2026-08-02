@@ -24,6 +24,8 @@ const MAX_MCP_SCHEMA_JSON_CHARS = 12_000;
 const MAX_MCP_SCHEMA_STRING_CHARS = 700;
 const MAX_MCP_SCHEMA_ARRAY_ITEMS = 20;
 const MAX_MCP_SCHEMA_PROPERTIES = 80;
+const MAX_MCP_SCHEMA_DEPTH = 8;
+const MAX_MCP_SCHEMA_NODES = 600;
 const CONNECT_TIMEOUT_MS = 15_000;
 const STDIO_STDERR_MAX_BYTES = 16 * 1024;
 const STDIO_STDERR_DRAIN_MS = 2_000;
@@ -212,48 +214,100 @@ function sanitizeToolDescription(
   return truncateText(text, MAX_MCP_TOOL_DESCRIPTION_CHARS);
 }
 
-function compactSchemaValue(value: unknown): unknown {
-  if (typeof value === 'string') return truncateText(value, MAX_MCP_SCHEMA_STRING_CHARS);
-  if (Array.isArray(value))
-    return value.slice(0, MAX_MCP_SCHEMA_ARRAY_ITEMS).map(compactSchemaValue);
-  if (!value || typeof value !== 'object') return value;
-
-  const input = value as Record<string, unknown>;
-  const output: Record<string, unknown> = {};
-
-  for (const [key, raw] of Object.entries(input)) {
-    if (key === 'properties' && raw && typeof raw === 'object' && !Array.isArray(raw)) {
-      const properties: Record<string, unknown> = {};
-      const entries = Object.entries(raw as Record<string, unknown>);
-      for (const [propKey, propValue] of entries.slice(0, MAX_MCP_SCHEMA_PROPERTIES)) {
-        properties[propKey] = compactSchemaValue(propValue);
-      }
-      output[key] = properties;
-      if (entries.length > MAX_MCP_SCHEMA_PROPERTIES) {
-        output.additionalProperties = true;
-        output.description = truncateText(
-          `${String(output.description ?? '')} Schema omitted ${entries.length - MAX_MCP_SCHEMA_PROPERTIES} extra properties to keep the MCP tool prompt small.`,
-          MAX_MCP_SCHEMA_STRING_CHARS,
-        );
-      }
-      continue;
-    }
-
-    output[key] = compactSchemaValue(raw);
-  }
-
-  return output;
+interface SchemaBudget {
+  nodesRemaining: number;
+  exhausted: boolean;
 }
 
-function compactMcpToolSchema(schema: Record<string, unknown>): Record<string, unknown> {
-  const compacted = compactSchemaValue(schema) as Record<string, unknown>;
-  if (JSON.stringify(compacted).length <= MAX_MCP_SCHEMA_JSON_CHARS) return compacted;
+function fallbackMcpToolSchema(): Record<string, unknown> {
   return {
     type: 'object',
     additionalProperties: true,
     description:
       'Original MCP input schema was too large to include fully. Provide the minimal arguments requested by the user and implied by the tool description.',
   };
+}
+
+function consumeSchemaNode(budget: SchemaBudget): boolean {
+  budget.nodesRemaining--;
+  if (budget.nodesRemaining >= 0) return true;
+  budget.exhausted = true;
+  return false;
+}
+
+function compactSchemaValue(value: unknown, budget: SchemaBudget, depth = 0): unknown {
+  if (!consumeSchemaNode(budget)) return undefined;
+  if (depth > MAX_MCP_SCHEMA_DEPTH) {
+    budget.exhausted = true;
+    return undefined;
+  }
+  if (typeof value === 'string') return truncateText(value, MAX_MCP_SCHEMA_STRING_CHARS);
+  if (Array.isArray(value)) {
+    const output: unknown[] = [];
+    for (const item of value.slice(0, MAX_MCP_SCHEMA_ARRAY_ITEMS)) {
+      if (budget.exhausted) break;
+      output.push(compactSchemaValue(item, budget, depth + 1));
+    }
+    return output;
+  }
+  if (!value || typeof value !== 'object') return value;
+
+  const input = value as Record<string, unknown>;
+  const output: Record<string, unknown> = {};
+  let omittedExtraProperties = false;
+
+  for (const key in input) {
+    if (!Object.prototype.hasOwnProperty.call(input, key)) continue;
+    if (budget.exhausted) break;
+    const raw = input[key];
+    if (key === 'properties' && raw && typeof raw === 'object' && !Array.isArray(raw)) {
+      const properties: Record<string, unknown> = {};
+      const sourceProperties = raw as Record<string, unknown>;
+      let includedProperties = 0;
+      for (const propKey in sourceProperties) {
+        if (!Object.prototype.hasOwnProperty.call(sourceProperties, propKey)) continue;
+        if (budget.exhausted) break;
+        if (includedProperties >= MAX_MCP_SCHEMA_PROPERTIES) {
+          omittedExtraProperties = true;
+          break;
+        }
+        properties[propKey] = compactSchemaValue(sourceProperties[propKey], budget, depth + 1);
+        includedProperties++;
+      }
+      output[key] = properties;
+      continue;
+    }
+
+    output[key] = compactSchemaValue(raw, budget, depth + 1);
+  }
+
+  if (omittedExtraProperties) {
+    const existingDescription = typeof output.description === 'string' ? output.description : '';
+    output.description = truncateText(
+      `${existingDescription} Schema omitted extra properties to keep the MCP tool prompt small.`,
+      MAX_MCP_SCHEMA_STRING_CHARS,
+    );
+    output.additionalProperties = true;
+  }
+
+  return output;
+}
+
+function compactMcpToolSchema(schema: Record<string, unknown>): Record<string, unknown> {
+  const budget: SchemaBudget = {
+    nodesRemaining: MAX_MCP_SCHEMA_NODES,
+    exhausted: false,
+  };
+  const compacted = compactSchemaValue(schema, budget) as Record<string, unknown>;
+  if (budget.exhausted || !compacted || typeof compacted !== 'object') {
+    return fallbackMcpToolSchema();
+  }
+  try {
+    if (JSON.stringify(compacted).length <= MAX_MCP_SCHEMA_JSON_CHARS) return compacted;
+  } catch {
+    // Fall through to the permissive fallback.
+  }
+  return fallbackMcpToolSchema();
 }
 
 function isStdioAllowed(): boolean {

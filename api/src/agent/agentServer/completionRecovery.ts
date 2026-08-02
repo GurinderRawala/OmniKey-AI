@@ -78,6 +78,7 @@ function openAISupportsExtendedPromptCache(model: string): boolean {
   return (
     /^gpt-5\.5/.test(m) ||
     /^gpt-5\.4/.test(m) ||
+    /^gpt-5\.3/.test(m) ||
     /^gpt-5\.2/.test(m) ||
     /^gpt-5\.1/.test(m) ||
     /^gpt-5($|-)/.test(m) ||

@@ -48,6 +48,8 @@ export interface AICompletionResult {
   content: string;
   finish_reason: 'stop' | 'tool_calls' | 'length';
   tool_calls?: AIToolCall[];
+  /** Internal guard used when the agent tool loop stopped itself for safety. */
+  toolLoopStopped?: boolean;
   usage?: AIUsage;
   model: string;
   /** Normalised assistant message ready to push into history */

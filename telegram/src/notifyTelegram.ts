@@ -92,6 +92,7 @@ async function sendTelegramMessage(
   message: string,
   options: SendMessageOptions = {},
   fallbackText = message,
+  retriedAfterRateLimit = false,
 ) {
   if (!bot) {
     throw new Error('Telegram bot not initialized. Call initTelegram first.');
@@ -101,13 +102,13 @@ async function sendTelegramMessage(
     return await bot.sendMessage(chatId, message, options);
   } catch (err) {
     const retryAfterMs = telegramRetryAfterMs(err);
-    if (retryAfterMs !== null) {
+    if (retryAfterMs !== null && !retriedAfterRateLimit) {
       logger.warn('Telegram send was rate-limited; retrying', {
         retryAfterMs,
         ...telegramErrorDetails(err),
       });
       await delay(retryAfterMs);
-      return await bot.sendMessage(chatId, message, options);
+      return sendTelegramMessage(logger, chatId, message, options, fallbackText, true);
     }
     if (options.parse_mode && isTelegramParseError(err)) {
       logger.warn('Telegram rejected parse mode; retrying as plain text', {
@@ -131,28 +132,61 @@ async function editTelegramMessageText(
   text: string,
   options: EditMessageTextOptions,
   fallbackText = text,
+  retriedAfterRateLimit = false,
 ) {
   if (!bot) return false;
   try {
     return await bot.editMessageText(text, options);
   } catch (err) {
     const retryAfterMs = telegramRetryAfterMs(err);
-    if (retryAfterMs !== null) {
+    if (retryAfterMs !== null && !retriedAfterRateLimit) {
       logger.warn('Telegram edit was rate-limited; retrying', {
         retryAfterMs,
         ...telegramErrorDetails(err),
       });
       await delay(retryAfterMs);
-      return await bot.editMessageText(text, options);
+      return editTelegramMessageText(logger, text, options, fallbackText, true);
     }
     if (options.parse_mode && isTelegramParseError(err)) {
       logger.warn('Telegram rejected edit parse mode; retrying as plain text', {
         parseMode: options.parse_mode,
         ...telegramErrorDetails(err),
       });
-      return await bot.editMessageText(fallbackText, withoutParseMode(options));
+      try {
+        return await bot.editMessageText(fallbackText, withoutParseMode(options));
+      } catch (fallbackErr) {
+        logger.error('Plain-text Telegram edit fallback failed', telegramErrorDetails(fallbackErr));
+        throw fallbackErr;
+      }
     }
+    logger.error('Failed to edit Telegram message', telegramErrorDetails(err));
     throw err;
+  }
+}
+
+async function sendHtmlWithFallback(logger: Logger, chatId: number, body: string): Promise<void> {
+  try {
+    await sendTelegramMessage(
+      logger,
+      chatId,
+      body,
+      {
+        parse_mode: 'HTML',
+        disable_web_page_preview: true,
+      },
+      stripHtmlTags(body),
+    );
+  } catch (err) {
+    logger.warn('HTML render failed; falling back to plain text', {
+      error: (err as Error).message,
+    });
+    try {
+      await sendTelegramMessage(logger, chatId, stripHtmlTags(body));
+    } catch (fallbackErr) {
+      logger.warn('Plain-text fallback also failed', {
+        error: (fallbackErr as Error).message,
+      });
+    }
   }
 }
 
@@ -163,7 +197,7 @@ async function answerTelegramCallback(
 ): Promise<void> {
   if (!bot) return;
   try {
-    await (bot.answerCallbackQuery as any)(callbackQueryId, options);
+    await bot.answerCallbackQuery(callbackQueryId, options);
   } catch (err) {
     logger.warn('Failed to answer Telegram callback query', telegramErrorDetails(err));
   }
@@ -549,7 +583,9 @@ interface WizardCopy {
 function renderModelStep(state: PendingPromptState): WizardCopy {
   const currentLabel = modelLabelFor(state, state.activeModel);
   const heading = `*${wizardStep(state, 1)} · Model*`;
-  const contextLine = state.sessionId ? `Resuming session \`${state.sessionId}\`.` : 'Starting a new session.';
+  const contextLine = state.sessionId
+    ? `Resuming session \`${state.sessionId}\`.`
+    : 'Starting a new session.';
   const text = [
     heading,
     contextLine,
@@ -872,23 +908,7 @@ async function handleTaskCommand(logger: Logger, chatId: number) {
     const chunks = splitForTelegram(header + html);
     if (!bot) return;
     for (const chunk of chunks) {
-      try {
-        await sendTelegramMessage(
-          logger,
-          chatId,
-          chunk,
-          {
-            parse_mode: 'HTML',
-            disable_web_page_preview: true,
-          },
-          stripHtmlTags(chunk),
-        );
-      } catch (err) {
-        logger.warn('HTML render failed for /task; falling back to plain', {
-          error: (err as Error).message,
-        });
-        await sendTelegramMessage(logger, chatId, stripHtmlTags(chunk));
-      }
+      await sendHtmlWithFallback(logger, chatId, chunk);
     }
   } catch (err) {
     logger.error('Failed to handle /task', { error: (err as Error).message });
@@ -1032,10 +1052,12 @@ async function handleCallbackQuery(logger: Logger, query: TelegramBot.CallbackQu
       modelSelectionCache.delete(chatId);
       await answerTelegramCallback(logger, query.id, { text: 'Kept current model' });
       if (query.message) {
-        await bot.editMessageReplyMarkup(
-          { inline_keyboard: [] },
-          { chat_id: chatId, message_id: query.message.message_id },
-        ).catch(() => undefined);
+        await bot
+          .editMessageReplyMarkup(
+            { inline_keyboard: [] },
+            { chat_id: chatId, message_id: query.message.message_id },
+          )
+          .catch(() => undefined);
       }
       return;
     }
@@ -1132,7 +1154,8 @@ async function handleCallbackQuery(logger: Logger, query: TelegramBot.CallbackQu
         } else {
           state.activeModel = option.id;
         }
-        state.chosenModelLabel = modelLabelFor(state, state.activeModel) || option.label || option.id;
+        state.chosenModelLabel =
+          modelLabelFor(state, state.activeModel) || option.label || option.id;
       } catch (err) {
         logger.error('Failed to update Telegram-selected model', {
           provider: state.activeProvider,
@@ -1304,32 +1327,7 @@ async function runAgentForChat(
     }
   };
 
-  const sendHtml = async (body: string) => {
-    try {
-      await sendTelegramMessage(
-        logger,
-        chatId,
-        body,
-        {
-          parse_mode: 'HTML',
-          disable_web_page_preview: true,
-        },
-        stripHtmlTags(body),
-      );
-    } catch (e) {
-      // Fall back to plain text if Telegram rejects the HTML payload.
-      logger.warn('HTML render failed; falling back to plain text', {
-        error: (e as Error).message,
-      });
-      try {
-        await sendTelegramMessage(logger, chatId, stripHtmlTags(body));
-      } catch (e2) {
-        logger.warn('Plain-text fallback also failed', {
-          error: (e2 as Error).message,
-        });
-      }
-    }
-  };
+  const sendHtml = async (body: string) => sendHtmlWithFallback(logger, chatId, body);
 
   try {
     const result = await runAgentTurn(logger, {
@@ -1469,7 +1467,10 @@ export function setupMessageListener(logger: Logger, bot: TelegramBot) {
         void notify(logger, `❌ Telegram button failed: ${(err as Error).message}`, {
           chatId,
         }).catch((notifyErr) => {
-          logger.error('Failed to report Telegram callback failure', telegramErrorDetails(notifyErr));
+          logger.error(
+            'Failed to report Telegram callback failure',
+            telegramErrorDetails(notifyErr),
+          );
         });
       }
     });
@@ -1488,6 +1489,9 @@ export function setupMessageListener(logger: Logger, bot: TelegramBot) {
         chatId,
         command: text.startsWith('/') ? text.split(/\s+/, 1)[0] : undefined,
         textLength: text.length,
+      });
+      logger.debug('Telegram message preview', {
+        chatId,
         preview: messagePreview(text),
       });
 
@@ -1549,7 +1553,10 @@ export function setupMessageListener(logger: Logger, bot: TelegramBot) {
         void notify(logger, `❌ Telegram command failed: ${(err as Error).message}`, {
           chatId,
         }).catch((notifyErr) => {
-          logger.error('Failed to report Telegram command failure', telegramErrorDetails(notifyErr));
+          logger.error(
+            'Failed to report Telegram command failure',
+            telegramErrorDetails(notifyErr),
+          );
         });
       }
     });

@@ -155,17 +155,24 @@ function statusMacOS(): void {
   } catch (e) {
     console.warn('launchctl list failed:', (e as Error).message);
   }
-  const port = process.env[TELEGRAM_PORT_ENV] || DEFAULT_TELEGRAM_PORT;
+  const parsedPort = Number(process.env[TELEGRAM_PORT_ENV]);
+  const port =
+    Number.isInteger(parsedPort) && parsedPort > 0 && parsedPort <= 65535
+      ? parsedPort
+      : Number(DEFAULT_TELEGRAM_PORT);
+  let lsof = '';
   try {
-    const lsof = execSync(`lsof -i :${port} -sTCP:LISTEN -t || true`).toString().trim();
-    console.log(
-      lsof
-        ? `Listening on port ${port} (pid ${lsof.split('\n')[0]}).`
-        : `Nothing listening on port ${port}.`,
-    );
+    lsof = execFileSync('lsof', ['-i', `:${port}`, '-sTCP:LISTEN', '-t'])
+      .toString()
+      .trim();
   } catch {
     /* ignore */
   }
+  console.log(
+    lsof
+      ? `Listening on port ${port} (pid ${lsof.split('\n')[0]}).`
+      : `Nothing listening on port ${port}.`,
+  );
 }
 
 function logsMacOS(): void {

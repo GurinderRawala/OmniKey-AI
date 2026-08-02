@@ -4,14 +4,37 @@ import { config } from '../../config';
 import { AgentSession } from '../../models/agentSession';
 import { authMiddleware, AuthLocals } from '../../authMiddleware';
 import { getContextWindowSize } from '../../ai-client';
-import { getAgentSettings, selectedAgentModelForProvider } from '../../agentSettingsStore';
+import {
+  getAgentSettings,
+  getAgentSettingsVersion,
+  selectedAgentModelForProvider,
+} from '../../agentSettingsStore';
 import { GROUPING_SESSION_PREFIX } from '../sessionGrouping';
 import { buildTranscript, RawHistoryMessage } from './transcript';
 
+const CONTEXT_WINDOW_CACHE_TTL_MS = 5_000;
+let contextWindowCache: { value: number; expiresAt: number; settingsVersion: number } | null = null;
+
 async function getActiveContextWindowSize(): Promise<number> {
+  const now = Date.now();
+  const settingsVersion = getAgentSettingsVersion();
+  if (
+    contextWindowCache &&
+    contextWindowCache.expiresAt > now &&
+    contextWindowCache.settingsVersion === settingsVersion
+  ) {
+    return contextWindowCache.value;
+  }
+
   const settings = await getAgentSettings();
   const model = selectedAgentModelForProvider(settings, config.aiProvider);
-  return getContextWindowSize(config.aiProvider, model);
+  const value = getContextWindowSize(config.aiProvider, model);
+  contextWindowCache = {
+    value,
+    expiresAt: now + CONTEXT_WINDOW_CACHE_TTL_MS,
+    settingsVersion,
+  };
+  return value;
 }
 
 // Exposes agent session management endpoints that the macOS (and Windows)

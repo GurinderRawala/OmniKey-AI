@@ -641,6 +641,51 @@ describe('agent session persistence checkpoints', () => {
     ).toBe(true);
   });
 
+  it('does not bypass the tool-loop limit after a web tool failure', async () => {
+    const toolCall = {
+      id: 'call-loop',
+      name: 'web_search',
+      arguments: { query: 'loop during outage' },
+    };
+    const send = vi.fn();
+
+    mocks.executeTool.mockResolvedValue('Error searching: upstream outage');
+    mocks.complete.mockResolvedValue({
+      assistantMessage: { role: 'assistant', content: '', tool_calls: [toolCall] },
+      content: '',
+      finish_reason: 'tool_calls',
+      model: 'test-model',
+      tool_calls: [toolCall],
+    });
+
+    await runAgentTurn(
+      'session-1',
+      { id: 'subscription-1' } as any,
+      {
+        session_id: 'session-1',
+        sender: 'client',
+        content: 'Keep searching during outage.',
+        platform: 'macos',
+      },
+      send,
+      mocks.log as any,
+      { skipGrouping: true },
+    );
+
+    expect(mocks.executeTool.mock.calls.length).toBeLessThanOrEqual(20);
+    expect(mocks.complete.mock.calls.length).toBeLessThanOrEqual(21);
+    expect(
+      send.mock.calls.some(([msg]) => String(msg.content).includes('too many tool calls')),
+    ).toBe(true);
+    expect(
+      historyUpdateCalls()
+        .map(parsedHistoryFromCall)
+        .some((history) =>
+          history.some((msg) => msg.content.startsWith('IMPORTANT: The web search tool failed')),
+        ),
+    ).toBe(false);
+  });
+
   it('ignores old web-tool failures when the current tool loop succeeds', async () => {
     mocks.agentSession.findOne.mockResolvedValueOnce({
       id: 'session-1',

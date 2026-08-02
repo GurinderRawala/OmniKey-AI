@@ -24,6 +24,7 @@ function toolLoopLimitResult(model: string, message = TOOL_LOOP_LIMIT_MESSAGE): 
     content,
     finish_reason: 'stop',
     model,
+    toolLoopStopped: true,
     assistantMessage: { role: 'assistant', content },
   };
 }
@@ -88,8 +89,9 @@ export async function runToolLoop(
       tools: toolCalls.map((tc) => tc.name),
     });
 
-    const toolResults: Array<{ id: string; name: string; result: string }> = [];
-    for (const tc of toolCalls) {
+    const executeOneToolCall = async (
+      tc: NonNullable<AICompletionResult['tool_calls']>[number],
+    ): Promise<{ id: string; name: string; result: string }> => {
       const args = tc.arguments as Record<string, unknown>;
 
       // If the tool is not in the per-turn allowed list (e.g. the user
@@ -108,14 +110,13 @@ export async function runToolLoop(
           is_terminal_output: false,
           is_error: true,
         });
-        toolResults.push({
+        return {
           id: tc.id,
           name: tc.name,
           result:
             `Error: Tool "${tc.name}" is not enabled for this session. ` +
             `Available tools: ${Array.from(allowedToolNames).join(', ') || '(none)'}.`,
-        });
-        continue;
+        };
       }
 
       if (tc.name.startsWith(MCP_TOOL_PREFIX)) {
@@ -134,8 +135,7 @@ export async function runToolLoop(
           tool: tc.name,
           resultLength: toolResult.length,
         });
-        toolResults.push({ id: tc.id, name: tc.name, result: toolResult });
-        continue;
+        return { id: tc.id, name: tc.name, result: toolResult };
       }
 
       // Injected server-side tools (e.g. the session-grouping cron's
@@ -155,8 +155,7 @@ export async function runToolLoop(
           tool: tc.name,
           resultLength: toolResult.length,
         });
-        toolResults.push({ id: tc.id, name: tc.name, result: toolResult });
-        continue;
+        return { id: tc.id, name: tc.name, result: toolResult };
       }
 
       if (tc.name === 'generate_image') {
@@ -188,8 +187,7 @@ export async function runToolLoop(
           is_image_rendering: true,
         });
 
-        toolResults.push({ id: tc.id, name: tc.name, result: toolResult });
-        continue;
+        return { id: tc.id, name: tc.name, result: toolResult };
       }
 
       // shell_script is a real tool. For interactive sessions we send the
@@ -216,8 +214,7 @@ export async function runToolLoop(
             outputLength: output.length,
             resultLength: result.length,
           });
-          toolResults.push({ id: tc.id, name: tc.name, result });
-          continue;
+          return { id: tc.id, name: tc.name, result };
         }
 
         log.info('Agent invoking shell_script tool; forwarding to frontend', {
@@ -236,8 +233,7 @@ export async function runToolLoop(
         const terminalOutput = await new Promise<string>((resolve) => {
           pendingShellScripts.set(sessionId, { resolve, filterKeywords });
         });
-        toolResults.push({ id: tc.id, name: tc.name, result: terminalOutput });
-        continue;
+        return { id: tc.id, name: tc.name, result: terminalOutput };
       }
 
       // Notify the frontend that a web tool call is about to execute.
@@ -260,7 +256,29 @@ export async function runToolLoop(
         tool: tc.name,
         resultLength: toolResult.length,
       });
-      toolResults.push({ id: tc.id, name: tc.name, result: toolResult });
+      return { id: tc.id, name: tc.name, result: toolResult };
+    };
+
+    const toolResults = new Array<{ id: string; name: string; result: string }>(toolCalls.length);
+    let callIndex = 0;
+    while (callIndex < toolCalls.length) {
+      const tc = toolCalls[callIndex];
+      if (tc.name === 'shell_script') {
+        toolResults[callIndex] = await executeOneToolCall(tc);
+        callIndex++;
+        continue;
+      }
+
+      const batchStart = callIndex;
+      const batch: typeof toolCalls = [];
+      while (callIndex < toolCalls.length && toolCalls[callIndex].name !== 'shell_script') {
+        batch.push(toolCalls[callIndex]);
+        callIndex++;
+      }
+      const batchResults = await Promise.all(batch.map(executeOneToolCall));
+      batchResults.forEach((toolResult, offset) => {
+        toolResults[batchStart + offset] = toolResult;
+      });
     }
 
     for (const { id, name, result: toolResult } of toolResults) {

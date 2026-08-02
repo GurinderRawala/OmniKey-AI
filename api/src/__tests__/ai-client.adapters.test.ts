@@ -176,20 +176,30 @@ describe('OpenAIAdapter temperature handling', () => {
     expect(body).not.toHaveProperty('prompt_cache_retention');
   });
 
-  it('complete: still supports prompt_cache_retention for gpt-5.5', async () => {
-    mocks.responsesCreate.mockResolvedValueOnce({
-      output: [{ type: 'message', content: [{ type: 'output_text', text: 'ok' }] }],
-      usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-    });
-    const client = new AIClient('openai', 'sk-test');
-    await client.complete('gpt-5.5', messages, {
-      enablePromptCache: true,
-      promptCacheRetention: '24h',
-    });
-    const body = mocks.responsesCreate.mock.calls[0][0];
-    expect(body).toHaveProperty('prompt_cache_retention', '24h');
-    expect(body).not.toHaveProperty('prompt_cache_options');
-  });
+  it.each([['gpt-5.5', 'responses'] as const, ['gpt-5.3', 'chat'] as const])(
+    'complete: still supports prompt_cache_retention for %s',
+    async (model, apiPath) => {
+      if (apiPath === 'responses') {
+        mocks.responsesCreate.mockResolvedValueOnce({
+          output: [{ type: 'message', content: [{ type: 'output_text', text: 'ok' }] }],
+          usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+        });
+      } else {
+        mockCompleteResponse();
+      }
+      const client = new AIClient('openai', 'sk-test');
+      await client.complete(model, messages, {
+        enablePromptCache: true,
+        promptCacheRetention: '24h',
+      });
+      const body =
+        apiPath === 'responses'
+          ? mocks.responsesCreate.mock.calls[0][0]
+          : mocks.openaiCreate.mock.calls[0][0];
+      expect(body).toHaveProperty('prompt_cache_retention', '24h');
+      expect(body).not.toHaveProperty('prompt_cache_options');
+    },
+  );
 
   it('streamComplete: uses 0.3 default for supported model when caller omits temperature', async () => {
     mockStreamResponse();

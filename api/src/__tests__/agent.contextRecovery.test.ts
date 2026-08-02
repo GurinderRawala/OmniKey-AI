@@ -110,6 +110,32 @@ describe('pruneHistoryForContextLimit', () => {
     expect(session.history.some((m) => m.role === 'tool')).toBe(false);
   });
 
+  it('repairs stranded prefixes with multiple consecutive tool-call rounds', () => {
+    const session = makeSession([
+      { role: 'system', content: 'sys' },
+      {
+        role: 'assistant',
+        content: 'calling first tool',
+        tool_calls: [{ id: 't1', name: 'shell_script', arguments: {} }],
+      },
+      { role: 'tool', tool_call_id: 't1', tool_name: 'shell_script', content: 'first result' },
+      {
+        role: 'assistant',
+        content: 'calling second tool',
+        tool_calls: [{ id: 't2', name: 'shell_script', arguments: {} }],
+      },
+      { role: 'tool', tool_call_id: 't2', tool_name: 'shell_script', content: 'second result' },
+      { role: 'assistant', content: 'done' },
+      { role: 'user', content: 'latest question' },
+    ]);
+
+    const changed = pruneHistoryForContextLimit(session, noopLog);
+
+    expect(changed).toBe(true);
+    expect(session.history.map((m) => m.content)).toEqual(['sys', 'latest question']);
+    expect(session.history.some((m) => m.role === 'tool')).toBe(false);
+  });
+
   it('returns false when only system and the final user turn remain', () => {
     const session = makeSession([
       { role: 'system', content: 'sys' },

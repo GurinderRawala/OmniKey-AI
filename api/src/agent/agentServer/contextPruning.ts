@@ -114,10 +114,30 @@ export function pruneHistoryForContextLimit(session: SessionState, log: Logger):
     history[systemEnd].role === 'assistant' &&
     (history[systemEnd].tool_calls?.length ?? 0) > 0
   ) {
-    while (unitEnd < history.length && history[unitEnd].role === 'tool') unitEnd++;
+    while (unitEnd < protectedStart) {
+      if (history[unitEnd].role === 'tool') {
+        unitEnd++;
+        continue;
+      }
+      if (history[unitEnd].role === 'assistant' && (history[unitEnd].tool_calls?.length ?? 0) > 0) {
+        unitEnd++;
+        continue;
+      }
+      break;
+    }
     if (unitEnd < protectedStart && history[unitEnd].role === 'assistant') unitEnd++;
   } else if (history[systemEnd].role === 'tool') {
-    while (unitEnd < protectedStart && history[unitEnd].role === 'tool') unitEnd++;
+    while (unitEnd < protectedStart) {
+      if (history[unitEnd].role === 'tool') {
+        unitEnd++;
+        continue;
+      }
+      if (history[unitEnd].role === 'assistant' && (history[unitEnd].tool_calls?.length ?? 0) > 0) {
+        unitEnd++;
+        continue;
+      }
+      break;
+    }
     if (unitEnd < protectedStart && history[unitEnd].role === 'assistant') unitEnd++;
   }
   unitEnd = Math.min(unitEnd, protectedStart);

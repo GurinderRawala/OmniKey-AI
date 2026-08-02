@@ -357,9 +357,10 @@ async function runAgentTurnInternal(
               msg.content.startsWith('Error'),
           );
 
-        if (toolLoopHasFinal && !webToolFailed) {
-          // The tool loop produced a final answer and no web tool failed — use it
-          // directly, avoiding a redundant AI call.
+        if (toolLoopHasFinal && (!webToolFailed || recoveredToolLoopResult.toolLoopStopped)) {
+          // The tool loop produced a final answer, or hit its own hard stop. Use
+          // hard-stop answers directly so web-failure recovery cannot bypass the
+          // tool-iteration cap.
           log.info('Tool loop produced final answer; processing inline', { sessionId });
           content = toolLoopContent;
           result = recoveredToolLoopResult;
