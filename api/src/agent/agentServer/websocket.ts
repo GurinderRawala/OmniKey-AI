@@ -5,7 +5,11 @@ import { logger } from '../../logger';
 import { createLazyAuthContext } from '../agentAuth';
 import type { AgentMessage, AgentSendFn } from '../types';
 import { activeSessions, pendingShellScripts, sessionQueues } from './runtimeState';
-import { clearSteeringMessages, enqueueSteeringMessage } from './steering';
+import {
+  clearSteeringMessages,
+  enqueueSteeringMessage,
+  getPendingSteeringMessageCount,
+} from './steering';
 import { buildShellToolResult } from './terminalOutput';
 import { runAgentTurn } from './turnRunner';
 
@@ -106,18 +110,31 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
           !isInternalCall &&
           activeSessions.has(sessionId)
         ) {
-          const pendingSteeringMessages = enqueueSteeringMessage(sessionId, message, log);
+          const steeringResult = enqueueSteeringMessage(sessionId, message, log);
+          if (!steeringResult.accepted) {
+            send({
+              session_id: sessionId,
+              sender: 'agent',
+              content: 'Empty steering update ignored.',
+              is_terminal_output: false,
+              is_error: true,
+              is_steering: true,
+            });
+            log.info('Ignored empty steering message for active session', { sessionId });
+            return;
+          }
+
           send({
             session_id: sessionId,
             sender: 'agent',
-            content: 'Steering update received for the current task.',
+            content: 'Steering update received for the running task.',
             is_terminal_output: false,
             is_error: false,
             is_steering: true,
           });
           log.info('Accepted steering message for active session', {
             sessionId,
-            pendingSteeringMessages,
+            pendingSteeringMessages: steeringResult.pendingCount,
           });
           return;
         }
@@ -201,7 +218,8 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
       for (const sid of connectionSessionIds) {
         const wasActive = activeSessions.has(sid);
         const queueLength = sessionQueues.get(sid)?.length ?? 0;
-        const steeringLength = clearSteeringMessages(sid);
+        const steeringLength = getPendingSteeringMessageCount(sid);
+        const drainedSteeringLength = wasActive ? 0 : clearSteeringMessages(sid);
 
         if (wasActive || queueLength > 0 || steeringLength > 0) {
           activeSessions.delete(sid);
@@ -210,7 +228,8 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
             sessionId: sid,
             wasActive,
             drainedQueueLength: queueLength,
-            drainedSteeringLength: steeringLength,
+            drainedSteeringLength,
+            retainedSteeringLength: wasActive ? steeringLength : 0,
           });
         }
       }

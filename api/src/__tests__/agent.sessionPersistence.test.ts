@@ -347,6 +347,109 @@ describe('agent session persistence checkpoints', () => {
     ).toBe(true);
   });
 
+  it('restarts instead of sending a final answer when steering arrives during final persistence', async () => {
+    let storedHistoryJson: string | null = null;
+    let storedTurns = 0;
+    let resolveFinalPersistStarted: () => void = () => {};
+    let releaseFinalPersist: () => void = () => {};
+    const finalPersistStarted = new Promise<void>((resolve) => {
+      resolveFinalPersistStarted = resolve;
+    });
+    const finalPersistRelease = new Promise<void>((resolve) => {
+      releaseFinalPersist = resolve;
+    });
+    const send = vi.fn();
+
+    mocks.agentSession.findOne.mockImplementation(async () => {
+      if (!storedHistoryJson) return null;
+      return {
+        id: 'session-1',
+        historyJson: storedHistoryJson,
+        turns: storedTurns,
+        groupName: null,
+        groupLocked: false,
+      };
+    });
+    mocks.agentSession.update.mockImplementation(async (values: { historyJson?: string; turns?: number }) => {
+      if (Object.prototype.hasOwnProperty.call(values, 'historyJson')) {
+        storedHistoryJson = values.historyJson ?? storedHistoryJson;
+        storedTurns = values.turns ?? storedTurns;
+        const history = JSON.parse(storedHistoryJson ?? '[]') as Array<{ content: string }>;
+        if (history.some((msg) => msg.content.includes('Stale final answer'))) {
+          resolveFinalPersistStarted();
+          await finalPersistRelease;
+        }
+      }
+      return [1];
+    });
+
+    mocks.complete
+      .mockResolvedValueOnce({
+        assistantMessage: {
+          role: 'assistant',
+          content: '<final_answer>\nStale final answer.\n</final_answer>',
+        },
+        content: '<final_answer>\nStale final answer.\n</final_answer>',
+        finish_reason: 'stop',
+        model: 'test-model',
+      })
+      .mockResolvedValueOnce({
+        assistantMessage: {
+          role: 'assistant',
+          content: '<final_answer>\nSteered final answer.\n</final_answer>',
+        },
+        content: '<final_answer>\nSteered final answer.\n</final_answer>',
+        finish_reason: 'stop',
+        model: 'test-model',
+      });
+
+    const turn = runAgentTurn(
+      'session-1',
+      { id: 'subscription-1' } as any,
+      {
+        session_id: 'session-1',
+        sender: 'client',
+        content: 'Answer with the original plan.',
+        platform: 'macos',
+      },
+      send,
+      mocks.log as any,
+      { skipGrouping: true },
+    );
+
+    await finalPersistStarted;
+    enqueueSteeringMessage(
+      'session-1',
+      {
+        session_id: 'session-1',
+        sender: 'client',
+        content: 'Use the new direction before finalizing.',
+        is_steering: true,
+        platform: 'macos',
+      },
+      mocks.log as any,
+    );
+    releaseFinalPersist();
+
+    await turn;
+
+    expect(mocks.complete).toHaveBeenCalledTimes(2);
+    expect(send.mock.calls.some(([msg]) => String(msg.content).includes('Stale final answer'))).toBe(
+      false,
+    );
+    expect(
+      send.mock.calls.some(([msg]) => String(msg.content).includes('Steered final answer')),
+    ).toBe(true);
+    expect(JSON.parse(storedHistoryJson ?? '[]')).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: 'user',
+          content: expect.stringContaining('Use the new direction before finalizing.'),
+        }),
+      ]),
+    );
+  });
+
   it('refines verbose shell_script output before storing the tool result', async () => {
     const toolCall = {
       id: 'call-shell-1',

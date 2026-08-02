@@ -533,6 +533,8 @@ async function runAgentTurnInternal(
 
       pushToSessionHistory(logger, session, { role: 'assistant', content });
       await persistSessionToDB(sessionId, session);
+      if (await restartAfterPendingSteering()) return;
+
       send({
         session_id: sessionId,
         sender: 'agent',

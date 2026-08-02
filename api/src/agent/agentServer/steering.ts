@@ -3,6 +3,11 @@ import { pushToSessionHistory, createUserContent } from '../utils';
 import type { AgentMessage, AgentSendFn, SessionState } from '../types';
 import { sessionSteeringMessages } from './runtimeState';
 
+export interface EnqueueSteeringResult {
+  accepted: boolean;
+  pendingCount: number;
+}
+
 function normalizeSteeringContent(content: string): string {
   return content.trim();
 }
@@ -28,14 +33,15 @@ export function enqueueSteeringMessage(
   sessionId: string,
   message: AgentMessage,
   log: Logger,
-): number {
+): EnqueueSteeringResult {
   const content = normalizeSteeringContent(message.content ?? '');
-  if (!content) return sessionSteeringMessages.get(sessionId)?.length ?? 0;
+  if (!content) {
+    return { accepted: false, pendingCount: sessionSteeringMessages.get(sessionId)?.length ?? 0 };
+  }
 
   const pending = sessionSteeringMessages.get(sessionId) ?? [];
   pending.push({
     content,
-    platform: message.platform,
     receivedAt: new Date().toISOString(),
   });
   sessionSteeringMessages.set(sessionId, pending);
@@ -46,7 +52,7 @@ export function enqueueSteeringMessage(
     contentLength: content.length,
   });
 
-  return pending.length;
+  return { accepted: true, pendingCount: pending.length };
 }
 
 export function drainSteeringMessagesIntoHistory(
@@ -68,10 +74,16 @@ export function drainSteeringMessagesIntoHistory(
 
   if (!cleaned.length) return 0;
 
-  pushToSessionHistory(log, session, {
-    role: 'user',
-    content: formatSteeringContent(cleaned),
-  });
+  const steeringContent = formatSteeringContent(cleaned);
+  const lastMessage = session.history.at(-1);
+  if (lastMessage?.role === 'user' && typeof lastMessage.content === 'string') {
+    lastMessage.content = [lastMessage.content.trimEnd(), steeringContent].join('\n\n');
+  } else {
+    pushToSessionHistory(log, session, {
+      role: 'user',
+      content: steeringContent,
+    });
+  }
   session.lastModelPromptTokens = undefined;
 
   log.info('Applied steering messages to active agent turn', {
@@ -80,6 +92,10 @@ export function drainSteeringMessagesIntoHistory(
   });
 
   return cleaned.length;
+}
+
+export function getPendingSteeringMessageCount(sessionId: string): number {
+  return sessionSteeringMessages.get(sessionId)?.length ?? 0;
 }
 
 export function clearSteeringMessages(sessionId: string): number {

@@ -1356,6 +1356,39 @@ function toOpenAITools(tools: AITool[]): OpenAI.Chat.Completions.ChatCompletionT
 
 type AnthropicMessageParam = Anthropic.MessageParam;
 
+function appendAnthropicUserText(messages: AnthropicMessageParam[], text: string): void {
+  const prev = messages[messages.length - 1];
+  if (!prev || prev.role !== 'user') {
+    messages.push({ role: 'user', content: text });
+    return;
+  }
+
+  if (Array.isArray(prev.content)) {
+    (prev.content as Anthropic.ContentBlockParam[]).push({ type: 'text', text });
+    return;
+  }
+
+  prev.content = `${prev.content}\n\n${text}`;
+}
+
+function appendAnthropicToolResult(
+  messages: AnthropicMessageParam[],
+  toolResult: Anthropic.ToolResultBlockParam,
+): void {
+  const prev = messages[messages.length - 1];
+  if (!prev || prev.role !== 'user') {
+    messages.push({ role: 'user', content: [toolResult] });
+    return;
+  }
+
+  if (Array.isArray(prev.content)) {
+    (prev.content as Anthropic.ContentBlockParam[]).push(toolResult);
+    return;
+  }
+
+  prev.content = [{ type: 'text', text: prev.content }, toolResult];
+}
+
 function toAnthropicMessages(messages: AIMessage[]): {
   system: string | undefined;
   messages: AnthropicMessageParam[];
@@ -1372,17 +1405,12 @@ function toAnthropicMessages(messages: AIMessage[]): {
 
     if (msg.role === 'tool' && msg.tool_call_id) {
       // Tool results must go into the user role
-      const prev = result[result.length - 1];
       const toolResult: Anthropic.ToolResultBlockParam = {
         type: 'tool_result',
         tool_use_id: msg.tool_call_id,
         content: msg.content,
       };
-      if (prev && prev.role === 'user' && Array.isArray(prev.content)) {
-        (prev.content as Anthropic.ContentBlockParam[]).push(toolResult);
-      } else {
-        result.push({ role: 'user', content: [toolResult] });
-      }
+      appendAnthropicToolResult(result, toolResult);
       continue;
     }
 
@@ -1403,10 +1431,11 @@ function toAnthropicMessages(messages: AIMessage[]): {
       continue;
     }
 
-    result.push({
-      role: msg.role === 'assistant' ? 'assistant' : 'user',
-      content: msg.content,
-    });
+    if (msg.role === 'assistant') {
+      result.push({ role: 'assistant', content: msg.content });
+    } else {
+      appendAnthropicUserText(result, msg.content);
+    }
   }
 
   return { system, messages: result };
@@ -1424,6 +1453,15 @@ function toAnthropicTools(tools: AITool[]): Anthropic.Tool[] {
 // Message format converters — Gemini
 // ---------------------------------------------------------------------------
 
+function appendGeminiUserParts(contents: Content[], parts: NonNullable<Content['parts']>): void {
+  const prev = contents[contents.length - 1];
+  if (prev?.role === 'user') {
+    prev.parts = [...(prev.parts ?? []), ...parts];
+  } else {
+    contents.push({ role: 'user', parts });
+  }
+}
+
 function toGeminiContents(messages: AIMessage[]): {
   systemInstruction: string | undefined;
   contents: Content[];
@@ -1439,18 +1477,13 @@ function toGeminiContents(messages: AIMessage[]): {
 
     if (msg.role === 'tool' && msg.tool_call_id) {
       // Tool responses go as user messages with functionResponse parts
-      const prev = contents[contents.length - 1];
       const responsePart = {
         functionResponse: {
           name: msg.tool_name ?? 'tool',
           response: { result: msg.content },
         },
       };
-      if (prev && prev.role === 'user') {
-        prev.parts = [...(prev.parts ?? []), responsePart];
-      } else {
-        contents.push({ role: 'user', parts: [responsePart] });
-      }
+      appendGeminiUserParts(contents, [responsePart]);
       continue;
     }
 
@@ -1466,7 +1499,11 @@ function toGeminiContents(messages: AIMessage[]): {
     }
 
     const role = msg.role === 'assistant' ? 'model' : 'user';
-    contents.push({ role, parts: [{ text: msg.content }] });
+    if (role === 'user') {
+      appendGeminiUserParts(contents, [{ text: msg.content }]);
+    } else {
+      contents.push({ role, parts: [{ text: msg.content }] });
+    }
   }
 
   return { systemInstruction, contents };
