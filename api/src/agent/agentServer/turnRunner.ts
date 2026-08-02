@@ -371,12 +371,14 @@ async function runAgentTurnInternal(
         }
 
         const webFallbackDepth = options?.webFallbackDepth ?? 0;
-        if (webToolFailed && webFallbackDepth >= 1) {
-          const message =
-            'The web retrieval step failed repeatedly and the agent did not switch to terminal-based retrieval. The work so far has been saved; please ask it to continue using shell_script.';
-          log.warn('Web-tool fallback already attempted; stopping recursive recovery', {
+        if (webFallbackDepth >= 1) {
+          const message = webToolFailed
+            ? 'The web retrieval step failed repeatedly and the agent did not switch to terminal-based retrieval. The work so far has been saved; please ask it to continue using shell_script.'
+            : 'The agent did not produce a structured response after the fallback retry. The work so far has been saved; please ask it to continue from the latest result.';
+          log.warn('Tool-loop fallback already attempted; stopping recursive recovery', {
             sessionId,
             webFallbackDepth,
+            webToolFailed,
           });
           await persistSessionToDB(sessionId, session);
           sendFinalAnswer(send, sessionId, message, true);
@@ -432,7 +434,7 @@ async function runAgentTurnInternal(
           {
             ...options,
             disableWebTools: webToolFailed || options?.disableWebTools,
-            webFallbackDepth: webToolFailed ? webFallbackDepth + 1 : webFallbackDepth,
+            webFallbackDepth: webFallbackDepth + 1,
           },
         );
       }

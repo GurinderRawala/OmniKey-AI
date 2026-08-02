@@ -789,6 +789,82 @@ describe('agent session persistence checkpoints', () => {
     ).toBe(false);
   });
 
+  it('stops recursive tool-loop fallback after one retry even without web failure', async () => {
+    const firstToolCall = {
+      id: 'call-first',
+      name: 'web_search',
+      arguments: { query: 'first successful lookup' },
+    };
+    const retryToolCall = {
+      id: 'call-retry',
+      name: 'web_search',
+      arguments: { query: 'retry successful lookup' },
+    };
+    const send = vi.fn();
+
+    mocks.executeTool
+      .mockResolvedValueOnce('first successful result')
+      .mockResolvedValueOnce('retry successful result');
+    mocks.complete
+      .mockResolvedValueOnce({
+        assistantMessage: { role: 'assistant', content: '', tool_calls: [firstToolCall] },
+        content: '',
+        finish_reason: 'tool_calls',
+        model: 'test-model',
+        tool_calls: [firstToolCall],
+      })
+      .mockResolvedValueOnce({
+        assistantMessage: { role: 'assistant', content: 'Plain text after successful tool.' },
+        content: 'Plain text after successful tool.',
+        finish_reason: 'stop',
+        model: 'test-model',
+      })
+      .mockResolvedValueOnce({
+        assistantMessage: { role: 'assistant', content: '', tool_calls: [retryToolCall] },
+        content: '',
+        finish_reason: 'tool_calls',
+        model: 'test-model',
+        tool_calls: [retryToolCall],
+      })
+      .mockResolvedValueOnce({
+        assistantMessage: { role: 'assistant', content: 'Still plain after retry.' },
+        content: 'Still plain after retry.',
+        finish_reason: 'stop',
+        model: 'test-model',
+      });
+
+    await runAgentTurn(
+      'session-1',
+      { id: 'subscription-1' } as any,
+      {
+        session_id: 'session-1',
+        sender: 'client',
+        content: 'Search and then answer.',
+        platform: 'macos',
+      },
+      send,
+      mocks.log as any,
+      { skipGrouping: true },
+    );
+
+    expect(mocks.executeTool).toHaveBeenCalledTimes(2);
+    expect(mocks.complete).toHaveBeenCalledTimes(4);
+    expect(
+      send.mock.calls.some(([msg]) =>
+        String(msg.content).includes(
+          'did not produce a structured response after the fallback retry',
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      historyUpdateCalls()
+        .map(parsedHistoryFromCall)
+        .filter((history) =>
+          history.some((msg) => msg.content.startsWith('Web research is complete')),
+        ),
+    ).toHaveLength(1);
+  });
+
   it('ignores old web-tool failures when the current tool loop succeeds', async () => {
     mocks.agentSession.findOne.mockResolvedValueOnce({
       id: 'session-1',
