@@ -13,14 +13,6 @@ enum AgentTimelineSummarizer {
         summarize(kind: displayKind(for: kind), text: text).expanded
     }
 
-    /// Short, human-readable headline for one timeline step. Mirrors the
-    /// Codex transcript, where each reasoning step is introduced by a terse
-    /// title ("Inspecting the repo") rather than the raw model prose.
-    ///
-    /// For reasoning blocks we prefer an explicit markdown heading or a
-    /// leading bold run, then fall back to the first sentence. Tool blocks
-    /// reuse the existing collapsed summary so their headline stays
-    /// consistent with the rest of the timeline.
     /// Recovers the real kind of a persisted block.
     ///
     /// The server transcript files every unrecognised `role: "tool"` result
@@ -135,6 +127,11 @@ enum AgentTimelineSummarizer {
         // A line that is nothing but a shell invocation. Anchored to the start
         // so prose that merely mentions a tool ("I'll use git to check the
         // history") is preserved.
+        //
+        // The prefix alone is not sufficient: several starters are also common
+        // English sentence openers ("Find the root cause first.", "Which
+        // approach is better?", "Sort the results by date."). A line must
+        // therefore also *look* like a command — see `looksLikeShellInvocation`.
         let commandStarters = [
             "cd ", "ls ", "cat ", "sed ", "rg ", "grep ", "find ", "git ",
             "npm ", "yarn ", "pnpm ", "swift ", "xcodebuild ", "python ",
@@ -142,11 +139,58 @@ enum AgentTimelineSummarizer {
             "touch ", "chmod ", "curl ", "wget ", "sqlite3 ", "awk ", "sort ",
             "head ", "tail ", "wc ", "which ", "export ", "brew ", "docker ",
         ]
-        for starter in commandStarters where lower.hasPrefix(starter) { return true }
+        for starter in commandStarters where lower.hasPrefix(starter) {
+            return looksLikeShellInvocation(line)
+        }
 
         return false
     }
 
+    /// Second gate for lines that begin with a known command word. Rejects
+    /// anything shaped like prose and requires positive evidence of a shell
+    /// invocation, so sentences that merely start with `find`, `which`,
+    /// `sort`, or `head` survive.
+    private static func looksLikeShellInvocation(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let tokens = trimmed.split(separator: " ", omittingEmptySubsequences: true)
+
+        // Prose ends in sentence punctuation; commands effectively never do.
+        // A bare `.` final token is exempt — that is a path argument, as in
+        // `grep -r pattern .`, not the end of a sentence.
+        if let last = trimmed.last, ".?!:,;".contains(last), tokens.last != "." {
+            return false
+        }
+
+        // Strong syntax that prose does not use: flags, paths, globs,
+        // redirects, pipes, variables, or assignments.
+        //
+        // Quotes and apostrophes are deliberately excluded — they appear in
+        // ordinary prose ("Find the file's path") far too often to be evidence.
+        let evidence: [String] = [" -", " --", "/", "|", ">", "<", "&&", "~", "$", "*", "="]
+        for marker in evidence where trimmed.contains(marker) { return true }
+
+        // No syntax evidence left, so only accept a terse invocation such as
+        // `swift build`, `npm ci`, or `docker compose up`. Anything longer
+        // reads as a sentence.
+        guard tokens.count <= 3 else { return false }
+
+        // Every argument must be lowercase (subcommands) or a filename.
+        // A capitalised word signals prose ("which React"), while a dotted
+        // token is a file (`cat Package.swift`).
+        return tokens.dropFirst().allSatisfy { token in
+            token.first?.isUppercase == false || token.contains(".")
+        }
+    }
+
+    /// Short, human-readable headline for one timeline step. Mirrors the
+    /// Codex transcript, where each reasoning step is introduced by a terse
+    /// title ("Inspecting the repo") rather than the raw model prose.
+    ///
+    /// For reasoning blocks we prefer an explicit markdown heading or a
+    /// leading bold run, then fall back to the first sentence. Tool blocks
+    /// reuse the existing collapsed summary so their headline stays
+    /// consistent with the rest of the timeline.
     static func stepHeadline(kind: ChatBlockKind, text: String) -> String {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return defaultHeadline(for: kind) }

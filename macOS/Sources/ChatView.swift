@@ -551,7 +551,20 @@ private struct ChatSidebarGroupHeader: View {
         .animation(.easeInOut(duration: 0.12), value: hovered)
         .animation(.easeInOut(duration: 0.18), value: isCollapsed)
         .help(isCollapsed ? "Expand \(name)" : "Collapse \(name)")
-        .accessibilityLabel("\(name), \(count) chat\(count == 1 ? "" : "s")")
+        .accessibilityLabel(accessibilityLabelText)
+    }
+
+    /// Spoken description of the header. The running badge and the chevron
+    /// are purely visual, so both are folded in here — otherwise VoiceOver
+    /// users get neither the in-flight count nor the disclosure state.
+    /// Wording matches the badge tooltip and the `isCollapsed` help text.
+    private var accessibilityLabelText: String {
+        var parts = ["\(name), \(count) chat\(count == 1 ? "" : "s")"]
+        if runningCount > 0 {
+            parts.append("\(runningCount) chat\(runningCount == 1 ? "" : "s") running")
+        }
+        parts.append(isCollapsed ? "Collapsed" : "Expanded")
+        return parts.joined(separator: ", ")
     }
 }
 
@@ -986,15 +999,25 @@ enum ChatSidebarRelativeDate {
         return f
     }()
 
+    // Localized templates rather than fixed `dateFormat` strings: a
+    // hard-coded "MMM d" forces US ordering on locales that write the day
+    // first. Matches the approach in `ChatMessageTimestamp`.
     private static let monthDay: DateFormatter = {
         let f = DateFormatter()
-        f.dateFormat = "MMM d"
+        f.setLocalizedDateFormatFromTemplate("MMMd")
         return f
     }()
 
     private static let monthDayYear: DateFormatter = {
         let f = DateFormatter()
-        f.dateFormat = "MMM d, yyyy"
+        f.setLocalizedDateFormatFromTemplate("MMMdyyyy")
+        return f
+    }()
+
+    private static let full: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .medium
+        f.timeStyle = .short
         return f
     }()
 
@@ -1026,10 +1049,7 @@ enum ChatSidebarRelativeDate {
     /// Full, unabbreviated timestamp used for the row tooltip.
     static func fullLabel(for iso: String) -> String? {
         guard let date = date(from: iso) else { return nil }
-        let f = DateFormatter()
-        f.dateStyle = .medium
-        f.timeStyle = .short
-        return f.string(from: date)
+        return full.string(from: date)
     }
 }
 
@@ -1130,7 +1150,15 @@ struct ChatSessionRowView: View {
         }
         .onAppear { if isRunning { startRunPulse() } }
         .onChange(of: isRunning) { _, running in
-            if running { startRunPulse() } else { runPulse = false }
+            if running {
+                startRunPulse()
+            } else {
+                // Ease the dot out instead of snapping it, and wrap the reset
+                // in an explicit transaction so the repeating animation is
+                // replaced rather than left mid-cycle. Mirrors the halo stop
+                // in `ThinkingTimelineRow`.
+                withAnimation(.easeOut(duration: 0.3)) { runPulse = false }
+            }
         }
         .help(tooltip)
         .contextMenu {
@@ -2444,6 +2472,13 @@ enum ChatMessageTimestamp {
         return f
     }()
 
+    private static let full: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .full
+        f.timeStyle = .short
+        return f
+    }()
+
     static func label(for date: Date, now: Date = Date()) -> String {
         let calendar = Calendar.current
 
@@ -2462,10 +2497,7 @@ enum ChatMessageTimestamp {
     /// Unabbreviated timestamp for the tooltip, so the exact moment is always
     /// recoverable even when the label says "Yesterday".
     static func fullLabel(for date: Date) -> String {
-        let f = DateFormatter()
-        f.dateStyle = .full
-        f.timeStyle = .short
-        return f.string(from: date)
+        full.string(from: date)
     }
 }
 
@@ -3102,7 +3134,7 @@ private struct ThinkingTimelineRow: View {
     private var expandedDetail: some View {
         let trimmed = block.text.trimmingCharacters(in: .whitespacesAndNewlines)
         switch kind {
-        case .shellCommand, .terminalOutput, .webCall, .mcpCall, .toolCall:
+        case .shellCommand, .terminalOutput, .webCall, .mcpCall, .toolCall, .imageRendering:
             ChatMarkdownView(
                 text: AgentTimelineSummarizer.expandedSummary(kind: kind, text: trimmed),
                 baseFontSize: 11.5
