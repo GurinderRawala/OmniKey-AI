@@ -227,6 +227,18 @@ export async function initDatabase(logger: Logger): Promise<void> {
     if (sequelize.getDialect() === 'sqlite') {
       await sequelize.sync();
       await runSQLiteMigrations(logger);
+      if (config.isSelfHosted) {
+        try {
+          const { seedDefaultSelfHostedAgentAssets } = await import(
+            './agent/defaultSelfHostedSeeds'
+          );
+          await seedDefaultSelfHostedAgentAssets(logger);
+        } catch (err) {
+          logger.error('Default self-hosted agent asset seed failed; continuing startup', {
+            error: err,
+          });
+        }
+      }
       logger.info('Database connection established and models synchronized (SQLite).');
     } else {
       await sequelize.sync({ alter: true });

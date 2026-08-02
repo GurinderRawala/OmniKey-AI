@@ -18,7 +18,10 @@ export async function selfHostedSubscription(): Promise<Subscription> {
   try {
     // Reuse any existing self-hosted record (including legacy IDs) first.
     const existing = await Subscription.findOne({ where: { isSelfHosted: true } });
-    if (existing) return existing;
+    if (existing) {
+      await ensureSelfHostedDefaultsSeeded(existing);
+      return existing;
+    }
 
     // Use a deterministic primary key so concurrent first-time requests do not
     // create duplicate rows.
@@ -43,10 +46,22 @@ export async function selfHostedSubscription(): Promise<Subscription> {
       await subscription.save();
     }
 
+    await ensureSelfHostedDefaultsSeeded(subscription);
     return subscription;
   } catch (err) {
     logger.error('Error ensuring self-hosted subscription record exists.', { error: err });
     throw err;
+  }
+}
+
+async function ensureSelfHostedDefaultsSeeded(subscription: Subscription): Promise<void> {
+  try {
+    const { seedDefaultSelfHostedAgentAssetsForSubscription } = await import(
+      './agent/defaultSelfHostedSeeds'
+    );
+    await seedDefaultSelfHostedAgentAssetsForSubscription(subscription.id, logger);
+  } catch (err) {
+    logger.error('Error seeding default self-hosted agent assets.', { error: err });
   }
 }
 

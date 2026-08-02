@@ -22,6 +22,8 @@ import { AppDownload } from './models/appDownload';
 import './models/agentSession';
 import './models/scheduledJob';
 import './models/mcpServer';
+import './models/subscriptionTaskTemplate';
+import './models/subscriptionUsage';
 import './models/agentSettings';
 import { incrementDownloadCount, getDownloadCounts } from './bucket-adapter';
 
