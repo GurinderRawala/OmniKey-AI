@@ -7,12 +7,12 @@ class OmnikeyCli < Formula
   on_macos do
     on_arm do
       url "https://github.com/GurinderRawala/OmniKey-AI/releases/download/v#{version}/omnikey-cli-#{version}-darwin-arm64.tar.gz"
-      sha256 "d564c6f0ff434bb40860a676c15ce2cf7f618791a2cd473a0a4a902e30eb6b21"
+      sha256 "0d8928ccc53dffe7b11344f81c606d1b72a148b948386c2d76155ed8829625d1"
     end
 
     on_intel do
       url "https://github.com/GurinderRawala/OmniKey-AI/releases/download/v#{version}/omnikey-cli-#{version}-darwin-x86_64.tar.gz"
-      sha256 "09a595d072cc93ec705ed905dbcf9024c4c68334e98b4f2ee1adf4ba58b40631"
+      sha256 "3d160cc119017955dff2cd79b5aa0e807a98c4ba148c2945282f640faa537815"
     end
   end
 
