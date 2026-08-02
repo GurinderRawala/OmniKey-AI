@@ -1,4 +1,5 @@
 import TelegramBot from 'node-telegram-bot-api';
+import { randomUUID } from 'crypto';
 import type { Logger } from 'winston';
 import {
   AgentAbortError,
@@ -19,6 +20,165 @@ import {
 let bot: TelegramBot | null = null;
 
 export type TelegramParseMode = 'Markdown' | 'MarkdownV2' | 'HTML';
+type SendMessageOptions = NonNullable<Parameters<TelegramBot['sendMessage']>[2]>;
+type EditMessageTextOptions = NonNullable<Parameters<TelegramBot['editMessageText']>[1]>;
+interface AnswerCallbackQueryOptions {
+  text?: string;
+  show_alert?: boolean;
+  url?: string;
+  cache_time?: number;
+}
+
+export function telegramErrorDetails(err: unknown): Record<string, unknown> {
+  const e = err as {
+    code?: unknown;
+    message?: unknown;
+    response?: {
+      statusCode?: unknown;
+      body?: {
+        description?: unknown;
+        error_code?: unknown;
+        parameters?: { retry_after?: unknown };
+      };
+    };
+  };
+  return {
+    code: e?.code,
+    statusCode: e?.response?.statusCode,
+    errorCode: e?.response?.body?.error_code,
+    retryAfter: e?.response?.body?.parameters?.retry_after,
+    description: e?.response?.body?.description,
+    message: e?.message ?? String(err),
+  };
+}
+
+function telegramErrorDescription(err: unknown): string {
+  const details = telegramErrorDetails(err);
+  return String(details.description ?? details.message ?? '');
+}
+
+function isTelegramParseError(err: unknown): boolean {
+  return telegramErrorDescription(err).toLowerCase().includes("can't parse entities");
+}
+
+function telegramRetryAfterMs(err: unknown): number | null {
+  const retryAfter = telegramErrorDetails(err).retryAfter;
+  const seconds =
+    typeof retryAfter === 'number'
+      ? retryAfter
+      : typeof retryAfter === 'string'
+        ? Number(retryAfter)
+        : NaN;
+  if (!Number.isFinite(seconds) || seconds < 0 || seconds > 60) return null;
+  return Math.max(1, Math.ceil(seconds)) * 1000;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function stripHtmlTags(text: string): string {
+  return text.replace(/<[^>]+>/g, '');
+}
+
+function withoutParseMode<T extends { parse_mode?: unknown }>(options: T): Omit<T, 'parse_mode'> {
+  const { parse_mode: _parseMode, ...plainOptions } = options;
+  return plainOptions;
+}
+
+async function sendTelegramMessage(
+  logger: Logger,
+  chatId: string | number,
+  message: string,
+  options: SendMessageOptions = {},
+  fallbackText = message,
+) {
+  if (!bot) {
+    throw new Error('Telegram bot not initialized. Call initTelegram first.');
+  }
+
+  try {
+    return await bot.sendMessage(chatId, message, options);
+  } catch (err) {
+    const retryAfterMs = telegramRetryAfterMs(err);
+    if (retryAfterMs !== null) {
+      logger.warn('Telegram send was rate-limited; retrying', {
+        retryAfterMs,
+        ...telegramErrorDetails(err),
+      });
+      await delay(retryAfterMs);
+      return await bot.sendMessage(chatId, message, options);
+    }
+    if (options.parse_mode && isTelegramParseError(err)) {
+      logger.warn('Telegram rejected parse mode; retrying as plain text', {
+        parseMode: options.parse_mode,
+        ...telegramErrorDetails(err),
+      });
+      try {
+        return await bot.sendMessage(chatId, fallbackText, withoutParseMode(options));
+      } catch (fallbackErr) {
+        logger.error('Plain-text Telegram fallback failed', telegramErrorDetails(fallbackErr));
+        throw fallbackErr;
+      }
+    }
+    logger.error('Failed to send Telegram message', telegramErrorDetails(err));
+    throw err;
+  }
+}
+
+async function editTelegramMessageText(
+  logger: Logger,
+  text: string,
+  options: EditMessageTextOptions,
+  fallbackText = text,
+) {
+  if (!bot) return false;
+  try {
+    return await bot.editMessageText(text, options);
+  } catch (err) {
+    const retryAfterMs = telegramRetryAfterMs(err);
+    if (retryAfterMs !== null) {
+      logger.warn('Telegram edit was rate-limited; retrying', {
+        retryAfterMs,
+        ...telegramErrorDetails(err),
+      });
+      await delay(retryAfterMs);
+      return await bot.editMessageText(text, options);
+    }
+    if (options.parse_mode && isTelegramParseError(err)) {
+      logger.warn('Telegram rejected edit parse mode; retrying as plain text', {
+        parseMode: options.parse_mode,
+        ...telegramErrorDetails(err),
+      });
+      return await bot.editMessageText(fallbackText, withoutParseMode(options));
+    }
+    throw err;
+  }
+}
+
+async function answerTelegramCallback(
+  logger: Logger,
+  callbackQueryId: string,
+  options?: AnswerCallbackQueryOptions,
+): Promise<void> {
+  if (!bot) return;
+  try {
+    await (bot.answerCallbackQuery as any)(callbackQueryId, options);
+  } catch (err) {
+    logger.warn('Failed to answer Telegram callback query', telegramErrorDetails(err));
+  }
+}
+
+export async function stopTelegram(logger: Logger): Promise<void> {
+  if (!bot) return;
+  try {
+    await bot.stopPolling();
+  } catch (err) {
+    logger.warn('Failed to stop Telegram polling cleanly', telegramErrorDetails(err));
+  } finally {
+    bot = null;
+  }
+}
 
 export function initTelegram(botToken: string) {
   if (!botToken) throw new Error('Missing telegram bot token');
@@ -45,12 +205,7 @@ export async function notify(
 
   const parseMode = options.parseMode ?? 'Markdown';
 
-  try {
-    return await bot.sendMessage(chatId, message, { parse_mode: parseMode });
-  } catch (err) {
-    logger.error('Failed to send Telegram message:', err);
-    throw err;
-  }
+  return sendTelegramMessage(logger, chatId, message, { parse_mode: parseMode });
 }
 
 // ─── /cmd flow state ─────────────────────────────────────────────────────────
@@ -113,6 +268,10 @@ function isAuthorizedChat(chatId: number): boolean {
 function truncate(text: string, max: number): string {
   if (text.length <= max) return text;
   return text.slice(0, max - 1) + '…';
+}
+
+function messagePreview(text: string): string {
+  return truncate(text.replace(/\s+/g, ' ').trim(), 160);
 }
 
 /**
@@ -229,7 +388,7 @@ function markdownToTelegramHtml(input: string): string {
   // 3. Inline-link conversion before emphasis so the URL never gets italicised.
   text = text.replace(
     /\[([^\]]+)\]\(([^)\s]+)\)/g,
-    (_m, label: string, href: string) => `<a href="${href}">${label}</a>`,
+    (_m, label: string, href: string) => `<a href="${href.replace(/"/g, '&quot;')}">${label}</a>`,
   );
 
   // 4. Bold / italic / strike-through. Order matters — handle ** before *.
@@ -514,7 +673,7 @@ async function showStep(logger: Logger, chatId: number, state: PendingPromptStat
           : renderPromptStep(state);
 
   if (state.wizardMessageId == null) {
-    const sent = await bot.sendMessage(chatId, copy.text, {
+    const sent = await sendTelegramMessage(logger, chatId, copy.text, {
       parse_mode: 'Markdown',
       reply_markup: { inline_keyboard: copy.keyboard },
     });
@@ -523,7 +682,7 @@ async function showStep(logger: Logger, chatId: number, state: PendingPromptStat
   }
 
   try {
-    await bot.editMessageText(copy.text, {
+    await editTelegramMessageText(logger, copy.text, {
       chat_id: chatId,
       message_id: state.wizardMessageId,
       parse_mode: 'Markdown',
@@ -534,7 +693,7 @@ async function showStep(logger: Logger, chatId: number, state: PendingPromptStat
     logger.warn('Failed to edit wizard message; sending a new one', {
       error: (err as Error).message,
     });
-    const sent = await bot.sendMessage(chatId, copy.text, {
+    const sent = await sendTelegramMessage(logger, chatId, copy.text, {
       parse_mode: 'Markdown',
       reply_markup: { inline_keyboard: copy.keyboard },
     });
@@ -543,13 +702,14 @@ async function showStep(logger: Logger, chatId: number, state: PendingPromptStat
 }
 
 async function finishWizardMessage(
+  logger: Logger,
   chatId: number,
   state: PendingPromptState,
   finalText: string,
 ): Promise<void> {
   if (!bot || state.wizardMessageId == null) return;
   try {
-    await bot.editMessageText(finalText, {
+    await editTelegramMessageText(logger, finalText, {
       chat_id: chatId,
       message_id: state.wizardMessageId,
       parse_mode: 'Markdown',
@@ -576,7 +736,7 @@ async function sendSessionPicker(
       ? `*OmniKey Agent*${verboseTag}\n\nNo previous sessions. Start a new one?`
       : `*OmniKey Agent*${verboseTag}\n\nResume a recent session or start fresh:`;
 
-  await bot.sendMessage(chatId, text, {
+  await sendTelegramMessage(logger, chatId, text, {
     parse_mode: 'Markdown',
     reply_markup: { inline_keyboard: buildSessionKeyboard(sessions) },
   });
@@ -643,7 +803,8 @@ async function handleModelCommand(logger: Logger, chatId: number) {
     selection.activeModel ??
     'current model';
 
-  await bot.sendMessage(
+  await sendTelegramMessage(
+    logger,
     chatId,
     [
       '*Agent model*',
@@ -712,15 +873,21 @@ async function handleTaskCommand(logger: Logger, chatId: number) {
     if (!bot) return;
     for (const chunk of chunks) {
       try {
-        await bot.sendMessage(chatId, chunk, {
-          parse_mode: 'HTML',
-          disable_web_page_preview: true,
-        });
+        await sendTelegramMessage(
+          logger,
+          chatId,
+          chunk,
+          {
+            parse_mode: 'HTML',
+            disable_web_page_preview: true,
+          },
+          stripHtmlTags(chunk),
+        );
       } catch (err) {
         logger.warn('HTML render failed for /task; falling back to plain', {
           error: (err as Error).message,
         });
-        await bot.sendMessage(chatId, chunk.replace(/<[^>]+>/g, ''));
+        await sendTelegramMessage(logger, chatId, stripHtmlTags(chunk));
       }
     }
   } catch (err) {
@@ -812,7 +979,7 @@ async function handleCallbackQuery(logger: Logger, query: TelegramBot.CallbackQu
   const data = query.data || '';
   const chatId = query.message?.chat.id;
   if (!chatId || !isAuthorizedChat(chatId)) {
-    await bot.answerCallbackQuery(query.id, { text: 'Unauthorized' });
+    await answerTelegramCallback(logger, query.id, { text: 'Unauthorized' });
     return;
   }
 
@@ -824,9 +991,9 @@ async function handleCallbackQuery(logger: Logger, query: TelegramBot.CallbackQu
     pendingVerbose.delete(chatId);
     modelSelectionCache.delete(chatId);
     if (state?.wizardMessageId) {
-      await finishWizardMessage(chatId, state, '✕  Cancelled.');
+      await finishWizardMessage(logger, chatId, state, '✕  Cancelled.');
     }
-    await bot.answerCallbackQuery(query.id, { text: 'Cancelled' });
+    await answerTelegramCallback(logger, query.id, { text: 'Cancelled' });
     return;
   }
 
@@ -834,7 +1001,7 @@ async function handleCallbackQuery(logger: Logger, query: TelegramBot.CallbackQu
   if (data.startsWith(CB_SESSION)) {
     const tok = data.slice(CB_SESSION.length);
     if (tok === 'new') {
-      await bot.answerCallbackQuery(query.id);
+      await answerTelegramCallback(logger, query.id);
       await startNewSessionWizard(logger, chatId);
       return;
     }
@@ -842,12 +1009,12 @@ async function handleCallbackQuery(logger: Logger, query: TelegramBot.CallbackQu
     const sessions = sessionListCache.get(chatId) ?? [];
     const chosen = Number.isInteger(idx) ? sessions[idx] : undefined;
     if (!chosen) {
-      await bot.answerCallbackQuery(query.id, {
+      await answerTelegramCallback(logger, query.id, {
         text: 'Session no longer available',
       });
       return;
     }
-    await bot.answerCallbackQuery(query.id);
+    await answerTelegramCallback(logger, query.id);
     await startResumeSession(logger, chatId, chosen.id);
     return;
   }
@@ -856,14 +1023,14 @@ async function handleCallbackQuery(logger: Logger, query: TelegramBot.CallbackQu
   if (data.startsWith(CB_MODEL_ONLY)) {
     const state = modelSelectionCache.get(chatId);
     if (!state) {
-      await bot.answerCallbackQuery(query.id, { text: 'Model picker expired' });
+      await answerTelegramCallback(logger, query.id, { text: 'Model picker expired' });
       return;
     }
 
     const tok = data.slice(CB_MODEL_ONLY.length);
     if (tok === 'skip') {
       modelSelectionCache.delete(chatId);
-      await bot.answerCallbackQuery(query.id, { text: 'Kept current model' });
+      await answerTelegramCallback(logger, query.id, { text: 'Kept current model' });
       if (query.message) {
         await bot.editMessageReplyMarkup(
           { inline_keyboard: [] },
@@ -876,10 +1043,12 @@ async function handleCallbackQuery(logger: Logger, query: TelegramBot.CallbackQu
     const idx = Number(tok);
     const option = Number.isInteger(idx) ? state.modelOptions[idx] : undefined;
     if (!option) {
-      await bot.answerCallbackQuery(query.id, { text: 'Model not found' });
+      await answerTelegramCallback(logger, query.id, { text: 'Model not found' });
       return;
     }
 
+    await answerTelegramCallback(logger, query.id, { text: 'Updating model...' });
+    let updatedLabel: string | null = null;
     try {
       const response = await updateProviderModel(logger, state.activeProvider, option.id);
       const activeModel = response.activeModel ?? response.model ?? option.id;
@@ -891,14 +1060,26 @@ async function handleCallbackQuery(logger: Logger, query: TelegramBot.CallbackQu
         options.find((candidate) => candidate.id === activeModel)?.label ??
         option.label ??
         activeModel;
+      updatedLabel = label;
       modelSelectionCache.delete(chatId);
-      await bot.answerCallbackQuery(query.id, { text: 'Model updated' });
-      if (query.message) {
-        await bot.editMessageText(
+    } catch (err) {
+      logger.error('Failed to update Telegram /model selection', {
+        provider: state.activeProvider,
+        model: option.id,
+        error: (err as Error).message,
+      });
+      await notify(logger, `❌ Failed to update model: ${(err as Error).message}`, { chatId });
+      return;
+    }
+
+    if (query.message && updatedLabel) {
+      try {
+        await editTelegramMessageText(
+          logger,
           [
             '✅ *Agent model updated*',
             `Active provider: *${state.activeProvider}*`,
-            `Model: *${label}*`,
+            `Model: *${updatedLabel}*`,
           ].join('\n'),
           {
             chat_id: chatId,
@@ -907,14 +1088,14 @@ async function handleCallbackQuery(logger: Logger, query: TelegramBot.CallbackQu
             reply_markup: { inline_keyboard: [] },
           },
         );
+      } catch (err) {
+        logger.warn('Failed to edit /model picker after update', {
+          error: (err as Error).message,
+        });
+        await notify(logger, `✅ Agent model updated: ${updatedLabel}`, { chatId });
       }
-    } catch (err) {
-      logger.error('Failed to update Telegram /model selection', {
-        provider: state.activeProvider,
-        model: option.id,
-        error: (err as Error).message,
-      });
-      await bot.answerCallbackQuery(query.id, { text: 'Failed to update model' });
+    } else if (updatedLabel) {
+      await notify(logger, `✅ Agent model updated: ${updatedLabel}`, { chatId });
     }
     return;
   }
@@ -923,23 +1104,26 @@ async function handleCallbackQuery(logger: Logger, query: TelegramBot.CallbackQu
   if (data.startsWith(CB_MODEL)) {
     const state = pendingPrompts.get(chatId);
     if (!state || state.phase !== 'selectModel') {
-      await bot.answerCallbackQuery(query.id, { text: 'Step expired' });
+      await answerTelegramCallback(logger, query.id, { text: 'Step expired' });
       return;
     }
 
     const tok = data.slice(CB_MODEL.length);
+    let callbackAnswered = false;
     if (tok === 'skip') {
       state.chosenModelLabel = modelLabelFor(state, state.activeModel);
     } else {
       const idx = Number(tok);
       const option = Number.isInteger(idx) ? state.modelOptions[idx] : undefined;
       if (!option) {
-        await bot.answerCallbackQuery(query.id, { text: 'Model not found' });
+        await answerTelegramCallback(logger, query.id, { text: 'Model not found' });
         return;
       }
 
       try {
         if (option.id !== state.activeModel) {
+          await answerTelegramCallback(logger, query.id, { text: 'Updating model...' });
+          callbackAnswered = true;
           const response = await updateProviderModel(logger, state.activeProvider, option.id);
           state.activeModel = response.activeModel ?? response.model ?? option.id;
           if (response.modelOptions && response.modelOptions.length > 0) {
@@ -955,13 +1139,18 @@ async function handleCallbackQuery(logger: Logger, query: TelegramBot.CallbackQu
           model: option.id,
           error: (err as Error).message,
         });
-        await bot.answerCallbackQuery(query.id, { text: 'Failed to update model' });
+        if (!callbackAnswered) {
+          await answerTelegramCallback(logger, query.id, { text: 'Failed to update model' });
+        }
+        await notify(logger, `❌ Failed to update model: ${(err as Error).message}`, { chatId });
         return;
       }
     }
 
     state.phase = state.sessionId ? 'awaitPrompt' : 'selectInstruction';
-    await bot.answerCallbackQuery(query.id);
+    if (!callbackAnswered) {
+      await answerTelegramCallback(logger, query.id);
+    }
     await showStep(logger, chatId, state);
     return;
   }
@@ -970,10 +1159,11 @@ async function handleCallbackQuery(logger: Logger, query: TelegramBot.CallbackQu
   if (data.startsWith(CB_INSTRUCTION)) {
     const state = pendingPrompts.get(chatId);
     if (!state || state.phase !== 'selectInstruction') {
-      await bot.answerCallbackQuery(query.id, { text: 'Step expired' });
+      await answerTelegramCallback(logger, query.id, { text: 'Step expired' });
       return;
     }
     const tok = data.slice(CB_INSTRUCTION.length);
+    let callbackAnswered = false;
     if (tok === 'skip') {
       state.chosenInstructions = null;
       state.chosenInstructionsHeading = null;
@@ -981,7 +1171,7 @@ async function handleCallbackQuery(logger: Logger, query: TelegramBot.CallbackQu
       const idx = Number(tok);
       const t = state.templates[idx];
       if (!t) {
-        await bot.answerCallbackQuery(query.id, { text: 'Template not found' });
+        await answerTelegramCallback(logger, query.id, { text: 'Template not found' });
         return;
       }
       // Don't prepend the body to the user prompt — instead promote this
@@ -989,6 +1179,8 @@ async function handleCallbackQuery(logger: Logger, query: TelegramBot.CallbackQu
       // automatically on every subsequent agent run.
       try {
         if (!t.isDefault) {
+          await answerTelegramCallback(logger, query.id, { text: 'Setting default...' });
+          callbackAnswered = true;
           await setDefaultTaskTemplate(logger, t.id);
         }
         state.chosenInstructions = null;
@@ -998,14 +1190,19 @@ async function handleCallbackQuery(logger: Logger, query: TelegramBot.CallbackQu
           templateId: t.id,
           error: (err as Error).message,
         });
-        await bot.answerCallbackQuery(query.id, {
-          text: 'Failed to set default',
+        if (!callbackAnswered) {
+          await answerTelegramCallback(logger, query.id, { text: 'Failed to set default' });
+        }
+        await notify(logger, `❌ Failed to set default template: ${(err as Error).message}`, {
+          chatId,
         });
         return;
       }
     }
     state.phase = 'selectProject';
-    await bot.answerCallbackQuery(query.id);
+    if (!callbackAnswered) {
+      await answerTelegramCallback(logger, query.id);
+    }
     await showStep(logger, chatId, state);
     return;
   }
@@ -1014,7 +1211,7 @@ async function handleCallbackQuery(logger: Logger, query: TelegramBot.CallbackQu
   if (data.startsWith(CB_PROJECT)) {
     const state = pendingPrompts.get(chatId);
     if (!state || state.phase !== 'selectProject') {
-      await bot.answerCallbackQuery(query.id, { text: 'Step expired' });
+      await answerTelegramCallback(logger, query.id, { text: 'Step expired' });
       return;
     }
     const tok = data.slice(CB_PROJECT.length);
@@ -1024,18 +1221,18 @@ async function handleCallbackQuery(logger: Logger, query: TelegramBot.CallbackQu
       const idx = Number(tok);
       const g = state.groups[idx];
       if (!g) {
-        await bot.answerCallbackQuery(query.id, { text: 'Project not found' });
+        await answerTelegramCallback(logger, query.id, { text: 'Project not found' });
         return;
       }
       state.chosenGroupName = g.groupName;
     }
     state.phase = 'awaitPrompt';
-    await bot.answerCallbackQuery(query.id);
+    await answerTelegramCallback(logger, query.id);
     await showStep(logger, chatId, state);
     return;
   }
 
-  await bot.answerCallbackQuery(query.id);
+  await answerTelegramCallback(logger, query.id);
 }
 
 async function runAgentForChat(
@@ -1070,7 +1267,7 @@ async function runAgentForChat(
     ]
       .filter(Boolean)
       .join('\n');
-    await finishWizardMessage(chatId, pending, summary);
+    await finishWizardMessage(logger, chatId, pending, summary);
   }
 
   // The selected task template is already promoted to default on the
@@ -1079,10 +1276,10 @@ async function runAgentForChat(
   // verbatim — no preamble injection here.
   const composedPrompt = prompt;
 
-  const placeholderId = pending.sessionId ?? '(new)';
+  const sessionId = pending.sessionId ?? randomUUID();
   const abortController = new AbortController();
   const state: RunningSessionState = {
-    sessionId: placeholderId,
+    sessionId,
     startedAt: Date.now(),
     lastReasoning: null,
     abortController,
@@ -1098,9 +1295,8 @@ async function runAgentForChat(
   let lastSent: string | null = null;
 
   const sendPlain = async (body: string) => {
-    if (!bot) return;
     try {
-      await bot.sendMessage(chatId, body);
+      await sendTelegramMessage(logger, chatId, body);
     } catch (e) {
       logger.warn('Failed to forward block to telegram', {
         error: (e as Error).message,
@@ -1109,19 +1305,24 @@ async function runAgentForChat(
   };
 
   const sendHtml = async (body: string) => {
-    if (!bot) return;
     try {
-      await bot.sendMessage(chatId, body, {
-        parse_mode: 'HTML',
-        disable_web_page_preview: true,
-      });
+      await sendTelegramMessage(
+        logger,
+        chatId,
+        body,
+        {
+          parse_mode: 'HTML',
+          disable_web_page_preview: true,
+        },
+        stripHtmlTags(body),
+      );
     } catch (e) {
       // Fall back to plain text if Telegram rejects the HTML payload.
       logger.warn('HTML render failed; falling back to plain text', {
         error: (e as Error).message,
       });
       try {
-        await bot.sendMessage(chatId, body.replace(/<[^>]+>/g, ''));
+        await sendTelegramMessage(logger, chatId, stripHtmlTags(body));
       } catch (e2) {
         logger.warn('Plain-text fallback also failed', {
           error: (e2 as Error).message,
@@ -1132,7 +1333,7 @@ async function runAgentForChat(
 
   try {
     const result = await runAgentTurn(logger, {
-      sessionId: pending.sessionId ?? undefined,
+      sessionId,
       prompt: composedPrompt,
       groupName: pending.chosenGroupName ?? undefined,
       signal: abortController.signal,
@@ -1167,6 +1368,11 @@ async function runAgentForChat(
 
         const VERBOSE_MAX = 1500;
         switch (block.kind) {
+          case 'agentError': {
+            const body = truncate(cleanForTelegram(block.text) || block.text, VERBOSE_MAX);
+            await sendHtml(`⚠️ <b>Agent notice</b>\n${escapeHtml(body)}`);
+            return;
+          }
           case 'shellCommand': {
             const body = truncate(block.text.trim(), VERBOSE_MAX);
             await sendHtml(
@@ -1248,71 +1454,104 @@ async function handleStopCommand(logger: Logger, chatId: number) {
 }
 
 export function setupMessageListener(logger: Logger, bot: TelegramBot) {
+  bot.on('polling_error', (err) => {
+    logger.warn('Telegram polling error', telegramErrorDetails(err));
+  });
+
   bot.on('callback_query', (q) => {
     void handleCallbackQuery(logger, q).catch((err) => {
       logger.error('callback_query handler crashed', {
         error: (err as Error).message,
       });
+      void answerTelegramCallback(logger, q.id, { text: 'Command failed' });
+      const chatId = q.message?.chat.id;
+      if (chatId && isAuthorizedChat(chatId)) {
+        void notify(logger, `❌ Telegram button failed: ${(err as Error).message}`, {
+          chatId,
+        }).catch((notifyErr) => {
+          logger.error('Failed to report Telegram callback failure', telegramErrorDetails(notifyErr));
+        });
+      }
     });
   });
 
-  bot.on('message', async (msg) => {
-    const chatId = msg.chat.id;
-    if (!isAuthorizedChat(chatId)) {
-      logger.warn('Received message from unauthorized chat ID:', chatId);
-      return;
-    }
-
-    const text = (msg.text || '').trim();
-    logger.info(`Received message from chat ID ${chatId}: ${text}`);
-
-    const lower = text.toLowerCase();
-
-    if (lower === '/cmd' || lower.startsWith('/cmd ')) {
-      const args = text.slice('/cmd'.length).trim().split(/\s+/).filter(Boolean);
-      const verbose = args.some((a) => a === '--verbose' || a === '-v' || a === '--verbos');
-      await handleCmdCommand(logger, chatId, verbose);
-      return;
-    }
-
-    if (lower === '/task') {
-      await handleTaskCommand(logger, chatId);
-      return;
-    }
-
-    if (lower === '/model') {
-      await handleModelCommand(logger, chatId);
-      return;
-    }
-
-    if (lower === '/stop') {
-      await handleStopCommand(logger, chatId);
-      return;
-    }
-
-    // If we are awaiting a prompt for a /cmd selection, treat this message as the prompt.
-    const pending = pendingPrompts.get(chatId);
-    if (pending && text && !text.startsWith('/')) {
-      if (pending.phase !== 'awaitPrompt') {
-        await notify(logger, '👉 Pick the remaining options on the wizard above first.', {
-          chatId,
-        });
+  bot.on('message', (msg) => {
+    void (async () => {
+      const chatId = msg.chat.id;
+      if (!isAuthorizedChat(chatId)) {
+        logger.warn('Received message from unauthorized chat ID:', chatId);
         return;
       }
-      if (pending.sessionId) {
-        const messages = await getSessionMessages(logger, pending.sessionId);
-        if (messages === null) {
-          pendingPrompts.delete(chatId);
-          await notify(logger, '❌ Selected session no longer exists.', {
+
+      const text = (msg.text || '').trim();
+      logger.info('Received Telegram message', {
+        chatId,
+        command: text.startsWith('/') ? text.split(/\s+/, 1)[0] : undefined,
+        textLength: text.length,
+        preview: messagePreview(text),
+      });
+
+      const lower = text.toLowerCase();
+
+      if (lower === '/cmd' || lower.startsWith('/cmd ')) {
+        const args = text.slice('/cmd'.length).trim().split(/\s+/).filter(Boolean);
+        const verbose = args.some((a) => a === '--verbose' || a === '-v' || a === '--verbos');
+        await handleCmdCommand(logger, chatId, verbose);
+        return;
+      }
+
+      if (lower === '/task') {
+        await handleTaskCommand(logger, chatId);
+        return;
+      }
+
+      if (lower === '/model') {
+        await handleModelCommand(logger, chatId);
+        return;
+      }
+
+      if (lower === '/stop') {
+        await handleStopCommand(logger, chatId);
+        return;
+      }
+
+      // If we are awaiting a prompt for a /cmd selection, treat this message as the prompt.
+      const pending = pendingPrompts.get(chatId);
+      if (pending && text && !text.startsWith('/')) {
+        if (pending.phase !== 'awaitPrompt') {
+          await notify(logger, '👉 Pick the remaining options on the wizard above first.', {
             chatId,
           });
           return;
         }
+        if (pending.sessionId) {
+          const messages = await getSessionMessages(logger, pending.sessionId);
+          if (messages === null) {
+            pendingPrompts.delete(chatId);
+            await notify(logger, '❌ Selected session no longer exists.', {
+              chatId,
+            });
+            return;
+          }
+        }
+        await runAgentForChat(logger, chatId, pending, text);
+        return;
       }
-      await runAgentForChat(logger, chatId, pending, text);
-      return;
-    }
 
-    logger.info('Ignoring unknown message');
+      logger.info('Ignoring unknown message');
+    })().catch((err) => {
+      const chatId = msg.chat.id;
+      logger.error('message handler crashed', {
+        chatId,
+        error: (err as Error).message,
+      });
+      if (isAuthorizedChat(chatId)) {
+        void notify(logger, `❌ Telegram command failed: ${(err as Error).message}`, {
+          chatId,
+        }).catch((notifyErr) => {
+          logger.error('Failed to report Telegram command failure', telegramErrorDetails(notifyErr));
+        });
+      }
+    });
   });
 }

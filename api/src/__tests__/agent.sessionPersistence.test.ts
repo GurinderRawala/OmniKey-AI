@@ -128,6 +128,7 @@ vi.mock('../ai-client', () => ({
 }));
 
 import { runAgentTurn } from '../agent/agentServer';
+import { pendingShellScripts } from '../agent/agentServer/runtimeState';
 
 function historyUpdateCalls() {
   return mocks.agentSession.update.mock.calls.filter(([values]) =>
@@ -144,6 +145,15 @@ function parsedHistoryFromCall(call: unknown[]) {
   }>;
 }
 
+async function waitForCondition(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error('Timed out waiting for test condition');
+}
+
 describe('agent session persistence checkpoints', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -157,6 +167,7 @@ describe('agent session persistence checkpoints', () => {
     mocks.agentSession.increment.mockResolvedValue([1]);
     mocks.executeTool.mockResolvedValue('tool result');
     mocks.runScript.mockResolvedValue({ output: 'script output', isError: false });
+    pendingShellScripts.clear();
   });
 
   it('persists the first user turn before calling the model', async () => {
@@ -519,6 +530,268 @@ describe('agent session persistence checkpoints', () => {
     expect(mocks.executeTool).toHaveBeenCalledTimes(1);
     expect(
       send.mock.calls.some(([msg]) => String(msg.content).includes('Tool call completed.')),
+    ).toBe(true);
+  });
+
+  it('serializes multiple interactive shell_script calls instead of overwriting the pending resolver', async () => {
+    const shellOne = {
+      id: 'call-shell-1',
+      name: 'shell_script',
+      arguments: { script: 'echo one' },
+    };
+    const shellTwo = {
+      id: 'call-shell-2',
+      name: 'shell_script',
+      arguments: { script: 'echo two' },
+    };
+    const send = vi.fn();
+
+    mocks.complete
+      .mockResolvedValueOnce({
+        assistantMessage: { role: 'assistant', content: '', tool_calls: [shellOne, shellTwo] },
+        content: '',
+        finish_reason: 'tool_calls',
+        model: 'test-model',
+        tool_calls: [shellOne, shellTwo],
+      })
+      .mockResolvedValueOnce({
+        assistantMessage: {
+          role: 'assistant',
+          content: '<final_answer>\nBoth scripts completed.\n</final_answer>',
+        },
+        content: '<final_answer>\nBoth scripts completed.\n</final_answer>',
+        finish_reason: 'stop',
+        model: 'test-model',
+      });
+
+    const turn = runAgentTurn(
+      'session-1',
+      { id: 'subscription-1' } as any,
+      {
+        session_id: 'session-1',
+        sender: 'client',
+        content: 'Run two shell checks.',
+        platform: 'macos',
+      },
+      send,
+      mocks.log as any,
+      { skipGrouping: true },
+    );
+
+    await waitForCondition(() =>
+      send.mock.calls.some(([msg]) => String(msg.content).includes('echo one')),
+    );
+    expect(send.mock.calls.some(([msg]) => String(msg.content).includes('echo two'))).toBe(false);
+    pendingShellScripts.get('session-1')?.resolve('TERMINAL OUTPUT:\none');
+
+    await waitForCondition(() =>
+      send.mock.calls.some(([msg]) => String(msg.content).includes('echo two')),
+    );
+    pendingShellScripts.get('session-1')?.resolve('TERMINAL OUTPUT:\ntwo');
+
+    await turn;
+
+    const calls = historyUpdateCalls();
+    const finalHistory = parsedHistoryFromCall(calls[calls.length - 1]);
+    const shellResults = finalHistory.filter(
+      (msg) => msg.role === 'tool' && msg.tool_name === 'shell_script',
+    );
+    expect(shellResults.map((msg) => msg.content)).toEqual([
+      'TERMINAL OUTPUT:\none',
+      'TERMINAL OUTPUT:\ntwo',
+    ]);
+    expect(
+      send.mock.calls.some(([msg]) => String(msg.content).includes('Both scripts completed.')),
+    ).toBe(true);
+  });
+
+  it('stops a runaway tool loop after a bounded number of iterations', async () => {
+    const toolCall = {
+      id: 'call-loop',
+      name: 'web_search',
+      arguments: { query: 'loop forever' },
+    };
+    const send = vi.fn();
+
+    mocks.complete.mockResolvedValue({
+      assistantMessage: { role: 'assistant', content: '', tool_calls: [toolCall] },
+      content: '',
+      finish_reason: 'tool_calls',
+      model: 'test-model',
+      tool_calls: [toolCall],
+    });
+
+    await runAgentTurn(
+      'session-1',
+      { id: 'subscription-1' } as any,
+      {
+        session_id: 'session-1',
+        sender: 'client',
+        content: 'Keep searching.',
+        platform: 'macos',
+      },
+      send,
+      mocks.log as any,
+      { skipGrouping: true },
+    );
+
+    expect(mocks.executeTool.mock.calls.length).toBeLessThanOrEqual(20);
+    expect(
+      send.mock.calls.some(([msg]) => String(msg.content).includes('too many tool calls')),
+    ).toBe(true);
+  });
+
+  it('ignores old web-tool failures when the current tool loop succeeds', async () => {
+    mocks.agentSession.findOne.mockResolvedValueOnce({
+      id: 'session-1',
+      historyJson: JSON.stringify([
+        { role: 'system', content: 'sys' },
+        { role: 'user', content: '<user_input>\nOld task\n</user_input>' },
+        {
+          role: 'assistant',
+          content: '',
+          tool_calls: [{ id: 'old-call', name: 'web_search', arguments: { query: 'old' } }],
+        },
+        {
+          role: 'tool',
+          tool_call_id: 'old-call',
+          tool_name: 'web_search',
+          content: 'Error searching: old outage',
+        },
+      ]),
+      turns: 1,
+      groupName: null,
+      groupLocked: false,
+    });
+
+    const freshToolCall = {
+      id: 'fresh-call',
+      name: 'web_search',
+      arguments: { query: 'fresh' },
+    };
+    const send = vi.fn();
+    mocks.executeTool.mockResolvedValueOnce('fresh search result');
+    mocks.complete
+      .mockResolvedValueOnce({
+        assistantMessage: { role: 'assistant', content: '', tool_calls: [freshToolCall] },
+        content: '',
+        finish_reason: 'tool_calls',
+        model: 'test-model',
+        tool_calls: [freshToolCall],
+      })
+      .mockResolvedValueOnce({
+        assistantMessage: {
+          role: 'assistant',
+          content: '<final_answer>\nFresh result is usable.\n</final_answer>',
+        },
+        content: '<final_answer>\nFresh result is usable.\n</final_answer>',
+        finish_reason: 'stop',
+        model: 'test-model',
+      });
+
+    await runAgentTurn(
+      'session-1',
+      { id: 'subscription-1' } as any,
+      {
+        session_id: 'session-1',
+        sender: 'client',
+        content: 'Search again.',
+        platform: 'macos',
+      },
+      send,
+      mocks.log as any,
+      { skipGrouping: true },
+    );
+
+    const histories = historyUpdateCalls().map(parsedHistoryFromCall);
+    expect(
+      histories.some((history) =>
+        history.some((msg) => msg.content.startsWith('IMPORTANT: The web search tool failed')),
+      ),
+    ).toBe(false);
+    expect(
+      send.mock.calls.some(([msg]) => String(msg.content).includes('Fresh result is usable.')),
+    ).toBe(true);
+  });
+
+  it('treats plain text from any provider as a final answer without format retries', async () => {
+    const send = vi.fn();
+    mocks.complete.mockResolvedValueOnce({
+      assistantMessage: { role: 'assistant', content: 'Plain but useful answer.' },
+      content: 'Plain but useful answer.',
+      finish_reason: 'stop',
+      model: 'test-model',
+    });
+
+    await runAgentTurn(
+      'session-1',
+      { id: 'subscription-1' } as any,
+      {
+        session_id: 'session-1',
+        sender: 'client',
+        content: 'Answer directly.',
+        platform: 'macos',
+      },
+      send,
+      mocks.log as any,
+      { skipGrouping: true },
+    );
+
+    expect(mocks.complete).toHaveBeenCalledTimes(1);
+    expect(
+      send.mock.calls.some(([msg]) =>
+        String(msg.content).includes('<final_answer>\nPlain but useful answer.\n</final_answer>'),
+      ),
+    ).toBe(true);
+  });
+
+  it('refuses disabled special tools before trying to execute them', async () => {
+    const imageToolCall = {
+      id: 'call-image',
+      name: 'generate_image',
+      arguments: { prompt: 'draw a dashboard' },
+    };
+    const send = vi.fn();
+
+    mocks.complete
+      .mockResolvedValueOnce({
+        assistantMessage: { role: 'assistant', content: '', tool_calls: [imageToolCall] },
+        content: '',
+        finish_reason: 'tool_calls',
+        model: 'test-model',
+        tool_calls: [imageToolCall],
+      })
+      .mockResolvedValueOnce({
+        assistantMessage: {
+          role: 'assistant',
+          content: '<final_answer>\nImage tool unavailable.\n</final_answer>',
+        },
+        content: '<final_answer>\nImage tool unavailable.\n</final_answer>',
+        finish_reason: 'stop',
+        model: 'test-model',
+      });
+
+    await runAgentTurn(
+      'session-1',
+      { id: 'subscription-1' } as any,
+      {
+        session_id: 'session-1',
+        sender: 'client',
+        content: 'Generate an image.',
+        platform: 'macos',
+      },
+      send,
+      mocks.log as any,
+      { skipGrouping: true },
+    );
+
+    expect(
+      send.mock.calls.some(([msg]) =>
+        String(msg.content).includes('Tool "generate_image" is not enabled'),
+      ),
+    ).toBe(true);
+    expect(
+      send.mock.calls.some(([msg]) => String(msg.content).includes('Image tool unavailable.')),
     ).toBe(true);
   });
 });

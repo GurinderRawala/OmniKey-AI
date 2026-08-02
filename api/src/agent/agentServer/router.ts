@@ -4,10 +4,15 @@ import { config } from '../../config';
 import { AgentSession } from '../../models/agentSession';
 import { authMiddleware, AuthLocals } from '../../authMiddleware';
 import { getContextWindowSize } from '../../ai-client';
+import { getAgentSettings, selectedAgentModelForProvider } from '../../agentSettingsStore';
 import { GROUPING_SESSION_PREFIX } from '../sessionGrouping';
 import { buildTranscript, RawHistoryMessage } from './transcript';
 
-const contextWindowSize = getContextWindowSize(config.aiProvider);
+async function getActiveContextWindowSize(): Promise<number> {
+  const settings = await getAgentSettings();
+  const model = selectedAgentModelForProvider(settings, config.aiProvider);
+  return getContextWindowSize(config.aiProvider, model);
+}
 
 // Exposes agent session management endpoints that the macOS (and Windows)
 // clients can call over plain HTTP before/during a session.
@@ -24,32 +29,35 @@ export function createAgentRouter(): express.Router {
     const { subscription, logger: log } = res.locals;
 
     try {
-      const sessions = await AgentSession.findAll({
-        where: {
-          subscriptionId: subscription.id,
-          // Hide the internal grouping-cron helper sessions.
-          id: { [Op.notLike]: `${GROUPING_SESSION_PREFIX}%` },
-        },
-        order: [['last_active_at', 'DESC']],
-        limit: 50,
-        attributes: [
-          'id',
-          'title',
-          'platform',
-          'turns',
-          'totalTokensUsed',
-          'promptTokensUsed',
-          'completionTokensUsed',
-          'lastPromptTokens',
-          'groupName',
-          'groupDescription',
-          'taskInstructionId',
-          'taskInstructionHeading',
-          'lastActiveAt',
-          'createdAt',
-          'updatedAt',
-        ],
-      });
+      const [contextWindowSize, sessions] = await Promise.all([
+        getActiveContextWindowSize(),
+        AgentSession.findAll({
+          where: {
+            subscriptionId: subscription.id,
+            // Hide the internal grouping-cron helper sessions.
+            id: { [Op.notLike]: `${GROUPING_SESSION_PREFIX}%` },
+          },
+          order: [['last_active_at', 'DESC']],
+          limit: 50,
+          attributes: [
+            'id',
+            'title',
+            'platform',
+            'turns',
+            'totalTokensUsed',
+            'promptTokensUsed',
+            'completionTokensUsed',
+            'lastPromptTokens',
+            'groupName',
+            'groupDescription',
+            'taskInstructionId',
+            'taskInstructionHeading',
+            'lastActiveAt',
+            'createdAt',
+            'updatedAt',
+          ],
+        }),
+      ]);
 
       res.json(
         sessions.map((s) => ({
@@ -118,19 +126,22 @@ export function createAgentRouter(): express.Router {
     }
 
     try {
-      const session = await AgentSession.findOne({
-        where: { id: sessionId, subscriptionId: subscription.id },
-        attributes: [
-          'id',
-          'title',
-          'turns',
-          'totalTokensUsed',
-          'promptTokensUsed',
-          'completionTokensUsed',
-          'lastPromptTokens',
-          'lastActiveAt',
-        ],
-      });
+      const [contextWindowSize, session] = await Promise.all([
+        getActiveContextWindowSize(),
+        AgentSession.findOne({
+          where: { id: sessionId, subscriptionId: subscription.id },
+          attributes: [
+            'id',
+            'title',
+            'turns',
+            'totalTokensUsed',
+            'promptTokensUsed',
+            'completionTokensUsed',
+            'lastPromptTokens',
+            'lastActiveAt',
+          ],
+        }),
+      ]);
 
       if (!session) {
         res.status(404).json({ error: 'Session not found' });

@@ -4,7 +4,13 @@ import express from 'express';
 import { randomUUID } from 'crypto';
 import winston from 'winston';
 import { z } from 'zod';
-import { initTelegram, notify, setupMessageListener } from './notifyTelegram';
+import {
+  initTelegram,
+  notify,
+  setupMessageListener,
+  stopTelegram,
+  telegramErrorDetails,
+} from './notifyTelegram';
 
 export const logger = winston.createLogger({
   level: process.env.LOG_LEVEL || 'info',
@@ -22,7 +28,26 @@ export const logger = winston.createLogger({
 });
 
 const app = express();
-const port = process.env.PORT ? parseInt(process.env.PORT, 10) : 6666;
+const DEFAULT_PORT = 6666;
+const TELEGRAM_PORT_ENV = 'OMNIKEY_TELEGRAM_PORT';
+
+function resolvePort(): number {
+  const envPort = process.env[TELEGRAM_PORT_ENV];
+  if (!envPort) return DEFAULT_PORT;
+
+  const parsedPort = Number(envPort);
+  if (Number.isInteger(parsedPort) && parsedPort > 0 && parsedPort <= 65535) {
+    return parsedPort;
+  }
+
+  logger.warn(`Invalid ${TELEGRAM_PORT_ENV}; using default port`, {
+    value: envPort,
+    defaultPort: DEFAULT_PORT,
+  });
+  return DEFAULT_PORT;
+}
+
+const port = resolvePort();
 
 const botToken = process.env.TELEGRAM_BOT_TOKEN ?? '';
 if (botToken) {
@@ -51,10 +76,10 @@ app.get('/', (req, res) => {
 });
 
 app.post('/telegram/send', async (req, res) => {
-  logger.defaultMeta = { conId: 'sending notification' };
+  const requestLogger = logger.child({ conId: `telegram-send:${randomUUID()}` });
   const parsed = sendBodySchema.safeParse(req.body);
   if (!parsed.success) {
-    logger.warn('Invalid /telegram/send body', {
+    requestLogger.warn('Invalid /telegram/send body', {
       issues: parsed.error.issues,
     });
     return res.status(400).json({
@@ -65,13 +90,13 @@ app.post('/telegram/send', async (req, res) => {
 
   const { message, parseMode } = parsed.data;
   try {
-    await notify(logger, message, { parseMode });
+    await notify(requestLogger, message, { parseMode });
     return res.json({
       message: 'Message sent',
       parseMode: parseMode ?? 'Markdown',
     });
   } catch (e) {
-    logger.error('Failed to send message:', e);
+    requestLogger.error('Failed to send message', telegramErrorDetails(e));
     const description =
       (e as { response?: { body?: { description?: string } } })?.response?.body?.description ??
       (e as Error).message;
@@ -82,16 +107,33 @@ app.post('/telegram/send', async (req, res) => {
   }
 });
 
-app.listen(port, () => {
+const server = app.listen(port, () => {
   logger.info(`Server listening on http://localhost:${port}`);
 });
 
-process.on('SIGINT', () => {
-  logger.info('Received SIGINT. Exiting...');
+let shuttingDown = false;
+
+async function shutdown(signal: NodeJS.Signals): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  logger.info(`Received ${signal}. Shutting down...`);
+
+  const hardExit = setTimeout(() => {
+    logger.warn('Timed out during shutdown; exiting forcefully');
+    process.exit(1);
+  }, 5_000);
+  hardExit.unref();
+
+  await stopTelegram(logger);
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  clearTimeout(hardExit);
   process.exit(0);
+}
+
+process.on('SIGINT', () => {
+  void shutdown('SIGINT');
 });
 
 process.on('SIGTERM', () => {
-  logger.info('Received SIGTERM. Exiting...');
-  process.exit(0);
+  void shutdown('SIGTERM');
 });

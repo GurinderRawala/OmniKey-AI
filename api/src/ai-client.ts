@@ -60,6 +60,7 @@ export interface CompletionOptions {
   maxTokens?: number;
   promptCacheKey?: string;
   promptCacheRetention?: 'in_memory' | '24h';
+  promptCacheTtl?: '30m';
   enablePromptCache?: boolean;
 }
 
@@ -361,7 +362,8 @@ function openAICacheRequestOptions(options: CompletionOptions): Record<string, u
   if (!options.enablePromptCache) return {};
   return {
     ...(options.promptCacheKey ? { prompt_cache_key: options.promptCacheKey } : {}),
-    ...(options.promptCacheRetention
+    ...(options.promptCacheTtl ? { prompt_cache_options: { ttl: options.promptCacheTtl } } : {}),
+    ...(options.promptCacheRetention && !options.promptCacheTtl
       ? { prompt_cache_retention: options.promptCacheRetention }
       : {}),
   };
@@ -698,10 +700,9 @@ function toResponsesTools(tools: AITool[]): any[] {
  * AICompletionResult.
  *
  * Priority order for output classification:
- * 1. Function calls → return as tool_calls (shell_script, MCP, web-search, etc.).
- * 2. Text that already contains <shell_script> or <final_answer> tags → pass through.
- * 3. Plain text with no recognized tags → auto-wrap in <final_answer> tags so
- *    the agent loop does not spin trying to coerce the model into using tags.
+ * 1. Function calls -> return as tool_calls (shell_script, MCP, web-search, etc.).
+ * 2. Text output -> pass through. The agent runner handles any response-format
+ *    normalization uniformly across providers.
  */
 function fromResponsesOutput(response: any, modelName: string): AICompletionResult {
   const output: any[] = response.output ?? [];
@@ -722,15 +723,6 @@ function fromResponsesOutput(response: any, modelName: string): AICompletionResu
     arguments: JSON.parse(item.arguments || '{}') as Record<string, unknown>,
   }));
 
-  const hasRecognizedTags =
-    /<shell_script>/i.test(textContent) || /<final_answer>/i.test(textContent);
-
-  // 3. Auto-wrap plain text that has no recognized tags
-  const normalizedContent =
-    tool_calls.length === 0 && textContent && !hasRecognizedTags
-      ? `<final_answer>\n${textContent}\n</final_answer>`
-      : textContent;
-
   const finishReason: 'stop' | 'tool_calls' | 'length' =
     tool_calls.length > 0 ? 'tool_calls' : response.status === 'incomplete' ? 'length' : 'stop';
 
@@ -738,12 +730,12 @@ function fromResponsesOutput(response: any, modelName: string): AICompletionResu
 
   const assistantMessage: AIMessage = {
     role: 'assistant',
-    content: normalizedContent,
+    content: textContent,
     ...(tool_calls.length ? { tool_calls } : {}),
   };
 
   return {
-    content: normalizedContent,
+    content: textContent,
     finish_reason: finishReason,
     tool_calls: tool_calls.length ? tool_calls : undefined,
     usage,

@@ -32,7 +32,9 @@ const WIN_CONFIG_DIR = path.join(getConfigDir(), 'telegram');
 const WIN_LOG_PATH = path.join(WIN_CONFIG_DIR, 'daemon.log');
 const WIN_ERROR_LOG_PATH = path.join(WIN_CONFIG_DIR, 'daemon-error.log');
 
-const FORWARD_ENV_KEYS = ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'PORT', 'LOG_LEVEL'];
+const TELEGRAM_PORT_ENV = 'OMNIKEY_TELEGRAM_PORT';
+const DEFAULT_TELEGRAM_PORT = '6666';
+const FORWARD_ENV_KEYS = ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', TELEGRAM_PORT_ENV, 'LOG_LEVEL'];
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -153,7 +155,7 @@ function statusMacOS(): void {
   } catch (e) {
     console.warn('launchctl list failed:', (e as Error).message);
   }
-  const port = process.env.PORT || '6666';
+  const port = process.env[TELEGRAM_PORT_ENV] || DEFAULT_TELEGRAM_PORT;
   try {
     const lsof = execSync(`lsof -i :${port} -sTCP:LISTEN -t || true`).toString().trim();
     console.log(
@@ -403,8 +405,8 @@ export async function startTelegramDaemon(): Promise<void> {
   for (const [key, value] of Object.entries(cfg)) {
     process.env[key] = value;
   }
-  // Ensure PORT has a value so the plist always includes it.
-  process.env.PORT = process.env.PORT ?? '6666';
+  // Ensure the Telegram-specific port has a value so the plist always includes it.
+  process.env[TELEGRAM_PORT_ENV] = process.env[TELEGRAM_PORT_ENV] ?? DEFAULT_TELEGRAM_PORT;
   ensureBuilt();
   if (isWindows) {
     await startWindows();

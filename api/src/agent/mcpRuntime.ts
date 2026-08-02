@@ -18,6 +18,12 @@ import { AITool } from '../ai-client';
 
 export const MCP_TOOL_PREFIX = 'mcp_';
 const MAX_TOOL_NAME_LEN = 64;
+const MAX_MCP_TOOLS_PER_TURN = 50;
+const MAX_MCP_TOOL_DESCRIPTION_CHARS = 700;
+const MAX_MCP_SCHEMA_JSON_CHARS = 12_000;
+const MAX_MCP_SCHEMA_STRING_CHARS = 700;
+const MAX_MCP_SCHEMA_ARRAY_ITEMS = 20;
+const MAX_MCP_SCHEMA_PROPERTIES = 80;
 const CONNECT_TIMEOUT_MS = 15_000;
 const STDIO_STDERR_MAX_BYTES = 16 * 1024;
 const STDIO_STDERR_DRAIN_MS = 2_000;
@@ -184,6 +190,70 @@ function slug(s: string): string {
 function buildToolName(serverName: string, toolName: string): string {
   const candidate = `${MCP_TOOL_PREFIX}${slug(serverName)}__${slug(toolName)}`;
   return candidate.slice(0, MAX_TOOL_NAME_LEN);
+}
+
+function truncateText(value: string, maxLength: number): string {
+  const normalized = value
+    .replace(/[\u0000-\u001f\u007f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, maxLength)}...`;
+}
+
+function sanitizeToolDescription(
+  serverName: string,
+  toolName: string,
+  description?: string,
+): string {
+  const text = description
+    ? `[${serverName}] ${description}`
+    : `[${serverName}] MCP tool ${toolName}`;
+  return truncateText(text, MAX_MCP_TOOL_DESCRIPTION_CHARS);
+}
+
+function compactSchemaValue(value: unknown): unknown {
+  if (typeof value === 'string') return truncateText(value, MAX_MCP_SCHEMA_STRING_CHARS);
+  if (Array.isArray(value))
+    return value.slice(0, MAX_MCP_SCHEMA_ARRAY_ITEMS).map(compactSchemaValue);
+  if (!value || typeof value !== 'object') return value;
+
+  const input = value as Record<string, unknown>;
+  const output: Record<string, unknown> = {};
+
+  for (const [key, raw] of Object.entries(input)) {
+    if (key === 'properties' && raw && typeof raw === 'object' && !Array.isArray(raw)) {
+      const properties: Record<string, unknown> = {};
+      const entries = Object.entries(raw as Record<string, unknown>);
+      for (const [propKey, propValue] of entries.slice(0, MAX_MCP_SCHEMA_PROPERTIES)) {
+        properties[propKey] = compactSchemaValue(propValue);
+      }
+      output[key] = properties;
+      if (entries.length > MAX_MCP_SCHEMA_PROPERTIES) {
+        output.additionalProperties = true;
+        output.description = truncateText(
+          `${String(output.description ?? '')} Schema omitted ${entries.length - MAX_MCP_SCHEMA_PROPERTIES} extra properties to keep the MCP tool prompt small.`,
+          MAX_MCP_SCHEMA_STRING_CHARS,
+        );
+      }
+      continue;
+    }
+
+    output[key] = compactSchemaValue(raw);
+  }
+
+  return output;
+}
+
+function compactMcpToolSchema(schema: Record<string, unknown>): Record<string, unknown> {
+  const compacted = compactSchemaValue(schema) as Record<string, unknown>;
+  if (JSON.stringify(compacted).length <= MAX_MCP_SCHEMA_JSON_CHARS) return compacted;
+  return {
+    type: 'object',
+    additionalProperties: true,
+    description:
+      'Original MCP input schema was too large to include fully. Provide the minimal arguments requested by the user and implied by the tool description.',
+  };
 }
 
 function isStdioAllowed(): boolean {
@@ -417,6 +487,14 @@ export async function getMcpToolsForSubscription(
   for (const c of connected) {
     if (!c) continue;
     for (const tool of c.tools) {
+      if (aiTools.length >= MAX_MCP_TOOLS_PER_TURN) {
+        log.warn('Reached MCP tool exposure cap for this turn; skipping remaining tools', {
+          subscriptionId,
+          maxMcpToolsPerTurn: MAX_MCP_TOOLS_PER_TURN,
+        });
+        return { aiTools, dispatch };
+      }
+
       const toolName = buildToolName(c.serverName, tool.name);
       if (dispatch.has(toolName)) {
         log.warn('MCP tool name collision — skipping', {
@@ -429,10 +507,8 @@ export async function getMcpToolsForSubscription(
       dispatch.set(toolName, { serverId: c.serverId, mcpToolName: tool.name });
       aiTools.push({
         name: toolName,
-        description: tool.description
-          ? `[${c.serverName}] ${tool.description}`
-          : `[${c.serverName}] MCP tool ${tool.name}`,
-        parameters: tool.inputSchema,
+        description: sanitizeToolDescription(c.serverName, tool.name, tool.description),
+        parameters: compactMcpToolSchema(tool.inputSchema),
       });
     }
   }

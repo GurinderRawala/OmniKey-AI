@@ -226,6 +226,7 @@ interface AgentWireMessage {
 
 export type AgentBlockKind =
   | 'reasoning'
+  | 'agentError'
   | 'shellCommand'
   | 'terminalOutput'
   | 'webCall'
@@ -339,8 +340,14 @@ const PLATFORM =
 function runShellScript(
   script: string,
   logger: Logger,
+  signal?: AbortSignal,
 ): Promise<{ output: string; status: number }> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new AgentAbortError());
+      return;
+    }
+
     let shell: string;
     let shellArgs: string[];
 
@@ -365,6 +372,56 @@ function runShellScript(
 
     let buf = '';
     let truncated = false;
+    let aborted = false;
+    let timeout: NodeJS.Timeout | null = null;
+    let killTimer: NodeJS.Timeout | null = null;
+
+    const terminateChild = (reason: 'abort' | 'timeout') => {
+      const signalName = reason === 'abort' ? 'aborted' : 'timed out';
+      logger.info(`Shell script ${signalName}; sending SIGTERM`, {
+        platform: PLATFORM,
+        length: script.length,
+        ...(reason === 'timeout' ? { timeoutMs: SHELL_TIMEOUT_MS } : {}),
+      });
+      try {
+        child.kill('SIGTERM');
+      } catch {
+        /* noop */
+      }
+      killTimer = setTimeout(() => {
+        try {
+          child.kill('SIGKILL');
+        } catch {
+          /* noop */
+        }
+      }, 5_000);
+    };
+
+    const cleanup = () => {
+      if (timeout) {
+        clearTimeout(timeout);
+        timeout = null;
+      }
+      if (killTimer) {
+        clearTimeout(killTimer);
+        killTimer = null;
+      }
+      if (signal && onAbort) {
+        signal.removeEventListener('abort', onAbort);
+      }
+    };
+
+    const onAbort = signal
+      ? () => {
+          aborted = true;
+          terminateChild('abort');
+        }
+      : null;
+
+    if (signal && onAbort) {
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+
     const append = (chunk: Buffer) => {
       if (truncated) return;
       const room = SHELL_OUTPUT_MAX - buf.length;
@@ -384,19 +441,16 @@ function runShellScript(
     child.stdout.on('data', append);
     child.stderr.on('data', append);
 
-    const timeout = setTimeout(() => {
-      logger.warn('Shell script timed out; sending SIGTERM', {
-        timeoutMs: SHELL_TIMEOUT_MS,
-      });
-      try {
-        child.kill('SIGTERM');
-      } catch {
-        /* noop */
-      }
+    timeout = setTimeout(() => {
+      terminateChild('timeout');
     }, SHELL_TIMEOUT_MS);
 
     child.on('error', (err) => {
-      clearTimeout(timeout);
+      cleanup();
+      if (aborted) {
+        reject(new AgentAbortError());
+        return;
+      }
       resolve({
         output: `${buf}\n[shell spawn error: ${err.message}]`,
         status: -1,
@@ -404,7 +458,11 @@ function runShellScript(
     });
 
     child.on('close', (code, signal) => {
-      clearTimeout(timeout);
+      cleanup();
+      if (aborted) {
+        reject(new AgentAbortError());
+        return;
+      }
       const status = typeof code === 'number' ? code : signal ? 1 : 0;
       const finalOutput = truncated ? `${buf}\n... [truncated to ${SHELL_OUTPUT_MAX} bytes]` : buf;
       logger.info('Shell script finished', {
@@ -443,6 +501,7 @@ export async function runAgentTurn(logger: Logger, opts: RunAgentOptions): Promi
 
     let settled = false;
     let idleTimer: NodeJS.Timeout | null = null;
+    let lastErrorContent: string | null = null;
 
     const resetIdleTimer = () => {
       if (idleTimer) clearTimeout(idleTimer);
@@ -518,11 +577,6 @@ export async function runAgentTurn(logger: Logger, opts: RunAgentOptions): Promi
       const content = msg.content || '';
       resetIdleTimer();
 
-      if (msg.is_error) {
-        finish(new Error(content || 'Agent reported an error'));
-        return;
-      }
-
       if (msg.is_web_call) {
         await opts.onBlock({ kind: 'webCall', text: content });
         return;
@@ -540,6 +594,15 @@ export async function runAgentTurn(logger: Logger, opts: RunAgentOptions): Promi
       if (finalAnswer) {
         await opts.onBlock({ kind: 'finalAnswer', text: finalAnswer });
         finish(null, { sessionId, finalAnswer });
+        return;
+      }
+
+      // The backend uses some is_error messages as recoverable tool notices
+      // before feeding the error back to the model. Keep the socket open so
+      // that recovery can produce the real final answer.
+      if (msg.is_error) {
+        lastErrorContent = cleanReasoning(content) || content || 'Agent reported an error';
+        await opts.onBlock({ kind: 'agentError', text: lastErrorContent });
         return;
       }
 
@@ -571,7 +634,8 @@ export async function runAgentTurn(logger: Logger, opts: RunAgentOptions): Promi
         await opts.onBlock({ kind: 'shellCommand', text: shellScript });
 
         try {
-          const { output, status } = await runShellScript(shellScript, logger);
+          const { output, status } = await runShellScript(shellScript, logger, opts.signal);
+          if (opts.signal?.aborted) throw new AgentAbortError();
           const statusLabel = status === 0 ? 'success' : `error (exit code: ${status})`;
           await opts.onBlock({
             kind: 'terminalOutput',
@@ -586,6 +650,10 @@ export async function runAgentTurn(logger: Logger, opts: RunAgentOptions): Promi
             platform: PLATFORM,
           });
         } catch (err) {
+          if (err instanceof AgentAbortError) {
+            finish(err);
+            return;
+          }
           const message = (err as Error).message;
           logger.error('Shell execution failed', { error: message });
           await opts.onBlock({
@@ -616,7 +684,9 @@ export async function runAgentTurn(logger: Logger, opts: RunAgentOptions): Promi
     });
 
     ws.on('close', () => {
-      if (!settled) finish(new Error('Agent WebSocket closed before final answer'));
+      if (!settled) {
+        finish(new Error(lastErrorContent || 'Agent WebSocket closed before final answer'));
+      }
     });
   });
 }

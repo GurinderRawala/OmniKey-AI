@@ -137,9 +137,7 @@ describe('OpenAIAdapter temperature handling', () => {
   });
 
   it('streamComplete: omits temperature for gpt-5.5 (Responses API path)', async () => {
-    const stream: any = asAsyncIterable([
-      { type: 'response.output_text.delta', delta: 'ok' },
-    ]);
+    const stream: any = asAsyncIterable([{ type: 'response.output_text.delta', delta: 'ok' }]);
     stream.finalResponse = vi.fn().mockResolvedValue({
       usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
     });
@@ -151,9 +149,7 @@ describe('OpenAIAdapter temperature handling', () => {
   });
 
   it('streamComplete: omits temperature even when caller passes empty options for gpt-5.5', async () => {
-    const stream: any = asAsyncIterable([
-      { type: 'response.output_text.delta', delta: 'ok' },
-    ]);
+    const stream: any = asAsyncIterable([{ type: 'response.output_text.delta', delta: 'ok' }]);
     stream.finalResponse = vi.fn().mockResolvedValue({
       usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
     });
@@ -162,6 +158,37 @@ describe('OpenAIAdapter temperature handling', () => {
     await client.streamComplete('gpt-5.5', messages, {}, () => {});
     const body = mocks.responsesStream.mock.calls[0][0];
     expect(body).not.toHaveProperty('temperature');
+  });
+
+  it('complete: uses prompt_cache_options ttl for gpt-5.6', async () => {
+    mocks.responsesCreate.mockResolvedValueOnce({
+      output: [{ type: 'message', content: [{ type: 'output_text', text: 'ok' }] }],
+      usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+    });
+    const client = new AIClient('openai', 'sk-test');
+    await client.complete('gpt-5.6', messages, {
+      enablePromptCache: true,
+      promptCacheTtl: '30m',
+      promptCacheRetention: '24h',
+    });
+    const body = mocks.responsesCreate.mock.calls[0][0];
+    expect(body).toHaveProperty('prompt_cache_options', { ttl: '30m' });
+    expect(body).not.toHaveProperty('prompt_cache_retention');
+  });
+
+  it('complete: still supports prompt_cache_retention for gpt-5.5', async () => {
+    mocks.responsesCreate.mockResolvedValueOnce({
+      output: [{ type: 'message', content: [{ type: 'output_text', text: 'ok' }] }],
+      usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+    });
+    const client = new AIClient('openai', 'sk-test');
+    await client.complete('gpt-5.5', messages, {
+      enablePromptCache: true,
+      promptCacheRetention: '24h',
+    });
+    const body = mocks.responsesCreate.mock.calls[0][0];
+    expect(body).toHaveProperty('prompt_cache_retention', '24h');
+    expect(body).not.toHaveProperty('prompt_cache_options');
   });
 
   it('streamComplete: uses 0.3 default for supported model when caller omits temperature', async () => {
@@ -225,16 +252,13 @@ describe('AnthropicAdapter temperature handling', () => {
     'claude-fable-5',
     'claude-sonnet-5',
     'claude-sonnet-4-6',
-  ])(
-    'complete: omits temperature for unsupported model %s',
-    async (model) => {
-      mockCompleteResponse();
-      const client = new AIClient('anthropic', 'sk-anthropic-test');
-      await client.complete(model, messages, { temperature: 0.5 });
-      const body = mocks.anthropicCreate.mock.calls[0][0];
-      expect(body).not.toHaveProperty('temperature');
-    },
-  );
+  ])('complete: omits temperature for unsupported model %s', async (model) => {
+    mockCompleteResponse();
+    const client = new AIClient('anthropic', 'sk-anthropic-test');
+    await client.complete(model, messages, { temperature: 0.5 });
+    const body = mocks.anthropicCreate.mock.calls[0][0];
+    expect(body).not.toHaveProperty('temperature');
+  });
 
   it('streamComplete: passes temperature for claude-sonnet-4-5', async () => {
     mockStreamResponse();

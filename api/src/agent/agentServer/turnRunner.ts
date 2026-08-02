@@ -31,6 +31,14 @@ import { getOrCreateSession, persistSessionToDB } from './sessionStore';
 import { buildShellToolResult } from './terminalOutput';
 import { runToolLoop } from './toolLoop';
 
+function hasTag(content: string, tag: string): boolean {
+  return new RegExp(`<${tag}\\b`, 'i').test(content);
+}
+
+function normalizePlainTextFinalAnswer(content: string): string {
+  return `<final_answer>\n${content}\n</final_answer>`;
+}
+
 async function runAgentTurnInternal(
   sessionId: string,
   subscription: Subscription,
@@ -282,6 +290,7 @@ async function runAgentTurnInternal(
         turn: session.turns,
       });
 
+      const toolLoopHistoryStart = session.history.length;
       let toolLoopResult = await runToolLoop(
         result,
         session,
@@ -337,14 +346,16 @@ async function runAgentTurnInternal(
         }
 
         const toolLoopContent = recoveredToolLoopResult.content.trim();
-        const toolLoopHasFinal = toolLoopContent.includes('<final_answer>');
-        const webToolFailed = session.history.some(
-          (msg) =>
-            msg.role === 'tool' &&
-            (msg.tool_name === 'web_search' || msg.tool_name === 'web_fetch') &&
-            typeof msg.content === 'string' &&
-            msg.content.startsWith('Error'),
-        );
+        const toolLoopHasFinal = hasTag(toolLoopContent, 'final_answer');
+        const webToolFailed = session.history
+          .slice(toolLoopHistoryStart)
+          .some(
+            (msg) =>
+              msg.role === 'tool' &&
+              (msg.tool_name === 'web_search' || msg.tool_name === 'web_fetch') &&
+              typeof msg.content === 'string' &&
+              msg.content.startsWith('Error'),
+          );
 
         if (toolLoopHasFinal && !webToolFailed) {
           // The tool loop produced a final answer and no web tool failed — use it
@@ -406,7 +417,24 @@ async function runAgentTurnInternal(
       }
     }
 
-    const hasFinalAnswerTag = content.includes('<final_answer>');
+    if (content && !hasTag(content, 'final_answer') && !hasTag(content, 'shell_script')) {
+      log.info('Agent returned plain text; treating it as a final answer', {
+        sessionId,
+        subscriptionId: subscription.id,
+        turn: session.turns,
+      });
+      content = normalizePlainTextFinalAnswer(content);
+      result = {
+        ...result,
+        content,
+        assistantMessage: {
+          ...result.assistantMessage,
+          content,
+        },
+      };
+    }
+
+    const hasFinalAnswerTag = hasTag(content, 'final_answer');
 
     if (hasFinalAnswerTag) {
       log.info('Finalizing agent session after final answer tag', {

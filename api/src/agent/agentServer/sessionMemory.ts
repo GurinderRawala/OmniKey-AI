@@ -5,20 +5,34 @@ import {
   AIMessage,
   estimateHistoryTokens,
   getDefaultModel,
+  getInputTokenBudget,
 } from '../../ai-client';
 import { config } from '../../config';
 import { AgentSession } from '../../models/agentSession';
 import { isInjectedUserPrompt } from '../injectedUserPrompts';
 import type { SessionState } from '../types';
+import { pruneHistoryForContextLimit } from './contextPruning';
 
 const KEEP_RECENT_USER_TURNS = 2;
-const MEMORY_TRIGGER_TOKENS = 12_000;
-const MIN_SUMMARIZE_TOKENS = 3_000;
+const MEMORY_TRIGGER_INPUT_RATIO = 0.5;
+const PROACTIVE_TRIM_RATIO = 0.9;
+const MIN_SUMMARIZE_TOKENS = 8_000;
 const MAX_SUMMARY_TRANSCRIPT_CHARS = 60_000;
 const MAX_MESSAGE_SUMMARY_CHARS = 4_000;
 const MAX_TOOL_RESULT_SUMMARY_CHARS = 2_500;
 const MAX_MEMORY_CHARS = 8_000;
 const MEMORY_MAX_OUTPUT_TOKENS = 1_400;
+const noopPruneLog = { warn: () => undefined } as unknown as Logger;
+
+function memoryTriggerTokens(model: string): number {
+  const inputBudget = getInputTokenBudget(config.aiProvider, model);
+  if (inputBudget <= 0) return Number.POSITIVE_INFINITY;
+  return Math.floor(inputBudget * MEMORY_TRIGGER_INPUT_RATIO);
+}
+
+function resolveMemoryModel(session: SessionState, model?: string): string {
+  return model ?? session.activeModel ?? getDefaultModel(config.aiProvider, 'smart');
+}
 
 function isStoredInstructions(message: AIMessage): boolean {
   return message.role === 'user' && /<stored_instructions\b/i.test(message.content);
@@ -148,9 +162,69 @@ export function buildCompactedHistoryForRequest(session: SessionState): AIMessag
   return result;
 }
 
+export function shouldUseSessionMemory(session: SessionState, model?: string): boolean {
+  if (!session.sessionMemory?.trim()) return false;
+  const resolvedModel = resolveMemoryModel(session, model);
+  return estimateHistoryTokens(session.history) >= memoryTriggerTokens(resolvedModel);
+}
+
+export function buildHistoryForRequest(session: SessionState, model?: string): AIMessage[] {
+  if (!shouldUseSessionMemory(session, model)) return [...session.history];
+  return buildCompactedHistoryForRequest(session);
+}
+
+/**
+ * Proactively shrinks a request history to a safe fraction of the active
+ * model's input budget. The raw persisted transcript is not mutated; this is
+ * the send-time view used for provider calls and context-remaining estimates.
+ */
+export function trimHistoryToBudget(
+  history: AIMessage[],
+  sessionId: string,
+  model: string,
+  log?: Logger,
+): AIMessage[] {
+  const budget = Math.floor(getInputTokenBudget(config.aiProvider, model) * PROACTIVE_TRIM_RATIO);
+  if (budget <= 0) return history;
+
+  const scratchSession = { subscription: {} as any, history, turns: 0 };
+  let guard = 0;
+  while (estimateHistoryTokens(scratchSession.history) > budget && guard < 200) {
+    guard++;
+    if (!pruneHistoryForContextLimit(scratchSession, log ?? noopPruneLog)) break;
+  }
+
+  if (guard > 0 && log) {
+    log.info('Proactively trimmed history to fit context budget before sending', {
+      sessionId,
+      steps: guard,
+      estimatedTokens: estimateHistoryTokens(scratchSession.history),
+      budget,
+    });
+  }
+
+  return scratchSession.history;
+}
+
+export function buildTrimmedHistoryForRequest(
+  session: SessionState,
+  model?: string,
+  sessionId = 'unknown',
+  log?: Logger,
+): AIMessage[] {
+  const resolvedModel = resolveMemoryModel(session, model);
+  return trimHistoryToBudget(
+    buildHistoryForRequest(session, resolvedModel),
+    sessionId,
+    resolvedModel,
+    log,
+  );
+}
+
 export async function ensureSessionMemory(
   session: SessionState,
   sessionId: string,
+  model: string,
   log: Logger,
   onUsage?: (result: AICompletionResult) => Promise<void>,
 ): Promise<void> {
@@ -164,9 +238,10 @@ export async function ensureSessionMemory(
 
   const pendingMessages = history.slice(compactedThrough, summarizeEnd);
   const pendingTokens = estimateHistoryTokens(pendingMessages);
-  const currentRequestTokens = estimateHistoryTokens(buildCompactedHistoryForRequest(session));
+  const rawRequestTokens = estimateHistoryTokens(history);
+  const triggerTokens = memoryTriggerTokens(model);
 
-  if (currentRequestTokens < MEMORY_TRIGGER_TOKENS && pendingTokens < MIN_SUMMARIZE_TOKENS) {
+  if (rawRequestTokens < triggerTokens || pendingTokens < MIN_SUMMARIZE_TOKENS) {
     return;
   }
 
@@ -220,6 +295,8 @@ export async function ensureSessionMemory(
       compactedMessages: pendingMessages.length,
       compactedThrough: summarizeEnd,
       pendingTokens,
+      rawRequestTokens,
+      triggerTokens,
       memoryLength: memory.length,
       model: result.model,
     });

@@ -251,8 +251,10 @@ describe('GET /api/usage — token metrics', () => {
     const res = await request(makeApp()).get('/api/usage?range=7d&pricePerMillionTokensUsd=50');
 
     expect(res.status).toBe(200);
-    expect(JSON.stringify(res.body)).not.toContain('50');
     expect(res.body.totals.totalTokens).toBe(1_000_000);
+    expect(res.body.totals).not.toHaveProperty('costUsd');
+    expect(res.body.estimates).not.toHaveProperty('estimatedCostUsd');
+    expect(res.body).not.toHaveProperty('pricing');
   });
 
   it('pushes the provider filter into the database query', async () => {
