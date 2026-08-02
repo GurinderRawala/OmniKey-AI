@@ -128,8 +128,17 @@ vi.mock('../ai-client', () => ({
 }));
 
 import { runAgentTurn } from '../agent/agentServer';
-import { pendingShellScripts, sessionSteeringMessages } from '../agent/agentServer/runtimeState';
-import { enqueueSteeringMessage } from '../agent/agentServer/steering';
+import {
+  activeSessions,
+  pendingShellScripts,
+  sessionQueues,
+  sessionSteeringMessages,
+} from '../agent/agentServer/runtimeState';
+import { queuePendingSteeringAsFollowUp } from '../agent/agentServer/websocket';
+import {
+  enqueueSteeringMessage,
+  MAX_STEERING_RESTARTS,
+} from '../agent/agentServer/steering';
 
 function historyUpdateCalls() {
   return mocks.agentSession.update.mock.calls.filter(([values]) =>
@@ -168,7 +177,9 @@ describe('agent session persistence checkpoints', () => {
     mocks.agentSession.increment.mockResolvedValue([1]);
     mocks.executeTool.mockResolvedValue('tool result');
     mocks.runScript.mockResolvedValue({ output: 'script output', isError: false });
+    activeSessions.clear();
     pendingShellScripts.clear();
+    sessionQueues.clear();
     sessionSteeringMessages.clear();
   });
 
@@ -448,6 +459,94 @@ describe('agent session persistence checkpoints', () => {
         }),
       ]),
     );
+  });
+
+  it('queues stranded steering as a normal follow-up turn when an active turn exits', () => {
+    const send = vi.fn();
+
+    enqueueSteeringMessage(
+      'session-1',
+      {
+        session_id: 'session-1',
+        sender: 'client',
+        content: 'Apply this if the current turn already finished.',
+        is_steering: true,
+        platform: 'macos',
+      },
+      mocks.log as any,
+    );
+
+    const queuedCount = queuePendingSteeringAsFollowUp(
+      'session-1',
+      { id: 'subscription-1' } as any,
+      send,
+      mocks.log as any,
+    );
+
+    const queue = sessionQueues.get('session-1');
+    expect(queuedCount).toBe(1);
+    expect(sessionSteeringMessages.get('session-1')).toBeUndefined();
+    expect(queue).toHaveLength(1);
+    expect(queue?.[0].message).toEqual(
+      expect.objectContaining({
+        session_id: 'session-1',
+        sender: 'client',
+        content: 'Apply this if the current turn already finished.',
+        platform: 'macos',
+      }),
+    );
+    expect(queue?.[0].message.is_steering).toBeUndefined();
+  });
+
+  it('stops repeated steering restarts with a steering-specific budget', async () => {
+    const send = vi.fn();
+
+    mocks.complete.mockImplementation(async () => {
+      enqueueSteeringMessage(
+        'session-1',
+        {
+          session_id: 'session-1',
+          sender: 'client',
+          content: `Rapid steering update ${mocks.complete.mock.calls.length}`,
+          is_steering: true,
+          platform: 'macos',
+        },
+        mocks.log as any,
+      );
+      return {
+        assistantMessage: {
+          role: 'assistant',
+          content: '<final_answer>\nWould otherwise finish.\n</final_answer>',
+        },
+        content: '<final_answer>\nWould otherwise finish.\n</final_answer>',
+        finish_reason: 'stop',
+        model: 'test-model',
+      };
+    });
+
+    await runAgentTurn(
+      'session-1',
+      { id: 'subscription-1' } as any,
+      {
+        session_id: 'session-1',
+        sender: 'client',
+        content: 'Answer while steering keeps arriving.',
+        platform: 'macos',
+      },
+      send,
+      mocks.log as any,
+      { skipGrouping: true },
+    );
+
+    expect(mocks.complete).toHaveBeenCalledTimes(MAX_STEERING_RESTARTS + 1);
+    expect(
+      send.mock.calls.some(([msg]) =>
+        String(msg.content).includes('too many steering updates'),
+      ),
+    ).toBe(true);
+    expect(
+      send.mock.calls.some(([msg]) => String(msg.content).includes('Would otherwise finish.')),
+    ).toBe(false);
   });
 
   it('refines verbose shell_script output before storing the tool result', async () => {

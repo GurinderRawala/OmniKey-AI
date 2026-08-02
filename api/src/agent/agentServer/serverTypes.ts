@@ -31,6 +31,8 @@ export interface QueuedMessage {
 export interface PendingSteeringMessage {
   content: string;
   receivedAt: string;
+  platform?: string;
+  groupName?: string;
 }
 
 export type PendingShellScript = {

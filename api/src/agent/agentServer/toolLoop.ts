@@ -10,7 +10,13 @@ import type { AITool, AICompletionResult } from '../../ai-client';
 import type { CustomToolHandler } from './serverTypes';
 import { pendingShellScripts } from './runtimeState';
 import { persistSessionToDB } from './sessionStore';
-import { drainSteeringMessagesIntoHistory, sendSteeringAppliedNotice } from './steering';
+import {
+  consumeSteeringRestart,
+  drainSteeringMessagesIntoHistory,
+  sendSteeringAppliedNotice,
+  STEERING_RESTART_LIMIT_MESSAGE,
+  type SteeringRestartBudget,
+} from './steering';
 import { buildShellToolResult, collectShellOutputFilterKeywords } from './terminalOutput';
 import { completeWithContextRecovery } from './completionRecovery';
 
@@ -56,6 +62,7 @@ export async function runToolLoop(
   onUsage: (result: AICompletionResult) => Promise<void>,
   isCronJob: boolean,
   hasStoredPrompt: boolean,
+  steeringRestartBudget: SteeringRestartBudget,
   toolHandlers?: Map<string, CustomToolHandler>,
 ): Promise<AICompletionResult> {
   // Tools the model is allowed to invoke on this turn. Built from the same
@@ -77,6 +84,17 @@ export async function runToolLoop(
     );
     if (preToolSteeringMessageCount > 0) {
       await persistSessionToDB(sessionId, session);
+      if (
+        !consumeSteeringRestart(
+          steeringRestartBudget,
+          sessionId,
+          log,
+          'before executing stale tool calls',
+        )
+      ) {
+        return toolLoopLimitResult(model, STEERING_RESTART_LIMIT_MESSAGE);
+      }
+
       sendSteeringAppliedNotice(send, sessionId, preToolSteeringMessageCount);
       result = await completeWithContextRecovery(
         session,
@@ -336,6 +354,17 @@ export async function runToolLoop(
     );
     if (steeringMessageCount > 0) {
       await persistSessionToDB(sessionId, session);
+      if (
+        !consumeSteeringRestart(
+          steeringRestartBudget,
+          sessionId,
+          log,
+          'after tool results',
+        )
+      ) {
+        return toolLoopLimitResult(model, STEERING_RESTART_LIMIT_MESSAGE);
+      }
+
       sendSteeringAppliedNotice(send, sessionId, steeringMessageCount);
     }
 
@@ -380,6 +409,17 @@ export async function runToolLoop(
       if (lateSteeringMessageCount === 0) break;
 
       await persistSessionToDB(sessionId, session);
+      if (
+        !consumeSteeringRestart(
+          steeringRestartBudget,
+          sessionId,
+          log,
+          'after follow-up model response',
+        )
+      ) {
+        return toolLoopLimitResult(model, STEERING_RESTART_LIMIT_MESSAGE);
+      }
+
       sendSteeringAppliedNotice(send, sessionId, lateSteeringMessageCount);
       result = await completeWithContextRecovery(
         session,

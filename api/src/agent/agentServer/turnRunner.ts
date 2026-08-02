@@ -28,9 +28,21 @@ import {
   removeInjectedUserPromptsFromHistory,
 } from './completionRecovery';
 import { getOrCreateSession, persistSessionToDB } from './sessionStore';
-import { drainSteeringMessagesIntoHistory, sendSteeringAppliedNotice } from './steering';
+import {
+  consumeSteeringRestart,
+  createSteeringRestartBudget,
+  drainSteeringMessagesIntoHistory,
+  sendSteeringAppliedNotice,
+  STEERING_RESTART_LIMIT_MESSAGE,
+} from './steering';
 import { buildShellToolResult } from './terminalOutput';
 import { runToolLoop } from './toolLoop';
+
+type InternalAgentTurnOptions = AgentTurnOptions & {
+  untaggedDepth?: number;
+  webFallbackDepth?: number;
+  steeringRestartCount?: number;
+};
 
 function hasTag(content: string, tag: string): boolean {
   return new RegExp(`<${tag}\\b`, 'i').test(content);
@@ -40,13 +52,23 @@ function normalizePlainTextFinalAnswer(content: string): string {
   return `<final_answer>\n${content}\n</final_answer>`;
 }
 
+function steeringRestartLimitResult(model: string): AICompletionResult {
+  const content = `<final_answer>\n${STEERING_RESTART_LIMIT_MESSAGE}\n</final_answer>`;
+  return {
+    content,
+    finish_reason: 'stop',
+    model,
+    assistantMessage: { role: 'assistant', content },
+  };
+}
+
 async function runAgentTurnInternal(
   sessionId: string,
   subscription: Subscription,
   clientMessage: AgentMessage,
   send: AgentSendFn,
   log: Logger,
-  options?: AgentTurnOptions & { untaggedDepth?: number; webFallbackDepth?: number },
+  options?: InternalAgentTurnOptions,
 ): Promise<void> {
   const {
     sessionState: session,
@@ -200,6 +222,7 @@ async function runAgentTurnInternal(
     ...mcpBundle.aiTools,
     ...(options?.extraTools ?? []),
   ]);
+  const steeringRestartBudget = createSteeringRestartBudget(options?.steeringRestartCount);
 
   const recordUsage = async (result: AICompletionResult) => {
     const usage = result.usage;
@@ -256,6 +279,17 @@ async function runAgentTurnInternal(
       if (steeringMessageCount === 0) return current;
 
       await persistSessionToDB(sessionId, session);
+      if (
+        !consumeSteeringRestart(
+          steeringRestartBudget,
+          sessionId,
+          log,
+          'after initial model response',
+        )
+      ) {
+        return steeringRestartLimitResult(agentModel);
+      }
+
       sendSteeringAppliedNotice(send, sessionId, steeringMessageCount);
 
       current = await completeWithContextRecovery(
@@ -283,6 +317,23 @@ async function runAgentTurnInternal(
     if (steeringMessageCount === 0) return false;
 
     await persistSessionToDB(sessionId, session);
+    if (
+      !consumeSteeringRestart(
+        steeringRestartBudget,
+        sessionId,
+        log,
+        'before finalizing model response',
+      )
+    ) {
+      pushToSessionHistory(logger, session, {
+        role: 'assistant',
+        content: `<final_answer>\n${STEERING_RESTART_LIMIT_MESSAGE}\n</final_answer>`,
+      });
+      await persistSessionToDB(sessionId, session);
+      sendFinalAnswer(send, sessionId, STEERING_RESTART_LIMIT_MESSAGE, true);
+      return true;
+    }
+
     sendSteeringAppliedNotice(send, sessionId, steeringMessageCount);
 
     await runAgentTurnInternal(
@@ -296,7 +347,7 @@ async function runAgentTurnInternal(
       },
       send,
       logger,
-      options,
+      { ...options, steeringRestartCount: steeringRestartBudget.used },
     );
     return true;
   };
@@ -366,6 +417,7 @@ async function runAgentTurnInternal(
         recordUsage,
         Boolean(options?.isCronJob),
         hasStoredPrompt,
+        steeringRestartBudget,
         options?.toolHandlers,
       );
 
@@ -405,6 +457,7 @@ async function runAgentTurnInternal(
             recordUsage,
             Boolean(options?.isCronJob),
             hasStoredPrompt,
+            steeringRestartBudget,
             options?.toolHandlers,
           );
           continue;
@@ -426,10 +479,10 @@ async function runAgentTurnInternal(
           // The tool loop produced a final answer, or hit its own hard stop. Use
           // hard-stop answers directly so web-failure recovery cannot bypass the
           // tool-iteration cap.
-        log.info('Tool loop produced final answer; processing inline', { sessionId });
-        content = toolLoopContent;
-        result = recoveredToolLoopResult;
-        break;
+          log.info('Tool loop produced final answer; processing inline', { sessionId });
+          content = toolLoopContent;
+          result = recoveredToolLoopResult;
+          break;
         }
 
         const webFallbackDepth = options?.webFallbackDepth ?? 0;
@@ -497,6 +550,7 @@ async function runAgentTurnInternal(
             ...options,
             disableWebTools: webToolFailed || options?.disableWebTools,
             webFallbackDepth: webFallbackDepth + 1,
+            steeringRestartCount: steeringRestartBudget.used,
           },
         );
       }
@@ -611,7 +665,11 @@ async function runAgentTurnInternal(
         },
         send,
         logger,
-        { ...options, untaggedDepth: untaggedDepth + 1 },
+        {
+          ...options,
+          untaggedDepth: untaggedDepth + 1,
+          steeringRestartCount: steeringRestartBudget.used,
+        },
       );
     } else {
       log.warn('Agent returned empty content with no recognized tags; sending error', {
