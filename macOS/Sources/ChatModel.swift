@@ -21,6 +21,11 @@ enum ChatBlockKind {
     case webCall
     case mcpCall
     case imageRendering
+    /// A tool invocation that isn't one of the specifically-modelled kinds
+    /// above. The server transcript files these under `agentReasoning`, so
+    /// they are recovered client-side by `AgentTimelineSummarizer.classify`
+    /// and shown as a tool step rather than mislabelled as reasoning.
+    case toolCall
     case finalAnswer
 }
 
@@ -784,6 +789,8 @@ final class ChatModel: ObservableObject {
             return .mcpCall
         case "imageRendering":
             return .imageRendering
+        case "toolCall":
+            return .toolCall
         case "finalAnswer":
             return .finalAnswer
         default:

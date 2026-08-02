@@ -2650,7 +2650,17 @@ struct AssistantMessageView: View {
     @Environment(\.colorScheme) private var colorScheme
 
     private var thinkingBlocks: [ChatBlock] {
-        message.blocks.filter { $0.kind != .finalAnswer }
+        message.blocks.filter { block in
+            guard block.kind != .finalAnswer else { return false }
+            // Only genuine reasoning is subject to the noise filter. A block
+            // that reclassifies to a tool kind is a real step and must be
+            // kept — it is shown as that tool, not as reasoning.
+            let effective = AgentTimelineSummarizer.classify(kind: block.kind, text: block.text)
+            guard effective == .agentReasoning else { return true }
+            // Drop reasoning steps that are nothing but command noise:
+            // rendering them produces empty, meaningless timeline rows.
+            return !AgentTimelineSummarizer.reasoningProse(block.text).isEmpty
+        }
     }
 
     private var finalBlock: ChatBlock? {
@@ -2745,7 +2755,8 @@ private struct ThinkingSectionView: View {
     /// so the reasoning is visible without expanding the timeline.
     private var liveHeadline: String? {
         guard isStreaming, let block = latestBlock else { return nil }
-        let headline = AgentTimelineSummarizer.stepHeadline(kind: block.kind, text: block.text)
+        let kind = AgentTimelineSummarizer.classify(kind: block.kind, text: block.text)
+        let headline = AgentTimelineSummarizer.stepHeadline(kind: kind, text: block.text)
         return headline.isEmpty ? nil : headline
     }
 
@@ -2799,17 +2810,21 @@ private struct ThinkingSectionView: View {
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: isStreaming ? "sparkles" : "brain")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: 12.5, weight: .semibold))
                     .foregroundColor(
                         isStreaming
                             ? NordTheme.accentPurple(colorScheme)
                             : NordTheme.secondaryText(colorScheme).opacity(0.85)
                     )
+                // Sized locally rather than via `OKFont.captionSmall` (11pt):
+                // this is the turn's primary status line, so it needs more
+                // presence than the badge-sized token, which is shared with
+                // other chips and should not grow with it.
                 Text(thinkingHeaderTitle)
-                    .font(OKFont.captionSmall)
+                    .font(.system(size: 12.5, weight: .semibold))
                     .foregroundColor(NordTheme.secondaryText(colorScheme))
                 Image(systemName: expanded ? "chevron.up" : "chevron.down")
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(.system(size: 10, weight: .semibold))
                     .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.55))
                 Spacer(minLength: 0)
             }
@@ -2915,22 +2930,37 @@ private struct ThinkingTimelineRow: View {
     @State private var haloPulse = false
 
     // Per-kind visual metadata
+    /// The block's *effective* kind. Persisted history mislabels unrecognised
+    /// tool results as `agentReasoning`, so recover the real kind before
+    /// choosing an icon, label, or detail renderer.
+    private var kind: ChatBlockKind {
+        AgentTimelineSummarizer.classify(kind: block.kind, text: block.text)
+    }
+
     private var meta: (icon: String, label: String, accent: Color) {
-        switch block.kind {
+        switch kind {
         case .agentReasoning:  return ("brain",             "Reasoning",  NordTheme.accentPurple(colorScheme))
         case .shellCommand:    return ("terminal.fill",     "Command",    NordTheme.accent(colorScheme))
         case .terminalOutput:  return ("terminal",          "Output",     NordTheme.secondaryText(colorScheme))
         case .webCall:         return ("globe",             "Web Search", NordTheme.accentBlue(colorScheme))
         case .mcpCall:         return ("server.rack",       "MCP Call",   NordTheme.accentAmber(colorScheme))
         case .imageRendering:  return ("photo",             "Image",      NordTheme.accentGreen(colorScheme))
+        case .toolCall:        return ("wrench.and.screwdriver", toolLabel, NordTheme.accentBlue(colorScheme))
         case .finalAnswer:     return ("checkmark.circle.fill", "Answer", NordTheme.accentGreen(colorScheme))
         }
+    }
+
+    /// Names the specific tool in the row label ("Tool · web search") so the
+    /// step says what actually ran instead of a generic placeholder.
+    private var toolLabel: String {
+        guard let raw = AgentTimelineSummarizer.toolName(in: block.text) else { return "Tool" }
+        return "Tool · \(AgentTimelineSummarizer.friendlyToolName(raw))"
     }
 
     /// Terse title for the step, shown in place of the raw prose so the
     /// collapsed timeline reads as a list of actions.
     private var headline: String {
-        AgentTimelineSummarizer.stepHeadline(kind: block.kind, text: block.text)
+        AgentTimelineSummarizer.stepHeadline(kind: kind, text: block.text)
     }
 
     private var durationLabel: String? {
@@ -2938,23 +2968,19 @@ private struct ThinkingTimelineRow: View {
         return AgentTimelineTiming.format(duration)
     }
 
-    /// Reasoning is the one kind whose full text is worth reading inline —
-    /// Codex streams it as prose under the step title rather than hiding it
-    /// behind a disclosure. Tool blocks stay collapsed until expanded.
-    private var showsInlineReasoning: Bool {
-        block.kind == .agentReasoning && !reasoningBody.isEmpty
-    }
-
-    /// Reasoning text minus the headline, so the inline prose does not repeat
-    /// the title rendered directly above it.
+    /// Reasoning text minus the headline, so the expanded prose does not
+    /// repeat the title rendered directly above it.
     private var reasoningBody: String {
-        let trimmed = block.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed != headline else { return "" }
-        if trimmed.hasPrefix(headline) {
-            return String(trimmed.dropFirst(headline.count))
+        // Use the sanitized prose, not the raw block: persisted reasoning
+        // often carries `Tool: ...` headers and bare shell lines that add no
+        // meaning and duplicate the adjacent Command row.
+        let prose = AgentTimelineSummarizer.reasoningProse(block.text)
+        guard !prose.isEmpty, prose != headline else { return "" }
+        if prose.hasPrefix(headline) {
+            return String(prose.dropFirst(headline.count))
                 .trimmingCharacters(in: CharacterSet(charactersIn: " \n\t:.-*#"))
         }
-        return trimmed
+        return prose
     }
 
     var body: some View {
@@ -3029,13 +3055,15 @@ private struct ThinkingTimelineRow: View {
                                 .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(isActive ? 0.7 : 0.4))
                         }
 
-                        // Chevron — only visible on hover
-                        Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        // Chevron is always visible now that expanding is the
+                        // only way to reach a step's detail — hiding it until
+                        // hover left the disclosure undiscoverable.
+                        Image(systemName: "chevron.down")
                             .font(.system(size: 8, weight: .medium))
+                            .rotationEffect(.degrees(isExpanded ? 180 : 0))
                             .foregroundColor(
-                                hovered
-                                    ? NordTheme.secondaryText(colorScheme).opacity(0.45)
-                                    : .clear
+                                NordTheme.secondaryText(colorScheme)
+                                    .opacity(hovered ? 0.6 : 0.3)
                             )
                     }
                     .padding(.vertical, 5)
@@ -3045,18 +3073,9 @@ private struct ThinkingTimelineRow: View {
                 .buttonStyle(.plain)
                 .onHover { hovered = $0 }
 
-                // Live reasoning prose, streamed inline under the step title.
-                if showsInlineReasoning, !isExpanded {
-                    Text(reasoningBody)
-                        .font(.system(size: 11.5))
-                        .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.72))
-                        .lineLimit(isActive ? 6 : 3)
-                        .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.bottom, 8)
-                        .padding(.trailing, 6)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
+                // Detail is disclosure-only — nothing is rendered until the
+                // step is opened, so the collapsed timeline stays a scannable
+                // list of one-line steps.
 
                 // Expanded full content
                 if isExpanded {
@@ -3082,10 +3101,10 @@ private struct ThinkingTimelineRow: View {
     @ViewBuilder
     private var expandedDetail: some View {
         let trimmed = block.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        switch block.kind {
-        case .shellCommand, .terminalOutput, .webCall, .mcpCall:
+        switch kind {
+        case .shellCommand, .terminalOutput, .webCall, .mcpCall, .toolCall:
             ChatMarkdownView(
-                text: AgentTimelineSummarizer.expandedSummary(kind: block.kind, text: trimmed),
+                text: AgentTimelineSummarizer.expandedSummary(kind: kind, text: trimmed),
                 baseFontSize: 11.5
             )
             .opacity(0.88)
@@ -3107,9 +3126,16 @@ private struct ThinkingTimelineRow: View {
             .padding(.trailing, 6)
 
         default:
-            ChatMarkdownView(text: trimmed, baseFontSize: 11.5)
-                .opacity(0.85)
-                .padding(.trailing, 6)
+            // Reasoning expands to the cleaned prose. Falling back to the raw
+            // text would reintroduce exactly the command noise the collapsed
+            // row filtered out.
+            let prose = AgentTimelineSummarizer.reasoningProse(trimmed)
+            ChatMarkdownView(
+                text: prose.isEmpty ? "_No additional detail._" : prose,
+                baseFontSize: 11.5
+            )
+            .opacity(0.85)
+            .padding(.trailing, 6)
         }
     }
 }
