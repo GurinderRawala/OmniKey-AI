@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing v* tag to release or retry'
+        required: true
+        type: string
 
 jobs:
   build:
@@ -22,6 +28,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -31,7 +39,12 @@ jobs:
 
       - name: Get version from tag
         id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          RELEASE_TAG="${RELEASE_TAG#refs/tags/}"
+          echo "TAG=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "VERSION=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
 
       - name: Install monorepo dependencies
         run: yarn install --frozen-lockfile
@@ -94,11 +107,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Get version from tag
         id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          RELEASE_TAG="${RELEASE_TAG#refs/tags/}"
+          echo "TAG=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "VERSION=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
 
       - name: Download arm64 tarball
         uses: actions/download-artifact@v4
@@ -130,7 +149,7 @@ jobs:
         with:
           files: release-assets/*.tar.gz
           generate_release_notes: true
-          tag_name: ${{ github.ref_name }}
+          tag_name: ${{ steps.version.outputs.TAG }}
 
       - name: Update Homebrew formula
         run: |
@@ -146,22 +165,42 @@ jobs:
 
       - name: Commit updated formula
         run: |
+          UPDATED_FORMULA="$(mktemp)"
+          cp Formula/omnikey-cli.rb "$UPDATED_FORMULA"
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git checkout -B main origin/main
+          cp "$UPDATED_FORMULA" Formula/omnikey-cli.rb
+
           git add Formula/omnikey-cli.rb
-          git diff --cached --quiet || git commit -m "chore: update Homebrew formula to v${{ steps.version.outputs.VERSION }} [skip ci]"
-          git push origin HEAD:main
+          if git diff --cached --quiet; then
+            echo "Homebrew formula is already up to date on main."
+          else
+            git commit -m "chore: update Homebrew formula to v${{ steps.version.outputs.VERSION }} [skip ci]"
+            git push origin HEAD:main
+          fi
 
       - name: Push formula to homebrew-omnikey tap
         env:
           TAP_PAT: ${{ secrets.HOMEBREW_TAP_PAT }}
         run: |
           VERSION=${{ steps.version.outputs.VERSION }}
+          if [ -z "${TAP_PAT}" ]; then
+            echo "::error::HOMEBREW_TAP_PAT is not configured."
+            exit 1
+          fi
+
           git clone https://x-access-token:${TAP_PAT}@github.com/GurinderRawala/homebrew-omnikey.git tap-repo
           cp Formula/omnikey-cli.rb tap-repo/omnikey-cli.rb
           cd tap-repo
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add omnikey-cli.rb
-          git diff --cached --quiet || git commit -m "chore: update Homebrew formula to v${VERSION}"
-          git push
+          if git diff --cached --quiet; then
+            echo "Homebrew tap formula is already up to date."
+          else
+            git commit -m "chore: update Homebrew formula to v${VERSION}"
+            git push origin HEAD:main
+          fi
