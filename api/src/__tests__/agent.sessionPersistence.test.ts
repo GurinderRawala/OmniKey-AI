@@ -641,22 +641,113 @@ describe('agent session persistence checkpoints', () => {
     ).toBe(true);
   });
 
-  it('does not bypass the tool-loop limit after a web tool failure', async () => {
-    const toolCall = {
-      id: 'call-loop',
+  it('interrupts repeated web-tool failure and recovers with shell_script fallback', async () => {
+    const webToolCall = {
+      id: 'call-web',
+      name: 'web_search',
+      arguments: { query: 'loop during outage' },
+    };
+    const shellToolCall = {
+      id: 'call-shell',
+      name: 'shell_script',
+      arguments: { script: 'curl -fsSL https://example.com/status' },
+    };
+    const send = vi.fn();
+
+    mocks.executeTool.mockResolvedValue('Error searching: upstream outage');
+    mocks.complete
+      .mockResolvedValueOnce({
+        assistantMessage: { role: 'assistant', content: '', tool_calls: [webToolCall] },
+        content: '',
+        finish_reason: 'tool_calls',
+        model: 'test-model',
+        tool_calls: [webToolCall],
+      })
+      .mockResolvedValueOnce({
+        assistantMessage: { role: 'assistant', content: '', tool_calls: [shellToolCall] },
+        content: '',
+        finish_reason: 'tool_calls',
+        model: 'test-model',
+        tool_calls: [shellToolCall],
+      })
+      .mockResolvedValueOnce({
+        assistantMessage: {
+          role: 'assistant',
+          content: '<final_answer>\nRecovered through shell.\n</final_answer>',
+        },
+        content: '<final_answer>\nRecovered through shell.\n</final_answer>',
+        finish_reason: 'stop',
+        model: 'test-model',
+      });
+
+    const turn = runAgentTurn(
+      'session-1',
+      { id: 'subscription-1' } as any,
+      {
+        session_id: 'session-1',
+        sender: 'client',
+        content: 'Keep searching during outage.',
+        platform: 'macos',
+      },
+      send,
+      mocks.log as any,
+      { skipGrouping: true },
+    );
+
+    await waitForCondition(() =>
+      send.mock.calls.some(([msg]) => String(msg.content).includes('curl -fsSL')),
+    );
+    pendingShellScripts.get('session-1')?.resolve('TERMINAL OUTPUT:\nfallback data');
+
+    await turn;
+
+    expect(mocks.executeTool).toHaveBeenCalledTimes(1);
+    expect(mocks.complete).toHaveBeenCalledTimes(3);
+    expect(
+      send.mock.calls.some(([msg]) => String(msg.content).includes('Recovered through shell.')),
+    ).toBe(true);
+    expect(
+      send.mock.calls.some(([msg]) => String(msg.content).includes('too many tool calls')),
+    ).toBe(false);
+    const recoveryTools = (mocks.complete.mock.calls[1][2]?.tools ?? []).map(
+      (tool: { name: string }) => tool.name,
+    );
+    expect(recoveryTools).toContain('shell_script');
+    expect(recoveryTools).not.toContain('web_search');
+    expect(recoveryTools).not.toContain('web_fetch');
+    expect(
+      historyUpdateCalls()
+        .map(parsedHistoryFromCall)
+        .some((history) =>
+          history.some((msg) => msg.content.startsWith('IMPORTANT: The web search tool failed')),
+        ),
+    ).toBe(true);
+  });
+
+  it('stops recursive web fallback if the model keeps requesting unavailable web tools', async () => {
+    const webToolCall = {
+      id: 'call-web',
       name: 'web_search',
       arguments: { query: 'loop during outage' },
     };
     const send = vi.fn();
 
     mocks.executeTool.mockResolvedValue('Error searching: upstream outage');
-    mocks.complete.mockResolvedValue({
-      assistantMessage: { role: 'assistant', content: '', tool_calls: [toolCall] },
-      content: '',
-      finish_reason: 'tool_calls',
-      model: 'test-model',
-      tool_calls: [toolCall],
-    });
+    mocks.complete
+      .mockResolvedValueOnce({
+        assistantMessage: { role: 'assistant', content: '', tool_calls: [webToolCall] },
+        content: '',
+        finish_reason: 'tool_calls',
+        model: 'test-model',
+        tool_calls: [webToolCall],
+      })
+      .mockResolvedValueOnce({
+        assistantMessage: { role: 'assistant', content: '', tool_calls: [webToolCall] },
+        content: '',
+        finish_reason: 'tool_calls',
+        model: 'test-model',
+        tool_calls: [webToolCall],
+      });
 
     await runAgentTurn(
       'session-1',
@@ -672,17 +763,13 @@ describe('agent session persistence checkpoints', () => {
       { skipGrouping: true },
     );
 
-    expect(mocks.executeTool.mock.calls.length).toBeLessThanOrEqual(20);
-    expect(mocks.complete.mock.calls.length).toBeLessThanOrEqual(21);
+    expect(mocks.executeTool).toHaveBeenCalledTimes(1);
+    expect(mocks.complete).toHaveBeenCalledTimes(2);
     expect(
-      send.mock.calls.some(([msg]) => String(msg.content).includes('too many tool calls')),
+      send.mock.calls.some(([msg]) => String(msg.content).includes('did not switch to terminal')),
     ).toBe(true);
     expect(
-      historyUpdateCalls()
-        .map(parsedHistoryFromCall)
-        .some((history) =>
-          history.some((msg) => msg.content.startsWith('IMPORTANT: The web search tool failed')),
-        ),
+      send.mock.calls.some(([msg]) => String(msg.content).includes('too many tool calls')),
     ).toBe(false);
   });
 

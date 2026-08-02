@@ -18,6 +18,14 @@ const MAX_TOOL_CALLS_PER_ITERATION = 8;
 const TOOL_LOOP_LIMIT_MESSAGE =
   'The agent stopped because it made too many tool calls in one turn. The work so far has been saved; please send a narrower follow-up or ask it to continue from the latest result.';
 
+function isWebTool(name: string): boolean {
+  return name === 'web_search' || name === 'web_fetch';
+}
+
+function isToolFailureResult(result: string): boolean {
+  return result.trimStart().startsWith('Error');
+}
+
 function toolLoopLimitResult(model: string, message = TOOL_LOOP_LIMIT_MESSAGE): AICompletionResult {
   const content = `<final_answer>\n${message}\n</final_answer>`;
   return {
@@ -26,6 +34,15 @@ function toolLoopLimitResult(model: string, message = TOOL_LOOP_LIMIT_MESSAGE): 
     model,
     toolLoopStopped: true,
     assistantMessage: { role: 'assistant', content },
+  };
+}
+
+function webToolFailureInterruptResult(model: string): AICompletionResult {
+  return {
+    content: '',
+    finish_reason: 'stop',
+    model,
+    assistantMessage: { role: 'assistant', content: '' },
   };
 }
 
@@ -295,6 +312,23 @@ export async function runToolLoop(
     // provider history on resume, but waiting until final answer means a user
     // stop can lose all completed work from this turn.
     await persistSessionToDB(sessionId, session);
+
+    if (
+      toolResults.some(
+        (toolResult) => isWebTool(toolResult.name) && isToolFailureResult(toolResult.result),
+      )
+    ) {
+      log.warn('Web tool failed during tool loop; interrupting loop for shell fallback', {
+        sessionId,
+        toolIteration: toolIterations,
+        failedTools: toolResults
+          .filter(
+            (toolResult) => isWebTool(toolResult.name) && isToolFailureResult(toolResult.result),
+          )
+          .map((toolResult) => toolResult.name),
+      });
+      return webToolFailureInterruptResult(model);
+    }
 
     // Call the AI again with the tool results in history to get the next response.
     result = await completeWithContextRecovery(

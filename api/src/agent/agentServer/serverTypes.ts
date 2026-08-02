@@ -16,6 +16,7 @@ export type CustomToolHandler = (args: Record<string, unknown>, log: Logger) => 
 export interface AgentTurnOptions {
   isCronJob?: boolean;
   skipGrouping?: boolean;
+  disableWebTools?: boolean;
   extraTools?: AITool[];
   toolHandlers?: Map<string, CustomToolHandler>;
 }

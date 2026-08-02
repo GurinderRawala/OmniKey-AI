@@ -45,7 +45,7 @@ async function runAgentTurnInternal(
   clientMessage: AgentMessage,
   send: AgentSendFn,
   log: Logger,
-  options?: AgentTurnOptions & { untaggedDepth?: number },
+  options?: AgentTurnOptions & { untaggedDepth?: number; webFallbackDepth?: number },
 ): Promise<void> {
   const {
     sessionState: session,
@@ -190,8 +190,11 @@ async function runAgentTurnInternal(
   // All providers receive shell_script as a native function tool.
   const shellTool =
     agentSettings.terminalAccess === 'limited' ? SHELL_SCRIPT_TOOL_LIMITED : SHELL_SCRIPT_TOOL;
+  const toolSettings = options?.disableWebTools
+    ? { ...agentSettings, webSearchEnabled: false }
+    : agentSettings;
   const shellTools: AITool[] = [shellTool];
-  const tools = buildAvailableTools(agentSettings, [
+  const tools = buildAvailableTools(toolSettings, [
     ...shellTools,
     ...mcpBundle.aiTools,
     ...(options?.extraTools ?? []),
@@ -367,6 +370,19 @@ async function runAgentTurnInternal(
           break;
         }
 
+        const webFallbackDepth = options?.webFallbackDepth ?? 0;
+        if (webToolFailed && webFallbackDepth >= 1) {
+          const message =
+            'The web retrieval step failed repeatedly and the agent did not switch to terminal-based retrieval. The work so far has been saved; please ask it to continue using shell_script.';
+          log.warn('Web-tool fallback already attempted; stopping recursive recovery', {
+            sessionId,
+            webFallbackDepth,
+          });
+          await persistSessionToDB(sessionId, session);
+          sendFinalAnswer(send, sessionId, message, true);
+          return;
+        }
+
         // The tool loop returned plain text, or a final answer after a web tool
         // failed. Make one more AI turn so the model can correct itself and use
         // shell_script as the fallback.
@@ -413,7 +429,11 @@ async function runAgentTurnInternal(
           },
           send,
           logger,
-          options,
+          {
+            ...options,
+            disableWebTools: webToolFailed || options?.disableWebTools,
+            webFallbackDepth: webToolFailed ? webFallbackDepth + 1 : webFallbackDepth,
+          },
         );
       }
     }
