@@ -1802,6 +1802,10 @@ private struct LandingInputComposer: View {
         model.isRunning && inputIsEmpty
     }
 
+    private var isSteeringState: Bool {
+        model.isRunning && !inputIsEmpty
+    }
+
     // The composer surface gets a real fill (not `Color.clear`) so the
     // input visually lifts above the conversation transcript and the
     // border/shadow read as a single layered card rather than a thin
@@ -1820,7 +1824,7 @@ private struct LandingInputComposer: View {
             // ── Top: text area ───────────────────────────────────────
             ZStack(alignment: .topLeading) {
                 if model.inputText.isEmpty {
-                    Text("Ask OmniAgent anything…")
+                    Text(model.isRunning ? "Steer the current task…" : "Ask OmniAgent anything…")
                         .font(.system(size: 13))
                         .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.45))
                         .padding(.horizontal, 16)
@@ -1985,8 +1989,9 @@ private struct LandingInputComposer: View {
 
                 AgentModelMenu(model: model)
 
-                // Send / Stop
-                // • Has text → always send (even mid-run; server queues it)
+                // Send / Steer / Stop
+                // • Has text + idle → start a new turn
+                // • Has text + running → steer the active turn over its existing socket
                 // • No text + running → stop button
                 // • No text + idle → disabled send button
                 Button {
@@ -2002,7 +2007,7 @@ private struct LandingInputComposer: View {
                                 radius: isSendHovered && !inputIsEmpty ? 6 : 0,
                                 x: 0, y: 1
                             )
-                        Image(systemName: isStopState ? "stop.fill" : "arrow.up")
+                        Image(systemName: sendButtonIconName)
                             .font(.system(size: 13, weight: .bold))
                             .foregroundColor(sendButtonIconColor)
                     }
@@ -2015,7 +2020,7 @@ private struct LandingInputComposer: View {
                 .buttonStyle(.plain)
                 .disabled(inputIsEmpty && !model.isRunning)
                 .onHover { isSendHovered = $0 }
-                .help(isStopState ? "Stop current turn" : "Send message  ·  ⏎")
+                .help(sendButtonHelp)
             }
             .padding(.horizontal, 10)
             .padding(.top, 6)
@@ -2054,6 +2059,7 @@ private struct LandingInputComposer: View {
 
     private var sendButtonFill: Color {
         if isStopState { return Color.red }
+        if isSteeringState { return NordTheme.accentGreen(colorScheme) }
         if inputIsEmpty { return NordTheme.border(colorScheme).opacity(1.8) }
         return NordTheme.accent(colorScheme)
     }
@@ -2067,7 +2073,20 @@ private struct LandingInputComposer: View {
 
     private var sendButtonShadowColor: Color {
         if isStopState { return Color.red.opacity(0.35) }
+        if isSteeringState { return NordTheme.accentGreen(colorScheme).opacity(0.35) }
         return NordTheme.accent(colorScheme).opacity(0.35)
+    }
+
+    private var sendButtonIconName: String {
+        if isStopState { return "stop.fill" }
+        if isSteeringState { return "arrow.up.right" }
+        return "arrow.up"
+    }
+
+    private var sendButtonHelp: String {
+        if isStopState { return "Stop current turn" }
+        if isSteeringState { return "Steer current task  ·  ⏎" }
+        return "Send message  ·  ⏎"
     }
 }
 
@@ -2420,7 +2439,7 @@ struct ChatMessageView: View, @MainActor Equatable {
     var body: some View {
         switch message.role {
         case .user:
-            UserBubbleView(text: message.text, sentAt: message.sentAt)
+            UserBubbleView(text: message.text, sentAt: message.sentAt, isSteering: message.isSteering)
         case .assistant:
             AssistantMessageView(message: message, isStreaming: isStreaming)
         case .system:
@@ -2506,6 +2525,7 @@ struct UserBubbleView: View {
     /// When the user sent the message. `nil` for messages hydrated from
     /// server history, where no send time is available.
     var sentAt: Date? = nil
+    var isSteering: Bool = false
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -2540,6 +2560,16 @@ struct UserBubbleView: View {
                 // Sharing one row keeps the bubble's vertical rhythm
                 // unchanged from before the timestamp was added.
                 HStack(spacing: 8) {
+                    if isSteering {
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.up.right.circle.fill")
+                                .font(.system(size: 10, weight: .semibold))
+                            Text("Steered current task")
+                                .font(.system(size: 10, weight: .medium))
+                        }
+                        .foregroundColor(NordTheme.accentGreen(colorScheme).opacity(0.78))
+                        .help("Sent to the running task instead of queued as a new turn")
+                    }
                     if let sentAt {
                         Text(ChatMessageTimestamp.label(for: sentAt))
                             .font(.system(size: 10))
@@ -2600,6 +2630,9 @@ struct UserBubbleView: View {
     // the conversation visually quiet so the assistant prose — which is
     // where the actual answer lives — remains the focal point.
     private var bubbleFillColor: Color {
+        if isSteering {
+            return NordTheme.accentGreen(colorScheme).opacity(colorScheme == .dark ? 0.16 : 0.09)
+        }
         switch colorScheme {
         case .dark:
             return NordTheme.accent(colorScheme).opacity(0.18)
@@ -2613,6 +2646,9 @@ struct UserBubbleView: View {
     }
 
     private var bubbleBorderColor: Color {
+        if isSteering {
+            return NordTheme.accentGreen(colorScheme).opacity(colorScheme == .dark ? 0.30 : 0.24)
+        }
         switch colorScheme {
         case .dark:
             return NordTheme.accent(colorScheme).opacity(0.32)

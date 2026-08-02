@@ -10,6 +10,7 @@ import type { AITool, AICompletionResult } from '../../ai-client';
 import type { CustomToolHandler } from './serverTypes';
 import { pendingShellScripts } from './runtimeState';
 import { persistSessionToDB } from './sessionStore';
+import { drainSteeringMessagesIntoHistory, sendSteeringAppliedNotice } from './steering';
 import { buildShellToolResult, collectShellOutputFilterKeywords } from './terminalOutput';
 import { completeWithContextRecovery } from './completionRecovery';
 
@@ -54,6 +55,7 @@ export async function runToolLoop(
   mcpDispatch: Map<string, { serverId: string; mcpToolName: string }>,
   onUsage: (result: AICompletionResult) => Promise<void>,
   isCronJob: boolean,
+  hasStoredPrompt: boolean,
   toolHandlers?: Map<string, CustomToolHandler>,
 ): Promise<AICompletionResult> {
   // Tools the model is allowed to invoke on this turn. Built from the same
@@ -66,6 +68,30 @@ export async function runToolLoop(
 
   while (result.finish_reason === 'tool_calls') {
     toolIterations++;
+
+    const preToolSteeringMessageCount = drainSteeringMessagesIntoHistory(
+      sessionId,
+      session,
+      hasStoredPrompt,
+      log,
+    );
+    if (preToolSteeringMessageCount > 0) {
+      await persistSessionToDB(sessionId, session);
+      sendSteeringAppliedNotice(send, sessionId, preToolSteeringMessageCount);
+      result = await completeWithContextRecovery(
+        session,
+        sessionId,
+        model,
+        {
+          tools: tools.length ? tools : undefined,
+          temperature: 0.2,
+        },
+        log,
+        onUsage,
+      );
+      await onUsage(result);
+      continue;
+    }
 
     const toolCalls = result.tool_calls ?? [];
 
@@ -302,6 +328,17 @@ export async function runToolLoop(
     // stop can lose all completed work from this turn.
     await persistSessionToDB(sessionId, session);
 
+    const steeringMessageCount = drainSteeringMessagesIntoHistory(
+      sessionId,
+      session,
+      hasStoredPrompt,
+      log,
+    );
+    if (steeringMessageCount > 0) {
+      await persistSessionToDB(sessionId, session);
+      sendSteeringAppliedNotice(send, sessionId, steeringMessageCount);
+    }
+
     if (
       toolResults.some(
         (toolResult) => isWebTool(toolResult.name) && isToolFailureResult(toolResult.result),
@@ -332,6 +369,31 @@ export async function runToolLoop(
       onUsage,
     );
     await onUsage(result);
+
+    for (;;) {
+      const lateSteeringMessageCount = drainSteeringMessagesIntoHistory(
+        sessionId,
+        session,
+        hasStoredPrompt,
+        log,
+      );
+      if (lateSteeringMessageCount === 0) break;
+
+      await persistSessionToDB(sessionId, session);
+      sendSteeringAppliedNotice(send, sessionId, lateSteeringMessageCount);
+      result = await completeWithContextRecovery(
+        session,
+        sessionId,
+        model,
+        {
+          tools: tools.length ? tools : undefined,
+          temperature: 0.2,
+        },
+        log,
+        onUsage,
+      );
+      await onUsage(result);
+    }
   }
 
   log.info('Finished reasoning and tool calls: ', {

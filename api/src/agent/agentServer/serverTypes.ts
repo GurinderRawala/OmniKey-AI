@@ -28,6 +28,12 @@ export interface QueuedMessage {
   log: Logger;
 }
 
+export interface PendingSteeringMessage {
+  content: string;
+  receivedAt: string;
+  platform?: string;
+}
+
 export type PendingShellScript = {
   resolve: (output: string) => void;
   filterKeywords: string[];

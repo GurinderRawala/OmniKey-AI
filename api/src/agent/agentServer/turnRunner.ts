@@ -28,6 +28,7 @@ import {
   removeInjectedUserPromptsFromHistory,
 } from './completionRecovery';
 import { getOrCreateSession, persistSessionToDB } from './sessionStore';
+import { drainSteeringMessagesIntoHistory, sendSteeringAppliedNotice } from './steering';
 import { buildShellToolResult } from './terminalOutput';
 import { runToolLoop } from './toolLoop';
 
@@ -231,16 +232,8 @@ async function runAgentTurnInternal(
     );
   };
 
-  try {
-    log.debug('Calling AI provider for agent turn', {
-      sessionId,
-      provider: config.aiProvider,
-      model: agentModel,
-      turn: session.turns,
-      historyLength: session.history.length,
-    });
-
-    let result = await completeWithContextRecovery(
+  const completeWithSteeringRecovery = async (): Promise<AICompletionResult> => {
+    let current = await completeWithContextRecovery(
       session,
       sessionId,
       agentModel,
@@ -251,8 +244,73 @@ async function runAgentTurnInternal(
       log,
       recordUsage,
     );
+    await recordUsage(current);
 
-    await recordUsage(result);
+    for (;;) {
+      const steeringMessageCount = drainSteeringMessagesIntoHistory(
+        sessionId,
+        session,
+        hasStoredPrompt,
+        log,
+      );
+      if (steeringMessageCount === 0) return current;
+
+      await persistSessionToDB(sessionId, session);
+      sendSteeringAppliedNotice(send, sessionId, steeringMessageCount);
+
+      current = await completeWithContextRecovery(
+        session,
+        sessionId,
+        agentModel,
+        {
+          tools: tools?.length ? tools : undefined,
+          temperature: 0.2,
+        },
+        log,
+        recordUsage,
+      );
+      await recordUsage(current);
+    }
+  };
+
+  const restartAfterPendingSteering = async (): Promise<boolean> => {
+    const steeringMessageCount = drainSteeringMessagesIntoHistory(
+      sessionId,
+      session,
+      hasStoredPrompt,
+      log,
+    );
+    if (steeringMessageCount === 0) return false;
+
+    await persistSessionToDB(sessionId, session);
+    sendSteeringAppliedNotice(send, sessionId, steeringMessageCount);
+
+    await runAgentTurnInternal(
+      sessionId,
+      subscription,
+      {
+        sender: 'agent',
+        session_id: sessionId,
+        content: '',
+        is_web_call: true,
+      },
+      send,
+      logger,
+      options,
+    );
+    return true;
+  };
+
+  try {
+    log.debug('Calling AI provider for agent turn', {
+      sessionId,
+      provider: config.aiProvider,
+      model: agentModel,
+      turn: session.turns,
+      historyLength: session.history.length,
+    });
+
+    let result = await completeWithSteeringRecovery();
 
     const recoveredInitialResult = await recoverOutputLengthResult(
       result,
@@ -273,6 +331,8 @@ async function runAgentTurnInternal(
       return;
     }
     result = recoveredInitialResult;
+
+    if (await restartAfterPendingSteering()) return;
 
     let content = result.content.trim();
 
@@ -305,6 +365,7 @@ async function runAgentTurnInternal(
         mcpBundle.dispatch,
         recordUsage,
         Boolean(options?.isCronJob),
+        hasStoredPrompt,
         options?.toolHandlers,
       );
 
@@ -343,6 +404,7 @@ async function runAgentTurnInternal(
             mcpBundle.dispatch,
             recordUsage,
             Boolean(options?.isCronJob),
+            hasStoredPrompt,
             options?.toolHandlers,
           );
           continue;
@@ -364,10 +426,10 @@ async function runAgentTurnInternal(
           // The tool loop produced a final answer, or hit its own hard stop. Use
           // hard-stop answers directly so web-failure recovery cannot bypass the
           // tool-iteration cap.
-          log.info('Tool loop produced final answer; processing inline', { sessionId });
-          content = toolLoopContent;
-          result = recoveredToolLoopResult;
-          break;
+        log.info('Tool loop produced final answer; processing inline', { sessionId });
+        content = toolLoopContent;
+        result = recoveredToolLoopResult;
+        break;
         }
 
         const webFallbackDepth = options?.webFallbackDepth ?? 0;
@@ -456,6 +518,8 @@ async function runAgentTurnInternal(
         },
       };
     }
+
+    if (await restartAfterPendingSteering()) return;
 
     const hasFinalAnswerTag = hasTag(content, 'final_answer');
 

@@ -38,6 +38,7 @@ export interface AgentMessage {
   is_web_call?: boolean;
   is_image_rendering?: boolean;
   is_mcp_call?: boolean;
+  is_steering?: boolean;
   platform?: string;
   group_name?: string;
 }

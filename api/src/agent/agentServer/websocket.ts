@@ -5,6 +5,7 @@ import { logger } from '../../logger';
 import { createLazyAuthContext } from '../agentAuth';
 import type { AgentMessage, AgentSendFn } from '../types';
 import { activeSessions, pendingShellScripts, sessionQueues } from './runtimeState';
+import { clearSteeringMessages, enqueueSteeringMessage } from './steering';
 import { buildShellToolResult } from './terminalOutput';
 import { runAgentTurn } from './turnRunner';
 
@@ -97,6 +98,29 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
         // always bypass the queue — they are part of the currently active turn.
         const isTerminalFeedback = Boolean(message.is_terminal_output) || Boolean(message.is_error);
         const isInternalCall = Boolean(message.is_web_call);
+        const isSteeringMessage = Boolean(message.is_steering);
+
+        if (
+          isSteeringMessage &&
+          !isTerminalFeedback &&
+          !isInternalCall &&
+          activeSessions.has(sessionId)
+        ) {
+          const pendingSteeringMessages = enqueueSteeringMessage(sessionId, message, log);
+          send({
+            session_id: sessionId,
+            sender: 'agent',
+            content: 'Steering update received for the current task.',
+            is_terminal_output: false,
+            is_error: false,
+            is_steering: true,
+          });
+          log.info('Accepted steering message for active session', {
+            sessionId,
+            pendingSteeringMessages,
+          });
+          return;
+        }
 
         if (!isTerminalFeedback && !isInternalCall && activeSessions.has(sessionId)) {
           // A turn is already running for this session. Queue the message so it
@@ -177,14 +201,16 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
       for (const sid of connectionSessionIds) {
         const wasActive = activeSessions.has(sid);
         const queueLength = sessionQueues.get(sid)?.length ?? 0;
+        const steeringLength = clearSteeringMessages(sid);
 
-        if (wasActive || queueLength > 0) {
+        if (wasActive || queueLength > 0 || steeringLength > 0) {
           activeSessions.delete(sid);
           sessionQueues.delete(sid);
           log.info('Cleaned up stuck session state after WebSocket disconnect', {
             sessionId: sid,
             wasActive,
             drainedQueueLength: queueLength,
+            drainedSteeringLength: steeringLength,
           });
         }
       }

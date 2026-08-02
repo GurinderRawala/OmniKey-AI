@@ -85,6 +85,7 @@ ${
 }
 - Use ${!isWindows ? 'bash (macOS/Linux)' : 'PowerShell'}. Every script must be self-contained and ready to run as-is.
 - Skip the script only for purely factual or conversational requests with no live data dependency (e.g., "what is 2+2").
+- <user_steering> contains a newer message the user sent while this turn was already running. Treat it as current-priority guidance for the in-progress task, adapting your next action immediately instead of treating it as a separate queued request.
 
 **Script phasing — one phase per turn:**
 - **Act immediately — no upfront planning.** For any multi-step task, emit the **first** script right away without reasoning through future steps first. Decide each next step only *after* you see the terminal output from the previous one. Long plans written before any script is run produce long reasoning blocks that get cut off — emit the script and let the output guide you.

@@ -128,7 +128,8 @@ vi.mock('../ai-client', () => ({
 }));
 
 import { runAgentTurn } from '../agent/agentServer';
-import { pendingShellScripts } from '../agent/agentServer/runtimeState';
+import { pendingShellScripts, sessionSteeringMessages } from '../agent/agentServer/runtimeState';
+import { enqueueSteeringMessage } from '../agent/agentServer/steering';
 
 function historyUpdateCalls() {
   return mocks.agentSession.update.mock.calls.filter(([values]) =>
@@ -168,6 +169,7 @@ describe('agent session persistence checkpoints', () => {
     mocks.executeTool.mockResolvedValue('tool result');
     mocks.runScript.mockResolvedValue({ output: 'script output', isError: false });
     pendingShellScripts.clear();
+    sessionSteeringMessages.clear();
   });
 
   it('persists the first user turn before calling the model', async () => {
@@ -264,6 +266,85 @@ describe('agent session persistence checkpoints', () => {
         }),
       ]),
     );
+  });
+
+  it('applies steering messages before acting on a stale model response', async () => {
+    const staleToolCall = {
+      id: 'call-stale',
+      name: 'web_search',
+      arguments: { query: 'old direction' },
+    };
+    let resolveFirstCompletion: (value: unknown) => void = () => {};
+    const firstCompletion = new Promise((resolve) => {
+      resolveFirstCompletion = resolve;
+    });
+    const send = vi.fn();
+
+    mocks.complete
+      .mockReturnValueOnce(firstCompletion)
+      .mockResolvedValueOnce({
+        assistantMessage: {
+          role: 'assistant',
+          content: '<final_answer>\nFollowed the steering update.\n</final_answer>',
+        },
+        content: '<final_answer>\nFollowed the steering update.\n</final_answer>',
+        finish_reason: 'stop',
+        model: 'test-model',
+      });
+
+    const turn = runAgentTurn(
+      'session-1',
+      { id: 'subscription-1' } as any,
+      {
+        session_id: 'session-1',
+        sender: 'client',
+        content: 'Search the web for the old direction.',
+        platform: 'macos',
+      },
+      send,
+      mocks.log as any,
+      { skipGrouping: true },
+    );
+
+    await waitForCondition(() => mocks.complete.mock.calls.length === 1);
+    enqueueSteeringMessage(
+      'session-1',
+      {
+        session_id: 'session-1',
+        sender: 'client',
+        content: 'Do not search. Use the local result we already have.',
+        is_steering: true,
+        platform: 'macos',
+      },
+      mocks.log as any,
+    );
+    resolveFirstCompletion({
+      assistantMessage: { role: 'assistant', content: '', tool_calls: [staleToolCall] },
+      content: '',
+      finish_reason: 'tool_calls',
+      model: 'test-model',
+      tool_calls: [staleToolCall],
+    });
+
+    await turn;
+
+    expect(mocks.complete).toHaveBeenCalledTimes(2);
+    expect(mocks.executeTool).not.toHaveBeenCalled();
+    expect(
+      send.mock.calls.some(([msg]) => String(msg.content).includes('Followed the steering update.')),
+    ).toBe(true);
+
+    const histories = historyUpdateCalls().map(parsedHistoryFromCall);
+    expect(
+      histories.some((history) =>
+        history.some(
+          (msg) =>
+            msg.role === 'user' &&
+            msg.content.includes('<user_steering') &&
+            msg.content.includes('Do not search. Use the local result we already have.'),
+        ),
+      ),
+    ).toBe(true);
   });
 
   it('refines verbose shell_script output before storing the tool result', async () => {
