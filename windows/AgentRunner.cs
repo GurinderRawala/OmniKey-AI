@@ -495,6 +495,7 @@ namespace OmniKey.Windows
             public bool? is_web_call { get; set; }
             public bool? is_image_rendering { get; set; }
             public bool? is_mcp_call { get; set; }
+            public bool? is_steering { get; set; }
             public string platform { get; set; } = "windows";
             // Project group selected in the composer. Sent on the initial
             // outbound message; the backend stamps the new session with it

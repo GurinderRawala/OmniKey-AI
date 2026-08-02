@@ -10,6 +10,7 @@ namespace OmniKey.Windows
     internal sealed class ChatSessionRunHandle
     {
         private readonly object _lock = new();
+        private readonly SemaphoreSlim _sendLock = new(1, 1);
         private ClientWebSocket? _webSocket;
         private Process? _process;
         private CancellationTokenSource? _cancellationSource;
@@ -43,6 +44,36 @@ namespace OmniKey.Windows
             {
                 _webSocket = null;
                 _cancellationSource = null;
+            }
+        }
+
+        internal async Task SendWebSocketMessageAsync(
+            AgentRunner.AgentMessage message,
+            CancellationToken cancellationToken = default)
+        {
+            ClientWebSocket? webSocket;
+            CancellationTokenSource? cancellationSource;
+            lock (_lock)
+            {
+                webSocket = _webSocket;
+                cancellationSource = _cancellationSource;
+            }
+
+            if (webSocket == null || webSocket.State != WebSocketState.Open)
+                throw new InvalidOperationException("The current agent turn is no longer connected.");
+
+            using var linkedCancellation = cancellationSource != null
+                ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, cancellationSource.Token)
+                : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
+            await _sendLock.WaitAsync(linkedCancellation.Token);
+            try
+            {
+                await AgentRunner.SendMessageAsync(webSocket, message, linkedCancellation.Token);
+            }
+            finally
+            {
+                _sendLock.Release();
             }
         }
 
@@ -176,6 +207,25 @@ namespace OmniKey.Windows
             return handle;
         }
 
+        public Task SendSteeringMessageAsync(
+            string sessionId,
+            string text,
+            ChatSessionRunHandle handle)
+        {
+            var message = new AgentRunner.AgentMessage
+            {
+                session_id = sessionId,
+                sender = "client",
+                content = text,
+                is_terminal_output = false,
+                is_error = false,
+                is_steering = true,
+                platform = "windows",
+            };
+
+            return handle.SendWebSocketMessageAsync(message);
+        }
+
         private static async Task ConnectAndRunAsync(
             string sessionId,
             string userText,
@@ -225,7 +275,7 @@ namespace OmniKey.Windows
                     group_name = string.IsNullOrWhiteSpace(groupName) ? null : groupName,
                 };
 
-                await AgentRunner.SendMessageAsync(ws, initial, cts.Token);
+                await handle.SendWebSocketMessageAsync(initial, cts.Token);
 
                 while (ws.State == WebSocketState.Open && !cts.Token.IsCancellationRequested)
                 {
@@ -252,6 +302,9 @@ namespace OmniKey.Windows
                         continue;
 
                     string content = msg.content ?? "";
+
+                    if (msg.is_steering == true)
+                        continue;
 
                     if (msg.is_web_call == true)
                     {
@@ -309,7 +362,7 @@ namespace OmniKey.Windows
                             platform = "windows"
                         };
 
-                        await AgentRunner.SendMessageAsync(ws, reply, cts.Token);
+                        await handle.SendWebSocketMessageAsync(reply, cts.Token);
                         continue;
                     }
 
