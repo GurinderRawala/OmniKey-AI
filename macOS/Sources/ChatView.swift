@@ -323,6 +323,14 @@ struct ChatSidebarView: View {
                                 isCollapsed: isCollapsed,
                                 containsActiveSession: sessions.contains { $0.id == model.activeSessionId },
                                 onToggle: {
+                                    // While searching, every group is force-expanded
+                                    // above, so `isCollapsed` no longer reflects
+                                    // `collapsedGroups`. Toggling here would mutate
+                                    // the real set with no visible effect and then
+                                    // surface as a surprise inversion once the query
+                                    // is cleared. Ignore the tap instead so search
+                                    // never silently rewrites collapse state.
+                                    guard !model.isSessionSearchActive else { return }
                                     withAnimation(.easeInOut(duration: 0.18)) {
                                         if collapsedGroups.contains(name) {
                                             collapsedGroups.remove(name)
@@ -2878,7 +2886,7 @@ private struct ThinkingSectionView: View {
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: isStreaming ? "sparkles" : "brain")
-                    .font(.system(size: 12.5, weight: .semibold))
+                    .font(.system(size: 11.9, weight: .semibold))
                     .foregroundColor(
                         isStreaming
                             ? NordTheme.accentPurple(colorScheme)
@@ -2889,10 +2897,10 @@ private struct ThinkingSectionView: View {
                 // presence than the badge-sized token, which is shared with
                 // other chips and should not grow with it.
                 Text(thinkingHeaderTitle)
-                    .font(.system(size: 12.5, weight: .semibold))
+                    .font(.system(size: 11.9, weight: .semibold))
                     .foregroundColor(NordTheme.secondaryText(colorScheme))
                 Image(systemName: expanded ? "chevron.up" : "chevron.down")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(.system(size: 9.5, weight: .semibold))
                     .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.55))
                 Spacer(minLength: 0)
             }
