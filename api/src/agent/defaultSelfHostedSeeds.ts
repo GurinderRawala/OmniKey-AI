@@ -6,8 +6,11 @@ import { Subscription } from '../models/subscription';
 import { SubscriptionTaskTemplate } from '../models/subscriptionTaskTemplate';
 
 export const DEFAULT_CODING_AGENT_HEADING = 'Coding Agent';
+const DEFAULT_TELEGRAM_PORT = process.env.OMNIKEY_TELEGRAM_PORT || '6666';
+const SELF_HOSTED_SEED_FAILURE_COOLDOWN_MS = 60_000;
 const seededSubscriptionIds = new Set<string>();
 const pendingSeedPromisesBySubscriptionId = new Map<string, Promise<void>>();
+const failedSeedRetryAtBySubscriptionId = new Map<string, number>();
 
 const DEFAULT_CODING_AGENT_INSTRUCTIONS = `You are a senior coding agent. Your job is to modify, debug, and verify code in the user's repository end-to-end. Work directly in the repo, follow existing conventions, and leave the codebase in a better, working state.
 
@@ -69,7 +72,7 @@ When finished, respond with a concise summary that includes:
 If no files were changed, say so clearly and explain what you found.
 
 Telegram notification:
-Only send a Telegram notification if the user's input includes @notify. After the work is complete, POST to http://localhost:6666/telegram/send with JSON { "message": "<short task-specific completion message>" }. If sending fails, mention the failure in the final answer.`;
+Only send a Telegram notification if the user's input includes @notify. After the work is complete, POST to http://localhost:${DEFAULT_TELEGRAM_PORT}/telegram/send with JSON { "message": "<short task-specific completion message>" }. If sending fails, mention the failure in the final answer.`;
 
 interface DefaultMcpServer {
   name: string;
@@ -86,6 +89,19 @@ function normalizeName(value: string): string {
   return value.trim().toLowerCase();
 }
 
+function isUniqueConstraintError(err: unknown): boolean {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    'name' in err &&
+    (err as { name?: string }).name === 'SequelizeUniqueConstraintError'
+  );
+}
+
+function defaultCodingAgentTemplateId(subscriptionId: string): string {
+  return `default-coding-agent-${subscriptionId}`;
+}
+
 function defaultFilesystemRoot(): string {
   return process.env.HOME || process.env.USERPROFILE || os.homedir();
 }
@@ -97,7 +113,7 @@ function defaultMcpServers(): DefaultMcpServer[] {
       description: 'Scoped filesystem access for local coding-agent work.',
       transport: 'stdio',
       command: 'npx',
-      args: ['-y', '@modelcontextprotocol/server-filesystem', defaultFilesystemRoot()],
+      args: ['-y', '@modelcontextprotocol/server-filesystem@2026.7.10', defaultFilesystemRoot()],
       env: {},
       headers: {},
       isEnabled: true,
@@ -107,7 +123,7 @@ function defaultMcpServers(): DefaultMcpServer[] {
       description: 'Browser automation and inspection through Playwright MCP.',
       transport: 'stdio',
       command: 'npx',
-      args: ['-y', '@playwright/mcp@latest'],
+      args: ['-y', '@playwright/mcp@0.0.78'],
       env: {},
       headers: {},
       isEnabled: true,
@@ -117,7 +133,7 @@ function defaultMcpServers(): DefaultMcpServer[] {
       description: 'Local Git repository inspection and workflow tools.',
       transport: 'stdio',
       command: 'uvx',
-      args: ['mcp-server-git'],
+      args: ['mcp-server-git==2026.7.10'],
       env: {},
       headers: {},
       isEnabled: true,
@@ -129,7 +145,14 @@ export async function seedDefaultSelfHostedAgentAssets(logger: Logger): Promise<
   const subscriptions = await Subscription.findAll({ attributes: ['id'] });
 
   for (const subscription of subscriptions) {
-    await seedDefaultSelfHostedAgentAssetsForSubscription(subscription.id, logger);
+    try {
+      await seedDefaultSelfHostedAgentAssetsForSubscription(subscription.id, logger);
+    } catch (err) {
+      logger.error('Default self-hosted agent asset seed failed for subscription; continuing', {
+        subscriptionId: subscription.id,
+        error: err,
+      });
+    }
   }
 }
 
@@ -138,6 +161,9 @@ export async function seedDefaultSelfHostedAgentAssetsForSubscription(
   logger: Logger,
 ): Promise<void> {
   if (seededSubscriptionIds.has(subscriptionId)) return;
+
+  const retryAt = failedSeedRetryAtBySubscriptionId.get(subscriptionId);
+  if (retryAt && Date.now() < retryAt) return;
 
   const pendingSeedPromise = pendingSeedPromisesBySubscriptionId.get(subscriptionId);
   if (pendingSeedPromise) {
@@ -151,6 +177,14 @@ export async function seedDefaultSelfHostedAgentAssetsForSubscription(
   )
     .then(() => {
       seededSubscriptionIds.add(subscriptionId);
+      failedSeedRetryAtBySubscriptionId.delete(subscriptionId);
+    })
+    .catch((err) => {
+      failedSeedRetryAtBySubscriptionId.set(
+        subscriptionId,
+        Date.now() + SELF_HOSTED_SEED_FAILURE_COOLDOWN_MS,
+      );
+      throw err;
     })
     .finally(() => {
       pendingSeedPromisesBySubscriptionId.delete(subscriptionId);
@@ -174,13 +208,18 @@ async function seedMissingDefaultSelfHostedAgentAssetsForSubscription(
 
   let taskTemplateCreated = false;
   if (!hasCodingAgentTemplate) {
-    await SubscriptionTaskTemplate.create({
-      subscriptionId,
-      heading: DEFAULT_CODING_AGENT_HEADING,
-      instructions: compressString(DEFAULT_CODING_AGENT_INSTRUCTIONS),
-      isDefault: false,
-    });
-    taskTemplateCreated = true;
+    try {
+      await SubscriptionTaskTemplate.create({
+        id: defaultCodingAgentTemplateId(subscriptionId),
+        subscriptionId,
+        heading: DEFAULT_CODING_AGENT_HEADING,
+        instructions: compressString(DEFAULT_CODING_AGENT_INSTRUCTIONS),
+        isDefault: false,
+      });
+      taskTemplateCreated = true;
+    } catch (err) {
+      if (!isUniqueConstraintError(err)) throw err;
+    }
   }
 
   const existingMcpServers = await MCPServer.findAll({
@@ -195,11 +234,15 @@ async function seedMissingDefaultSelfHostedAgentAssetsForSubscription(
   for (const server of defaultMcpServers()) {
     if (existingMcpServerNames.has(normalizeName(server.name))) continue;
 
-    await MCPServer.create({
-      subscriptionId,
-      ...server,
-    });
-    createdMcpServerNames.push(server.name);
+    try {
+      await MCPServer.create({
+        subscriptionId,
+        ...server,
+      });
+      createdMcpServerNames.push(server.name);
+    } catch (err) {
+      if (!isUniqueConstraintError(err)) throw err;
+    }
   }
 
   if (taskTemplateCreated || createdMcpServerNames.length > 0) {
@@ -209,4 +252,10 @@ async function seedMissingDefaultSelfHostedAgentAssetsForSubscription(
       mcpServersCreated: createdMcpServerNames,
     });
   }
+}
+
+export function resetDefaultSelfHostedSeedStateForTests(): void {
+  seededSubscriptionIds.clear();
+  pendingSeedPromisesBySubscriptionId.clear();
+  failedSeedRetryAtBySubscriptionId.clear();
 }

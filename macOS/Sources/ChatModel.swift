@@ -1053,20 +1053,27 @@ final class ChatModel: ObservableObject {
                 self.appendToUserMessageHaystack(sessionId: sessionId, text: text)
 
             case let .failure(error):
-                sessionSt.messages.removeAll {
-                    $0.id == steeringMessage.id || $0.id == continuationMessage.id
+                let continuationHasContent = sessionSt.messages.first {
+                    $0.id == continuationMessage.id
+                }.map { !$0.text.isEmpty || !$0.blocks.isEmpty } ?? false
+
+                if !continuationHasContent {
+                    sessionSt.messages.removeAll {
+                        $0.id == steeringMessage.id || $0.id == continuationMessage.id
+                    }
+                    sessionSt.streamingAssistantIndex = currentAssistantIndex
+                    if let previousRedirectTarget {
+                        sessionSt.assistantIndexRedirects[redirectKey] = previousRedirectTarget
+                    } else {
+                        sessionSt.assistantIndexRedirects.removeValue(forKey: redirectKey)
+                    }
+                    self.inputText = text
                 }
-                sessionSt.streamingAssistantIndex = currentAssistantIndex
-                if let previousRedirectTarget {
-                    sessionSt.assistantIndexRedirects[redirectKey] = previousRedirectTarget
-                } else {
-                    sessionSt.assistantIndexRedirects.removeValue(forKey: redirectKey)
-                }
+
                 if self.states[self.activeStateKey] === sessionSt {
                     self.messages = sessionSt.messages
                     self.trimmedOlderMessageCount = sessionSt.trimmedOlderMessageCount
                 }
-                self.inputText = text
                 self.lastErrorMessage = "Couldn't steer the current task: \(error.localizedDescription)"
             }
         }

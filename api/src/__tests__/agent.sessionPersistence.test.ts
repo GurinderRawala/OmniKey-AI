@@ -136,7 +136,10 @@ import {
 } from '../agent/agentServer/runtimeState';
 import { queuePendingSteeringAsFollowUp } from '../agent/agentServer/websocket';
 import {
+  drainSteeringMessagesIntoHistory,
   enqueueSteeringMessage,
+  MAX_PENDING_STEERING_CONTENT_CHARS,
+  MAX_PENDING_STEERING_MESSAGES,
   MAX_STEERING_RESTARTS,
 } from '../agent/agentServer/steering';
 
@@ -496,6 +499,94 @@ describe('agent session persistence checkpoints', () => {
       }),
     );
     expect(queue?.[0].message.is_steering).toBeUndefined();
+  });
+
+  it('rejects steering messages once pending queue limits are reached', () => {
+    for (let i = 0; i < MAX_PENDING_STEERING_MESSAGES; i++) {
+      const result = enqueueSteeringMessage(
+        'session-1',
+        {
+          session_id: 'session-1',
+          sender: 'client',
+          content: `Steering ${i}`,
+          is_steering: true,
+          platform: 'macos',
+        },
+        mocks.log as any,
+      );
+      expect(result.accepted).toBe(true);
+    }
+
+    const tooMany = enqueueSteeringMessage(
+      'session-1',
+      {
+        session_id: 'session-1',
+        sender: 'client',
+        content: 'One more update',
+        is_steering: true,
+        platform: 'macos',
+      },
+      mocks.log as any,
+    );
+
+    expect(tooMany.accepted).toBe(false);
+    expect(tooMany.pendingCount).toBe(MAX_PENDING_STEERING_MESSAGES);
+    expect(tooMany.rejectionReason).toContain('Too many steering updates');
+
+    sessionSteeringMessages.clear();
+    const tooLarge = enqueueSteeringMessage(
+      'session-1',
+      {
+        session_id: 'session-1',
+        sender: 'client',
+        content: 'x'.repeat(MAX_PENDING_STEERING_CONTENT_CHARS + 1),
+        is_steering: true,
+        platform: 'macos',
+      },
+      mocks.log as any,
+    );
+
+    expect(tooLarge.accepted).toBe(false);
+    expect(tooLarge.pendingCount).toBe(0);
+    expect(tooLarge.rejectionReason).toContain('too large');
+  });
+
+  it('keeps pending steering retryable when history mutation fails', () => {
+    enqueueSteeringMessage(
+      'session-1',
+      {
+        session_id: 'session-1',
+        sender: 'client',
+        content: 'Retry this steering later.',
+        is_steering: true,
+        platform: 'macos',
+      },
+      mocks.log as any,
+    );
+
+    const history = [
+      { role: 'system', content: 'system prompt' },
+      { role: 'user', content: 'Original request' },
+    ] as any[];
+    const originalPush = history.push.bind(history);
+    let pushCalls = 0;
+    history.push = ((...items: any[]) => {
+      pushCalls += 1;
+      if (pushCalls === 1) throw new Error('push failed');
+      return originalPush(...items);
+    }) as typeof history.push;
+
+    expect(() =>
+      drainSteeringMessagesIntoHistory(
+        'session-1',
+        { history, activeModel: 'test-model' } as any,
+        false,
+        mocks.log as any,
+      ),
+    ).toThrow('push failed');
+
+    expect(sessionSteeringMessages.get('session-1')).toHaveLength(1);
+    expect(history.at(-1)).toEqual({ role: 'user', content: 'Original request' });
   });
 
   it('stops repeated steering restarts with a steering-specific budget', async () => {

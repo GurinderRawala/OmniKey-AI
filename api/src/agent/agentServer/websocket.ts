@@ -23,7 +23,7 @@ export function queuePendingSteeringAsFollowUp(
   send: AgentSendFn,
   log: Logger,
 ): number {
-  const pending = takePendingSteeringMessages(sessionId);
+  const pending = takePendingSteeringMessages(sessionId, log);
   if (!pending.length) return 0;
 
   const content = formatSteeringMessagesForQueuedTurn(pending);
@@ -158,12 +158,16 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
             send({
               session_id: sessionId,
               sender: 'agent',
-              content: 'Empty steering update ignored.',
+              content: steeringResult.rejectionReason ?? 'Empty steering update ignored.',
               is_terminal_output: false,
               is_error: true,
               is_steering: true,
             });
-            log.info('Ignored empty steering message for active session', { sessionId });
+            log.info('Ignored steering message for active session', {
+              sessionId,
+              reason: steeringResult.rejectionReason ?? 'empty',
+              pendingSteeringMessages: steeringResult.pendingCount,
+            });
             return;
           }
 

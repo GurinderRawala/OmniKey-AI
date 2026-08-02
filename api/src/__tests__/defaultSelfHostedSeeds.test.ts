@@ -32,6 +32,7 @@ vi.mock('../models/mcpServer', () => ({
 
 import {
   DEFAULT_CODING_AGENT_HEADING,
+  resetDefaultSelfHostedSeedStateForTests,
   seedDefaultSelfHostedAgentAssets,
   seedDefaultSelfHostedAgentAssetsForSubscription,
 } from '../agent/defaultSelfHostedSeeds';
@@ -49,6 +50,7 @@ beforeEach(() => {
   mocks.taskTemplateCreate.mockReset();
   mocks.mcpServerFindAll.mockReset();
   mocks.mcpServerCreate.mockReset();
+  resetDefaultSelfHostedSeedStateForTests();
 });
 
 describe('seedDefaultSelfHostedAgentAssets', () => {
@@ -61,6 +63,7 @@ describe('seedDefaultSelfHostedAgentAssets', () => {
     await seedDefaultSelfHostedAgentAssets(logger);
 
     expect(mocks.taskTemplateCreate).toHaveBeenCalledWith({
+      id: 'default-coding-agent-sub-1',
       subscriptionId: 'sub-1',
       heading: DEFAULT_CODING_AGENT_HEADING,
       instructions: expect.stringMatching(/^gz1:/),
@@ -79,7 +82,7 @@ describe('seedDefaultSelfHostedAgentAssets', () => {
         subscriptionId: 'sub-1',
         name: 'filesystem',
         command: 'npx',
-        args: expect.arrayContaining(['@modelcontextprotocol/server-filesystem']),
+        args: expect.arrayContaining(['@modelcontextprotocol/server-filesystem@2026.7.10']),
         isEnabled: true,
       }),
     );
@@ -88,7 +91,7 @@ describe('seedDefaultSelfHostedAgentAssets', () => {
         subscriptionId: 'sub-1',
         name: 'playwright',
         command: 'npx',
-        args: ['-y', '@playwright/mcp@latest'],
+        args: ['-y', '@playwright/mcp@0.0.78'],
         isEnabled: true,
       }),
     );
@@ -97,10 +100,28 @@ describe('seedDefaultSelfHostedAgentAssets', () => {
         subscriptionId: 'sub-1',
         name: 'git',
         command: 'uvx',
-        args: ['mcp-server-git'],
+        args: ['mcp-server-git==2026.7.10'],
         isEnabled: true,
       }),
     );
+  });
+
+  it('continues seeding later subscriptions after one subscription fails', async () => {
+    const logger = makeLogger();
+    mocks.subscriptionFindAll.mockResolvedValue([{ id: 'sub-fail' }, { id: 'sub-ok' }]);
+    mocks.taskTemplateFindAll.mockRejectedValueOnce(new Error('database busy')).mockResolvedValueOnce([]);
+    mocks.mcpServerFindAll.mockResolvedValueOnce([]);
+
+    await seedDefaultSelfHostedAgentAssets(logger);
+
+    expect(logger.error).toHaveBeenCalledWith(
+      'Default self-hosted agent asset seed failed for subscription; continuing',
+      expect.objectContaining({ subscriptionId: 'sub-fail' }),
+    );
+    expect(mocks.taskTemplateCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ subscriptionId: 'sub-ok' }),
+    );
+    expect(mocks.mcpServerCreate).toHaveBeenCalledTimes(3);
   });
 });
 
@@ -134,5 +155,32 @@ describe('seedDefaultSelfHostedAgentAssetsForSubscription', () => {
 
     expect(mocks.taskTemplateCreate).toHaveBeenCalledTimes(1);
     expect(mocks.mcpServerCreate).toHaveBeenCalledTimes(3);
+  });
+
+  it('treats duplicate seeded assets from concurrent processes as already created', async () => {
+    const logger = makeLogger();
+    const duplicate = Object.assign(new Error('duplicate'), {
+      name: 'SequelizeUniqueConstraintError',
+    });
+    mocks.taskTemplateFindAll.mockResolvedValue([]);
+    mocks.taskTemplateCreate.mockRejectedValueOnce(duplicate);
+    mocks.mcpServerFindAll.mockResolvedValue([]);
+    mocks.mcpServerCreate
+      .mockResolvedValueOnce({})
+      .mockRejectedValueOnce(duplicate)
+      .mockResolvedValueOnce({});
+
+    await seedDefaultSelfHostedAgentAssetsForSubscription('sub-4', logger);
+
+    expect(mocks.taskTemplateCreate).toHaveBeenCalledTimes(1);
+    expect(mocks.mcpServerCreate).toHaveBeenCalledTimes(3);
+    expect(logger.info).toHaveBeenCalledWith(
+      'Seeded default self-hosted agent assets.',
+      expect.objectContaining({
+        subscriptionId: 'sub-4',
+        taskTemplateCreated: false,
+        mcpServersCreated: ['filesystem', 'git'],
+      }),
+    );
   });
 });

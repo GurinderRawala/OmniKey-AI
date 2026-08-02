@@ -730,13 +730,21 @@ namespace OmniKey.Windows
             {
                 RunOnUi(() =>
                 {
-                    sessionSt.Messages.RemoveAll(m =>
-                        m.Id == steeringMessage.Id || m.Id == continuationMessage.Id);
-                    sessionSt.StreamingAssistantIndex = previousAssistantIndex;
-                    if (hadPreviousRedirect)
-                        sessionSt.AssistantIndexRedirects[redirectKey] = previousRedirectTarget;
-                    else
-                        sessionSt.AssistantIndexRedirects.Remove(redirectKey);
+                    bool continuationHasContent = sessionSt.Messages.Any(m =>
+                        m.Id == continuationMessage.Id &&
+                        (!string.IsNullOrEmpty(m.Text) || m.Blocks.Count > 0));
+
+                    if (!continuationHasContent)
+                    {
+                        sessionSt.Messages.RemoveAll(m =>
+                            m.Id == steeringMessage.Id || m.Id == continuationMessage.Id);
+                        sessionSt.StreamingAssistantIndex = previousAssistantIndex;
+                        if (hadPreviousRedirect)
+                            sessionSt.AssistantIndexRedirects[redirectKey] = previousRedirectTarget;
+                        else
+                            sessionSt.AssistantIndexRedirects.Remove(redirectKey);
+                        InputText = text;
+                    }
 
                     if (ReferenceEquals(_states.GetValueOrDefault(activeStateKey), sessionSt))
                     {
@@ -744,7 +752,6 @@ namespace OmniKey.Windows
                         TrimmedOlderMessageCount = sessionSt.TrimmedOlderMessageCount;
                     }
 
-                    InputText = text;
                     LastErrorMessage = $"Couldn't steer the current task: {ex.Message}";
                     NotifyStateChanged();
                 });
