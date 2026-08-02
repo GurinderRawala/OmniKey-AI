@@ -32,7 +32,9 @@ const WIN_CONFIG_DIR = path.join(getConfigDir(), 'telegram');
 const WIN_LOG_PATH = path.join(WIN_CONFIG_DIR, 'daemon.log');
 const WIN_ERROR_LOG_PATH = path.join(WIN_CONFIG_DIR, 'daemon-error.log');
 
-const FORWARD_ENV_KEYS = ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'PORT', 'LOG_LEVEL'];
+const TELEGRAM_PORT_ENV = 'OMNIKEY_TELEGRAM_PORT';
+const DEFAULT_TELEGRAM_PORT = '6666';
+const FORWARD_ENV_KEYS = ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', TELEGRAM_PORT_ENV, 'LOG_LEVEL'];
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -153,17 +155,24 @@ function statusMacOS(): void {
   } catch (e) {
     console.warn('launchctl list failed:', (e as Error).message);
   }
-  const port = process.env.PORT || '6666';
+  const parsedPort = Number(process.env[TELEGRAM_PORT_ENV]);
+  const port =
+    Number.isInteger(parsedPort) && parsedPort > 0 && parsedPort <= 65535
+      ? parsedPort
+      : Number(DEFAULT_TELEGRAM_PORT);
+  let lsof = '';
   try {
-    const lsof = execSync(`lsof -i :${port} -sTCP:LISTEN -t || true`).toString().trim();
-    console.log(
-      lsof
-        ? `Listening on port ${port} (pid ${lsof.split('\n')[0]}).`
-        : `Nothing listening on port ${port}.`,
-    );
+    lsof = execFileSync('lsof', ['-i', `:${port}`, '-sTCP:LISTEN', '-t'])
+      .toString()
+      .trim();
   } catch {
     /* ignore */
   }
+  console.log(
+    lsof
+      ? `Listening on port ${port} (pid ${lsof.split('\n')[0]}).`
+      : `Nothing listening on port ${port}.`,
+  );
 }
 
 function logsMacOS(): void {
@@ -403,8 +412,8 @@ export async function startTelegramDaemon(): Promise<void> {
   for (const [key, value] of Object.entries(cfg)) {
     process.env[key] = value;
   }
-  // Ensure PORT has a value so the plist always includes it.
-  process.env.PORT = process.env.PORT ?? '6666';
+  // Ensure the Telegram-specific port has a value so the plist always includes it.
+  process.env[TELEGRAM_PORT_ENV] = process.env[TELEGRAM_PORT_ENV] ?? DEFAULT_TELEGRAM_PORT;
   ensureBuilt();
   if (isWindows) {
     await startWindows();

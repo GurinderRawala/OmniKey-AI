@@ -21,6 +21,11 @@ enum ChatBlockKind {
     case webCall
     case mcpCall
     case imageRendering
+    /// A tool invocation that isn't one of the specifically-modelled kinds
+    /// above. The server transcript files these under `agentReasoning`, so
+    /// they are recovered client-side by `AgentTimelineSummarizer.classify`
+    /// and shown as a tool step rather than mislabelled as reasoning.
+    case toolCall
     case finalAnswer
 }
 
@@ -28,6 +33,12 @@ struct ChatBlock: Identifiable, Equatable {
     let id = UUID()
     let kind: ChatBlockKind
     var text: String
+    /// Wall-clock time the block was appended to the transcript. Used by the
+    /// timeline to show per-step timing ("2.4s") and the turn-level
+    /// "Worked for …" header, mirroring the Codex desktop transcript.
+    /// Blocks hydrated from history share the hydration timestamp, so the
+    /// view falls back to hiding timings when every block has the same value.
+    var createdAt: Date = Date()
 
     static func == (lhs: ChatBlock, rhs: ChatBlock) -> Bool {
         return lhs.id == rhs.id && lhs.text == rhs.text
@@ -41,21 +52,34 @@ struct ChatMessage: Identifiable, Equatable {
     /// use `blocks` for streamed agent output. System messages use `text`.
     var text: String
     var blocks: [ChatBlock]
+    /// When the message was sent. Populated for messages composed in this
+    /// app session. `nil` for messages hydrated from server history, which
+    /// carries no per-message timestamp — the view hides the label rather
+    /// than inventing a time.
+    var sentAt: Date?
+    /// True when the user sent this while the agent turn was already running.
+    /// It steers that active turn instead of creating a queued follow-up turn.
+    var isSteering: Bool
 
     static func == (lhs: ChatMessage, rhs: ChatMessage) -> Bool {
-        return lhs.id == rhs.id && lhs.role == rhs.role && lhs.text == rhs.text && lhs.blocks == rhs.blocks
+        return lhs.id == rhs.id
+            && lhs.role == rhs.role
+            && lhs.text == rhs.text
+            && lhs.blocks == rhs.blocks
+            && lhs.sentAt == rhs.sentAt
+            && lhs.isSteering == rhs.isSteering
     }
 
-    static func user(_ text: String) -> ChatMessage {
-        ChatMessage(role: .user, text: text, blocks: [])
+    static func user(_ text: String, sentAt: Date? = Date(), isSteering: Bool = false) -> ChatMessage {
+        ChatMessage(role: .user, text: text, blocks: [], sentAt: sentAt, isSteering: isSteering)
     }
 
     static func assistant() -> ChatMessage {
-        ChatMessage(role: .assistant, text: "", blocks: [])
+        ChatMessage(role: .assistant, text: "", blocks: [], sentAt: nil, isSteering: false)
     }
 
     static func system(_ text: String) -> ChatMessage {
-        ChatMessage(role: .system, text: text, blocks: [])
+        ChatMessage(role: .system, text: text, blocks: [], sentAt: nil, isSteering: false)
     }
 }
 
@@ -76,6 +100,11 @@ final class ChatSessionState: @unchecked Sendable {
     /// Updated each time a new turn starts so the header "Running" indicator
     /// tracks the latest streaming turn.
     var streamingAssistantIndex: Int? = nil
+    /// When the user steers an active turn, the continuation should appear after
+    /// the steering bubble. Existing WebSocket callbacks still reference the
+    /// assistant index captured at turn start, so this maps that original index
+    /// to the current continuation bubble.
+    var assistantIndexRedirects: [Int: Int] = [:]
 }
 
 // MARK: - Chat model
@@ -152,6 +181,11 @@ final class ChatModel: ObservableObject {
 
     /// True while a turn is in flight (WebSocket open, awaiting final answer).
     @Published var isRunning: Bool = false
+
+    /// Ids of every session with at least one turn in flight — not just the
+    /// active one. Turns run in parallel across sessions, so the sidebar uses
+    /// this to badge each busy chat instead of only the one on screen.
+    @Published private(set) var runningSessionIds: Set<String> = []
 
     /// Surfaced to the view when something goes wrong outside the
     /// per-turn assistant flow (e.g. session list refresh failure).
@@ -685,18 +719,25 @@ final class ChatModel: ObservableObject {
     /// as well as final answers. For chat resume, render each turn as a clean
     /// user message plus the last useful assistant response.
     private static func hydrateTranscript(from entries: [SessionHistoryEntry]) -> [ChatMessage] {
+        // One shared stamp for every hydrated block. The timeline treats a
+        // zero-length span as "no real timing available" and hides the
+        // duration badges, so replayed history never shows invented timings.
+        let hydratedAt = Date()
+
         if entries.contains(where: { ($0.blocks ?? []).isEmpty == false }) {
             return entries.compactMap { entry in
                 if entry.role == "user" {
                     if ChatModel.isInjectedUserPrompt(entry.text) { return nil }
-                    return ChatMessage.user(entry.text)
+                    // Server history carries no per-message timestamp, so the
+                    // send time is unknown rather than "now".
+                    return ChatMessage.user(entry.text, sentAt: nil)
                 }
 
                 guard entry.role == "assistant" else { return nil }
                 var message = ChatMessage.assistant()
                 message.blocks = (entry.blocks ?? []).compactMap { block in
                     guard let kind = ChatModel.blockKind(from: block.kind) else { return nil }
-                    return ChatBlock(kind: kind, text: block.text)
+                    return ChatBlock(kind: kind, text: block.text, createdAt: hydratedAt)
                 }
                 return message.blocks.isEmpty ? nil : message
             }
@@ -712,7 +753,7 @@ final class ChatModel: ObservableObject {
             }
 
             var message = ChatMessage.assistant()
-            message.blocks.append(ChatBlock(kind: .finalAnswer, text: text))
+            message.blocks.append(ChatBlock(kind: .finalAnswer, text: text, createdAt: hydratedAt))
             result.append(message)
             pendingAssistantTexts = []
         }
@@ -721,7 +762,7 @@ final class ChatModel: ObservableObject {
             if entry.role == "user" {
                 if ChatModel.isInjectedUserPrompt(entry.text) { continue }
                 flushAssistant()
-                result.append(ChatMessage.user(entry.text))
+                result.append(ChatMessage.user(entry.text, sentAt: nil))
             } else if entry.role == "assistant" {
                 pendingAssistantTexts.append(entry.text)
             }
@@ -757,6 +798,8 @@ final class ChatModel: ObservableObject {
             return .mcpCall
         case "imageRendering":
             return .imageRendering
+        case "toolCall":
+            return .toolCall
         case "finalAnswer":
             return .finalAnswer
         default:
@@ -785,6 +828,7 @@ final class ChatModel: ObservableObject {
         sessionUserMessageHaystacks.removeValue(forKey: session.id)
         // Optimistically cancel all running turns for this session.
         states[session.id]?.runHandles.forEach { $0.cancel() }
+        runningSessionIds.remove(session.id)
 
         guard let token = SubscriptionManager.shared.jwtToken, !token.isEmpty else { return }
         let url = APIClient.baseURL
@@ -822,6 +866,10 @@ final class ChatModel: ObservableObject {
         let currentState = sessionState(for: activeStateKey)
         inputText = ""
         lastErrorMessage = nil
+        if currentState.isRunning {
+            sendSteeringInput(text, to: currentState)
+            return
+        }
         if activeSessionId == nil && messages.isEmpty {
             activeSessionTaskInstructionTitle = defaultTaskTemplate?.heading
         }
@@ -855,7 +903,9 @@ final class ChatModel: ObservableObject {
         // turns each stream into their own row rather than fighting over one index.
         let capturedAssistantIndex = sessionSt.messages.count - 1
         sessionSt.streamingAssistantIndex = capturedAssistantIndex
+        sessionSt.assistantIndexRedirects[capturedAssistantIndex] = nil
         sessionSt.runCount += 1
+        runningSessionIds.insert(sessionId)
 
         // Sync published properties so the view reflects the new messages.
         messages = sessionSt.messages
@@ -912,6 +962,8 @@ final class ChatModel: ObservableObject {
                 if sessionSt.runCount == 0 {
                     sessionSt.runHandles = []
                     sessionSt.streamingAssistantIndex = nil
+                    sessionSt.assistantIndexRedirects.removeAll()
+                    self.runningSessionIds.remove(sessionId)
                     if self.states[self.activeStateKey] === sessionSt {
                         self.isRunning = false
                     }
@@ -937,6 +989,8 @@ final class ChatModel: ObservableObject {
                 if sessionSt.runCount == 0 {
                     sessionSt.runHandles = []
                     sessionSt.streamingAssistantIndex = nil
+                    sessionSt.assistantIndexRedirects.removeAll()
+                    self.runningSessionIds.remove(sessionId)
                     if self.states[self.activeStateKey] === sessionSt {
                         self.isRunning = false
                     }
@@ -956,17 +1010,86 @@ final class ChatModel: ObservableObject {
         sessionSt.runHandles.append(handle)
     }
 
-    /// Append `block` to the assistant message being streamed in `sessionSt`.
+    private func sendSteeringInput(_ text: String, to sessionSt: ChatSessionState) {
+        guard let sessionId = activeSessionId, let handle = sessionSt.runHandles.last else {
+            lastErrorMessage = "The current task is no longer connected."
+            return
+        }
+
+        let currentAssistantIndex = sessionSt.streamingAssistantIndex
+            ?? sessionSt.messages.lastIndex(where: { $0.role == .assistant })
+        guard let currentAssistantIndex,
+              currentAssistantIndex >= 0,
+              currentAssistantIndex < sessionSt.messages.count
+        else {
+            lastErrorMessage = "The current task has no active response to steer."
+            inputText = text
+            return
+        }
+
+        let redirectKey = sessionSt.assistantIndexRedirects.first(where: { $0.value == currentAssistantIndex })?.key
+            ?? currentAssistantIndex
+        let previousRedirectTarget = sessionSt.assistantIndexRedirects[redirectKey]
+        let steeringMessage = ChatMessage.user(text, isSteering: true)
+        let continuationMessage = ChatMessage.assistant()
+        let insertIndex = min(currentAssistantIndex + 1, sessionSt.messages.count)
+        sessionSt.messages.insert(steeringMessage, at: insertIndex)
+        sessionSt.messages.insert(continuationMessage, at: insertIndex + 1)
+        sessionSt.streamingAssistantIndex = insertIndex + 1
+        sessionSt.assistantIndexRedirects[redirectKey] = insertIndex + 1
+        if states[activeStateKey] === sessionSt {
+            messages = sessionSt.messages
+            trimmedOlderMessageCount = sessionSt.trimmedOlderMessageCount
+        }
+
+        ChatSessionRunner.shared.sendSteeringMessage(
+            sessionId: sessionId,
+            text: text,
+            handle: handle
+        ) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success:
+                self.appendToUserMessageHaystack(sessionId: sessionId, text: text)
+
+            case let .failure(error):
+                let continuationHasContent = sessionSt.messages.first {
+                    $0.id == continuationMessage.id
+                }.map { !$0.text.isEmpty || !$0.blocks.isEmpty } ?? false
+
+                if !continuationHasContent {
+                    sessionSt.messages.removeAll {
+                        $0.id == steeringMessage.id || $0.id == continuationMessage.id
+                    }
+                    sessionSt.streamingAssistantIndex = currentAssistantIndex
+                    if let previousRedirectTarget {
+                        sessionSt.assistantIndexRedirects[redirectKey] = previousRedirectTarget
+                    } else {
+                        sessionSt.assistantIndexRedirects.removeValue(forKey: redirectKey)
+                    }
+                    self.inputText = text
+                }
+
+                if self.states[self.activeStateKey] === sessionSt {
+                    self.messages = sessionSt.messages
+                    self.trimmedOlderMessageCount = sessionSt.trimmedOlderMessageCount
+                }
+                self.lastErrorMessage = "Couldn't steer the current task: \(error.localizedDescription)"
+            }
+        }
+    }
+
     /// Append `block` to the assistant message at `index` in `sessionSt`.
     /// Each turn captures its own index at send time so concurrent turns write
     /// to separate bubbles. If `sessionSt` is the active session the published
     /// `messages` array is also updated so the view refreshes.
     private func appendBlock(_ block: ChatBlock, toSession sessionSt: ChatSessionState, at index: Int) {
-        guard index >= 0, index < sessionSt.messages.count else { return }
-        var message = sessionSt.messages[index]
+        let targetIndex = sessionSt.assistantIndexRedirects[index] ?? index
+        guard targetIndex >= 0, targetIndex < sessionSt.messages.count else { return }
+        var message = sessionSt.messages[targetIndex]
         guard message.role == .assistant else { return }
         message.blocks.append(block)
-        sessionSt.messages[index] = message
+        sessionSt.messages[targetIndex] = message
 
         if states[activeStateKey] === sessionSt {
             messages = sessionSt.messages
@@ -1001,6 +1124,8 @@ final class ChatModel: ObservableObject {
         s?.runCount = 0
         s?.runHandles = []
         s?.streamingAssistantIndex = nil
+        s?.assistantIndexRedirects.removeAll()
+        if let id = activeSessionId { runningSessionIds.remove(id) }
         isRunning = false
     }
 

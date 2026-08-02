@@ -9,13 +9,15 @@ import { getAgentPrompt } from '../agentPrompts';
 import { getPromptMcpsForSubscription } from '../mcpPromptCache';
 import { getAgentSettings } from '../../agentSettingsStore';
 import type { SessionState } from '../types';
-import { buildCompactedHistoryForRequest } from './sessionMemory';
+import { buildTrimmedHistoryForRequest } from './sessionMemory';
 import { userHistoryHasProjectContext } from './transcript';
 
 export async function persistSessionToDB(sessionId: string, state: SessionState): Promise<void> {
   try {
     const historyJson = JSON.stringify(state.history);
-    const estimatedPromptTokens = estimateHistoryTokens(buildCompactedHistoryForRequest(state));
+    const estimatedPromptTokens = estimateHistoryTokens(
+      buildTrimmedHistoryForRequest(state, state.activeModel, sessionId),
+    );
     await AgentSession.update(
       {
         historyJson,
@@ -24,12 +26,9 @@ export async function persistSessionToDB(sessionId: string, state: SessionState)
         sessionMemoryHistoryLength: state.sessionMemoryHistoryLength ?? 0,
         sessionMemoryUpdatedAt: state.sessionMemoryUpdatedAt ?? null,
         lastActiveAt: new Date(),
-        // Refresh the "context remaining" signal from the history we're actually
-        // persisting — including any pruning that just happened — so the UI
-        // reflects what the NEXT request will send. Relying only on the last
-        // successful call's usage left the figure stale after a turn that failed
-        // on overflow: the oversized message never got counted, so the UI kept
-        // showing a half-empty window.
+        // Refresh the "context remaining" signal from the request view the next
+        // model call will use: full raw history when it fits, compact memory
+        // when enabled, and proactive request-local trimming when necessary.
         lastPromptTokens: Math.max(estimatedPromptTokens, state.lastModelPromptTokens ?? 0),
       },
       { where: { id: sessionId } },

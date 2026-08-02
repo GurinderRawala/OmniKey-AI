@@ -43,6 +43,7 @@ export function stripInjectedWrappersRich(text: string): StrippedInput {
   const body = withContextPathsExtracted
     .replace(/<stored_instructions>[\s\S]*?<\/stored_instructions>/gi, '')
     .replace(/<user_input>([\s\S]*?)<\/user_input>/gi, '$1')
+    .replace(/<user_steering[^>]*>([\s\S]*?)<\/user_steering>/gi, '$1')
     .replace(/@omniagent/gi, '')
     .trim();
   const contextPathsLine = contextPaths.length
@@ -84,10 +85,12 @@ export function extractUserInputs(historyJson: string): string[] {
       if (raw.startsWith('COMMAND ERROR:')) continue;
       if (isInjectedUserPrompt(raw)) continue;
 
-      // Unwrap <user_input>, then strip injected wrappers from the inner
+      // Unwrap <user_input>/<user_steering>, then strip injected wrappers from the inner
       // text. The body is capped at 400 chars; the fallback line is
       // appended in full so it always survives the cap.
-      const match = /<user_input>([\s\S]*?)<\/user_input>/i.exec(raw);
+      const match =
+        /<user_input>([\s\S]*?)<\/user_input>/i.exec(raw) ??
+        /<user_steering[^>]*>([\s\S]*?)<\/user_steering>/i.exec(raw);
       const inner = match ? match[1] : raw;
       const { body, contextPathsLine } = stripInjectedWrappersRich(inner);
       const truncatedBody = body.slice(0, 400);

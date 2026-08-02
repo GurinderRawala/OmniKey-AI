@@ -22,6 +22,8 @@ import { AppDownload } from './models/appDownload';
 import './models/agentSession';
 import './models/scheduledJob';
 import './models/mcpServer';
+import './models/subscriptionTaskTemplate';
+import './models/subscriptionUsage';
 import './models/agentSettings';
 import { incrementDownloadCount, getDownloadCounts } from './bucket-adapter';
 
@@ -107,8 +109,8 @@ app.get('/macos/appcast', (req, res) => {
 
   // These should match the values embedded into the macOS app
   // Info.plist in macOS/build_release_dmg.sh.
-  const bundleVersion = '51';
-  const shortVersion = '1.4.1';
+  const bundleVersion = '52';
+  const shortVersion = '1.4.2';
 
   const xml = `<?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0"
@@ -139,7 +141,7 @@ app.get('/macos/appcast', (req, res) => {
 // ── Windows distribution endpoints ───────────────────────────────────────────
 // These should match the values in windows/OmniKey.Windows.csproj
 // <Version> and windows/build_release_zip.ps1 $APP_VERSION.
-const WIN_VERSION = '1.16.2';
+const WIN_VERSION = '1.19.2';
 const WIN_ZIP_FILENAME = 'OmniKeyAI-windows-win-x64.zip';
 const WIN_ZIP_PATH = path.join(process.cwd(), 'windows', WIN_ZIP_FILENAME);
 
@@ -192,8 +194,9 @@ app.get('/windows/update', (req, res) => {
     releaseNotes: [
       `What's new in ${WIN_VERSION}`,
       ``,
-      ` Chat: code blocks in assistant responses no longer flash up with a bright white background. The markdown theming pass used to abort mid-document whenever it hit a fenced code block, leaving every subsequent code block unthemed - that path is now iteration-safe.`,
-      ` Chat: opening an old conversation now jumps straight to the latest message instead of leaving you scrolled to the very top, and the view stays pinned to the bottom whenever you send a new message.`,
+      ` Chat: you can now steer a running OmniAgent task from the composer instead of waiting for the current run to finish and queueing the message.`,
+      ` Chat: the input now switches between Send, Steer, and Stop states so mid-run guidance lands in the active session.`,
+      ` Chat: steering messages are shown in the conversation history and keep streamed continuation output intact if you stop or retry.`,
     ].join('\n'),
   });
 });

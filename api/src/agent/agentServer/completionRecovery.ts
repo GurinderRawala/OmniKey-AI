@@ -7,14 +7,13 @@ import {
   AITool,
   AICompletionResult,
   CompletionOptions,
-  estimateHistoryTokens,
-  getInputTokenBudget,
 } from '../../ai-client';
-import { isContextLengthError, pruneHistoryForContextLimit, pushToSessionHistory } from '../utils';
+import { pushToSessionHistory } from '../utils';
 import { isInjectedUserPrompt } from '../injectedUserPrompts';
 import type { SessionState } from '../types';
 import { persistSessionToDB } from './sessionStore';
-import { buildCompactedHistoryForRequest, ensureSessionMemory } from './sessionMemory';
+import { isContextLengthError, pruneHistoryForContextLimit } from './contextPruning';
+import { buildTrimmedHistoryForRequest, ensureSessionMemory } from './sessionMemory';
 
 // Upper bound on prune-and-retry cycles per completion. Each cycle removes one
 // unit (or compacts one message), so 12 is plenty to claw back from an overflow
@@ -44,52 +43,16 @@ function createOutputLengthRecoveryDirective(attempt: number): string {
     .join('\n');
 }
 
-// Fraction of the input-token budget we proactively trim down to before
-// sending. The 10% headroom absorbs the gap between our estimate and the
-// provider's real tokenizer so we rarely fall through to reactive recovery.
-const PROACTIVE_TRIM_RATIO = 0.9;
-
-/**
- * Proactively shrinks the history before a request so we never knowingly send
- * an over-window turn. Reactive recovery remains the backstop for the rare case
- * where the real token count still exceeds our estimate.
- */
-function trimHistoryToBudget(
-  history: AIMessage[],
-  sessionId: string,
-  model: string,
-  log: Logger,
-): AIMessage[] {
-  const budget = Math.floor(getInputTokenBudget(config.aiProvider, model) * PROACTIVE_TRIM_RATIO);
-  if (budget <= 0) return history;
-
-  const scratchSession = { subscription: {} as any, history, turns: 0 };
-  let guard = 0;
-  while (estimateHistoryTokens(scratchSession.history) > budget && guard < 200) {
-    guard++;
-    if (!pruneHistoryForContextLimit(scratchSession, log)) break;
-  }
-
-  if (guard > 0) {
-    log.info('Proactively trimmed history to fit context budget before sending', {
-      sessionId,
-      steps: guard,
-      estimatedTokens: estimateHistoryTokens(scratchSession.history),
-      budget,
-    });
-  }
-
-  return scratchSession.history;
-}
-
 function cacheableOptions(
   session: SessionState,
   model: string,
   options: CompletionOptions,
 ): CompletionOptions {
   const keyBase = `${config.aiProvider}:${model}:${session.subscription?.id ?? 'unknown'}`;
+  const promptCacheTtl =
+    config.aiProvider === 'openai' && openAIUsesPromptCacheOptions(model) ? '30m' : undefined;
   const promptCacheRetention =
-    config.aiProvider === 'openai' && openAISupportsExtendedPromptCache(model)
+    config.aiProvider === 'openai' && !promptCacheTtl && openAISupportsExtendedPromptCache(model)
       ? '24h'
       : undefined;
   return {
@@ -98,16 +61,24 @@ function cacheableOptions(
     promptCacheKey:
       options.promptCacheKey ??
       `omnikey-agent-${Buffer.from(keyBase).toString('base64url').slice(0, 48)}`,
-    ...(options.promptCacheRetention || !promptCacheRetention ? {} : { promptCacheRetention }),
+    ...(options.promptCacheTtl || !promptCacheTtl ? {} : { promptCacheTtl }),
+    ...(options.promptCacheRetention || options.promptCacheTtl || !promptCacheRetention
+      ? {}
+      : { promptCacheRetention }),
   };
+}
+
+function openAIUsesPromptCacheOptions(model: string): boolean {
+  const m = model.toLowerCase();
+  return /^gpt-5\.(?:[6-9]|\d{2,})/.test(m) || /^gpt-(?:[6-9]|\d{2,})/.test(m);
 }
 
 function openAISupportsExtendedPromptCache(model: string): boolean {
   const m = model.toLowerCase();
   return (
-    /^gpt-5\.6/.test(m) ||
     /^gpt-5\.5/.test(m) ||
     /^gpt-5\.4/.test(m) ||
+    /^gpt-5\.3/.test(m) ||
     /^gpt-5\.2/.test(m) ||
     /^gpt-5\.1/.test(m) ||
     /^gpt-5($|-)/.test(m) ||
@@ -123,13 +94,8 @@ export async function completeWithContextRecovery(
   log: Logger,
   onUsage?: (result: AICompletionResult) => Promise<void>,
 ): Promise<AICompletionResult> {
-  await ensureSessionMemory(session, sessionId, log, onUsage);
-  let requestHistory = trimHistoryToBudget(
-    buildCompactedHistoryForRequest(session),
-    sessionId,
-    model,
-    log,
-  );
+  await ensureSessionMemory(session, sessionId, model, log, onUsage);
+  let requestHistory = buildTrimmedHistoryForRequest(session, model, sessionId, log);
   const requestOptions = cacheableOptions(session, model, options);
 
   let attempt = 0;

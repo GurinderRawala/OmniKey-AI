@@ -163,8 +163,8 @@ export async function ensureTelegramConfig(
 
 /**
  * Spawn the bundled telegram-bot server as a long-lived child process.
- * The bot reads PORT from process.env (defaults to 7072 in the app), so we
- * inject the CLI's chosen port that way to keep the upstream code untouched.
+ * The bot reads OMNIKEY_TELEGRAM_PORT from process.env, so we inject the
+ * CLI's chosen port that way to avoid clashing with other apps' generic PORT.
  */
 export function spawnTelegramClient(port: number, env: Record<string, string>): ChildProcess {
   const bundleRoot = resolveBundleRoot();
@@ -190,7 +190,7 @@ export function spawnTelegramClient(port: number, env: Record<string, string>): 
     env: {
       ...process.env,
       ...env,
-      PORT: String(port),
+      OMNIKEY_TELEGRAM_PORT: String(port),
     },
   });
 

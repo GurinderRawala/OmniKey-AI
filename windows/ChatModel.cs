@@ -61,15 +61,22 @@ namespace OmniKey.Windows
         public ChatMessageRole Role { get; }
         public string Text { get; set; }
         public List<ChatBlock> Blocks { get; set; }
+        public bool IsSteering { get; }
 
-        private ChatMessage(ChatMessageRole role, string text, List<ChatBlock>? blocks = null)
+        private ChatMessage(
+            ChatMessageRole role,
+            string text,
+            List<ChatBlock>? blocks = null,
+            bool isSteering = false)
         {
             Role = role;
             Text = text;
             Blocks = blocks ?? new List<ChatBlock>();
+            IsSteering = isSteering;
         }
 
-        public static ChatMessage User(string text) => new(ChatMessageRole.User, text);
+        public static ChatMessage User(string text, bool isSteering = false) =>
+            new(ChatMessageRole.User, text, isSteering: isSteering);
         public static ChatMessage Assistant() => new(ChatMessageRole.Assistant, "");
         public static ChatMessage System(string text) => new(ChatMessageRole.System, text);
     }
@@ -81,6 +88,7 @@ namespace OmniKey.Windows
         public bool IsRunning { get; set; }
         public ChatSessionRunHandle? RunHandle { get; set; }
         public int? StreamingAssistantIndex { get; set; }
+        public Dictionary<int, int> AssistantIndexRedirects { get; } = new();
     }
 
     internal sealed class ChatModel
@@ -508,15 +516,16 @@ namespace OmniKey.Windows
             ActiveSessionId = session.Id;
             ActiveSessionTitle = string.IsNullOrWhiteSpace(session.Title) ? "Untitled Chat" : session.Title;
             LastErrorMessage = null;
-            IsLoadingSessionHistory = true;
-
-            loadState(sessionState(session.Id));
+            var state = sessionState(session.Id);
+            IsLoadingSessionHistory = !state.IsRunning;
+            loadState(state);
 
             DefaultTaskTemplate = null;
             FetchDefaultTaskTemplate();
             NotifyStateChanged();
 
-            _ = LoadSessionHistoryAsync(session.Id);
+            if (!state.IsRunning)
+                _ = LoadSessionHistoryAsync(session.Id);
         }
 
         public void DeleteSession(AgentSessionInfo session)
@@ -534,11 +543,14 @@ namespace OmniKey.Windows
                 return;
 
             var currentState = sessionState(activeStateKey);
-            if (currentState.IsRunning)
-                return;
-
             InputText = "";
             LastErrorMessage = null;
+
+            if (currentState.IsRunning)
+            {
+                SendSteeringInput(text, currentState);
+                return;
+            }
 
             string sessionId = ActiveSessionId ?? Guid.NewGuid().ToString();
             ChatSessionState sessionSt;
@@ -603,6 +615,7 @@ namespace OmniKey.Windows
                     sessionSt.IsRunning = false;
                     sessionSt.RunHandle = null;
                     sessionSt.StreamingAssistantIndex = null;
+                    sessionSt.AssistantIndexRedirects.Clear();
                     if (ReferenceEquals(_states.GetValueOrDefault(activeStateKey), sessionSt))
                         IsRunning = false;
                     NotifyStateChanged();
@@ -625,6 +638,7 @@ namespace OmniKey.Windows
                     sessionSt.IsRunning = false;
                     sessionSt.RunHandle = null;
                     sessionSt.StreamingAssistantIndex = null;
+                    sessionSt.AssistantIndexRedirects.Clear();
                     if (ReferenceEquals(_states.GetValueOrDefault(activeStateKey), sessionSt))
                         IsRunning = false;
                     LastErrorMessage = error.Message;
@@ -633,6 +647,115 @@ namespace OmniKey.Windows
 
             sessionSt.RunHandle = handle;
             NotifyStateChanged();
+        }
+
+        private void SendSteeringInput(string text, ChatSessionState sessionSt)
+        {
+            if (ActiveSessionId is not { Length: > 0 } sessionId || sessionSt.RunHandle is not { } handle)
+            {
+                LastErrorMessage = "The current task is no longer connected.";
+                InputText = text;
+                return;
+            }
+
+            int assistantIndex = sessionSt.StreamingAssistantIndex
+                ?? sessionSt.Messages.FindLastIndex(m => m.Role == ChatMessageRole.Assistant);
+
+            if (assistantIndex < 0 || assistantIndex >= sessionSt.Messages.Count)
+            {
+                LastErrorMessage = "The current task has no active response to steer.";
+                InputText = text;
+                return;
+            }
+
+            int redirectKey = assistantIndex;
+            foreach (var pair in sessionSt.AssistantIndexRedirects)
+            {
+                if (pair.Value == assistantIndex)
+                {
+                    redirectKey = pair.Key;
+                    break;
+                }
+            }
+
+            bool hadPreviousRedirect = sessionSt.AssistantIndexRedirects.TryGetValue(
+                redirectKey,
+                out int previousRedirectTarget);
+            var steeringMessage = ChatMessage.User(text, isSteering: true);
+            var continuationMessage = ChatMessage.Assistant();
+            int insertIndex = Math.Min(assistantIndex + 1, sessionSt.Messages.Count);
+
+            sessionSt.Messages.Insert(insertIndex, steeringMessage);
+            sessionSt.Messages.Insert(insertIndex + 1, continuationMessage);
+            sessionSt.StreamingAssistantIndex = insertIndex + 1;
+            sessionSt.AssistantIndexRedirects[redirectKey] = insertIndex + 1;
+
+            if (ReferenceEquals(_states.GetValueOrDefault(activeStateKey), sessionSt))
+            {
+                Messages = new List<ChatMessage>(sessionSt.Messages);
+                TrimmedOlderMessageCount = sessionSt.TrimmedOlderMessageCount;
+                NotifyStateChanged();
+            }
+
+            _ = SendSteeringInputAsync(
+                sessionId,
+                text,
+                handle,
+                sessionSt,
+                steeringMessage,
+                continuationMessage,
+                assistantIndex,
+                redirectKey,
+                hadPreviousRedirect,
+                previousRedirectTarget);
+        }
+
+        private async Task SendSteeringInputAsync(
+            string sessionId,
+            string text,
+            ChatSessionRunHandle handle,
+            ChatSessionState sessionSt,
+            ChatMessage steeringMessage,
+            ChatMessage continuationMessage,
+            int previousAssistantIndex,
+            int redirectKey,
+            bool hadPreviousRedirect,
+            int previousRedirectTarget)
+        {
+            try
+            {
+                await ChatSessionRunner.Shared.SendSteeringMessageAsync(sessionId, text, handle);
+            }
+            catch (Exception ex)
+            {
+                RunOnUi(() =>
+                {
+                    bool continuationHasContent = sessionSt.Messages.Any(m =>
+                        m.Id == continuationMessage.Id &&
+                        (!string.IsNullOrEmpty(m.Text) || m.Blocks.Count > 0));
+
+                    if (!continuationHasContent)
+                    {
+                        sessionSt.Messages.RemoveAll(m =>
+                            m.Id == steeringMessage.Id || m.Id == continuationMessage.Id);
+                        sessionSt.StreamingAssistantIndex = previousAssistantIndex;
+                        if (hadPreviousRedirect)
+                            sessionSt.AssistantIndexRedirects[redirectKey] = previousRedirectTarget;
+                        else
+                            sessionSt.AssistantIndexRedirects.Remove(redirectKey);
+                        InputText = text;
+                    }
+
+                    if (ReferenceEquals(_states.GetValueOrDefault(activeStateKey), sessionSt))
+                    {
+                        Messages = new List<ChatMessage>(sessionSt.Messages);
+                        TrimmedOlderMessageCount = sessionSt.TrimmedOlderMessageCount;
+                    }
+
+                    LastErrorMessage = $"Couldn't steer the current task: {ex.Message}";
+                    NotifyStateChanged();
+                });
+            }
         }
 
         public bool RecallLastUserMessage()
@@ -662,6 +785,7 @@ namespace OmniKey.Windows
             state.IsRunning = false;
             state.RunHandle = null;
             state.StreamingAssistantIndex = null;
+            state.AssistantIndexRedirects.Clear();
             IsRunning = false;
             NotifyStateChanged();
         }
@@ -995,14 +1119,18 @@ namespace OmniKey.Windows
 
         private void appendBlock(ChatBlock block, ChatSessionState state)
         {
-            if (state.StreamingAssistantIndex is not int index ||
-                index < 0 ||
-                index >= state.Messages.Count)
+            if (state.StreamingAssistantIndex is not int index)
             {
                 return;
             }
 
-            var message = state.Messages[index];
+            int targetIndex = state.AssistantIndexRedirects.TryGetValue(index, out int redirected)
+                ? redirected
+                : index;
+            if (targetIndex < 0 || targetIndex >= state.Messages.Count)
+                return;
+
+            var message = state.Messages[targetIndex];
             if (message.Role != ChatMessageRole.Assistant)
                 return;
 

@@ -69,7 +69,7 @@ describe('pruneHistoryForContextLimit', () => {
     expect(session.history[3].content).toBe('follow up');
   });
 
-  it('drops the oldest assistant tool_call together with its tool results', () => {
+  it('drops the oldest user exchange together with its assistant and tool results', () => {
     const session = makeSession([
       { role: 'system', content: 'sys' },
       { role: 'user', content: 'first turn' },
@@ -86,20 +86,53 @@ describe('pruneHistoryForContextLimit', () => {
     const changed = pruneHistoryForContextLimit(session, noopLog);
 
     expect(changed).toBe(true);
-    // Oldest unit is the "first turn" user message (a standalone unit).
-    expect(session.history.map((m) => m.content)).toEqual([
-      'sys',
-      'calling tool',
-      'result',
-      'done',
-      'latest question',
+    expect(session.history.map((m) => m.content)).toEqual(['sys', 'latest question']);
+    expect(session.history.some((m) => m.role === 'tool')).toBe(false);
+  });
+
+  it('repairs a stranded assistant tool_call together with its tool results', () => {
+    const session = makeSession([
+      { role: 'system', content: 'sys' },
+      {
+        role: 'assistant',
+        content: 'calling tool',
+        tool_calls: [{ id: 't1', name: 'shell_script', arguments: {} }],
+      },
+      { role: 'tool', tool_call_id: 't1', tool_name: 'shell_script', content: 'result' },
+      { role: 'assistant', content: 'done' },
+      { role: 'user', content: 'latest question' },
     ]);
 
-    // Next prune removes the assistant tool_call AND its tool result as one block,
-    // never leaving an orphaned tool_call or tool result.
-    const changed2 = pruneHistoryForContextLimit(session, noopLog);
-    expect(changed2).toBe(true);
-    expect(session.history.map((m) => m.role)).toEqual(['system', 'assistant', 'user']);
+    const changed = pruneHistoryForContextLimit(session, noopLog);
+
+    expect(changed).toBe(true);
+    expect(session.history.map((m) => m.role)).toEqual(['system', 'user']);
+    expect(session.history.some((m) => m.role === 'tool')).toBe(false);
+  });
+
+  it('repairs stranded prefixes with multiple consecutive tool-call rounds', () => {
+    const session = makeSession([
+      { role: 'system', content: 'sys' },
+      {
+        role: 'assistant',
+        content: 'calling first tool',
+        tool_calls: [{ id: 't1', name: 'shell_script', arguments: {} }],
+      },
+      { role: 'tool', tool_call_id: 't1', tool_name: 'shell_script', content: 'first result' },
+      {
+        role: 'assistant',
+        content: 'calling second tool',
+        tool_calls: [{ id: 't2', name: 'shell_script', arguments: {} }],
+      },
+      { role: 'tool', tool_call_id: 't2', tool_name: 'shell_script', content: 'second result' },
+      { role: 'assistant', content: 'done' },
+      { role: 'user', content: 'latest question' },
+    ]);
+
+    const changed = pruneHistoryForContextLimit(session, noopLog);
+
+    expect(changed).toBe(true);
+    expect(session.history.map((m) => m.content)).toEqual(['sys', 'latest question']);
     expect(session.history.some((m) => m.role === 'tool')).toBe(false);
   });
 

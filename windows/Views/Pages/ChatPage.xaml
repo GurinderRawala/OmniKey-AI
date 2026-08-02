@@ -232,8 +232,20 @@
                 <Border
                     MaxWidth="600"
                     Padding="16,12"
-                    Background="{StaticResource Nord.UserBubbleBrush}"
+                    BorderThickness="1"
                     CornerRadius="14">
+                    <Border.Style>
+                        <Style TargetType="Border">
+                            <Setter Property="Background" Value="{StaticResource Nord.UserBubbleBrush}" />
+                            <Setter Property="BorderBrush" Value="Transparent" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsSteering}" Value="True">
+                                    <Setter Property="Background" Value="#296EC88C" />
+                                    <Setter Property="BorderBrush" Value="#4D6EC88C" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Border.Style>
                     <TextBlock
                         FontFamily="{StaticResource OK.FontFamily}"
                         FontSize="{StaticResource OK.Font.Body}"
@@ -242,6 +254,26 @@
                         Text="{Binding Text}"
                         TextWrapping="Wrap" />
                 </Border>
+                <StackPanel
+                    Margin="0,6,2,0"
+                    HorizontalAlignment="Right"
+                    Orientation="Horizontal"
+                    ToolTip="Sent to the running task instead of queued as a new turn"
+                    Visibility="{Binding IsSteering, Converter={StaticResource BooleanToVisibilityConverter}}">
+                    <ui:SymbolIcon
+                        Margin="0,0,4,0"
+                        VerticalAlignment="Center"
+                        FontSize="12"
+                        Foreground="{StaticResource Nord.AccentGreenBrush}"
+                        Symbol="ArrowUpRight24" />
+                    <TextBlock
+                        VerticalAlignment="Center"
+                        FontFamily="{StaticResource OK.FontFamily}"
+                        FontSize="10"
+                        FontWeight="Medium"
+                        Foreground="{StaticResource Nord.AccentGreenBrush}"
+                        Text="Steered current task" />
+                </StackPanel>
                 <Button
                     Margin="0,6,2,0"
                     HorizontalAlignment="Right"
@@ -1133,7 +1165,7 @@
                         FontSize="{StaticResource OK.Font.Body}"
                         Foreground="{StaticResource Nord.PrimaryTextBrush}"
                         MaxHeight="220"
-                        PlaceholderText="Ask OmniAgent anything…"
+                        PlaceholderText="{Binding ComposerPlaceholder}"
                         Text="{Binding InputText, UpdateSourceTrigger=PropertyChanged}"
                         TextWrapping="Wrap"
                         VerticalScrollBarVisibility="Auto">
@@ -1411,7 +1443,7 @@
                             TrackBrush="{StaticResource Nord.BorderBrush}"
                             Visibility="{Binding HasContextSummary, Converter={StaticResource BooleanToVisibilityConverter}}" />
 
-                        <!-- Send / Stop -->
+                        <!-- Send / Steer / Stop -->
                         <Grid Grid.Column="3">
                             <ui:Button
                                 Width="36"
@@ -1421,8 +1453,18 @@
                                 Command="{Binding SendCommand}"
                                 Cursor="Hand"
                                 Icon="{ui:SymbolIcon Symbol=ArrowUp24, FontSize=16}"
-                                ToolTip="Send (Enter)"
+                                ToolTip="{Binding SendButtonToolTip}"
                                 Visibility="{Binding IsRunning, Converter={StaticResource InverseBooleanToVisibilityConverter}}" />
+                            <ui:Button
+                                Width="36"
+                                Height="36"
+                                Padding="0"
+                                Appearance="Success"
+                                Command="{Binding SendCommand}"
+                                Cursor="Hand"
+                                Icon="{ui:SymbolIcon Symbol=ArrowUpRight24, FontSize=15}"
+                                ToolTip="{Binding SendButtonToolTip}"
+                                Visibility="{Binding IsSteeringState, Converter={StaticResource BooleanToVisibilityConverter}}" />
                             <ui:Button
                                 Width="36"
                                 Height="36"
@@ -1432,7 +1474,7 @@
                                 Cursor="Hand"
                                 Icon="{ui:SymbolIcon Symbol=Stop24, FontSize=14}"
                                 ToolTip="Stop"
-                                Visibility="{Binding IsRunning, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                                Visibility="{Binding IsStopState, Converter={StaticResource BooleanToVisibilityConverter}}" />
                         </Grid>
                     </Grid>
                 </Grid>

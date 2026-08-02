@@ -198,10 +198,20 @@ namespace OmniKey.Windows.ViewModels
                 _model.InputText = value;
                 OnPropertyChanged();
                 SendCommand.NotifyCanExecuteChanged();
+                OnPropertyChanged(nameof(IsInputEmpty));
+                OnPropertyChanged(nameof(IsStopState));
+                OnPropertyChanged(nameof(IsSteeringState));
+                OnPropertyChanged(nameof(ComposerPlaceholder));
+                OnPropertyChanged(nameof(SendButtonToolTip));
             }
         }
 
-        public bool CanSend => !IsRunning && !string.IsNullOrWhiteSpace(InputText);
+        public bool CanSend => !string.IsNullOrWhiteSpace(InputText);
+        public bool IsInputEmpty => string.IsNullOrWhiteSpace(InputText);
+        public bool IsStopState => IsRunning && IsInputEmpty;
+        public bool IsSteeringState => IsRunning && !IsInputEmpty;
+        public string ComposerPlaceholder => IsRunning ? "Steer the current task..." : "Ask OmniAgent anything...";
+        public string SendButtonToolTip => IsSteeringState ? "Steer current task (Enter)" : "Send (Enter)";
         public bool HasError => !string.IsNullOrWhiteSpace(LastErrorMessage);
         public bool HasNoMessages => Messages.Count == 0;
         public bool HasSearchQuery => !string.IsNullOrWhiteSpace(SessionSearchQuery);
@@ -322,6 +332,11 @@ namespace OmniKey.Windows.ViewModels
             {
                 OnPropertyChanged(nameof(InputText));
                 SendCommand.NotifyCanExecuteChanged();
+                OnPropertyChanged(nameof(IsInputEmpty));
+                OnPropertyChanged(nameof(IsStopState));
+                OnPropertyChanged(nameof(IsSteeringState));
+                OnPropertyChanged(nameof(ComposerPlaceholder));
+                OnPropertyChanged(nameof(SendButtonToolTip));
             }, null);
 
         [RelayCommand]
@@ -387,7 +402,14 @@ namespace OmniKey.Windows.ViewModels
             _model.OpenSession(value);
         }
 
-        partial void OnIsRunningChanged(bool value) => SendCommand.NotifyCanExecuteChanged();
+        partial void OnIsRunningChanged(bool value)
+        {
+            SendCommand.NotifyCanExecuteChanged();
+            OnPropertyChanged(nameof(IsStopState));
+            OnPropertyChanged(nameof(IsSteeringState));
+            OnPropertyChanged(nameof(ComposerPlaceholder));
+            OnPropertyChanged(nameof(SendButtonToolTip));
+        }
 
         private void OnModelStateChanged(object? sender, EventArgs e) =>
             _ui.Post(_ => ProjectFromModel(), null);
@@ -493,6 +515,11 @@ namespace OmniKey.Windows.ViewModels
             OnPropertyChanged(nameof(InputText));
             OnPropertyChanged(nameof(HasError));
             OnPropertyChanged(nameof(CanSend));
+            OnPropertyChanged(nameof(IsInputEmpty));
+            OnPropertyChanged(nameof(IsStopState));
+            OnPropertyChanged(nameof(IsSteeringState));
+            OnPropertyChanged(nameof(ComposerPlaceholder));
+            OnPropertyChanged(nameof(SendButtonToolTip));
             OnPropertyChanged(nameof(HasNoMessages));
             OnPropertyChanged(nameof(SidebarHasSessions));
             OnPropertyChanged(nameof(HasSearchQuery));
@@ -839,6 +866,7 @@ namespace OmniKey.Windows.ViewModels
         public ChatMessageRole Role => Source.Role;
         public string Text => Source.Text;
         public bool IsStreaming { get; }
+        public bool IsSteering => Source.IsSteering;
 
         public bool IsUser => Role == ChatMessageRole.User;
         public bool IsAssistant => Role == ChatMessageRole.Assistant;

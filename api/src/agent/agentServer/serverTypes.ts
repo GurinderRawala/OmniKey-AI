@@ -16,6 +16,7 @@ export type CustomToolHandler = (args: Record<string, unknown>, log: Logger) => 
 export interface AgentTurnOptions {
   isCronJob?: boolean;
   skipGrouping?: boolean;
+  disableWebTools?: boolean;
   extraTools?: AITool[];
   toolHandlers?: Map<string, CustomToolHandler>;
 }
@@ -25,6 +26,13 @@ export interface QueuedMessage {
   send: AgentSendFn;
   subscription: Subscription;
   log: Logger;
+}
+
+export interface PendingSteeringMessage {
+  content: string;
+  receivedAt: string;
+  platform?: string;
+  groupName?: string;
 }
 
 export type PendingShellScript = {

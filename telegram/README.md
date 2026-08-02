@@ -63,7 +63,7 @@ omnikey telegram start
 | -------------------- | -------- | ------------------------------------------------------ |
 | `TELEGRAM_BOT_TOKEN` | yes      | Token from @BotFather                                  |
 | `TELEGRAM_CHAT_ID`   | yes      | Numeric chat ID (negative for groups/channels)         |
-| `PORT`               | no       | HTTP server port (defaults to `7072`)                  |
+| `OMNIKEY_TELEGRAM_PORT` | no    | HTTP server port (defaults to `6666`)                  |
 | `LOG_LEVEL`          | no       | `error` · `warn` · `info` · `debug` — defaults to `info` |
 
 ---

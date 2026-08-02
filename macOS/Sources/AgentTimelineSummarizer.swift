@@ -13,9 +13,257 @@ enum AgentTimelineSummarizer {
         summarize(kind: displayKind(for: kind), text: text).expanded
     }
 
+    /// Recovers the real kind of a persisted block.
+    ///
+    /// The server transcript files every unrecognised `role: "tool"` result
+    /// under `agentReasoning` (see `toolBlockKind` — its fallback branch), so
+    /// replayed timelines label genuine tool calls as "Reasoning". The payload
+    /// still carries the `Tool: <name>` header the builder wrote, which is
+    /// enough to classify it correctly on the client.
+    ///
+    /// Blocks that already have a specific kind are returned untouched.
+    static func classify(kind: ChatBlockKind, text: String) -> ChatBlockKind {
+        guard kind == .agentReasoning else { return kind }
+        guard let tool = toolName(in: text) else { return .agentReasoning }
+
+        let lower = tool.lowercased()
+        if lower.hasPrefix("mcp_") || lower.hasPrefix("mcp__") { return .mcpCall }
+        if lower == "generate_image" { return .imageRendering }
+        if lower == "web_search" || lower == "web_fetch" { return .webCall }
+        if lower == "shell_script" { return .shellCommand }
+        return .toolCall
+    }
+
+    /// Extracts `<name>` from a leading `Tool: <name>` header, which is the
+    /// exact shape `toolBlockText` writes into persisted history.
+    static func toolName(in text: String) -> String? {
+        for rawLine in text.components(separatedBy: .newlines) {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !line.isEmpty else { continue }
+
+            guard line.lowercased().hasPrefix("tool:") else { return nil }
+            let name = line.dropFirst("tool:".count)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return name.isEmpty ? nil : name
+        }
+        return nil
+    }
+
+    /// Human-readable form of a raw tool identifier: `mcp_github__list_repos`
+    /// becomes `github › list repos`, `web_search` becomes `web search`.
+    static func friendlyToolName(_ raw: String) -> String {
+        var name = raw
+        for prefix in ["mcp__", "mcp_"] where name.lowercased().hasPrefix(prefix) {
+            name = String(name.dropFirst(prefix.count))
+            break
+        }
+        return name
+            .components(separatedBy: "__")
+            .map { $0.replacingOccurrences(of: "_", with: " ") }
+            .filter { !$0.isEmpty }
+            .joined(separator: " \u{203A} ")
+    }
+
+    /// Strips command noise out of a reasoning block, leaving only the prose
+    /// the agent actually wrote.
+    ///
+    /// Persisted reasoning blocks are polluted from two directions: the
+    /// transcript builder files unrecognised `role: "tool"` results under
+    /// `agentReasoning` with a raw `Tool: <name>` payload, and the prose that
+    /// accompanies a `<shell_script>` is stored verbatim — often restating
+    /// the command it is about to run. Replaying that in the timeline shows
+    /// commands twice (once here, once in the adjacent `shellCommand` row)
+    /// and reads as a dump rather than reasoning.
+    ///
+    /// Returns an empty string when nothing but noise remains, which the
+    /// timeline uses as the signal to drop the step entirely.
+    static func reasoningProse(_ text: String) -> String {
+        var kept: [String] = []
+        var inFence = false
+
+        for rawLine in text.components(separatedBy: .newlines) {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            // Fenced blocks in reasoning are always command/output dumps here;
+            // the real script lives in its own `shellCommand` block.
+            if line.hasPrefix("```") {
+                inFence.toggle()
+                continue
+            }
+            if inFence { continue }
+
+            if line.isEmpty {
+                // Collapse runs of blank lines instead of leaving gaps behind
+                // removed content.
+                if kept.last?.isEmpty == false { kept.append("") }
+                continue
+            }
+
+            if isCommandNoise(line) { continue }
+
+            kept.append(rawLine)
+        }
+
+        while kept.last?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true {
+            kept.removeLast()
+        }
+
+        return kept.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// True for lines that are machinery rather than reasoning: tool-result
+    /// headers, stream markers, and bare shell invocations.
+    private static func isCommandNoise(_ line: String) -> Bool {
+        let lower = line.lowercased()
+
+        if lower.hasPrefix("tool:") || lower == "tool result" { return true }
+        // Placeholder the transcript builder emits for an empty tool result.
+        if lower == "no result text." || lower == "no result text" { return true }
+        if line == "TERMINAL OUTPUT:" || line == "COMMAND ERROR:" { return true }
+        if line.hasPrefix("[terminal ") { return true }
+        if line.hasPrefix("$ ") || line.hasPrefix("% ") { return true }
+        if isShellBoilerplate(line) { return true }
+
+        // A line that is nothing but a shell invocation. Anchored to the start
+        // so prose that merely mentions a tool ("I'll use git to check the
+        // history") is preserved.
+        //
+        // The prefix alone is not sufficient: several starters are also common
+        // English sentence openers ("Find the root cause first.", "Which
+        // approach is better?", "Sort the results by date."). A line must
+        // therefore also *look* like a command — see `looksLikeShellInvocation`.
+        let commandStarters = [
+            "cd ", "ls ", "cat ", "sed ", "rg ", "grep ", "find ", "git ",
+            "npm ", "yarn ", "pnpm ", "swift ", "xcodebuild ", "python ",
+            "python3 ", "node ", "echo ", "mkdir ", "cp ", "mv ", "rm ",
+            "touch ", "chmod ", "curl ", "wget ", "sqlite3 ", "awk ", "sort ",
+            "head ", "tail ", "wc ", "which ", "export ", "brew ", "docker ",
+        ]
+        for starter in commandStarters where lower.hasPrefix(starter) {
+            return looksLikeShellInvocation(line)
+        }
+
+        return false
+    }
+
+    /// Second gate for lines that begin with a known command word. Rejects
+    /// anything shaped like prose and requires positive evidence of a shell
+    /// invocation, so sentences that merely start with `find`, `which`,
+    /// `sort`, or `head` survive.
+    private static func looksLikeShellInvocation(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let tokens = trimmed.split(separator: " ", omittingEmptySubsequences: true)
+
+        // Prose ends in sentence punctuation; commands effectively never do.
+        // A bare `.` final token is exempt — that is a path argument, as in
+        // `grep -r pattern .`, not the end of a sentence.
+        if let last = trimmed.last, ".?!:,;".contains(last), tokens.last != "." {
+            return false
+        }
+
+        // Strong syntax that prose does not use: flags, paths, globs,
+        // redirects, pipes, variables, or assignments.
+        //
+        // Quotes and apostrophes are deliberately excluded — they appear in
+        // ordinary prose ("Find the file's path") far too often to be evidence.
+        let evidence: [String] = [" -", " --", "/", "|", ">", "<", "&&", "~", "$", "*", "="]
+        for marker in evidence where trimmed.contains(marker) { return true }
+
+        // No syntax evidence left, so only accept a terse invocation such as
+        // `swift build`, `npm ci`, or `docker compose up`. Anything longer
+        // reads as a sentence.
+        guard tokens.count <= 3 else { return false }
+
+        // Every argument must be lowercase (subcommands) or a filename.
+        // A capitalised word signals prose ("which React"), while a dotted
+        // token is a file (`cat Package.swift`).
+        return tokens.dropFirst().allSatisfy { token in
+            token.first?.isUppercase == false || token.contains(".")
+        }
+    }
+
+    /// Short, human-readable headline for one timeline step. Mirrors the
+    /// Codex transcript, where each reasoning step is introduced by a terse
+    /// title ("Inspecting the repo") rather than the raw model prose.
+    ///
+    /// For reasoning blocks we prefer an explicit markdown heading or a
+    /// leading bold run, then fall back to the first sentence. Tool blocks
+    /// reuse the existing collapsed summary so their headline stays
+    /// consistent with the rest of the timeline.
+    static func stepHeadline(kind: ChatBlockKind, text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return defaultHeadline(for: kind) }
+
+        switch kind {
+        case .agentReasoning, .finalAnswer:
+            // Derive the title from the cleaned prose so a leading `Tool: ...`
+            // or bare command line never becomes the step's headline.
+            let prose = reasoningProse(trimmed)
+            if let headline = reasoningHeadline(prose.isEmpty ? trimmed : prose) {
+                return headline
+            }
+            return defaultHeadline(for: kind)
+        default:
+            let collapsed = collapsedSummary(kind: kind, text: trimmed)
+            return collapsed.isEmpty ? defaultHeadline(for: kind) : truncate(collapsed, max: 90)
+        }
+    }
+
+    private static func defaultHeadline(for kind: ChatBlockKind) -> String {
+        switch kind {
+        case .agentReasoning: return "Thinking"
+        case .shellCommand: return "Running command"
+        case .terminalOutput: return "Reading output"
+        case .webCall: return "Searching the web"
+        case .mcpCall: return "Calling MCP tool"
+        case .imageRendering: return "Working on an image"
+        case .toolCall: return "Calling tool"
+        case .finalAnswer: return "Answer"
+        }
+    }
+
+    private static func reasoningHeadline(_ text: String) -> String? {
+        for rawLine in text.components(separatedBy: .newlines) {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !line.isEmpty else { continue }
+
+            if line.hasPrefix("#") {
+                let stripped = line.drop(while: { $0 == "#" }).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !stripped.isEmpty { return truncate(stripped, max: 90) }
+                continue
+            }
+
+            if let bold = leadingBoldRun(line) { return truncate(bold, max: 90) }
+
+            return truncate(firstSentence(line), max: 90)
+        }
+        return nil
+    }
+
+    /// Extracts `Heading` from a line that starts with `**Heading**`.
+    private static func leadingBoldRun(_ line: String) -> String? {
+        guard line.hasPrefix("**"),
+              let closing = line.range(of: "**", range: line.index(line.startIndex, offsetBy: 2)..<line.endIndex)
+        else { return nil }
+        let inner = String(line[line.index(line.startIndex, offsetBy: 2)..<closing.lowerBound])
+            .trimmingCharacters(in: CharacterSet(charactersIn: " :.-"))
+        return inner.isEmpty ? nil : inner
+    }
+
+    private static func firstSentence(_ line: String) -> String {
+        let normalized = normalizeInlineWhitespace(line)
+        guard let terminator = normalized.firstIndex(where: { $0 == "." || $0 == "!" || $0 == "?" }) else {
+            return normalized
+        }
+        let sentence = String(normalized[..<terminator]).trimmingCharacters(in: .whitespacesAndNewlines)
+        return sentence.count >= 12 ? sentence : normalized
+    }
+
     private enum DisplayKind {
         case agentReasoning
         case shellCommand
+        case toolCall
         case terminalOutput
         case webCall
         case mcpCall
@@ -36,6 +284,7 @@ enum AgentTimelineSummarizer {
         case .webCall: return .webCall
         case .mcpCall: return .mcpCall
         case .imageRendering: return .imageRendering
+        case .toolCall: return .toolCall
         case .finalAnswer: return .finalAnswer
         }
     }
@@ -62,6 +311,8 @@ enum AgentTimelineSummarizer {
             return summarizeWebCall(text)
         case .imageRendering:
             return summarizeGeneric(text, fallback: "Image task updated")
+        case .toolCall:
+            return summarizeToolCall(text)
         case .agentReasoning, .finalAnswer:
             return summarizeGeneric(text, fallback: "")
         }
@@ -113,6 +364,27 @@ enum AgentTimelineSummarizer {
         ].joined(separator: "\n")
 
         return Summary(collapsed: collapsed, expanded: expanded)
+    }
+
+    /// Summary for a generic tool invocation recovered from a mislabelled
+    /// reasoning block. Mirrors `summarizeMCP` so tool steps read consistently
+    /// with the MCP rows beside them.
+    private static func summarizeToolCall(_ text: String) -> Summary {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let raw = toolName(in: trimmed)
+        let label = raw.map(friendlyToolName) ?? "tool"
+        let body = resultBody(from: trimmed)
+
+        if body.isEmpty {
+            let text = "Called \(label)"
+            return Summary(collapsed: text, expanded: text)
+        }
+
+        let result = resultSummary(body)
+        return Summary(
+            collapsed: truncate("\(label): \(result.collapsed)", max: 180),
+            expanded: "Called `\(label)`.\n\(result.expanded)"
+        )
     }
 
     private static func summarizeMCP(_ text: String) -> Summary {

@@ -51,7 +51,7 @@ vi.mock('@google/genai', () => ({
   Tool: class {},
 }));
 
-import { AIClient } from '../ai-client';
+import { AIClient, type AIMessage } from '../ai-client';
 
 const messages = [{ role: 'user' as const, content: 'hello' }];
 
@@ -137,9 +137,7 @@ describe('OpenAIAdapter temperature handling', () => {
   });
 
   it('streamComplete: omits temperature for gpt-5.5 (Responses API path)', async () => {
-    const stream: any = asAsyncIterable([
-      { type: 'response.output_text.delta', delta: 'ok' },
-    ]);
+    const stream: any = asAsyncIterable([{ type: 'response.output_text.delta', delta: 'ok' }]);
     stream.finalResponse = vi.fn().mockResolvedValue({
       usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
     });
@@ -151,9 +149,7 @@ describe('OpenAIAdapter temperature handling', () => {
   });
 
   it('streamComplete: omits temperature even when caller passes empty options for gpt-5.5', async () => {
-    const stream: any = asAsyncIterable([
-      { type: 'response.output_text.delta', delta: 'ok' },
-    ]);
+    const stream: any = asAsyncIterable([{ type: 'response.output_text.delta', delta: 'ok' }]);
     stream.finalResponse = vi.fn().mockResolvedValue({
       usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
     });
@@ -163,6 +159,47 @@ describe('OpenAIAdapter temperature handling', () => {
     const body = mocks.responsesStream.mock.calls[0][0];
     expect(body).not.toHaveProperty('temperature');
   });
+
+  it('complete: uses prompt_cache_options ttl for gpt-5.6', async () => {
+    mocks.responsesCreate.mockResolvedValueOnce({
+      output: [{ type: 'message', content: [{ type: 'output_text', text: 'ok' }] }],
+      usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+    });
+    const client = new AIClient('openai', 'sk-test');
+    await client.complete('gpt-5.6', messages, {
+      enablePromptCache: true,
+      promptCacheTtl: '30m',
+      promptCacheRetention: '24h',
+    });
+    const body = mocks.responsesCreate.mock.calls[0][0];
+    expect(body).toHaveProperty('prompt_cache_options', { ttl: '30m' });
+    expect(body).not.toHaveProperty('prompt_cache_retention');
+  });
+
+  it.each([['gpt-5.5', 'responses'] as const, ['gpt-5.3', 'chat'] as const])(
+    'complete: still supports prompt_cache_retention for %s',
+    async (model, apiPath) => {
+      if (apiPath === 'responses') {
+        mocks.responsesCreate.mockResolvedValueOnce({
+          output: [{ type: 'message', content: [{ type: 'output_text', text: 'ok' }] }],
+          usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+        });
+      } else {
+        mockCompleteResponse();
+      }
+      const client = new AIClient('openai', 'sk-test');
+      await client.complete(model, messages, {
+        enablePromptCache: true,
+        promptCacheRetention: '24h',
+      });
+      const body =
+        apiPath === 'responses'
+          ? mocks.responsesCreate.mock.calls[0][0]
+          : mocks.openaiCreate.mock.calls[0][0];
+      expect(body).toHaveProperty('prompt_cache_retention', '24h');
+      expect(body).not.toHaveProperty('prompt_cache_options');
+    },
+  );
 
   it('streamComplete: uses 0.3 default for supported model when caller omits temperature', async () => {
     mockStreamResponse();
@@ -225,16 +262,13 @@ describe('AnthropicAdapter temperature handling', () => {
     'claude-fable-5',
     'claude-sonnet-5',
     'claude-sonnet-4-6',
-  ])(
-    'complete: omits temperature for unsupported model %s',
-    async (model) => {
-      mockCompleteResponse();
-      const client = new AIClient('anthropic', 'sk-anthropic-test');
-      await client.complete(model, messages, { temperature: 0.5 });
-      const body = mocks.anthropicCreate.mock.calls[0][0];
-      expect(body).not.toHaveProperty('temperature');
-    },
-  );
+  ])('complete: omits temperature for unsupported model %s', async (model) => {
+    mockCompleteResponse();
+    const client = new AIClient('anthropic', 'sk-anthropic-test');
+    await client.complete(model, messages, { temperature: 0.5 });
+    const body = mocks.anthropicCreate.mock.calls[0][0];
+    expect(body).not.toHaveProperty('temperature');
+  });
 
   it('streamComplete: passes temperature for claude-sonnet-4-5', async () => {
     mockStreamResponse();
@@ -250,6 +284,54 @@ describe('AnthropicAdapter temperature handling', () => {
     await client.streamComplete('claude-opus-5', messages, { temperature: 0.6 }, () => {});
     const body = mocks.anthropicStream.mock.calls[0][0];
     expect(body).not.toHaveProperty('temperature');
+  });
+
+  it('complete: folds steering text into the tool-result user message', async () => {
+    mockCompleteResponse();
+    const history: AIMessage[] = [
+      { role: 'user', content: '<user_input>\nSearch first.\n</user_input>' },
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [{ id: 'call-1', name: 'web_search', arguments: { query: 'old' } }],
+      },
+      {
+        role: 'tool',
+        tool_call_id: 'call-1',
+        tool_name: 'web_search',
+        content: 'tool output',
+      },
+      {
+        role: 'user',
+        content:
+          '<user_steering priority="current_turn" semantics="newer_user_guidance">\nUse this update.\n</user_steering>',
+      },
+    ];
+
+    const client = new AIClient('anthropic', 'sk-anthropic-test');
+    await client.complete('claude-sonnet-4-5', history, {});
+
+    const body = mocks.anthropicCreate.mock.calls[0][0];
+    expect(body.messages.map((message: { role: string }) => message.role)).toEqual([
+      'user',
+      'assistant',
+      'user',
+    ]);
+    const finalUser = body.messages.at(-1);
+    expect(Array.isArray(finalUser.content)).toBe(true);
+    expect(finalUser.content).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'tool_result',
+          tool_use_id: 'call-1',
+          content: 'tool output',
+        }),
+        expect.objectContaining({
+          type: 'text',
+          text: expect.stringContaining('Use this update.'),
+        }),
+      ]),
+    );
   });
 });
 
@@ -307,5 +389,52 @@ describe('GeminiAdapter temperature handling', () => {
     await client.streamComplete('gemini-2.5-pro', messages, {}, () => {});
     const body = mocks.geminiGenerateStream.mock.calls[0][0];
     expect(body.config).toHaveProperty('temperature', 0.3);
+  });
+
+  it('complete: folds steering text into the function-response user content', async () => {
+    mockCompleteResponse();
+    const history: AIMessage[] = [
+      { role: 'user', content: '<user_input>\nSearch first.\n</user_input>' },
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [{ id: 'call-1', name: 'web_search', arguments: { query: 'old' } }],
+      },
+      {
+        role: 'tool',
+        tool_call_id: 'call-1',
+        tool_name: 'web_search',
+        content: 'tool output',
+      },
+      {
+        role: 'user',
+        content:
+          '<user_steering priority="current_turn" semantics="newer_user_guidance">\nUse this update.\n</user_steering>',
+      },
+    ];
+
+    const client = new AIClient('gemini', 'gemini-test-key');
+    await client.complete('gemini-2.5-pro', history, {});
+
+    const body = mocks.geminiGenerate.mock.calls[0][0];
+    expect(body.contents.map((content: { role: string }) => content.role)).toEqual([
+      'user',
+      'model',
+      'user',
+    ]);
+    const finalUser = body.contents.at(-1);
+    expect(finalUser.parts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          functionResponse: expect.objectContaining({
+            name: 'web_search',
+            response: { result: 'tool output' },
+          }),
+        }),
+        expect.objectContaining({
+          text: expect.stringContaining('Use this update.'),
+        }),
+      ]),
+    );
   });
 });

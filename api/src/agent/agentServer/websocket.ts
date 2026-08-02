@@ -4,9 +4,56 @@ import cuid from 'cuid';
 import { logger } from '../../logger';
 import { createLazyAuthContext } from '../agentAuth';
 import type { AgentMessage, AgentSendFn } from '../types';
+import type { Subscription } from '../../models/subscription';
+import type { Logger } from 'winston';
 import { activeSessions, pendingShellScripts, sessionQueues } from './runtimeState';
+import {
+  clearSteeringMessages,
+  enqueueSteeringMessage,
+  formatSteeringMessagesForQueuedTurn,
+  getPendingSteeringMessageCount,
+  takePendingSteeringMessages,
+} from './steering';
 import { buildShellToolResult } from './terminalOutput';
 import { runAgentTurn } from './turnRunner';
+
+export function queuePendingSteeringAsFollowUp(
+  sessionId: string,
+  subscription: Subscription,
+  send: AgentSendFn,
+  log: Logger,
+): number {
+  const pending = takePendingSteeringMessages(sessionId, log);
+  if (!pending.length) return 0;
+
+  const content = formatSteeringMessagesForQueuedTurn(pending);
+  if (!content) return 0;
+  const platform = pending.find((message) => message.platform)?.platform;
+  const groupName = pending.find((message) => message.groupName)?.groupName;
+
+  const queue = sessionQueues.get(sessionId) ?? [];
+  queue.push({
+    message: {
+      session_id: sessionId,
+      sender: 'client',
+      content,
+      platform,
+      group_name: groupName,
+    },
+    send,
+    subscription,
+    log,
+  });
+  sessionQueues.set(sessionId, queue);
+
+  log.info('Queued stranded steering as follow-up turn', {
+    sessionId,
+    steeringMessageCount: pending.length,
+    queueLength: queue.length,
+  });
+
+  return pending.length;
+}
 
 async function processNextInQueue(sessionId: string): Promise<void> {
   const queue = sessionQueues.get(sessionId);
@@ -21,6 +68,7 @@ async function processNextInQueue(sessionId: string): Promise<void> {
   } catch (err) {
     next.log.error('Queued agent turn failed', { sessionId, error: err });
   } finally {
+    queuePendingSteeringAsFollowUp(sessionId, next.subscription, next.send, next.log);
     activeSessions.delete(sessionId);
     void processNextInQueue(sessionId);
   }
@@ -97,6 +145,46 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
         // always bypass the queue — they are part of the currently active turn.
         const isTerminalFeedback = Boolean(message.is_terminal_output) || Boolean(message.is_error);
         const isInternalCall = Boolean(message.is_web_call);
+        const isSteeringMessage = Boolean(message.is_steering);
+
+        if (
+          isSteeringMessage &&
+          !isTerminalFeedback &&
+          !isInternalCall &&
+          activeSessions.has(sessionId)
+        ) {
+          const steeringResult = enqueueSteeringMessage(sessionId, message, log);
+          if (!steeringResult.accepted) {
+            send({
+              session_id: sessionId,
+              sender: 'agent',
+              content: steeringResult.rejectionReason ?? 'Empty steering update ignored.',
+              is_terminal_output: false,
+              is_error: true,
+              is_steering: true,
+            });
+            log.info('Ignored steering message for active session', {
+              sessionId,
+              reason: steeringResult.rejectionReason ?? 'empty',
+              pendingSteeringMessages: steeringResult.pendingCount,
+            });
+            return;
+          }
+
+          send({
+            session_id: sessionId,
+            sender: 'agent',
+            content: 'Steering update received for the running task.',
+            is_terminal_output: false,
+            is_error: false,
+            is_steering: true,
+          });
+          log.info('Accepted steering message for active session', {
+            sessionId,
+            pendingSteeringMessages: steeringResult.pendingCount,
+          });
+          return;
+        }
 
         if (!isTerminalFeedback && !isInternalCall && activeSessions.has(sessionId)) {
           // A turn is already running for this session. Queue the message so it
@@ -137,6 +225,7 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
         } catch (err) {
           log.error('Agent turn failed', { sessionId, error: err });
         } finally {
+          queuePendingSteeringAsFollowUp(sessionId, subscription, send, log);
           activeSessions.delete(sessionId);
           void processNextInQueue(sessionId);
         }
@@ -177,14 +266,18 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
       for (const sid of connectionSessionIds) {
         const wasActive = activeSessions.has(sid);
         const queueLength = sessionQueues.get(sid)?.length ?? 0;
+        const steeringLength = getPendingSteeringMessageCount(sid);
+        const drainedSteeringLength = wasActive ? 0 : clearSteeringMessages(sid);
 
-        if (wasActive || queueLength > 0) {
+        if (wasActive || queueLength > 0 || steeringLength > 0) {
           activeSessions.delete(sid);
           sessionQueues.delete(sid);
           log.info('Cleaned up stuck session state after WebSocket disconnect', {
             sessionId: sid,
             wasActive,
             drainedQueueLength: queueLength,
+            drainedSteeringLength,
+            retainedSteeringLength: wasActive ? steeringLength : 0,
           });
         }
       }

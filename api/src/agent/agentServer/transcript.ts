@@ -64,6 +64,7 @@ export function userHistoryHasProjectContext(history: SessionState['history']): 
 function cleanUserTranscriptText(text: string): string {
   return text
     .replace(/<user_input>([\s\S]*?)<\/user_input>/gi, '$1')
+    .replace(/<user_steering[^>]*>([\s\S]*?)<\/user_steering>/gi, '$1')
     .replace(/<stored_instructions>[\s\S]*?<\/stored_instructions>/gi, '')
     .replace(/<project_context[^>]*>[\s\S]*?<\/project_context>/gi, '')
     .replace(/@omniagent/gi, '')

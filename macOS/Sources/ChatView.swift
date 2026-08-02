@@ -94,6 +94,30 @@ struct ChatSidebarView: View {
                     .font(OKFont.bodyEmphasized)
                     .okTighten(-0.15)
                     .foregroundColor(NordTheme.primaryText(colorScheme))
+
+                // Global "N running" pill. Turns stream in parallel across
+                // sessions, so this is the only place the user can see that
+                // background work is still happening after switching chats.
+                if !model.runningSessionIds.isEmpty {
+                    let running = model.runningSessionIds.count
+                    HStack(spacing: 3) {
+                        Circle()
+                            .fill(NordTheme.accentGreen(colorScheme))
+                            .frame(width: 5, height: 5)
+                        Text("\(running)")
+                            .font(.system(size: 10, weight: .semibold))
+                            .monospacedDigit()
+                    }
+                    .foregroundColor(NordTheme.accentGreen(colorScheme))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(
+                        Capsule().fill(NordTheme.accentGreen(colorScheme).opacity(0.14))
+                    )
+                    .help("\(running) chat\(running == 1 ? "" : "s") running")
+                    .transition(.opacity.combined(with: .scale(scale: 0.85)))
+                }
+
                 Spacer()
                 // Refresh — spinner replaces the icon while the fetch is in flight.
                 // Fixed 28×28 frame keeps all three buttons on the same baseline.
@@ -112,14 +136,25 @@ struct ChatSidebarView: View {
                         updateChecker.refreshNow()
                     }
                 }
-                SidebarIconButton(icon: "square.and.pencil", help: "New Chat") {
+                SidebarIconButton(icon: "square.and.pencil", help: "New Chat (\u{2318}N)") {
                     model.startNewChat()
                 }
-                SidebarIconButton(icon: "sidebar.left", help: "Collapse sidebar") {
+                SidebarIconButton(icon: "sidebar.left", help: "Collapse sidebar (\u{2318}\u{2325}S)") {
                     onCollapse()
                 }
             }
             .animation(.easeInOut(duration: 0.15), value: isRefreshing)
+            .animation(.easeInOut(duration: 0.18), value: model.runningSessionIds.isEmpty)
+            // Hidden shortcut host for sidebar collapse. ⌘N is intentionally
+            // *not* registered here — `AppMainMenu` already owns it via the
+            // File ▸ New Chat item, and a second binding would double-fire.
+            .background(
+                Button(action: onCollapse) { EmptyView() }
+                    .keyboardShortcut("s", modifiers: [.command, .option])
+                    .frame(width: 0, height: 0)
+                    .opacity(0)
+                    .accessibilityHidden(true)
+            )
             .padding(.horizontal, 12)
             .padding(.top, 14)
             .padding(.bottom, 8)
@@ -130,7 +165,33 @@ struct ChatSidebarView: View {
             // not just the first message.
             ChatSidebarSearchField(query: $model.sessionSearchQuery)
                 .padding(.horizontal, 10)
-                .padding(.bottom, 10)
+                .padding(.bottom, model.isSessionSearchActive ? 6 : 10)
+
+            // Live result count — confirms the filter is applied and how
+            // much of the list is hidden, instead of leaving the user to
+            // count rows.
+            if model.isSessionSearchActive {
+                let matches = model.filteredSessions.count
+                HStack(spacing: 4) {
+                    Text("\(matches) of \(model.sessions.count)")
+                        .font(.system(size: 10, weight: .medium))
+                        .monospacedDigit()
+                    Text(matches == 1 ? "chat matches" : "chats match")
+                        .font(.system(size: 10))
+                    Spacer(minLength: 0)
+                    Button(action: { model.clearSessionSearch() }) {
+                        Text("Clear")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(NordTheme.accent(colorScheme))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Clear search")
+                }
+                .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.6))
+                .padding(.horizontal, 13)
+                .padding(.bottom, 8)
+                .transition(.opacity)
+            }
 
             Rectangle()
                 .fill(NordTheme.border(colorScheme))
@@ -157,12 +218,9 @@ struct ChatSidebarView: View {
                     }
 
                     if model.sessions.isEmpty && !model.hasPendingNewChat {
-                        Text("No chats yet")
-                            .font(.system(size: 12))
-                            .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.55))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 12)
-                            .padding(.top, 24)
+                        ChatSidebarEmptyState(onStart: { model.startNewChat() })
+                            .padding(.horizontal, 14)
+                            .padding(.top, 28)
                     } else if visibleSessions.isEmpty {
                         ChatSidebarSearchEmptyState(
                             query: model.sessionSearchQuery,
@@ -198,6 +256,8 @@ struct ChatSidebarView: View {
                             ChatSessionRowView(
                                 session: pinned,
                                 isActive: pinned.id == model.activeSessionId,
+                                isRunning: model.runningSessionIds.contains(pinned.id),
+                                searchQuery: model.sessionSearchQuery,
                                 onTap: { model.openSession(pinned) },
                                 onDelete: { model.deleteSession(pinned) }
                             )
@@ -248,44 +308,46 @@ struct ChatSidebarView: View {
 
                         ForEach(groupNames, id: \.self) { name in
                             let sessions = groupedByName[name, default: []]
-                            let isCollapsed = collapsedGroups.contains(name)
+                            // While searching, force every group open. Groups
+                            // start collapsed by default, so otherwise a match
+                            // inside a collapsed group would be invisible and
+                            // the search would look broken.
+                            let isCollapsed = model.isSessionSearchActive
+                                ? false
+                                : collapsedGroups.contains(name)
 
-                            Button {
-                                withAnimation(.easeInOut(duration: 0.18)) {
-                                    if collapsedGroups.contains(name) {
-                                        collapsedGroups.remove(name)
-                                    } else {
-                                        collapsedGroups.insert(name)
+                            ChatSidebarGroupHeader(
+                                name: name,
+                                count: sessions.count,
+                                runningCount: sessions.filter { model.runningSessionIds.contains($0.id) }.count,
+                                isCollapsed: isCollapsed,
+                                containsActiveSession: sessions.contains { $0.id == model.activeSessionId },
+                                onToggle: {
+                                    // While searching, every group is force-expanded
+                                    // above, so `isCollapsed` no longer reflects
+                                    // `collapsedGroups`. Toggling here would mutate
+                                    // the real set with no visible effect and then
+                                    // surface as a surprise inversion once the query
+                                    // is cleared. Ignore the tap instead so search
+                                    // never silently rewrites collapse state.
+                                    guard !model.isSessionSearchActive else { return }
+                                    withAnimation(.easeInOut(duration: 0.18)) {
+                                        if collapsedGroups.contains(name) {
+                                            collapsedGroups.remove(name)
+                                        } else {
+                                            collapsedGroups.insert(name)
+                                        }
                                     }
                                 }
-                            } label: {
-                                HStack(spacing: 5) {
-                                    Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
-                                        .font(.system(size: 9, weight: .bold))
-                                    Text(name)
-                                        .font(.system(size: 11, weight: .semibold))
-                                        .tracking(0.1)
-                                        .lineLimit(1)
-                                    Spacer()
-                                    Text("\(sessions.count)")
-                                        .font(.system(size: 10, weight: .medium))
-                                        .monospacedDigit()
-                                }
-                                .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.45))
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 14)
-                                .padding(.top, 12)
-                                .padding(.bottom, 3)
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .help(isCollapsed ? "Expand \(name)" : "Collapse \(name)")
+                            )
 
                             if !isCollapsed {
                                 ForEach(sessions.map { ChatSessionRowItem(session: $0, activeSessionId: model.activeSessionId) }) { item in
                                     ChatSessionRowView(
                                         session: item.session,
                                         isActive: item.isActive,
+                                        isRunning: model.runningSessionIds.contains(item.session.id),
+                                        searchQuery: model.sessionSearchQuery,
                                         onTap: { model.openSession(item.session) },
                                         onDelete: { model.deleteSession(item.session) }
                                     )
@@ -362,6 +424,157 @@ struct ChatSidebarView: View {
     }
 }
 
+
+// MARK: - Sidebar Empty State
+
+/// Zero-state for a brand-new account. Replaces the bare "No chats yet"
+/// label with an icon, a one-line explanation, and a primary action, so
+/// the empty sidebar teaches the next step instead of just reporting a
+/// void.
+private struct ChatSidebarEmptyState: View {
+    let onStart: () -> Void
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var hovered = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Image(systemName: "bubble.left.and.bubble.right")
+                .font(.system(size: 20, weight: .light))
+                .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.35))
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text("No chats yet")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(NordTheme.primaryText(colorScheme).opacity(0.8))
+                Text("Start a conversation and it will appear here, grouped by project.")
+                    .font(.system(size: 11))
+                    .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.6))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Button(action: onStart) {
+                HStack(spacing: 5) {
+                    Image(systemName: "square.and.pencil")
+                        .font(.system(size: 10, weight: .semibold))
+                    Text("New Chat")
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .foregroundColor(NordTheme.accent(colorScheme))
+                .padding(.horizontal, 9)
+                .padding(.vertical, 5)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(NordTheme.accent(colorScheme).opacity(hovered ? 0.18 : 0.10))
+                )
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .onHover { hovered = $0 }
+            .animation(.easeInOut(duration: 0.12), value: hovered)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+// MARK: - Sidebar Group Header
+
+/// Collapsible project-group header. Adds three things the previous inline
+/// header lacked: a hover affordance so it reads as interactive, a running
+/// badge that survives collapse (so a busy chat is discoverable without
+/// expanding the group), and an accent dot marking the group that holds the
+/// currently open chat.
+private struct ChatSidebarGroupHeader: View {
+    let name: String
+    let count: Int
+    let runningCount: Int
+    let isCollapsed: Bool
+    let containsActiveSession: Bool
+    let onToggle: () -> Void
+
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: onToggle) {
+            HStack(spacing: 5) {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .bold))
+                    .rotationEffect(.degrees(isCollapsed ? 0 : 90))
+
+                Text(name)
+                    .font(.system(size: 11, weight: .semibold))
+                    .tracking(0.1)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
+                // Marks the group holding the open chat while collapsed, so
+                // the user can still see where they are.
+                if containsActiveSession, isCollapsed {
+                    Circle()
+                        .fill(NordTheme.accent(colorScheme))
+                        .frame(width: 4, height: 4)
+                }
+
+                Spacer(minLength: 4)
+
+                if runningCount > 0 {
+                    HStack(spacing: 3) {
+                        Circle()
+                            .fill(NordTheme.accentGreen(colorScheme))
+                            .frame(width: 4, height: 4)
+                        Text("\(runningCount)")
+                            .font(.system(size: 9.5, weight: .semibold))
+                            .monospacedDigit()
+                    }
+                    .foregroundColor(NordTheme.accentGreen(colorScheme))
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1.5)
+                    .background(
+                        Capsule().fill(NordTheme.accentGreen(colorScheme).opacity(0.14))
+                    )
+                    .help("\(runningCount) chat\(runningCount == 1 ? "" : "s") running")
+                }
+
+                Text("\(count)")
+                    .font(.system(size: 10, weight: .medium))
+                    .monospacedDigit()
+            }
+            .foregroundColor(
+                NordTheme.secondaryText(colorScheme).opacity(hovered ? 0.75 : 0.45)
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(hovered ? NordTheme.badgeFill(colorScheme).opacity(0.7) : Color.clear)
+            )
+            .padding(.horizontal, 6)
+            .padding(.top, 12)
+            .padding(.bottom, 3)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+        .animation(.easeInOut(duration: 0.12), value: hovered)
+        .animation(.easeInOut(duration: 0.18), value: isCollapsed)
+        .help(isCollapsed ? "Expand \(name)" : "Collapse \(name)")
+        .accessibilityLabel(accessibilityLabelText)
+    }
+
+    /// Spoken description of the header. The running badge and the chevron
+    /// are purely visual, so both are folded in here — otherwise VoiceOver
+    /// users get neither the in-flight count nor the disclosure state.
+    /// Wording matches the badge tooltip and the `isCollapsed` help text.
+    private var accessibilityLabelText: String {
+        var parts = ["\(name), \(count) chat\(count == 1 ? "" : "s")"]
+        if runningCount > 0 {
+            parts.append("\(runningCount) chat\(runningCount == 1 ? "" : "s") running")
+        }
+        parts.append(isCollapsed ? "Collapsed" : "Expanded")
+        return parts.joined(separator: ", ")
+    }
+}
 
 // MARK: - Sidebar Update Banner
 
@@ -712,36 +925,57 @@ struct ChatSidebarRailView: View {
 
                     ForEach(model.sessions.prefix(12).map { ChatSessionRowItem(session: $0, activeSessionId: model.activeSessionId) }) { item in
                         let session = item.session
+                        let isRunning = model.runningSessionIds.contains(session.id)
                         Button(action: { model.openSession(session) }) {
-                            ZStack {
-                                Circle()
-                                    .fill(
-                                        item.isActive
-                                            ? NordTheme.accent(colorScheme).opacity(0.18)
-                                            : NordTheme.badgeFill(colorScheme)
-                                    )
-                                    .frame(width: 34, height: 34)
-                                    .overlay(
-                                        Circle()
-                                            .strokeBorder(
-                                                item.isActive
-                                                    ? NordTheme.accent(colorScheme).opacity(0.40)
-                                                    : NordTheme.border(colorScheme),
-                                                lineWidth: 1
+                            ZStack(alignment: .topTrailing) {
+                                ZStack {
+                                    Circle()
+                                        .fill(
+                                            item.isActive
+                                                ? NordTheme.accent(colorScheme).opacity(0.18)
+                                                : NordTheme.badgeFill(colorScheme)
+                                        )
+                                        .frame(width: 34, height: 34)
+                                        .overlay(
+                                            Circle()
+                                                .strokeBorder(
+                                                    item.isActive
+                                                        ? NordTheme.accent(colorScheme).opacity(0.40)
+                                                        : NordTheme.border(colorScheme),
+                                                    lineWidth: 1
+                                                )
+                                        )
+                                    Text(String(session.title.prefix(1)).uppercased())
+                                        .font(.system(size: 12, weight: .semibold))
+                                        .foregroundColor(
+                                            item.isActive
+                                                ? NordTheme.accent(colorScheme)
+                                                : NordTheme.secondaryText(colorScheme)
+                                        )
+                                }
+
+                                // Green corner dot mirrors the expanded row's
+                                // running indicator so collapsing the sidebar
+                                // does not hide in-flight work.
+                                if isRunning {
+                                    Circle()
+                                        .fill(NordTheme.accentGreen(colorScheme))
+                                        .frame(width: 8, height: 8)
+                                        .overlay(
+                                            Circle().strokeBorder(
+                                                NordTheme.panelBackground(colorScheme),
+                                                lineWidth: 1.5
                                             )
-                                    )
-                                Text(String(session.title.prefix(1)).uppercased())
-                                    .font(.system(size: 12, weight: .semibold))
-                                    .foregroundColor(
-                                        item.isActive
-                                            ? NordTheme.accent(colorScheme)
-                                            : NordTheme.secondaryText(colorScheme)
-                                    )
+                                        )
+                                        .offset(x: 1, y: -1)
+                                        .accessibilityHidden(true)
+                                }
                             }
+                            .frame(width: 34, height: 34)
                         }
                         .buttonStyle(.plain)
                         .id("rail-\(item.id)")
-                        .help(session.title)
+                        .help(isRunning ? "\(session.title) — running" : session.title)
                     }
                 }
                 .padding(.vertical, 4)
@@ -756,14 +990,109 @@ struct ChatSidebarRailView: View {
 
 // MARK: - Session Row
 
+/// Relative "last active" formatting for sidebar rows. Kept terse
+/// (`now`, `14m`, `3h`, `Yesterday`, `Mar 4`) so it fits the narrow
+/// trailing gutter without truncating the chat title.
+@MainActor
+enum ChatSidebarRelativeDate {
+    private static let parser: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
+    private static let fallbackParser: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+
+    // Localized templates rather than fixed `dateFormat` strings: a
+    // hard-coded "MMM d" forces US ordering on locales that write the day
+    // first. Matches the approach in `ChatMessageTimestamp`.
+    private static let monthDay: DateFormatter = {
+        let f = DateFormatter()
+        f.setLocalizedDateFormatFromTemplate("MMMd")
+        return f
+    }()
+
+    private static let monthDayYear: DateFormatter = {
+        let f = DateFormatter()
+        f.setLocalizedDateFormatFromTemplate("MMMdyyyy")
+        return f
+    }()
+
+    private static let full: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .medium
+        f.timeStyle = .short
+        return f
+    }()
+
+    static func date(from iso: String) -> Date? {
+        parser.date(from: iso) ?? fallbackParser.date(from: iso)
+    }
+
+    static func shortLabel(for iso: String, now: Date = Date()) -> String? {
+        guard let date = date(from: iso) else { return nil }
+        let seconds = now.timeIntervalSince(date)
+
+        // Clock skew between client and server can make a just-created
+        // session look slightly in the future — clamp instead of showing
+        // a negative age.
+        if seconds < 60 { return "now" }
+        if seconds < 3600 { return "\(Int(seconds / 60))m" }
+
+        let calendar = Calendar.current
+        if calendar.isDateInToday(date) { return "\(Int(seconds / 3600))h" }
+        if calendar.isDateInYesterday(date) { return "Yesterday" }
+
+        if seconds < 7 * 24 * 3600 { return "\(Int(seconds / 86_400))d" }
+        if calendar.isDate(date, equalTo: now, toGranularity: .year) {
+            return monthDay.string(from: date)
+        }
+        return monthDayYear.string(from: date)
+    }
+
+    /// Full, unabbreviated timestamp used for the row tooltip.
+    static func fullLabel(for iso: String) -> String? {
+        guard let date = date(from: iso) else { return nil }
+        return full.string(from: date)
+    }
+}
+
 struct ChatSessionRowView: View {
     let session: AgentSessionInfo
     let isActive: Bool
+    /// True while a turn for this session is streaming. Rendered as a pulsing
+    /// dot so parallel background chats are visible without opening them.
+    var isRunning: Bool = false
+    /// Query currently typed in the sidebar search field. When non-empty the
+    /// matching run in the title is highlighted so the user can see *why* a
+    /// row matched.
+    var searchQuery: String = ""
     let onTap: () -> Void
     let onDelete: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
     @State private var isHovered = false
+    @State private var runPulse = false
+    @State private var confirmingDelete = false
+
+    private var timestampLabel: String? {
+        ChatSidebarRelativeDate.shortLabel(for: session.lastActiveAt)
+    }
+
+    private var tooltip: String {
+        var parts: [String] = [session.title]
+        if session.turns > 0 {
+            parts.append("\(session.turns) turn\(session.turns == 1 ? "" : "s")")
+        }
+        if let full = ChatSidebarRelativeDate.fullLabel(for: session.lastActiveAt) {
+            parts.append("Last active \(full)")
+        }
+        return parts.joined(separator: " · ")
+    }
 
     var body: some View {
         Button(action: onTap) {
@@ -774,34 +1103,37 @@ struct ChatSessionRowView: View {
                     .frame(width: 3)
                     .padding(.vertical, 8)
 
-                Text(session.title)
-                    .font(.system(size: 13, weight: isActive ? .medium : .regular))
-                    .foregroundColor(
-                        isActive
-                            ? NordTheme.primaryText(colorScheme)
-                            : isHovered
-                                ? NordTheme.primaryText(colorScheme).opacity(0.8)
-                                : NordTheme.secondaryText(colorScheme)
-                    )
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.leading, 9)
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 5) {
+                        if isRunning {
+                            Circle()
+                                .fill(NordTheme.accentGreen(colorScheme))
+                                .frame(width: 5, height: 5)
+                                .opacity(runPulse ? 1.0 : 0.3)
+                                .accessibilityLabel("Running")
+                        }
 
-                if isHovered {
-                    Button(action: onDelete) {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 8.5, weight: .semibold))
-                            .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.55))
-                            .frame(width: 17, height: 17)
-                            .background(Circle().fill(NordTheme.badgeFill(colorScheme)))
+                        highlightedTitle
+                            .font(.system(size: 13, weight: isActive ? .medium : .regular))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
                     }
-                    .buttonStyle(.plain)
-                    .transition(.opacity.combined(with: .scale(scale: 0.85)))
-                    .padding(.trailing, 7)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    // Secondary metadata line. Hidden while the delete
+                    // confirmation is showing so the row does not grow.
+                    if let subtitle = subtitleText, !confirmingDelete {
+                        Text(subtitle)
+                            .font(.system(size: 10))
+                            .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.5))
+                            .lineLimit(1)
+                    }
                 }
+                .padding(.leading, 9)
+
+                trailingAccessory
             }
-            .frame(height: 34)
+            .frame(height: subtitleText == nil ? 34 : 42)
             .padding(.leading, 8)
             .background(
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
@@ -817,9 +1149,125 @@ struct ChatSessionRowView: View {
         }
         .buttonStyle(.plain)
         .animation(.easeInOut(duration: 0.1), value: isHovered)
-        .onHover { isHovered = $0 }
+        .animation(.easeInOut(duration: 0.12), value: confirmingDelete)
+        .onHover { hovering in
+            isHovered = hovering
+            // Reset an unconfirmed delete when the pointer leaves, so the
+            // row never stays armed after the user moves on.
+            if !hovering { confirmingDelete = false }
+        }
+        .onAppear { if isRunning { startRunPulse() } }
+        .onChange(of: isRunning) { _, running in
+            if running {
+                startRunPulse()
+            } else {
+                // Ease the dot out instead of snapping it, and wrap the reset
+                // in an explicit transaction so the repeating animation is
+                // replaced rather than left mid-cycle. Mirrors the halo stop
+                // in `ThinkingTimelineRow`.
+                withAnimation(.easeOut(duration: 0.3)) { runPulse = false }
+            }
+        }
+        .help(tooltip)
+        .contextMenu {
+            Button("Open") { onTap() }
+            Button("Copy Title") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(session.title, forType: .string)
+            }
+            Divider()
+            Button("Delete Chat", role: .destructive) { onDelete() }
+        }
+        .accessibilityLabel(tooltip)
+    }
+
+    /// Title with the search match highlighted. Falls back to plain text when
+    /// no query is active or the query does not appear in the title (it may
+    /// have matched the transcript instead).
+    private var highlightedTitle: Text {
+        let base = NordTheme.secondaryText(colorScheme)
+        let color: Color = isActive
+            ? NordTheme.primaryText(colorScheme)
+            : isHovered ? NordTheme.primaryText(colorScheme).opacity(0.8) : base
+
+        let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty,
+              let range = session.title.range(
+                of: query,
+                options: [.caseInsensitive, .diacriticInsensitive]
+              )
+        else {
+            return Text(session.title).foregroundColor(color)
+        }
+
+        return Text(String(session.title[session.title.startIndex..<range.lowerBound]))
+            .foregroundColor(color)
+            + Text(String(session.title[range]))
+                .foregroundColor(NordTheme.accent(colorScheme))
+                .fontWeight(.semibold)
+            + Text(String(session.title[range.upperBound...]))
+                .foregroundColor(color)
+    }
+
+    /// "12 turns · 3h". Omitted entirely when the backend has not reported
+    /// either value, so brand-new placeholder rows stay compact.
+    private var subtitleText: String? {
+        var parts: [String] = []
+        if session.turns > 0 {
+            parts.append("\(session.turns) turn\(session.turns == 1 ? "" : "s")")
+        }
+        if let timestampLabel { parts.append(timestampLabel) }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// Hover reveals a two-step delete affordance; otherwise the gutter stays
+    /// empty so the title has the full row width.
+    @ViewBuilder
+    private var trailingAccessory: some View {
+        if isHovered {
+            Button {
+                if confirmingDelete {
+                    onDelete()
+                } else {
+                    confirmingDelete = true
+                }
+            } label: {
+                Group {
+                    if confirmingDelete {
+                        Text("Delete?")
+                            .font(.system(size: 9.5, weight: .semibold))
+                            .foregroundColor(NordTheme.accentAmber(colorScheme))
+                            .padding(.horizontal, 6)
+                            .frame(height: 17)
+                            .background(
+                                Capsule().fill(NordTheme.accentAmber(colorScheme).opacity(0.14))
+                            )
+                    } else {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 8.5, weight: .semibold))
+                            .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.55))
+                            .frame(width: 17, height: 17)
+                            .background(Circle().fill(NordTheme.badgeFill(colorScheme)))
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(confirmingDelete ? "Click again to delete" : "Delete chat")
+            .transition(.opacity.combined(with: .scale(scale: 0.85)))
+            .padding(.trailing, 7)
+            .padding(.leading, 6)
+        }
+    }
+
+    private func startRunPulse() {
+        runPulse = false
+        withAnimation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true)) {
+            runPulse = true
+        }
     }
 }
+
 
 // MARK: - Pending New Chat Row
 
@@ -1362,6 +1810,10 @@ private struct LandingInputComposer: View {
         model.isRunning && inputIsEmpty
     }
 
+    private var isSteeringState: Bool {
+        model.isRunning && !inputIsEmpty
+    }
+
     // The composer surface gets a real fill (not `Color.clear`) so the
     // input visually lifts above the conversation transcript and the
     // border/shadow read as a single layered card rather than a thin
@@ -1380,7 +1832,7 @@ private struct LandingInputComposer: View {
             // ── Top: text area ───────────────────────────────────────
             ZStack(alignment: .topLeading) {
                 if model.inputText.isEmpty {
-                    Text("Ask OmniAgent anything…")
+                    Text(model.isRunning ? "Steer the current task…" : "Ask OmniAgent anything…")
                         .font(.system(size: 13))
                         .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.45))
                         .padding(.horizontal, 16)
@@ -1545,8 +1997,9 @@ private struct LandingInputComposer: View {
 
                 AgentModelMenu(model: model)
 
-                // Send / Stop
-                // • Has text → always send (even mid-run; server queues it)
+                // Send / Steer / Stop
+                // • Has text + idle → start a new turn
+                // • Has text + running → steer the active turn over its existing socket
                 // • No text + running → stop button
                 // • No text + idle → disabled send button
                 Button {
@@ -1562,7 +2015,7 @@ private struct LandingInputComposer: View {
                                 radius: isSendHovered && !inputIsEmpty ? 6 : 0,
                                 x: 0, y: 1
                             )
-                        Image(systemName: isStopState ? "stop.fill" : "arrow.up")
+                        Image(systemName: sendButtonIconName)
                             .font(.system(size: 13, weight: .bold))
                             .foregroundColor(sendButtonIconColor)
                     }
@@ -1575,7 +2028,7 @@ private struct LandingInputComposer: View {
                 .buttonStyle(.plain)
                 .disabled(inputIsEmpty && !model.isRunning)
                 .onHover { isSendHovered = $0 }
-                .help(isStopState ? "Stop current turn" : "Send message  ·  ⏎")
+                .help(sendButtonHelp)
             }
             .padding(.horizontal, 10)
             .padding(.top, 6)
@@ -1614,6 +2067,7 @@ private struct LandingInputComposer: View {
 
     private var sendButtonFill: Color {
         if isStopState { return Color.red }
+        if isSteeringState { return NordTheme.accentGreen(colorScheme) }
         if inputIsEmpty { return NordTheme.border(colorScheme).opacity(1.8) }
         return NordTheme.accent(colorScheme)
     }
@@ -1627,7 +2081,20 @@ private struct LandingInputComposer: View {
 
     private var sendButtonShadowColor: Color {
         if isStopState { return Color.red.opacity(0.35) }
+        if isSteeringState { return NordTheme.accentGreen(colorScheme).opacity(0.35) }
         return NordTheme.accent(colorScheme).opacity(0.35)
+    }
+
+    private var sendButtonIconName: String {
+        if isStopState { return "stop.fill" }
+        if isSteeringState { return "arrow.up.right" }
+        return "arrow.up"
+    }
+
+    private var sendButtonHelp: String {
+        if isStopState { return "Stop current turn" }
+        if isSteeringState { return "Steer current task  ·  ⏎" }
+        return "Send message  ·  ⏎"
     }
 }
 
@@ -1980,7 +2447,7 @@ struct ChatMessageView: View, @MainActor Equatable {
     var body: some View {
         switch message.role {
         case .user:
-            UserBubbleView(text: message.text)
+            UserBubbleView(text: message.text, sentAt: message.sentAt, isSteering: message.isSteering)
         case .assistant:
             AssistantMessageView(message: message, isStreaming: isStreaming)
         case .system:
@@ -2000,8 +2467,73 @@ struct ChatMessageView: View, @MainActor Equatable {
 
 // MARK: - User Bubble
 
+/// Formats the "sent at" label under a user message.
+///
+/// - Today: `2:41 PM`
+/// - Yesterday: `Yesterday 2:41 PM`
+/// - Earlier this year: `Mar 4, 2:41 PM`
+/// - Earlier years: `Mar 4, 2024, 2:41 PM`
+///
+/// Uses locale-aware templates rather than hard-coded patterns so 24-hour
+/// locales render `14:41` instead of a forced AM/PM string.
+@MainActor
+enum ChatMessageTimestamp {
+    private static let time: DateFormatter = {
+        let f = DateFormatter()
+        f.setLocalizedDateFormatFromTemplate("j:mm")
+        return f
+    }()
+
+    // Date and time are formatted separately and joined with a comma.
+    // Combining them in one template yields the verbose connector form
+    // ("Jul 23 at 12:43 PM"), which is too long for this small label.
+    private static let sameYearDate: DateFormatter = {
+        let f = DateFormatter()
+        f.setLocalizedDateFormatFromTemplate("MMMd")
+        return f
+    }()
+
+    private static let otherYearDate: DateFormatter = {
+        let f = DateFormatter()
+        f.setLocalizedDateFormatFromTemplate("MMMdyyyy")
+        return f
+    }()
+
+    private static let full: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .full
+        f.timeStyle = .short
+        return f
+    }()
+
+    static func label(for date: Date, now: Date = Date()) -> String {
+        let calendar = Calendar.current
+
+        if calendar.isDateInToday(date) {
+            return time.string(from: date)
+        }
+        if calendar.isDateInYesterday(date) {
+            return "Yesterday \(time.string(from: date))"
+        }
+        if calendar.isDate(date, equalTo: now, toGranularity: .year) {
+            return "\(sameYearDate.string(from: date)), \(time.string(from: date))"
+        }
+        return "\(otherYearDate.string(from: date)), \(time.string(from: date))"
+    }
+
+    /// Unabbreviated timestamp for the tooltip, so the exact moment is always
+    /// recoverable even when the label says "Yesterday".
+    static func fullLabel(for date: Date) -> String {
+        full.string(from: date)
+    }
+}
+
 struct UserBubbleView: View {
     let text: String
+    /// When the user sent the message. `nil` for messages hydrated from
+    /// server history, where no send time is available.
+    var sentAt: Date? = nil
+    var isSteering: Bool = false
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -2032,7 +2564,31 @@ struct UserBubbleView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
-                ChatCopyButton(text: text, title: "Copy message")
+                // Footer: send time on the left, copy action on the right.
+                // Sharing one row keeps the bubble's vertical rhythm
+                // unchanged from before the timestamp was added.
+                HStack(spacing: 8) {
+                    if isSteering {
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.up.right.circle.fill")
+                                .font(.system(size: 10, weight: .semibold))
+                            Text("Steered current task")
+                                .font(.system(size: 10, weight: .medium))
+                        }
+                        .foregroundColor(NordTheme.accentGreen(colorScheme).opacity(0.78))
+                        .help("Sent to the running task instead of queued as a new turn")
+                    }
+                    if let sentAt {
+                        Text(ChatMessageTimestamp.label(for: sentAt))
+                            .font(.system(size: 10))
+                            .monospacedDigit()
+                            .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.55))
+                            .help(ChatMessageTimestamp.fullLabel(for: sentAt))
+                            .accessibilityLabel("Sent \(ChatMessageTimestamp.fullLabel(for: sentAt))")
+                    }
+                    Spacer(minLength: 0)
+                    ChatCopyButton(text: text, title: "Copy message")
+                }
             }
             .padding(.horizontal, 14)
             .padding(.top, 10)
@@ -2082,6 +2638,9 @@ struct UserBubbleView: View {
     // the conversation visually quiet so the assistant prose — which is
     // where the actual answer lives — remains the focal point.
     private var bubbleFillColor: Color {
+        if isSteering {
+            return NordTheme.accentGreen(colorScheme).opacity(colorScheme == .dark ? 0.16 : 0.09)
+        }
         switch colorScheme {
         case .dark:
             return NordTheme.accent(colorScheme).opacity(0.18)
@@ -2095,6 +2654,9 @@ struct UserBubbleView: View {
     }
 
     private var bubbleBorderColor: Color {
+        if isSteering {
+            return NordTheme.accentGreen(colorScheme).opacity(colorScheme == .dark ? 0.30 : 0.24)
+        }
         switch colorScheme {
         case .dark:
             return NordTheme.accent(colorScheme).opacity(0.32)
@@ -2164,7 +2726,17 @@ struct AssistantMessageView: View {
     @Environment(\.colorScheme) private var colorScheme
 
     private var thinkingBlocks: [ChatBlock] {
-        message.blocks.filter { $0.kind != .finalAnswer }
+        message.blocks.filter { block in
+            guard block.kind != .finalAnswer else { return false }
+            // Only genuine reasoning is subject to the noise filter. A block
+            // that reclassifies to a tool kind is a real step and must be
+            // kept — it is shown as that tool, not as reasoning.
+            let effective = AgentTimelineSummarizer.classify(kind: block.kind, text: block.text)
+            guard effective == .agentReasoning else { return true }
+            // Drop reasoning steps that are nothing but command noise:
+            // rendering them produces empty, meaningless timeline rows.
+            return !AgentTimelineSummarizer.reasoningProse(block.text).isEmpty
+        }
     }
 
     private var finalBlock: ChatBlock? {
@@ -2195,49 +2767,140 @@ struct AssistantMessageView: View {
     }
 }
 
+// MARK: - Timeline timing helpers
+
+/// Formatting + derivation helpers for the Codex-style thinking timeline.
+/// Kept separate from the views so the timing rules are testable and the
+/// view bodies stay declarative.
+enum AgentTimelineTiming {
+    /// Below this threshold we assume the blocks were hydrated from history
+    /// (all stamped at load time) rather than streamed, and suppress timings.
+    static let minimumMeaningfulSpan: TimeInterval = 0.75
+
+    static func span(of blocks: [ChatBlock], now: Date) -> TimeInterval {
+        guard let first = blocks.first else { return 0 }
+        let end = max(blocks.last?.createdAt ?? first.createdAt, now)
+        return max(0, end.timeIntervalSince(first.createdAt))
+    }
+
+    /// Duration attributable to `blocks[index]` — the gap until the next
+    /// block, or until `now` for the block still in flight.
+    static func duration(of blocks: [ChatBlock], at index: Int, now: Date) -> TimeInterval {
+        guard index >= 0, index < blocks.count else { return 0 }
+        let start = blocks[index].createdAt
+        let end = (index + 1 < blocks.count) ? blocks[index + 1].createdAt : now
+        return max(0, end.timeIntervalSince(start))
+    }
+
+    /// "8s", "1m 04s", "1h 02m". Sub-second values round up to "1s" so a
+    /// step never renders as "0s".
+    static func format(_ interval: TimeInterval) -> String {
+        let total = Int(interval.rounded())
+        if total < 60 { return "\(max(1, total))s" }
+        let minutes = total / 60
+        let seconds = total % 60
+        if minutes < 60 { return String(format: "%dm %02ds", minutes, seconds) }
+        return String(format: "%dh %02dm", minutes / 60, minutes % 60)
+    }
+}
+
 // MARK: - Thinking Section (Timeline)
 
 private struct ThinkingSectionView: View {
     let blocks: [ChatBlock]
     var isStreaming: Bool = false
     @Environment(\.colorScheme) private var colorScheme
-    @State private var expanded = false
-    @State private var glowPulse = false
+
+    /// `nil` means "follow the stream" — auto-expanded while the turn runs and
+    /// auto-collapsed once it finishes, matching the Codex transcript. As soon
+    /// as the user toggles the header the explicit choice wins for this turn.
+    @State private var userExpanded: Bool? = nil
     @State private var expandedSteps: Set<Int> = []
+    @State private var now = Date()
+    @State private var headlinePhase = false
+
+    /// 1 Hz tick drives the live "Thinking… 12s" counter and the in-flight
+    /// step duration. Only consumed while `isStreaming`.
+    private let ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+
+    private var expanded: Bool { userExpanded ?? isStreaming }
+
+    private var latestBlock: ChatBlock? { blocks.last }
+
+    /// Headline of the step currently in flight — surfaced next to the header
+    /// so the reasoning is visible without expanding the timeline.
+    private var liveHeadline: String? {
+        guard isStreaming, let block = latestBlock else { return nil }
+        let kind = AgentTimelineSummarizer.classify(kind: block.kind, text: block.text)
+        let headline = AgentTimelineSummarizer.stepHeadline(kind: kind, text: block.text)
+        return headline.isEmpty ? nil : headline
+    }
+
+    private var showsTimings: Bool {
+        AgentTimelineTiming.span(of: blocks, now: isStreaming ? now : (blocks.last?.createdAt ?? now))
+            >= AgentTimelineTiming.minimumMeaningfulSpan
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             headerPill
+            if isStreaming, !expanded, let headline = liveHeadline {
+                liveActivityLine(headline)
+            }
             if expanded {
                 timelineBody
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .onAppear { if isStreaming { startGlow() } }
+        .onAppear { if isStreaming { startHeadlinePulse() } }
+        .onReceive(ticker) { tick in
+            guard isStreaming else { return }
+            now = tick
+        }
         .onChange(of: isStreaming) { _, streaming in
-            if streaming { startGlow() }
-            else { withAnimation(.easeOut(duration: 0.4)) { glowPulse = false } }
+            if streaming {
+                now = Date()
+                startHeadlinePulse()
+            } else {
+                // Freeze the clock at the last block so the finished header
+                // reports the real turn duration instead of drifting.
+                now = blocks.last?.createdAt ?? now
+                headlinePulse(false)
+                // Auto-collapse back to the summary pill, but only when the
+                // user never expressed a preference for this turn.
+                if userExpanded == nil {
+                    withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
+                        expandedSteps.removeAll()
+                    }
+                }
+            }
         }
     }
 
     private var headerPill: some View {
         Button {
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) { expanded.toggle() }
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
+                userExpanded = !expanded
+            }
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: isStreaming ? "sparkles" : "brain")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: 11.9, weight: .semibold))
                     .foregroundColor(
                         isStreaming
                             ? NordTheme.accentPurple(colorScheme)
                             : NordTheme.secondaryText(colorScheme).opacity(0.85)
                     )
+                // Sized locally rather than via `OKFont.captionSmall` (11pt):
+                // this is the turn's primary status line, so it needs more
+                // presence than the badge-sized token, which is shared with
+                // other chips and should not grow with it.
                 Text(thinkingHeaderTitle)
-                    .font(OKFont.captionSmall)
+                    .font(.system(size: 11.9, weight: .semibold))
                     .foregroundColor(NordTheme.secondaryText(colorScheme))
                 Image(systemName: expanded ? "chevron.up" : "chevron.down")
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(.system(size: 9.5, weight: .semibold))
                     .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.55))
                 Spacer(minLength: 0)
             }
@@ -2249,17 +2912,49 @@ private struct ThinkingSectionView: View {
         .help(expanded ? "Collapse thinking" : "Expand thinking")
     }
 
-    /// Codex shows "Worked for 2m 37s" / "Thinking…" instead of a
-    /// terse "Thinking" label. We don't have per-block timing in
-    /// `ChatBlock` yet, so for now we surface the step count when not
-    /// streaming and keep the live label when streaming.
-    private var thinkingHeaderTitle: String {
-        if isStreaming {
-            return "Thinking…"
+    /// Collapsed-state live line: the current reasoning headline, gently
+    /// pulsing, so the user sees *what* the agent is doing without opening
+    /// the timeline — the core of the Codex "live reasoning" feel.
+    private func liveActivityLine(_ headline: String) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Circle()
+                .fill(NordTheme.accentPurple(colorScheme))
+                .frame(width: 5, height: 5)
+                .padding(.top, 4)
+                .opacity(headlinePhase ? 1.0 : 0.35)
+                .animation(.easeInOut(duration: 0.85).repeatForever(autoreverses: true), value: headlinePhase)
+
+            Text(headline)
+                .font(.system(size: 11.5))
+                .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(headlinePhase ? 0.92 : 0.62))
+                .animation(.easeInOut(duration: 0.85).repeatForever(autoreverses: true), value: headlinePhase)
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .id(headline)
+                .transition(.opacity)
         }
+        .padding(.leading, 2)
+        .animation(.easeInOut(duration: 0.2), value: headline)
+    }
+
+    /// Codex shows "Thinking… 12s" while the turn runs and
+    /// "Worked for 2m 37s · 9 steps" once it lands. Timings are omitted for
+    /// transcripts hydrated from history, where no real timing exists.
+    private var thinkingHeaderTitle: String {
         let steps = blocks.count
-        if steps <= 0 { return "Thought" }
-        return "Thought for \(steps) step\(steps == 1 ? "" : "s")"
+        let stepText = "\(steps) step\(steps == 1 ? "" : "s")"
+
+        if isStreaming {
+            guard showsTimings else { return "Thinking…" }
+            let elapsed = AgentTimelineTiming.span(of: blocks, now: now)
+            return "Thinking… \(AgentTimelineTiming.format(elapsed))"
+        }
+
+        guard steps > 0 else { return "Thought" }
+        guard showsTimings else { return "Thought for \(stepText)" }
+        let total = AgentTimelineTiming.span(of: blocks, now: blocks.last?.createdAt ?? now)
+        return "Worked for \(AgentTimelineTiming.format(total)) · \(stepText)"
     }
 
     private var timelineBody: some View {
@@ -2270,6 +2965,9 @@ private struct ThinkingSectionView: View {
                     isLast: i == blocks.count - 1,
                     isActive: isStreaming && i == blocks.count - 1,
                     isExpanded: expandedSteps.contains(i),
+                    duration: showsTimings
+                        ? AgentTimelineTiming.duration(of: blocks, at: i, now: isStreaming ? now : (blocks.last?.createdAt ?? now))
+                        : nil,
                     onToggle: {
                         withAnimation(.easeInOut(duration: 0.18)) {
                             if expandedSteps.contains(i) { expandedSteps.remove(i) }
@@ -2283,10 +2981,12 @@ private struct ThinkingSectionView: View {
         .padding(.top, 2)
     }
 
-    private func startGlow() {
-        withAnimation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true)) {
-            glowPulse = true
-        }
+    private func startHeadlinePulse() {
+        headlinePulse(true)
+    }
+
+    private func headlinePulse(_ on: Bool) {
+        headlinePhase = on
     }
 }
 
@@ -2297,6 +2997,8 @@ private struct ThinkingTimelineRow: View {
     let isLast: Bool
     let isActive: Bool
     let isExpanded: Bool
+    /// Wall-clock time spent on this step. `nil` hides the badge (history).
+    var duration: TimeInterval? = nil
     let onToggle: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
@@ -2304,21 +3006,57 @@ private struct ThinkingTimelineRow: View {
     @State private var haloPulse = false
 
     // Per-kind visual metadata
+    /// The block's *effective* kind. Persisted history mislabels unrecognised
+    /// tool results as `agentReasoning`, so recover the real kind before
+    /// choosing an icon, label, or detail renderer.
+    private var kind: ChatBlockKind {
+        AgentTimelineSummarizer.classify(kind: block.kind, text: block.text)
+    }
+
     private var meta: (icon: String, label: String, accent: Color) {
-        switch block.kind {
+        switch kind {
         case .agentReasoning:  return ("brain",             "Reasoning",  NordTheme.accentPurple(colorScheme))
         case .shellCommand:    return ("terminal.fill",     "Command",    NordTheme.accent(colorScheme))
         case .terminalOutput:  return ("terminal",          "Output",     NordTheme.secondaryText(colorScheme))
         case .webCall:         return ("globe",             "Web Search", NordTheme.accentBlue(colorScheme))
         case .mcpCall:         return ("server.rack",       "MCP Call",   NordTheme.accentAmber(colorScheme))
         case .imageRendering:  return ("photo",             "Image",      NordTheme.accentGreen(colorScheme))
+        case .toolCall:        return ("wrench.and.screwdriver", toolLabel, NordTheme.accentBlue(colorScheme))
         case .finalAnswer:     return ("checkmark.circle.fill", "Answer", NordTheme.accentGreen(colorScheme))
         }
     }
 
-    // Concise display summary for raw tool/script blocks.
-    private var summary: String {
-        AgentTimelineSummarizer.collapsedSummary(kind: block.kind, text: block.text)
+    /// Names the specific tool in the row label ("Tool · web search") so the
+    /// step says what actually ran instead of a generic placeholder.
+    private var toolLabel: String {
+        guard let raw = AgentTimelineSummarizer.toolName(in: block.text) else { return "Tool" }
+        return "Tool · \(AgentTimelineSummarizer.friendlyToolName(raw))"
+    }
+
+    /// Terse title for the step, shown in place of the raw prose so the
+    /// collapsed timeline reads as a list of actions.
+    private var headline: String {
+        AgentTimelineSummarizer.stepHeadline(kind: kind, text: block.text)
+    }
+
+    private var durationLabel: String? {
+        guard let duration, duration >= 1 else { return nil }
+        return AgentTimelineTiming.format(duration)
+    }
+
+    /// Reasoning text minus the headline, so the expanded prose does not
+    /// repeat the title rendered directly above it.
+    private var reasoningBody: String {
+        // Use the sanitized prose, not the raw block: persisted reasoning
+        // often carries `Tool: ...` headers and bare shell lines that add no
+        // meaning and duplicate the adjacent Command row.
+        let prose = AgentTimelineSummarizer.reasoningProse(block.text)
+        guard !prose.isEmpty, prose != headline else { return "" }
+        if prose.hasPrefix(headline) {
+            return String(prose.dropFirst(headline.count))
+                .trimmingCharacters(in: CharacterSet(charactersIn: " \n\t:.-*#"))
+        }
+        return prose
     }
 
     var body: some View {
@@ -2374,11 +3112,11 @@ private struct ThinkingTimelineRow: View {
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundColor(NordTheme.primaryText(colorScheme).opacity(0.82))
 
-                        if !isExpanded, !summary.isEmpty {
+                        if !headline.isEmpty {
                             Text("·")
                                 .font(.system(size: 11))
                                 .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.3))
-                            Text(summary)
+                            Text(headline)
                                 .font(.system(size: 11))
                                 .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.58))
                                 .lineLimit(1)
@@ -2387,13 +3125,21 @@ private struct ThinkingTimelineRow: View {
 
                         Spacer(minLength: 4)
 
-                        // Chevron — only visible on hover
-                        Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        if let durationLabel {
+                            Text(durationLabel)
+                                .font(.system(size: 9.5, weight: .medium).monospacedDigit())
+                                .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(isActive ? 0.7 : 0.4))
+                        }
+
+                        // Chevron is always visible now that expanding is the
+                        // only way to reach a step's detail — hiding it until
+                        // hover left the disclosure undiscoverable.
+                        Image(systemName: "chevron.down")
                             .font(.system(size: 8, weight: .medium))
+                            .rotationEffect(.degrees(isExpanded ? 180 : 0))
                             .foregroundColor(
-                                hovered
-                                    ? NordTheme.secondaryText(colorScheme).opacity(0.45)
-                                    : .clear
+                                NordTheme.secondaryText(colorScheme)
+                                    .opacity(hovered ? 0.6 : 0.3)
                             )
                     }
                     .padding(.vertical, 5)
@@ -2402,6 +3148,10 @@ private struct ThinkingTimelineRow: View {
                 }
                 .buttonStyle(.plain)
                 .onHover { hovered = $0 }
+
+                // Detail is disclosure-only — nothing is rendered until the
+                // step is opened, so the collapsed timeline stays a scannable
+                // list of one-line steps.
 
                 // Expanded full content
                 if isExpanded {
@@ -2427,10 +3177,10 @@ private struct ThinkingTimelineRow: View {
     @ViewBuilder
     private var expandedDetail: some View {
         let trimmed = block.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        switch block.kind {
-        case .shellCommand, .terminalOutput, .webCall, .mcpCall:
+        switch kind {
+        case .shellCommand, .terminalOutput, .webCall, .mcpCall, .toolCall, .imageRendering:
             ChatMarkdownView(
-                text: AgentTimelineSummarizer.expandedSummary(kind: block.kind, text: trimmed),
+                text: AgentTimelineSummarizer.expandedSummary(kind: kind, text: trimmed),
                 baseFontSize: 11.5
             )
             .opacity(0.88)
@@ -2452,12 +3202,20 @@ private struct ThinkingTimelineRow: View {
             .padding(.trailing, 6)
 
         default:
-            ChatMarkdownView(text: trimmed, baseFontSize: 11.5)
-                .opacity(0.85)
-                .padding(.trailing, 6)
+            // Reasoning expands to the cleaned prose. Falling back to the raw
+            // text would reintroduce exactly the command noise the collapsed
+            // row filtered out.
+            let prose = AgentTimelineSummarizer.reasoningProse(trimmed)
+            ChatMarkdownView(
+                text: prose.isEmpty ? "_No additional detail._" : prose,
+                baseFontSize: 11.5
+            )
+            .opacity(0.85)
+            .padding(.trailing, 6)
         }
     }
 }
+
 
 // MARK: - Final Answer
 

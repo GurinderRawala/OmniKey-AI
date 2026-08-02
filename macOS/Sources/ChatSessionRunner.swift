@@ -26,6 +26,26 @@ final class ChatSessionRunHandle: @unchecked Sendable {
         _task = nil
     }
 
+    func sendWebSocketMessage(_ jsonString: String, completion: @escaping @Sendable (Error?) -> Void) {
+        lock.lock()
+        let task = _task
+        lock.unlock()
+
+        guard let task else {
+            let error = NSError(
+                domain: "ChatSessionRunner",
+                code: -3,
+                userInfo: [NSLocalizedDescriptionKey: "The current agent turn is no longer connected."]
+            )
+            completion(error)
+            return
+        }
+
+        task.send(.string(jsonString)) { error in
+            completion(error)
+        }
+    }
+
     /// Register the shell `Process` currently running for this turn. Replaces
     /// any previously registered process (a single turn only ever runs one
     /// `<shell_script>` at a time — the next script is requested only after
@@ -178,6 +198,46 @@ final class ChatSessionRunner {
         return handle
     }
 
+    func sendSteeringMessage(
+        sessionId: String,
+        text: String,
+        handle: ChatSessionRunHandle,
+        completion: @escaping @MainActor @Sendable (Result<Void, Error>) -> Void
+    ) {
+        let message = AgentMessage(
+            sessionID: sessionId,
+            sender: "client",
+            content: text,
+            isTerminalOutput: false,
+            isError: false,
+            isSteering: true,
+            platform: "macos"
+        )
+
+        let encoder = JSONEncoder()
+        guard let data = try? encoder.encode(message),
+              let json = String(data: data, encoding: .utf8)
+        else {
+            let error = NSError(
+                domain: "ChatSessionRunner",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "Failed to encode steering message."]
+            )
+            DispatchQueue.main.async { completion(.failure(error)) }
+            return
+        }
+
+        handle.sendWebSocketMessage(json) { error in
+            DispatchQueue.main.async {
+                if let error {
+                    completion(.failure(error))
+                } else {
+                    completion(.success(()))
+                }
+            }
+        }
+    }
+
     // MARK: - WebSocket session
 
     private func connect(
@@ -228,6 +288,7 @@ final class ChatSessionRunner {
         let isWebCall: Bool?
         let isImageRendering: Bool?
         let isMcpCall: Bool?
+        let isSteering: Bool?
         let platform: String?
         let groupName: String?
 
@@ -240,6 +301,7 @@ final class ChatSessionRunner {
             isWebCall: Bool? = nil,
             isImageRendering: Bool? = nil,
             isMcpCall: Bool? = nil,
+            isSteering: Bool? = nil,
             platform: String? = nil,
             groupName: String? = nil
         ) {
@@ -251,6 +313,7 @@ final class ChatSessionRunner {
             self.isWebCall = isWebCall
             self.isImageRendering = isImageRendering
             self.isMcpCall = isMcpCall
+            self.isSteering = isSteering
             self.platform = platform
             self.groupName = groupName
         }
@@ -264,6 +327,7 @@ final class ChatSessionRunner {
             case isWebCall = "is_web_call"
             case isImageRendering = "is_image_rendering"
             case isMcpCall = "is_mcp_call"
+            case isSteering = "is_steering"
             case platform
             case groupName = "group_name"
         }
@@ -370,6 +434,10 @@ final class ChatSessionRunner {
                         DispatchQueue.main.async {
                             onBlock(ChatBlock(kind: .mcpCall, text: content))
                         }
+                        receiveNext()
+                        return
+                    }
+                    if response.isSteering == true {
                         receiveNext()
                         return
                     }
