@@ -28,6 +28,12 @@ struct ChatBlock: Identifiable, Equatable {
     let id = UUID()
     let kind: ChatBlockKind
     var text: String
+    /// Wall-clock time the block was appended to the transcript. Used by the
+    /// timeline to show per-step timing ("2.4s") and the turn-level
+    /// "Worked for …" header, mirroring the Codex desktop transcript.
+    /// Blocks hydrated from history share the hydration timestamp, so the
+    /// view falls back to hiding timings when every block has the same value.
+    var createdAt: Date = Date()
 
     static func == (lhs: ChatBlock, rhs: ChatBlock) -> Bool {
         return lhs.id == rhs.id && lhs.text == rhs.text
@@ -41,21 +47,30 @@ struct ChatMessage: Identifiable, Equatable {
     /// use `blocks` for streamed agent output. System messages use `text`.
     var text: String
     var blocks: [ChatBlock]
+    /// When the message was sent. Populated for messages composed in this
+    /// app session. `nil` for messages hydrated from server history, which
+    /// carries no per-message timestamp — the view hides the label rather
+    /// than inventing a time.
+    var sentAt: Date?
 
     static func == (lhs: ChatMessage, rhs: ChatMessage) -> Bool {
-        return lhs.id == rhs.id && lhs.role == rhs.role && lhs.text == rhs.text && lhs.blocks == rhs.blocks
+        return lhs.id == rhs.id
+            && lhs.role == rhs.role
+            && lhs.text == rhs.text
+            && lhs.blocks == rhs.blocks
+            && lhs.sentAt == rhs.sentAt
     }
 
-    static func user(_ text: String) -> ChatMessage {
-        ChatMessage(role: .user, text: text, blocks: [])
+    static func user(_ text: String, sentAt: Date? = Date()) -> ChatMessage {
+        ChatMessage(role: .user, text: text, blocks: [], sentAt: sentAt)
     }
 
     static func assistant() -> ChatMessage {
-        ChatMessage(role: .assistant, text: "", blocks: [])
+        ChatMessage(role: .assistant, text: "", blocks: [], sentAt: nil)
     }
 
     static func system(_ text: String) -> ChatMessage {
-        ChatMessage(role: .system, text: text, blocks: [])
+        ChatMessage(role: .system, text: text, blocks: [], sentAt: nil)
     }
 }
 
@@ -152,6 +167,11 @@ final class ChatModel: ObservableObject {
 
     /// True while a turn is in flight (WebSocket open, awaiting final answer).
     @Published var isRunning: Bool = false
+
+    /// Ids of every session with at least one turn in flight — not just the
+    /// active one. Turns run in parallel across sessions, so the sidebar uses
+    /// this to badge each busy chat instead of only the one on screen.
+    @Published private(set) var runningSessionIds: Set<String> = []
 
     /// Surfaced to the view when something goes wrong outside the
     /// per-turn assistant flow (e.g. session list refresh failure).
@@ -685,18 +705,25 @@ final class ChatModel: ObservableObject {
     /// as well as final answers. For chat resume, render each turn as a clean
     /// user message plus the last useful assistant response.
     private static func hydrateTranscript(from entries: [SessionHistoryEntry]) -> [ChatMessage] {
+        // One shared stamp for every hydrated block. The timeline treats a
+        // zero-length span as "no real timing available" and hides the
+        // duration badges, so replayed history never shows invented timings.
+        let hydratedAt = Date()
+
         if entries.contains(where: { ($0.blocks ?? []).isEmpty == false }) {
             return entries.compactMap { entry in
                 if entry.role == "user" {
                     if ChatModel.isInjectedUserPrompt(entry.text) { return nil }
-                    return ChatMessage.user(entry.text)
+                    // Server history carries no per-message timestamp, so the
+                    // send time is unknown rather than "now".
+                    return ChatMessage.user(entry.text, sentAt: nil)
                 }
 
                 guard entry.role == "assistant" else { return nil }
                 var message = ChatMessage.assistant()
                 message.blocks = (entry.blocks ?? []).compactMap { block in
                     guard let kind = ChatModel.blockKind(from: block.kind) else { return nil }
-                    return ChatBlock(kind: kind, text: block.text)
+                    return ChatBlock(kind: kind, text: block.text, createdAt: hydratedAt)
                 }
                 return message.blocks.isEmpty ? nil : message
             }
@@ -712,7 +739,7 @@ final class ChatModel: ObservableObject {
             }
 
             var message = ChatMessage.assistant()
-            message.blocks.append(ChatBlock(kind: .finalAnswer, text: text))
+            message.blocks.append(ChatBlock(kind: .finalAnswer, text: text, createdAt: hydratedAt))
             result.append(message)
             pendingAssistantTexts = []
         }
@@ -721,7 +748,7 @@ final class ChatModel: ObservableObject {
             if entry.role == "user" {
                 if ChatModel.isInjectedUserPrompt(entry.text) { continue }
                 flushAssistant()
-                result.append(ChatMessage.user(entry.text))
+                result.append(ChatMessage.user(entry.text, sentAt: nil))
             } else if entry.role == "assistant" {
                 pendingAssistantTexts.append(entry.text)
             }
@@ -785,6 +812,7 @@ final class ChatModel: ObservableObject {
         sessionUserMessageHaystacks.removeValue(forKey: session.id)
         // Optimistically cancel all running turns for this session.
         states[session.id]?.runHandles.forEach { $0.cancel() }
+        runningSessionIds.remove(session.id)
 
         guard let token = SubscriptionManager.shared.jwtToken, !token.isEmpty else { return }
         let url = APIClient.baseURL
@@ -856,6 +884,7 @@ final class ChatModel: ObservableObject {
         let capturedAssistantIndex = sessionSt.messages.count - 1
         sessionSt.streamingAssistantIndex = capturedAssistantIndex
         sessionSt.runCount += 1
+        runningSessionIds.insert(sessionId)
 
         // Sync published properties so the view reflects the new messages.
         messages = sessionSt.messages
@@ -912,6 +941,7 @@ final class ChatModel: ObservableObject {
                 if sessionSt.runCount == 0 {
                     sessionSt.runHandles = []
                     sessionSt.streamingAssistantIndex = nil
+                    self.runningSessionIds.remove(sessionId)
                     if self.states[self.activeStateKey] === sessionSt {
                         self.isRunning = false
                     }
@@ -937,6 +967,7 @@ final class ChatModel: ObservableObject {
                 if sessionSt.runCount == 0 {
                     sessionSt.runHandles = []
                     sessionSt.streamingAssistantIndex = nil
+                    self.runningSessionIds.remove(sessionId)
                     if self.states[self.activeStateKey] === sessionSt {
                         self.isRunning = false
                     }
@@ -1001,6 +1032,7 @@ final class ChatModel: ObservableObject {
         s?.runCount = 0
         s?.runHandles = []
         s?.streamingAssistantIndex = nil
+        if let id = activeSessionId { runningSessionIds.remove(id) }
         isRunning = false
     }
 

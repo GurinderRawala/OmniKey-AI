@@ -13,6 +13,77 @@ enum AgentTimelineSummarizer {
         summarize(kind: displayKind(for: kind), text: text).expanded
     }
 
+    /// Short, human-readable headline for one timeline step. Mirrors the
+    /// Codex transcript, where each reasoning step is introduced by a terse
+    /// title ("Inspecting the repo") rather than the raw model prose.
+    ///
+    /// For reasoning blocks we prefer an explicit markdown heading or a
+    /// leading bold run, then fall back to the first sentence. Tool blocks
+    /// reuse the existing collapsed summary so their headline stays
+    /// consistent with the rest of the timeline.
+    static func stepHeadline(kind: ChatBlockKind, text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return defaultHeadline(for: kind) }
+
+        switch kind {
+        case .agentReasoning, .finalAnswer:
+            if let headline = reasoningHeadline(trimmed) { return headline }
+            return defaultHeadline(for: kind)
+        default:
+            let collapsed = collapsedSummary(kind: kind, text: trimmed)
+            return collapsed.isEmpty ? defaultHeadline(for: kind) : truncate(collapsed, max: 90)
+        }
+    }
+
+    private static func defaultHeadline(for kind: ChatBlockKind) -> String {
+        switch kind {
+        case .agentReasoning: return "Thinking"
+        case .shellCommand: return "Running command"
+        case .terminalOutput: return "Reading output"
+        case .webCall: return "Searching the web"
+        case .mcpCall: return "Calling MCP tool"
+        case .imageRendering: return "Working on an image"
+        case .finalAnswer: return "Answer"
+        }
+    }
+
+    private static func reasoningHeadline(_ text: String) -> String? {
+        for rawLine in text.components(separatedBy: .newlines) {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !line.isEmpty else { continue }
+
+            if line.hasPrefix("#") {
+                let stripped = line.drop(while: { $0 == "#" }).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !stripped.isEmpty { return truncate(stripped, max: 90) }
+                continue
+            }
+
+            if let bold = leadingBoldRun(line) { return truncate(bold, max: 90) }
+
+            return truncate(firstSentence(line), max: 90)
+        }
+        return nil
+    }
+
+    /// Extracts `Heading` from a line that starts with `**Heading**`.
+    private static func leadingBoldRun(_ line: String) -> String? {
+        guard line.hasPrefix("**"),
+              let closing = line.range(of: "**", range: line.index(line.startIndex, offsetBy: 2)..<line.endIndex)
+        else { return nil }
+        let inner = String(line[line.index(line.startIndex, offsetBy: 2)..<closing.lowerBound])
+            .trimmingCharacters(in: CharacterSet(charactersIn: " :.-"))
+        return inner.isEmpty ? nil : inner
+    }
+
+    private static func firstSentence(_ line: String) -> String {
+        let normalized = normalizeInlineWhitespace(line)
+        guard let terminator = normalized.firstIndex(where: { $0 == "." || $0 == "!" || $0 == "?" }) else {
+            return normalized
+        }
+        let sentence = String(normalized[..<terminator]).trimmingCharacters(in: .whitespacesAndNewlines)
+        return sentence.count >= 12 ? sentence : normalized
+    }
+
     private enum DisplayKind {
         case agentReasoning
         case shellCommand
