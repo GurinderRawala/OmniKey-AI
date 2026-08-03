@@ -166,6 +166,129 @@ document.getElementById('year').textContent = new Date().getFullYear();
   });
 })();
 
+// ── Docs changelog from GitHub Releases ──
+(function () {
+  const container = document.getElementById('github-changelog');
+  if (!container) return;
+
+  const status = document.getElementById('github-changelog-status');
+  const endpoint =
+    container.getAttribute('data-github-releases') ||
+    'https://api.github.com/repos/GurinderRawala/OmniKey-AI/releases?per_page=5';
+
+  function setStatus(text) {
+    if (status) status.textContent = text;
+  }
+
+  function stripMarkdown(text) {
+    return String(text || '')
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+      .replace(/`([^`]+)`/g, '$1')
+      .replace(/\*\*([^*]+)\*\*/g, '$1')
+      .replace(/__([^_]+)__/g, '$1')
+      .replace(/^[#>\s]+/, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function releaseHighlights(body) {
+    const lines = String(body || '')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const highlights = [];
+
+    for (const line of lines) {
+      if (/^#+\s/.test(line)) continue;
+      if (/full changelog/i.test(line)) continue;
+      if (/^what'?s changed$/i.test(stripMarkdown(line))) continue;
+      const bullet = line.match(/^[-*]\s+(.+)$/) || line.match(/^\d+\.\s+(.+)$/);
+      if (!bullet) continue;
+      const clean = stripMarkdown(bullet[1]);
+      if (clean) highlights.push(clean);
+      if (highlights.length >= 5) return highlights;
+    }
+
+    for (const line of lines) {
+      if (/^#+\s/.test(line) || /^[-*]\s+/.test(line) || /^\d+\.\s+/.test(line)) continue;
+      if (/full changelog/i.test(line)) continue;
+      const clean = stripMarkdown(line);
+      if (clean) highlights.push(clean);
+      if (highlights.length >= 3) break;
+    }
+
+    return highlights;
+  }
+
+  function formatDate(value) {
+    if (!value) return '';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toLocaleDateString(undefined, {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+    });
+  }
+
+  function appendText(parent, tagName, className, text) {
+    const node = document.createElement(tagName);
+    if (className) node.className = className;
+    node.textContent = text;
+    parent.appendChild(node);
+    return node;
+  }
+
+  function renderRelease(release) {
+    const article = document.createElement('article');
+    const title = release.name || release.tag_name || 'Release';
+    const published = formatDate(release.published_at || release.created_at);
+
+    appendText(article, 'h3', '', title);
+
+    const meta = document.createElement('div');
+    meta.className = 'docs-changelog-meta';
+    if (published) appendText(meta, 'time', '', published);
+    if (release.tag_name) appendText(meta, 'span', 'docs-changelog-tag', release.tag_name);
+    article.appendChild(meta);
+
+    const highlights = releaseHighlights(release.body);
+    if (highlights.length) {
+      const list = document.createElement('ul');
+      highlights.forEach((item) => appendText(list, 'li', '', item));
+      article.appendChild(list);
+    } else {
+      appendText(article, 'p', 'docs-changelog-empty', 'Release notes are available on GitHub.');
+    }
+
+    if (release.html_url) {
+      const link = appendText(article, 'a', 'docs-changelog-link', 'Read release notes');
+      link.href = release.html_url;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+    }
+
+    return article;
+  }
+
+  fetch(endpoint, { headers: { Accept: 'application/vnd.github+json' } })
+    .then((response) => (response.ok ? response.json() : Promise.reject(response.status)))
+    .then((releases) => {
+      const visibleReleases = Array.isArray(releases)
+        ? releases.filter((release) => release && !release.draft).slice(0, 5)
+        : [];
+      if (!visibleReleases.length) {
+        setStatus('Showing bundled release notes');
+        return;
+      }
+      container.replaceChildren(...visibleReleases.map(renderRelease));
+      setStatus('Synced from GitHub Releases');
+    })
+    .catch(() => {
+      setStatus('Showing bundled release notes');
+    });
+})();
+
 // ── Star-on-GitHub modal ──
 (function () {
   const modal = document.getElementById('star-modal');

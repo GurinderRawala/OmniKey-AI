@@ -375,13 +375,33 @@ Run focused validation and report remaining risk.</code></pre>
             <span class="section-label">Changelog</span>
             <h2>What is new in the latest release</h2>
             <p>
-              These notes summarize the current public release line for the CLI/API and desktop apps.
+              These notes sync from GitHub Releases when available. The bundled summary stays
+              visible if GitHub cannot be reached.
             </p>
 
-            <div class="docs-changelog">
+            <div class="docs-changelog-header">
+              <span class="docs-changelog-status" id="github-changelog-status">
+                Loading GitHub release notes
+              </span>
+              <a
+                href="https://github.com/GurinderRawala/OmniKey-AI/releases"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="docs-changelog-source"
+              >
+                View all releases
+              </a>
+            </div>
+
+            <div
+              class="docs-changelog"
+              id="github-changelog"
+              data-github-releases="https://api.github.com/repos/GurinderRawala/OmniKey-AI/releases?per_page=5"
+            >
               <article>
-                <h3>CLI and API v1.6.23</h3>
+                <h3>CLI and API v1.6.24</h3>
                 <ul>
+                  <li>Provider settings consistently honor custom daemon config paths.</li>
                   <li>Open Model provider supports generic OpenAI-compatible endpoints.</li>
                   <li>Open Model settings use <code>OPEN_MODEL_API_KEY</code> and <code>OPEN_MODEL_BASE_URL</code>.</li>
                   <li>Responses API routing is enabled for GPT-5 family models.</li>

@@ -1582,12 +1582,48 @@ footer a:hover {
   margin-top: 22px;
 }
 
+.docs-changelog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-top: 18px;
+  padding-bottom: 2px;
+}
+
+.docs-changelog-status {
+  color: var(--text-2);
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+
+.docs-changelog-source,
+.docs-changelog-link {
+  color: var(--cyan);
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
 .docs-panel,
 .docs-changelog article {
   padding: 18px;
   border-radius: 8px;
   border: 1px solid var(--border);
   background: var(--surface);
+}
+
+.docs-changelog-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+  color: var(--text-3);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.docs-changelog-tag {
+  color: var(--green);
 }
 
 .docs-panel pre {
@@ -1630,6 +1666,18 @@ footer a:hover {
   color: var(--green);
 }
 
+.docs-changelog-empty {
+  margin-top: 12px;
+  color: var(--text-2);
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+
+.docs-changelog-link {
+  display: inline-flex;
+  margin-top: 14px;
+}
+
 @media (max-width: 860px) {
   .docs-main {
     padding-top: 96px;
@@ -1657,6 +1705,11 @@ footer a:hover {
   .docs-two-col,
   .docs-changelog {
     grid-template-columns: 1fr;
+  }
+
+  .docs-changelog-header {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 
