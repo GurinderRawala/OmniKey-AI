@@ -1,9 +1,8 @@
 import fs from 'fs';
-import os from 'os';
-import path from 'path';
 import { config, AIProvider, TerminalAccessMode } from './config';
 import { AgentSettings } from './models/agentSettings';
 import { logger } from './logger';
+import { getLocalConfigPath, writeLocalConfigJson } from './localConfigFile';
 
 export const DEFAULT_AGENT_SETTINGS_ID = 'default';
 let agentSettingsVersion = 0;
@@ -85,13 +84,8 @@ function defaultModelForProvider(provider: AIProvider): string {
   return AGENT_MODEL_OPTIONS[provider][0].id;
 }
 
-function getConfigPath(): string {
-  const home = process.env.HOME || process.env.USERPROFILE || os.homedir();
-  return path.join(home, '.omnikey', 'config.json');
-}
-
 export function readLocalConfigFile(): Record<string, any> {
-  const configPath = getConfigPath();
+  const configPath = getLocalConfigPath();
   if (!fs.existsSync(configPath)) return {};
   try {
     const raw = fs.readFileSync(configPath, 'utf-8');
@@ -109,9 +103,7 @@ export function readLocalConfigFile(): Record<string, any> {
 }
 
 export function writeLocalConfigFile(data: Record<string, any>): void {
-  const configPath = getConfigPath();
-  fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  fs.writeFileSync(configPath, JSON.stringify(data, null, 2), 'utf-8');
+  writeLocalConfigJson(data);
 }
 
 function firstString(...values: unknown[]): string | undefined {
@@ -145,7 +137,7 @@ function legacyDefaults(): Omit<AgentSettingsSnapshot, 'id'> {
       firstString(cfg.OPENAI_MODEL, config.openaiModel) ?? defaultModelForProvider('openai'),
     anthropicModel: firstString(cfg.ANTHROPIC_MODEL) ?? defaultModelForProvider('anthropic'),
     geminiModel: firstString(cfg.GEMINI_MODEL) ?? defaultModelForProvider('gemini'),
-    nemotronModel: firstString(cfg.NEMOTRON_MODEL) ?? defaultModelForProvider('nemotron'),
+    nemotronModel: firstString(cfg.OPEN_MODEL_MODEL, cfg.NEMOTRON_MODEL) ?? defaultModelForProvider('nemotron'),
   };
 }
 

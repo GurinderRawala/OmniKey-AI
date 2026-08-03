@@ -1,14 +1,13 @@
 import inquirer from 'inquirer';
-import fs from 'fs';
 import path from 'path';
-import { getConfigDir, getConfigPath } from './utils';
+import { getConfigDir, getConfigPath, writeConfig } from './utils';
 
 const AI_PROVIDERS = [
   { name: 'OpenAI (gpt-4o-mini / gpt-5.5)', value: 'openai' },
   { name: 'Anthropic — Claude (claude-haiku / claude-opus)', value: 'anthropic' },
   { name: 'Google Gemini (gemini-2.5-flash / gemini-2.5-pro)', value: 'gemini' },
   {
-    name: 'NVIDIA Nemotron (nemotron-3-nano / nemotron-3-ultra) — open weights',
+    name: 'Open Model — OpenAI-compatible endpoint (NVIDIA NIM, vLLM, LM Studio, local gateways)',
     value: 'nemotron',
   },
 ];
@@ -26,14 +25,14 @@ const AI_PROVIDER_KEY_ENV: Record<string, string> = {
   openai: 'OPENAI_API_KEY',
   anthropic: 'ANTHROPIC_API_KEY',
   gemini: 'GEMINI_API_KEY',
-  nemotron: 'NVIDIA_API_KEY',
+  nemotron: 'OPEN_MODEL_API_KEY',
 };
 
 const AI_PROVIDER_KEY_LABEL: Record<string, string> = {
   openai: 'OpenAI API key (from platform.openai.com)',
   anthropic: 'Anthropic API key (from console.anthropic.com)',
   gemini: 'Google Gemini API key (from ai.google.dev)',
-  nemotron: 'NVIDIA API key (from build.nvidia.com — used by NIM/Nemotron)',
+  nemotron: 'Open Model API key (or any non-empty placeholder for a local gateway)',
 };
 
 /**
@@ -67,17 +66,16 @@ export async function onboard() {
   const providerExtras: Record<string, string> = {};
 
   if (aiProvider === 'nemotron') {
-    // Nemotron is served either via the public NVIDIA NIM gateway or a
-    // self-hosted NIM microservice. Always ask the user for the base URL so
-    // they can point at either. The default value matches the public gateway
-    // so pressing Enter "just works" for build.nvidia.com keys.
-    const DEFAULT_NEMOTRON_URL = 'https://integrate.api.nvidia.com/v1';
-    const { nemotronBaseUrl } = await inquirer.prompt([
+    // The legacy provider id remains `nemotron`, but this path accepts any
+    // OpenAI-compatible endpoint. The default keeps the previous NVIDIA NIM
+    // onboarding flow working for users who press Enter through the prompt.
+    const DEFAULT_OPEN_MODEL_URL = 'https://integrate.api.nvidia.com/v1';
+    const { openModelBaseUrl, openModelResponsesApiEnabled } = await inquirer.prompt([
       {
         type: 'input',
-        name: 'nemotronBaseUrl',
-        message: 'Enter the Nemotron / NVIDIA NIM base URL (press Enter for the public gateway):',
-        default: DEFAULT_NEMOTRON_URL,
+        name: 'openModelBaseUrl',
+        message: 'Enter the OpenAI-compatible /v1 base URL (press Enter for NVIDIA NIM public gateway):',
+        default: DEFAULT_OPEN_MODEL_URL,
         validate: (input: string) => {
           const trimmed = input.trim();
           if (trimmed === '') return 'URL cannot be empty';
@@ -90,8 +88,15 @@ export async function onboard() {
           }
         },
       },
+      {
+        type: 'confirm',
+        name: 'openModelResponsesApiEnabled',
+        message: 'Use Responses API for this endpoint (/v1/responses)?',
+        default: false,
+      },
     ]);
-    providerExtras['NEMOTRON_BASE_URL'] = nemotronBaseUrl.trim();
+    providerExtras['OPEN_MODEL_BASE_URL'] = openModelBaseUrl.trim();
+    providerExtras['OPEN_MODEL_RESPONSES_API_ENABLED'] = String(openModelResponsesApiEnabled);
   }
 
   // Web search provider (optional)
@@ -153,7 +158,6 @@ export async function onboard() {
 
   // Save all environment variables to ~/.omnikey/config.json
   const configPath = getConfigPath();
-  fs.mkdirSync(configDir, { recursive: true });
   const configVars = {
     AI_PROVIDER: aiProvider,
     [AI_PROVIDER_KEY_ENV[aiProvider]]: apiKey,
@@ -162,7 +166,7 @@ export async function onboard() {
     ...providerExtras,
     ...searchConfig,
   };
-  fs.writeFileSync(configPath, JSON.stringify(configVars, null, 2));
+  writeConfig(configVars);
 
   const providerLabel = SEARCH_PROVIDERS.find((p) => p.value === provider)?.name ?? provider;
   console.log(`\nWeb search provider: ${providerLabel}`);

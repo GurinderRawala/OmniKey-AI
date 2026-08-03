@@ -1,8 +1,31 @@
 import dotenv from 'dotenv';
+import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { getLocalConfigPath } from './localConfigFile';
 
 dotenv.config();
+
+function loadLocalConfigFileIntoEnv(): void {
+  const configPath = getLocalConfigPath();
+
+  if (!fs.existsSync(configPath)) return;
+
+  try {
+    const parsed = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
+
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (process.env[key] !== undefined || value === undefined || value === null) continue;
+      process.env[key] = String(value);
+    }
+  } catch {
+    // Keep config loading best-effort. The normal required-env validation below
+    // will still fail loudly if a necessary provider key is unavailable.
+  }
+}
+
+loadLocalConfigFileIntoEnv();
 
 function getEnv<T = true>(name: string, required: T): T extends true ? string : string | undefined {
   const value = process.env[name];
@@ -16,6 +39,24 @@ function getBooleanEnv(name: string, defaultValue = false): boolean {
   const value = getEnv(name, false);
   if (value === undefined) return defaultValue;
   return value.toLowerCase() === 'true' || value === '1';
+}
+
+function getFirstEnv(...names: string[]): string | undefined {
+  for (const name of names) {
+    const value = getEnv(name, false);
+    if (value !== undefined && value !== '') return value;
+  }
+  return undefined;
+}
+
+function getFirstBooleanEnv(names: string[], defaultValue = false): boolean {
+  for (const name of names) {
+    const value = getEnv(name, false);
+    if (value !== undefined && value !== '') {
+      return value.toLowerCase() === 'true' || value === '1';
+    }
+  }
+  return defaultValue;
 }
 
 function getNumberEnv(name: string, defaultValue?: number): number {
@@ -53,13 +94,16 @@ function getTerminalAccessMode(): TerminalAccessMode {
 
 function getAIProvider(): AIProvider {
   const value = getEnv('AI_PROVIDER', false);
+  if (value === 'open_model' || value === 'open-model' || value === 'openmodel') {
+    return 'nemotron';
+  }
   if (value === 'gemini' || value === 'anthropic' || value === 'openai' || value === 'nemotron') {
     return value;
   }
   // Auto-detect from available keys
   if (getEnv('ANTHROPIC_API_KEY', false)) return 'anthropic';
   if (getEnv('GEMINI_API_KEY', false)) return 'gemini';
-  if (getEnv('NVIDIA_API_KEY', false) || getEnv('NEMOTRON_API_KEY', false)) return 'nemotron';
+  if (getFirstEnv('OPEN_MODEL_API_KEY', 'NEMOTRON_API_KEY', 'NVIDIA_API_KEY')) return 'nemotron';
   return 'openai';
 }
 
@@ -68,11 +112,12 @@ function getActiveApiKey(provider: AIProvider): string {
   if (provider === 'anthropic') return getEnv('ANTHROPIC_API_KEY', true) as string;
   if (provider === 'gemini') return getEnv('GEMINI_API_KEY', true) as string;
   if (provider === 'nemotron') {
-    // Accept either NVIDIA_API_KEY (default name on build.nvidia.com) or
-    // NEMOTRON_API_KEY (more explicit). The latter wins if both are set.
-    const explicit = getEnv('NEMOTRON_API_KEY', false);
+    // The provider id remains "nemotron" for backward compatibility, but new
+    // installs use generic OPEN_MODEL_* names because any OpenAI-compatible
+    // endpoint can be targeted here. Legacy keys still work.
+    const explicit = getFirstEnv('OPEN_MODEL_API_KEY', 'NEMOTRON_API_KEY', 'NVIDIA_API_KEY');
     if (explicit) return explicit;
-    return getEnv('NVIDIA_API_KEY', true) as string;
+    return getEnv('OPEN_MODEL_API_KEY', true) as string;
   }
   throw new Error(`Unknown AI provider: ${provider}`);
 }
@@ -91,14 +136,18 @@ export const config = {
   // Legacy — kept for backwards compatibility; may be undefined when using another provider
   openaiApiKey: getEnv('OPENAI_API_KEY', false),
 
-  // Optional override for the NVIDIA NIM endpoint. Defaults to the public
-  // `https://integrate.api.nvidia.com/v1` gateway when unset. Point this at a
-  // self-hosted NIM (e.g. `http://my-nim-host:8000/v1`) to use private weights.
-  nemotronBaseUrl: getEnv('NEMOTRON_BASE_URL', false),
+  // Optional override for the OpenAI-compatible open-model endpoint. Defaults to
+  // NVIDIA's public NIM gateway when unset; point this at LM Studio, vLLM,
+  // Ollama/OpenAI-compatible gateways, or a private NIM deployment as needed.
+  nemotronBaseUrl: getFirstEnv('OPEN_MODEL_BASE_URL', 'NEMOTRON_BASE_URL'),
+  nemotronResponsesApiEnabled: getFirstBooleanEnv(
+    ['OPEN_MODEL_RESPONSES_API_ENABLED', 'NEMOTRON_RESPONSES_API_ENABLED'],
+    false,
+  ),
 
-  // Optional OpenAI model override. When set, the agent uses this model instead
-  // of the default smart-tier model (gpt-5.5). Useful for switching to Codex
-  // (codex-mini-latest) or pinning a specific GPT version.
+  // Legacy OpenAI model override. This is read only by the agent-settings
+  // migration path; runtime model selection is stored in SQLite so updates from
+  // the desktop model picker become the single source of truth.
   openaiModel: getEnv('OPENAI_MODEL', false),
 
   // Optional context-window override (in tokens). Leave unset (0) to use the

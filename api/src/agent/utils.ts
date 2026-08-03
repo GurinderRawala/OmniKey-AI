@@ -15,7 +15,7 @@ export { isContextLengthError, pruneHistoryForContextLimit } from './agentServer
 
 /**
  * Tool definition for shell script execution. Registered as a native function
- * tool for all providers (including gpt-5.5 via the Responses API) so the
+ * tool for all providers (including GPT-5 via the Responses API) so the
  * model invokes it via function calling rather than emitting XML tags.
  * agentServer intercepts the call, forwards the script to the frontend,
  * and resolves the tool result with the terminal output.
@@ -83,7 +83,7 @@ export const SHELL_SCRIPT_TOOL_LIMITED: AITool = {
  * allow them.
  *
  * `generate_image` is omitted for providers without image-generation
- * support (currently Anthropic and Nemotron) because the underlying
+ * support (currently Anthropic and the OpenAI-compatible open-model path) because the underlying
  * `aiClient.generateImage()` only supports OpenAI and Gemini — registering
  * an unsupported tool would invite the model to call it and fail at
  * execution time. The system prompt for those providers is built without

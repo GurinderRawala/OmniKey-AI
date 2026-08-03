@@ -28,6 +28,16 @@ export function readConfig(): Record<string, any> {
   return {};
 }
 
+export function writeConfig(config: Record<string, any>): void {
+  const configDir = getConfigDir();
+  const configPath = getConfigPath();
+  fs.mkdirSync(configDir, { recursive: true });
+  const tmpPath = `${configPath}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tmpPath, JSON.stringify(config, null, 2), { encoding: 'utf-8', mode: 0o600 });
+  fs.renameSync(tmpPath, configPath);
+  fs.chmodSync(configPath, 0o600);
+}
+
 export function getPort(): number {
   const config = readConfig();
   return config.OMNIKEY_PORT ? Number(config.OMNIKEY_PORT) : 7071;

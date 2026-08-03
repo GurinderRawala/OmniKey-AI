@@ -69,7 +69,7 @@ function providerLabel(provider: string): string {
     case 'gemini':
       return 'Gemini';
     case 'nemotron':
-      return 'Nemotron';
+      return 'Open Model';
     case 'unknown':
       return 'Unknown';
     default:

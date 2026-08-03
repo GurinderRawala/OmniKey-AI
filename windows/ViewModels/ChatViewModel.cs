@@ -62,6 +62,8 @@ namespace OmniKey.Windows.ViewModels
         [ObservableProperty] private int trimmedOlderMessageCount;
         [ObservableProperty] private AgentSessionInfo? selectedSession;
         [ObservableProperty] private bool isSidebarCollapsed;
+        [ObservableProperty] private bool isCustomAgentModelEditorOpen;
+        [ObservableProperty] private string customAgentModelInput = string.Empty;
 
         /// <summary>
         /// Sentinel row injected at the top of <see cref="AvailableTaskTemplates"/>.
@@ -174,6 +176,14 @@ namespace OmniKey.Windows.ViewModels
         /// <summary>The provider the model list belongs to — used in the pill's
         /// tooltip so users know which vendor's ids are valid.</summary>
         public string ActiveAIProvider => _model.ActiveAIProvider;
+        private string ActiveAIProviderLabel => _model.ActiveAIProvider switch
+        {
+            "openai" => "OpenAI",
+            "anthropic" => "Anthropic",
+            "gemini" => "Google Gemini",
+            "nemotron" => "Open Model",
+            _ => _model.ActiveAIProvider,
+        };
 
         public bool IsUpdatingAgentModel => _model.IsUpdatingAgentModel;
 
@@ -187,7 +197,14 @@ namespace OmniKey.Windows.ViewModels
 
         public string AgentModelTooltip => _model.IsRunning
             ? "Model is locked while a turn is running"
-            : $"Choose the {_model.ActiveAIProvider} model for the next turn";
+            : $"Choose the {ActiveAIProviderLabel} model for the next turn";
+
+        public string CustomAgentModelHelp => $"Use the exact model ID for {ActiveAIProviderLabel}.";
+
+        public bool CanOpenCustomAgentModel => CanChangeAgentModel;
+
+        public bool CanApplyCustomAgentModel =>
+            CanChangeAgentModel && !string.IsNullOrWhiteSpace(CustomAgentModelInput);
 
         public string InputText
         {
@@ -383,6 +400,30 @@ namespace OmniKey.Windows.ViewModels
         [RelayCommand]
         private void DismissError() => _model.DismissError();
 
+        [RelayCommand(CanExecute = nameof(CanOpenCustomAgentModel))]
+        private void OpenCustomAgentModel()
+        {
+            if (!CanChangeAgentModel) return;
+            CustomAgentModelInput = _model.ActiveAgentModel;
+            IsCustomAgentModelEditorOpen = true;
+        }
+
+        [RelayCommand]
+        private void CancelCustomAgentModel()
+        {
+            IsCustomAgentModelEditorOpen = false;
+            CustomAgentModelInput = _model.ActiveAgentModel;
+        }
+
+        [RelayCommand(CanExecute = nameof(CanApplyCustomAgentModel))]
+        private void ApplyCustomAgentModel()
+        {
+            string modelId = CustomAgentModelInput.Trim();
+            if (string.IsNullOrEmpty(modelId)) return;
+
+            IsCustomAgentModelEditorOpen = false;
+            _model.SetAgentModel(modelId);
+        }
 
         [RelayCommand]
         private void ClearSearch() => _model.ClearSessionSearch();
@@ -405,10 +446,21 @@ namespace OmniKey.Windows.ViewModels
         partial void OnIsRunningChanged(bool value)
         {
             SendCommand.NotifyCanExecuteChanged();
+            OpenCustomAgentModelCommand.NotifyCanExecuteChanged();
+            ApplyCustomAgentModelCommand.NotifyCanExecuteChanged();
             OnPropertyChanged(nameof(IsStopState));
             OnPropertyChanged(nameof(IsSteeringState));
             OnPropertyChanged(nameof(ComposerPlaceholder));
             OnPropertyChanged(nameof(SendButtonToolTip));
+            OnPropertyChanged(nameof(CanChangeAgentModel));
+            OnPropertyChanged(nameof(CanOpenCustomAgentModel));
+            OnPropertyChanged(nameof(CanApplyCustomAgentModel));
+        }
+
+        partial void OnCustomAgentModelInputChanged(string value)
+        {
+            ApplyCustomAgentModelCommand.NotifyCanExecuteChanged();
+            OnPropertyChanged(nameof(CanApplyCustomAgentModel));
         }
 
         private void OnModelStateChanged(object? sender, EventArgs e) =>
@@ -498,7 +550,7 @@ namespace OmniKey.Windows.ViewModels
             _suppressAgentModelFeedback = true;
             try
             {
-                SyncAgentModels(_model.ActiveAgentModelOptions);
+                SyncAgentModels(AgentModelMenuOptions(_model.ActiveAgentModelOptions));
                 OnPropertyChanged(nameof(SelectedAgentModelId));
             }
             finally
@@ -535,10 +587,34 @@ namespace OmniKey.Windows.ViewModels
             OnPropertyChanged(nameof(TaskInstructionTooltip));
             OnPropertyChanged(nameof(ActiveAgentModelLabel));
             OnPropertyChanged(nameof(ActiveAIProvider));
+            OnPropertyChanged(nameof(ActiveAIProviderLabel));
             OnPropertyChanged(nameof(IsUpdatingAgentModel));
             OnPropertyChanged(nameof(HasAgentModelOptions));
             OnPropertyChanged(nameof(CanChangeAgentModel));
+            OnPropertyChanged(nameof(CanOpenCustomAgentModel));
+            OnPropertyChanged(nameof(CanApplyCustomAgentModel));
             OnPropertyChanged(nameof(AgentModelTooltip));
+            OnPropertyChanged(nameof(CustomAgentModelHelp));
+            OpenCustomAgentModelCommand.NotifyCanExecuteChanged();
+            ApplyCustomAgentModelCommand.NotifyCanExecuteChanged();
+            if (!CanChangeAgentModel)
+                IsCustomAgentModelEditorOpen = false;
+        }
+
+        private IList<AgentModelOptionDto> AgentModelMenuOptions(IList<AgentModelOptionDto> source)
+        {
+            var options = source.ToList();
+            string active = _model.ActiveAgentModel;
+            if (!string.IsNullOrWhiteSpace(active)
+                && !options.Any(o => string.Equals(o.Id, active, StringComparison.Ordinal)))
+            {
+                options.Insert(0, new AgentModelOptionDto
+                {
+                    Id = active,
+                    Label = $"Custom: {active}",
+                });
+            }
+            return options;
         }
 
         /// <summary>Diff the model-option list by id so a realized ComboBox keeps

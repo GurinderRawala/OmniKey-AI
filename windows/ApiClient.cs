@@ -35,6 +35,8 @@ namespace OmniKey.Windows
         public bool IsConfigured { get; set; }
         public string? ApiKeyMasked { get; set; }
         public string? BaseUrl { get; set; }
+        public bool? ResponsesApiEnabled { get; set; }
+        public bool SupportsResponsesApiToggle { get; set; }
         public string? Model { get; set; }
 
         /// <summary>Models the server offers for this provider. Empty means the
@@ -72,6 +74,8 @@ namespace OmniKey.Windows
         public bool? IsConfigured { get; set; }
         public string? ApiKeyMasked { get; set; }
         public string? BaseUrl { get; set; }
+        public bool? ResponsesApiEnabled { get; set; }
+        public bool? SupportsResponsesApiToggle { get; set; }
         public string? ActiveProvider { get; set; }
         public bool? RestartScheduled { get; set; }
         public string? Message { get; set; }
@@ -632,14 +636,15 @@ namespace OmniKey.Windows
         }
 
         /// <summary>PUT /api/providers/{provider} — store/update its API key.
-        /// <paramref name="baseUrl"/> is only meaningful for Nemotron and is
-        /// omitted when blank (the backend validates it as a URL).</summary>
+        /// <paramref name="baseUrl"/> and <paramref name="responsesApiEnabled"/>
+        /// are only meaningful for the OpenAI-compatible open-model provider.</summary>
         public async Task<AIProviderMutationResponse> SaveAIProviderKeyAsync(
-            string provider, string apiKey, string? baseUrl)
+            string provider, string apiKey, string? baseUrl, bool? responsesApiEnabled = null)
         {
             using var req = BuildRequest(HttpMethod.Put, $"/api/providers/{provider}");
             var body = new Dictionary<string, object?> { ["apiKey"] = apiKey };
-            if (!string.IsNullOrWhiteSpace(baseUrl)) body["baseUrl"] = baseUrl;
+            body["baseUrl"] = string.IsNullOrWhiteSpace(baseUrl) ? null : baseUrl;
+            if (responsesApiEnabled.HasValue) body["responsesApiEnabled"] = responsesApiEnabled.Value;
             req.Content = JsonContent.Create(body);
             using var resp = await Http.SendAsync(req);
             await EnsureSuccessAsync(resp);
@@ -788,6 +793,8 @@ namespace OmniKey.Windows
                 IsConfigured = ReadNullableBool(root, "isConfigured"),
                 ApiKeyMasked = ReadString(root, "apiKeyMasked"),
                 BaseUrl = ReadString(root, "baseUrl"),
+                ResponsesApiEnabled = ReadNullableBool(root, "responsesApiEnabled"),
+                SupportsResponsesApiToggle = ReadNullableBool(root, "supportsResponsesApiToggle"),
                 ActiveProvider = ReadString(root, "activeProvider"),
                 RestartScheduled = ReadNullableBool(root, "restartScheduled"),
                 Message = ReadString(root, "message"),
@@ -908,4 +915,3 @@ namespace OmniKey.Windows
         public ApiException(int code, string msg) : base(msg) => StatusCode = code;
     }
 }
-

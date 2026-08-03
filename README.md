@@ -23,7 +23,7 @@ OmniKey AI is a productivity tool that enhances your workflow with AI-powered pr
    npm install -g omnikey-cli
    ```
 
-2. **Onboard and configure a provider** — pick OpenAI, Anthropic, Google Gemini, or Nemotron, and optionally a web search provider:
+2. **Onboard and configure a provider** — pick OpenAI, Anthropic, Google Gemini, or an OpenAI-compatible open model, and optionally a web search provider:
 
    ```sh
    omnikey onboard
@@ -44,7 +44,7 @@ A quick reference of the core capabilities and the commands or shortcuts that dr
 - **Prompt Enhancement** — `⌘E` / `Ctrl+E` rewrites the selected text into a stronger prompt.
 - **Grammar & Clarity Fix** — `⌘G` / `Ctrl+G` cleans up grammar without changing meaning.
 - **Custom Tasks** — `⌘T` / `Ctrl+T` applies your saved task instructions to the selected text.
-- **Multiple LLM providers** — switch between OpenAI, Anthropic, Google Gemini, and Nemotron during onboarding or via `omnikey set`.
+- **Multiple LLM providers** — switch between OpenAI, Anthropic, Google Gemini, and OpenAI-compatible open models during onboarding or via `omnikey set`.
 - **Web Search** — opt in during onboarding. Supports DuckDuckGo, Serper, Brave Search, Tavily, and SearXNG.
 - **Authenticated Browser Sessions** — `omnikey grant-browser-access` sets up a dedicated debug profile so the agent can read logged-in pages (Chrome, Brave, Edge, Arc, Vivaldi, Opera, Chromium, and Safari on macOS).
 - **MCP Servers** — extend the agent with Model Context Protocol tools:

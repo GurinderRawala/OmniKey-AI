@@ -34,7 +34,11 @@ app.set('trust proxy', 1);
 app.use(cors());
 app.use(express.json());
 
-// Landing page
+// Static website pages
+app.get(['/docs', '/docs/'], (_req, res) => {
+  res.sendFile(path.join(process.cwd(), 'public', 'docs.html'));
+});
+
 app.use(express.static(path.join(process.cwd(), 'public')));
 
 app.use('/api/subscription', createSubscriptionRouter(logger));

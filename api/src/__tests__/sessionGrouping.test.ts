@@ -26,6 +26,7 @@ import { describe, it, expect, vi } from 'vitest';
 vi.mock('../ai-client', () => ({
   aiClient: { complete: vi.fn(), streamComplete: vi.fn() },
   getDefaultModel: vi.fn(() => 'test-model'),
+  getFixedHelperModel: vi.fn(() => 'test-helper-model'),
 }));
 
 vi.mock('../models/agentSession', () => ({

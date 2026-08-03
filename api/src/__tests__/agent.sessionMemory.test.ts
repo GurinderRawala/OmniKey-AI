@@ -5,9 +5,7 @@ import type { SessionState } from '../agent/types';
 const mocks = vi.hoisted(() => ({
   complete: vi.fn(),
   estimateHistoryTokens: vi.fn((history: unknown[]) => JSON.stringify(history).length),
-  getDefaultModel: vi.fn((_provider: string, tier: string) =>
-    tier === 'fast' ? 'fast-summary-model' : 'smart-model',
-  ),
+  getFixedHelperModel: vi.fn(() => 'fast-summary-model'),
   getInputTokenBudget: vi.fn(() => 24_000),
   update: vi.fn(),
   log: {
@@ -19,7 +17,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../ai-client', () => ({
   aiClient: { complete: mocks.complete },
   estimateHistoryTokens: mocks.estimateHistoryTokens,
-  getDefaultModel: mocks.getDefaultModel,
+  getFixedHelperModel: mocks.getFixedHelperModel,
   getInputTokenBudget: mocks.getInputTokenBudget,
 }));
 
@@ -56,6 +54,7 @@ describe('agent session memory compaction', () => {
       (history: unknown[]) => JSON.stringify(history).length,
     );
     mocks.getInputTokenBudget.mockReturnValue(24_000);
+    mocks.getFixedHelperModel.mockReturnValue('fast-summary-model');
     mocks.update.mockResolvedValue([1]);
     mocks.complete.mockResolvedValue({
       content: [
@@ -87,6 +86,7 @@ describe('agent session memory compaction', () => {
 
     expect(mocks.complete).toHaveBeenCalledTimes(1);
     expect(mocks.complete.mock.calls[0][0]).toBe('fast-summary-model');
+    expect(mocks.getFixedHelperModel).toHaveBeenCalledWith('anthropic');
     expect(mocks.complete.mock.calls[0][2]).toEqual(
       expect.objectContaining({ maxTokens: 1400, temperature: 0 }),
     );
@@ -174,6 +174,24 @@ describe('agent session memory compaction', () => {
     expect(requestHistory.at(-1)?.content).toContain('Current task');
     expect(requestHistory.some((message) => message.content === hugeOldMessage)).toBe(false);
     expect(mocks.estimateHistoryTokens(requestHistory)).toBeLessThanOrEqual(1_800);
+  });
+
+  it('does not silently fall back to a default smart model when no active agent model is set', () => {
+    const session = makeSession([
+      { role: 'system', content: 'system prompt' },
+      { role: 'user', content: '<user_input>Current task</user_input>' },
+    ]);
+
+    expect(() => buildTrimmedHistoryForRequest(session)).toThrow(
+      'Agent active model is required for session memory budget resolution.',
+    );
+
+    session.sessionMemory = 'old memory';
+    session.sessionMemoryHistoryLength = 1;
+
+    expect(() => buildHistoryForRequest(session)).toThrow(
+      'Agent active model is required for session memory budget resolution.',
+    );
   });
 
   it('trims complete old user and assistant exchanges instead of stranding assistant turns', () => {

@@ -321,9 +321,32 @@
                                     Margin="0,0,0,14"
                                     FontFamily="{StaticResource OK.MonoFontFamily}"
                                     FontSize="13"
-                                    PlaceholderText="Optional provider endpoint"
+                                    PlaceholderText="OpenAI-compatible /v1 endpoint"
                                     Text="{Binding BaseUrlInput, UpdateSourceTrigger=PropertyChanged}" />
                             </StackPanel>
+
+                            <Grid
+                                Margin="0,0,0,14"
+                                Visibility="{Binding SelectedProvider.SupportsResponsesApiToggle, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                                    <TextBlock Style="{StaticResource FieldLabel}" Text="RESPONSES API" />
+                                    <TextBlock
+                                        FontFamily="{StaticResource OK.FontFamily}"
+                                        FontSize="{StaticResource OK.Font.CaptionSmall}"
+                                        Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                                        Text="Enable only when the configured gateway exposes /v1/responses."
+                                        TextWrapping="Wrap" />
+                                </StackPanel>
+                                <ui:ToggleSwitch
+                                    Grid.Column="1"
+                                    VerticalAlignment="Center"
+                                    AutomationProperties.Name="Use Responses API"
+                                    IsChecked="{Binding ResponsesApiEnabledInput, Mode=TwoWay}" />
+                            </Grid>
 
                             <StackPanel Visibility="{Binding SelectedProvider.SupportsModel, Converter={StaticResource BooleanToVisibilityConverter}}">
                                 <TextBlock Style="{StaticResource FieldLabel}" Text="OPENAI MODEL" />

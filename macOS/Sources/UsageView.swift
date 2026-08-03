@@ -9,7 +9,7 @@ private let usageSupportedProviders: [(key: String, label: String)] = [
     ("openai", "OpenAI"),
     ("anthropic", "Anthropic (Claude)"),
     ("gemini", "Google Gemini"),
-    ("nemotron", "NVIDIA Nemotron"),
+    ("nemotron", "Open Model"),
 ]
 
 private enum UsageRangeOption: String, CaseIterable, Identifiable {

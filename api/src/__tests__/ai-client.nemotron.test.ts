@@ -1,11 +1,12 @@
 /**
- * Tests for the Nemotron adapter.
+ * Tests for the OpenAI-compatible open-model adapter.
  *
- * The Nemotron adapter delegates to the `openai` SDK with a custom `baseURL`
- * (NVIDIA NIM is OpenAI-compatible), so these tests mock the same surface as
+ * The legacy provider id is still `nemotron`, but the adapter delegates to the
+ * `openai` SDK with a custom `baseURL`, so these tests mock the same surface as
  * `ai-client.adapters.test.ts` and verify that:
  *  - the OpenAI client is constructed with the correct `baseURL`,
- *  - chat completions are routed through the Nemotron model id, and
+ *  - chat completions remain the default broad-compatibility path,
+ *  - Responses API can be enabled for compatible gateways, and
  *  - streaming is wired up end-to-end including usage accounting.
  */
 
@@ -13,12 +14,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   openaiCreate: vi.fn(),
+  responsesCreate: vi.fn(),
+  responsesStream: vi.fn(),
   openaiCtor: vi.fn(),
 }));
 
 vi.mock('openai', () => ({
   default: class MockOpenAI {
     chat = { completions: { create: mocks.openaiCreate } };
+    responses = { create: mocks.responsesCreate, stream: mocks.responsesStream };
     images = { generate: vi.fn() };
     constructor(opts: unknown) {
       mocks.openaiCtor(opts);
@@ -60,10 +64,12 @@ function asAsyncIterable<T>(chunks: T[]): AsyncIterable<T> {
 
 beforeEach(() => {
   mocks.openaiCreate.mockReset();
+  mocks.responsesCreate.mockReset();
+  mocks.responsesStream.mockReset();
   mocks.openaiCtor.mockReset();
 });
 
-describe('NemotronAdapter', () => {
+describe('OpenAI-compatible open-model adapter', () => {
   it('targets the public NVIDIA NIM endpoint by default', () => {
     new AIClient('nemotron', 'nvapi-test');
     expect(mocks.openaiCtor).toHaveBeenCalledTimes(1);
@@ -74,7 +80,7 @@ describe('NemotronAdapter', () => {
     });
   });
 
-  it('honours a custom NEMOTRON_BASE_URL for self-hosted NIM', () => {
+  it('honours a custom base URL for a self-hosted OpenAI-compatible gateway', () => {
     new AIClient('nemotron', 'nvapi-test', {
       nemotronBaseURL: 'http://my-nim:8000/v1',
     });
@@ -82,7 +88,7 @@ describe('NemotronAdapter', () => {
     expect(opts.baseURL).toBe('http://my-nim:8000/v1');
   });
 
-  it('complete: sends the Nemotron model id and passes temperature', async () => {
+  it('complete: uses Chat Completions by default with the chosen model id', async () => {
     mocks.openaiCreate.mockResolvedValueOnce({
       choices: [{ message: { content: 'hi', tool_calls: undefined }, finish_reason: 'stop' }],
       usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 },
@@ -98,8 +104,32 @@ describe('NemotronAdapter', () => {
       model: 'nvidia/nemotron-3-super-120b-a12b',
       temperature: 0.42,
     });
+    expect(mocks.responsesCreate).not.toHaveBeenCalled();
     expect(result.content).toBe('hi');
     expect(result.usage?.total_tokens).toBe(6);
+  });
+
+  it('complete: uses Responses API when enabled for the provider', async () => {
+    mocks.responsesCreate.mockResolvedValueOnce({
+      model: 'meta/llama-4-coder',
+      output: [{ type: 'message', content: [{ type: 'output_text', text: 'done' }] }],
+      usage: { input_tokens: 8, output_tokens: 3, total_tokens: 11 },
+    });
+
+    const client = new AIClient('nemotron', 'local-key', {
+      nemotronBaseURL: 'http://localhost:8000/v1',
+      nemotronResponsesApiEnabled: true,
+    });
+    const result = await client.complete('meta/llama-4-coder', messages, { maxTokens: 200 });
+
+    const body = mocks.responsesCreate.mock.calls[0][0];
+    expect(body).toMatchObject({
+      model: 'meta/llama-4-coder',
+      max_output_tokens: 200,
+    });
+    expect(mocks.openaiCreate).not.toHaveBeenCalled();
+    expect(result.content).toBe('done');
+    expect(result.usage?.total_tokens).toBe(11);
   });
 
   it('streamComplete: forwards deltas and captures usage', async () => {
@@ -133,6 +163,41 @@ describe('NemotronAdapter', () => {
     });
     const body = mocks.openaiCreate.mock.calls[0][0];
     expect(body).toMatchObject({ stream: true });
+    expect(mocks.responsesStream).not.toHaveBeenCalled();
+  });
+
+  it('streamComplete: streams Responses API deltas when enabled', async () => {
+    const stream: any = asAsyncIterable([
+      { type: 'response.output_text.delta', delta: 'op' },
+      { type: 'response.output_text.delta', delta: 'en' },
+    ]);
+    stream.finalResponse = vi.fn().mockResolvedValue({
+      usage: { input_tokens: 5, output_tokens: 2, total_tokens: 7 },
+    });
+    mocks.responsesStream.mockReturnValueOnce(stream);
+
+    const client = new AIClient('nemotron', 'local-key', { nemotronResponsesApiEnabled: true });
+    const received: string[] = [];
+    const { usage } = await client.streamComplete(
+      'qwen/qwen3-coder',
+      messages,
+      { maxTokens: 42 },
+      (d) => received.push(d),
+    );
+
+    expect(received.join('')).toBe('open');
+    expect(usage).toEqual({
+      prompt_tokens: 5,
+      completion_tokens: 2,
+      total_tokens: 7,
+      cached_tokens: 0,
+      cache_write_tokens: 0,
+    });
+    const body = mocks.responsesStream.mock.calls[0][0];
+    expect(body).toMatchObject({
+      model: 'qwen/qwen3-coder',
+      max_output_tokens: 42,
+    });
   });
 
   it('exposes fast and smart defaults via getDefaultModel', () => {

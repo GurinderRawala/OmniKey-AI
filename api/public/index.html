@@ -3,14 +3,14 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>OmniKey AI – AI-Powered Text Enhancement for macOS &amp; Windows</title>
+    <title>OmniKey - AI-Powered Text Enhancement for macOS &amp; Windows</title>
     <meta
       name="description"
-      content="OmniKey AI is a productivity tool that enhances text with AI anywhere on your screen. Press a shortcut to enhance prompts, fix grammar, or run custom AI tasks — in any app, on any screen."
+      content="OmniKey is a productivity tool that enhances text with AI anywhere on your screen. Press a shortcut to enhance prompts, fix grammar, or run custom AI tasks — in any app, on any screen."
     />
     <meta
       name="keywords"
-      content="AI text enhancement, prompt enhancement, grammar fix, AI productivity, macOS menu bar app, Windows system tray app, OpenAI, Anthropic, Google Gemini, NVIDIA Nemotron, NVIDIA NIM, open weights"
+      content="AI text enhancement, prompt enhancement, grammar fix, AI productivity, macOS menu bar app, Windows system tray app, OpenAI, Anthropic, Google Gemini, OpenAI-compatible open models, NVIDIA NIM, open weights"
     />
     <meta name="robots" content="index, follow" />
     <link rel="canonical" href="https://omnikeyai.com/" />
@@ -18,7 +18,7 @@
     <!-- Open Graph -->
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://omnikeyai.com/" />
-    <meta property="og:title" content="OmniKey AI – AI-Powered Text Enhancement" />
+    <meta property="og:title" content="OmniKey - AI-Powered Text Enhancement" />
     <meta
       property="og:description"
       content="Enhance prompts, fix grammar, and run custom AI tasks with a keyboard shortcut — in any app, on any screen. Works on macOS and Windows."
@@ -26,11 +26,11 @@
     <meta property="og:image" content="https://omnikeyai.com/icon.png" />
     <meta property="og:image:width" content="1024" />
     <meta property="og:image:height" content="1024" />
-    <meta property="og:site_name" content="OmniKey AI" />
+    <meta property="og:site_name" content="OmniKey" />
 
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary" />
-    <meta name="twitter:title" content="OmniKey AI – AI-Powered Text Enhancement" />
+    <meta name="twitter:title" content="OmniKey - AI-Powered Text Enhancement" />
     <meta
       name="twitter:description"
       content="Enhance prompts, fix grammar, and run custom AI tasks with a keyboard shortcut — in any app, on any screen."
@@ -42,7 +42,7 @@
       {
         "@context": "https://schema.org",
         "@type": "SoftwareApplication",
-        "name": "OmniKey AI",
+        "name": "OmniKey",
         "description": "AI-powered text enhancement tool for macOS and Windows. Enhance prompts, fix grammar, and run custom AI tasks with a keyboard shortcut — in any app, on any screen.",
         "applicationCategory": "ProductivityApplication",
         "operatingSystem": "macOS 13+, Windows 10, Windows 11",
@@ -71,14 +71,15 @@
     <nav class="nav">
       <div class="nav-inner">
         <a href="/" class="nav-logo">
-          <img src="/icon.png" alt="OmniKey AI" class="nav-icon" />
-          <span>OmniKey AI</span>
+          <img src="/icon.png" alt="OmniKey" class="nav-icon" />
+          <span>OmniKey</span>
         </a>
         <div class="nav-links">
           <a href="#omniagent" class="nav-link-new"> OmniAgent </a>
           <a href="#how-it-works">How it works</a>
           <a href="#features">Features</a>
           <a href="#mcp-servers">MCP Servers</a>
+          <a href="/docs">Docs</a>
           <a href="#getting-started">Get started</a>
         </div>
         <div class="nav-actions">
@@ -87,13 +88,14 @@
             target="_blank"
             rel="noopener noreferrer"
             class="nav-github"
+            aria-label="Star OmniKey on GitHub"
           >
             <svg viewBox="0 0 16 16" fill="currentColor" width="13" height="13" aria-hidden="true">
               <path
                 d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.751.751 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z"
               />
             </svg>
-            Star on GitHub
+            <span class="nav-github-label">GitHub</span>
           </a>
           <a href="#download" class="nav-download">Download</a>
         </div>
@@ -116,6 +118,7 @@
           <a href="#how-it-works" class="mobile-menu-link">How it works</a>
           <a href="#features" class="mobile-menu-link">Features</a>
           <a href="#mcp-servers" class="mobile-menu-link">MCP Servers</a>
+          <a href="/docs" class="mobile-menu-link">Docs</a>
           <a href="#getting-started" class="mobile-menu-link">Get started</a>
         </nav>
         <div class="mobile-menu-actions">
@@ -190,7 +193,7 @@
         <span class="provider-sep">·</span>
         <span class="provider-badge">Google Gemini</span>
         <span class="provider-sep">·</span>
-        <span class="provider-badge">NVIDIA Nemotron</span>
+        <span class="provider-badge">Open Model</span>
       </div>
     </div>
 
@@ -533,7 +536,7 @@
               <p class="hint">
                 Powered by your configured provider — <strong>OpenAI</strong>,
                 <strong>Anthropic</strong>, <strong>Google Gemini</strong>, or
-                <strong>NVIDIA Nemotron</strong>.
+                <strong>OpenAI-compatible open models</strong>.
               </p>
             </div>
           </div>
@@ -568,8 +571,7 @@
             <h3>Multiple LLM Providers</h3>
             <p>
               Choose between <strong>OpenAI</strong>, <strong>Anthropic</strong>,
-              <strong>Google Gemini</strong>, or <strong>NVIDIA Nemotron</strong> (open weights,
-              served via NVIDIA NIM) as your AI backend. Configure your preferred provider during
+              <strong>Google Gemini</strong>, or <strong>OpenAI-compatible open models</strong> as your AI backend. Configure your preferred provider during
               onboarding or at any time via the CLI.
             </p>
           </div>
@@ -1103,7 +1105,7 @@ omnikey telegram stop     # stop the daemon</code></pre>
               <pre><code>omnikey onboard</code></pre>
               <p class="hint">
                 Supports <strong>OpenAI</strong>, <strong>Anthropic</strong>,
-                <strong>Google Gemini</strong>, and <strong>NVIDIA Nemotron</strong>. You can also
+                <strong>Google Gemini</strong>, and <strong>OpenAI-compatible open models</strong>. You can also
                 optionally configure a web search provider. Supported web search providers:
                 <strong>DuckDuckGo, Serper, Brave Search, Tavily, SearXNG</strong>.
               </p>
@@ -1140,8 +1142,8 @@ omnikey telegram stop     # stop the daemon</code></pre>
       <!-- ── Download CTA ── -->
       <section class="cta-section" id="download">
         <div class="cta-card">
-          <img src="/icon.png" alt="OmniKey AI" class="cta-icon" />
-          <h2 class="cta-title">Download OmniKey AI</h2>
+          <img src="/icon.png" alt="OmniKey" class="cta-icon" />
+          <h2 class="cta-title">Download OmniKey</h2>
           <p class="cta-desc">Free to use. Open source. Works on macOS and Windows.</p>
           <div class="download-count-badge" id="download-count-cta" hidden>
             <svg
@@ -1196,7 +1198,8 @@ omnikey telegram stop     # stop the daemon</code></pre>
 
     <footer>
       <p>
-        OmniKey AI &copy; <span id="year"></span> &nbsp;·&nbsp;
+        OmniKey &copy; <span id="year"></span> &nbsp;·&nbsp;
+        <a href="/docs">Docs</a> &nbsp;·&nbsp;
         <a
           href="https://github.com/GurinderRawala/OmniKey-AI"
           target="_blank"

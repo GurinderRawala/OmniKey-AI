@@ -3,7 +3,7 @@
  *
  * - 'enhance' → pinned cheap model + { temperature: 0.3 }
  * - 'grammar' → pinned cheap model + { temperature: 0.3 }
- * - 'task'    → smart-tier model + {} (no temperature)
+ * - 'task'    → DB-backed selected agent model + {} (no temperature)
  *
  * Mocks `./ai-client` and `./models/subscriptionTaskTemplate` so the test
  * stays a pure unit test and never touches the database or any SDK.
@@ -14,13 +14,15 @@ import winston from 'winston';
 
 const mocks = vi.hoisted(() => ({
   streamComplete: vi.fn(),
-  getDefaultModel: vi.fn(),
+  getFixedHelperModel: vi.fn(),
   findOne: vi.fn(),
+  getAgentSettings: vi.fn(),
+  selectedAgentModelForProvider: vi.fn(),
 }));
 
 vi.mock('../ai-client', () => ({
   aiClient: { streamComplete: mocks.streamComplete },
-  getDefaultModel: mocks.getDefaultModel,
+  getFixedHelperModel: mocks.getFixedHelperModel,
 }));
 
 vi.mock('../config', async (importOriginal) => {
@@ -33,6 +35,11 @@ vi.mock('../config', async (importOriginal) => {
 
 vi.mock('../models/subscriptionTaskTemplate', () => ({
   SubscriptionTaskTemplate: { findOne: mocks.findOne },
+}));
+
+vi.mock('../agentSettingsStore', () => ({
+  getAgentSettings: mocks.getAgentSettings,
+  selectedAgentModelForProvider: mocks.selectedAgentModelForProvider,
 }));
 
 import { runEnhancementModel } from '../featureRoutes';
@@ -51,10 +58,24 @@ beforeEach(() => {
   mocks.streamComplete.mockReset();
   mocks.streamComplete.mockResolvedValue({ usage: undefined, model: 'mock-model' });
 
-  mocks.getDefaultModel.mockReset();
-  mocks.getDefaultModel.mockImplementation((_provider: string, tier: 'fast' | 'smart') =>
-    tier === 'smart' ? 'smart-model-mock' : 'fast-model-mock',
-  );
+  mocks.getFixedHelperModel.mockReset();
+  mocks.getFixedHelperModel.mockReturnValue('fixed-openai-helper-model');
+
+  mocks.getAgentSettings.mockReset();
+  mocks.getAgentSettings.mockResolvedValue({
+    id: 'default',
+    terminalAccess: 'full',
+    webSearchEnabled: true,
+    usageRecordingEnabled: true,
+    browserAccessEnabled: false,
+    openaiModel: 'stored-openai-agent-model',
+    anthropicModel: 'stored-anthropic-agent-model',
+    geminiModel: 'stored-gemini-agent-model',
+    nemotronModel: 'stored-open-model-agent-model',
+  });
+
+  mocks.selectedAgentModelForProvider.mockReset();
+  mocks.selectedAgentModelForProvider.mockReturnValue('stored-openai-agent-model');
 
   mocks.findOne.mockReset();
   // Default task template — plain text passes through `decompressString`
@@ -104,12 +125,20 @@ describe('runEnhancementModel — temperature per command', () => {
     expect(options).not.toHaveProperty('temperature');
   });
 
-  it("selects the smart-tier model for cmd='task' and pinned cheap model for enhance/grammar", async () => {
+  it("selects the stored agent model for cmd='task' and pinned cheap model for enhance/grammar", async () => {
     await runEnhancementModel(makeLogger(), 'a', 'task', fakeSubscription);
     await runEnhancementModel(makeLogger(), 'b', 'enhance', fakeSubscription);
     await runEnhancementModel(makeLogger(), 'c', 'grammar', fakeSubscription);
 
     const modelsCalled = mocks.streamComplete.mock.calls.map(([model]) => model);
-    expect(modelsCalled).toEqual(['smart-model-mock', 'gpt-4o-mini', 'gpt-4o-mini']);
+    expect(modelsCalled).toEqual([
+      'stored-openai-agent-model',
+      'fixed-openai-helper-model',
+      'fixed-openai-helper-model',
+    ]);
+    expect(mocks.getFixedHelperModel).toHaveBeenCalledTimes(2);
+    expect(mocks.getFixedHelperModel).toHaveBeenCalledWith('openai');
+    expect(mocks.getAgentSettings).toHaveBeenCalledTimes(1);
+    expect(mocks.selectedAgentModelForProvider).toHaveBeenCalledTimes(1);
   });
 });

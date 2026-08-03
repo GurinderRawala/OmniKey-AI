@@ -5,7 +5,7 @@ import net from 'net';
 import http from 'http';
 import os from 'os';
 import { execSync, spawn } from 'child_process';
-import { getConfigDir, getConfigPath, readConfig, isWindows } from './utils';
+import { getConfigDir, readConfig, writeConfig, isWindows } from './utils';
 
 interface BrowserEntry {
   name: string;
@@ -156,12 +156,9 @@ async function findAvailablePort(startPort = 9222): Promise<number> {
 }
 
 function persistDebugPort(port: number): void {
-  const configDir = getConfigDir();
-  const configPath = getConfigPath();
-  fs.mkdirSync(configDir, { recursive: true });
   const cfg = readConfig();
   cfg['BROWSER_DEBUG_PORT'] = port;
-  fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2), 'utf-8');
+  writeConfig(cfg);
 }
 
 function persistDebugConfig(params: {
@@ -170,17 +167,13 @@ function persistDebugConfig(params: {
   userDataDir: string;
   port: number;
 }): void {
-  const configDir = getConfigDir();
-  const configPath = getConfigPath();
-  fs.mkdirSync(configDir, { recursive: true });
-
   const cfg = readConfig();
   cfg['BROWSER_DEBUG_PORT'] = params.port;
   cfg['BROWSER_DEBUG_BROWSER_NAME'] = params.browserName;
   cfg['BROWSER_DEBUG_EXECUTABLE'] = params.executablePath;
   cfg['BROWSER_DEBUG_USER_DATA_DIR'] = params.userDataDir;
 
-  fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2), 'utf-8');
+  writeConfig(cfg);
 }
 
 function hasExistingStartupEntry(): boolean {

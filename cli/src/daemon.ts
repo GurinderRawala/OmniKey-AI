@@ -8,6 +8,7 @@ import {
   getConfigDir,
   getConfigPath,
   readConfig,
+  writeConfig,
   initLogFiles,
 } from './utils';
 
@@ -27,8 +28,7 @@ export async function startDaemon(port: number = 7071) {
   configVars.TERMINAL_PLATFORM = isWindows ? 'windows' : 'macos';
 
   try {
-    fs.mkdirSync(configDir, { recursive: true });
-    fs.writeFileSync(configPath, JSON.stringify(configVars, null, 2), 'utf-8');
+    writeConfig(configVars);
   } catch (e) {
     console.error('Failed to write updated config.json:', e);
   }
@@ -39,27 +39,107 @@ export async function startDaemon(port: number = 7071) {
 
   if (isWindows) {
     await startDaemonWindows({
-      port,
       configDir,
-      configVars,
+      runtimeEnv: buildDaemonRuntimeEnv({ configDir, configPath, port, platform: 'windows' }),
       nodePath,
       backendPath,
       logPath,
       errorLogPath,
     });
   } else {
-    startDaemonMacOS({ port, configDir, configVars, nodePath, backendPath, logPath, errorLogPath });
+    startDaemonMacOS({
+      configDir,
+      runtimeEnv: buildDaemonRuntimeEnv({ configDir, configPath, port, platform: 'macos' }),
+      nodePath,
+      backendPath,
+      logPath,
+      errorLogPath,
+    });
   }
 }
 
 interface DaemonOptions {
-  port: number;
   configDir: string;
-  configVars: Record<string, any>;
+  runtimeEnv: Record<string, string>;
   nodePath: string;
   backendPath: string;
   logPath: string;
   errorLogPath: string;
+}
+
+export function escapePlistXml(value: unknown): string {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+function userHomeFromConfigDir(configDir: string): string {
+  return configDir.replace(/[/\\]\.omnikey$/, '');
+}
+
+export function buildDaemonRuntimeEnv(params: {
+  configDir: string;
+  configPath: string;
+  port: number;
+  platform: 'macos' | 'windows';
+}): Record<string, string> {
+  const home = userHomeFromConfigDir(params.configDir);
+  const userProfile = process.env.USERPROFILE || home;
+  const homeEnv = params.platform === 'windows' ? userProfile : process.env.HOME || home;
+  return {
+    OMNIKEY_CONFIG_PATH: params.configPath,
+    OMNIKEY_PORT: String(params.port),
+    TERMINAL_PLATFORM: params.platform,
+    HOME: homeEnv,
+    USERPROFILE: userProfile,
+    ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
+  };
+}
+
+export function buildLaunchAgentPlist(params: {
+  label: string;
+  nodePath: string;
+  backendPath: string;
+  env: Record<string, string>;
+  logPath: string;
+  errorLogPath: string;
+  workingDirectory: string;
+}): string {
+  const envVars = Object.entries(params.env)
+    .map(([k, v]) => `<key>${escapePlistXml(k)}</key><string>${escapePlistXml(v)}</string>`)
+    .join('\n    ');
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${escapePlistXml(params.label)}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${escapePlistXml(params.nodePath)}</string>
+    <string>${escapePlistXml(params.backendPath)}</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    ${envVars}
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>${escapePlistXml(params.logPath)}</string>
+  <key>StandardErrorPath</key>
+  <string>${escapePlistXml(params.errorLogPath)}</string>
+  <key>WorkingDirectory</key>
+  <string>${escapePlistXml(params.workingDirectory)}</string>
+</dict>
+</plist>
+`;
 }
 
 function resolveNssm(): string | null {
@@ -71,7 +151,7 @@ function resolveNssm(): string | null {
 }
 
 async function startDaemonWindows(opts: DaemonOptions) {
-  const { port, configDir, configVars, nodePath, backendPath, logPath, errorLogPath } = opts;
+  const { configDir, runtimeEnv, nodePath, backendPath, logPath, errorLogPath } = opts;
   const serviceName = 'OmnikeyDaemon';
 
   let nssmPath = resolveNssm();
@@ -136,15 +216,6 @@ async function startDaemonWindows(opts: DaemonOptions) {
     /* didn't exist */
   }
 
-  // NSSM services run as LocalSystem; pass USERPROFILE so the backend's
-  // getHomeDir() resolves to the correct user config directory.
-  const env: Record<string, string> = {
-    ...configVars,
-    OMNIKEY_PORT: String(port),
-    USERPROFILE: process.env.USERPROFILE || configDir.replace(/[/\\]\.omnikey$/, ''),
-    HOME: process.env.USERPROFILE || configDir.replace(/[/\\]\.omnikey$/, ''),
-  };
-
   try {
     // Install: nssm install <name> <application> [args...]
     execFileSync(nssmPath, ['install', serviceName, nodePath, backendPath], { stdio: 'pipe' });
@@ -152,7 +223,7 @@ async function startDaemonWindows(opts: DaemonOptions) {
     execFileSync(nssmPath, ['set', serviceName, 'AppDirectory', configDir], { stdio: 'pipe' });
 
     // Pass all env vars in a single call (replaces the entire AppEnvironmentExtra key)
-    const envEntries = Object.entries(env).map(([k, v]) => `${k}=${v}`);
+    const envEntries = Object.entries(runtimeEnv).map(([k, v]) => `${k}=${v}`);
     execFileSync(nssmPath, ['set', serviceName, 'AppEnvironmentExtra', ...envEntries], {
       stdio: 'pipe',
     });
@@ -195,49 +266,31 @@ async function startDaemonWindows(opts: DaemonOptions) {
 }
 
 function startDaemonMacOS(opts: DaemonOptions) {
-  const { port, configDir, configVars, nodePath, backendPath, logPath, errorLogPath } = opts;
+  const { configDir, runtimeEnv, nodePath, backendPath, logPath, errorLogPath } = opts;
   const homeDir = getHomeDir();
 
   const plistName = 'com.omnikey.daemon.plist';
   const plistPath = path.join(homeDir, 'Library', 'LaunchAgents', plistName);
-  const envVars = Object.entries({ ...configVars, OMNIKEY_PORT: String(port) })
-    .map(([k, v]) => `<key>${k}</key><string>${v}</string>`)
-    .join('\n');
-  const plistContent = `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>com.omnikey.daemon</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>${nodePath}</string>
-    <string>${backendPath}</string>
-  </array>
-  <key>EnvironmentVariables</key>
-  <dict>
-    ${envVars}
-  </dict>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <true/>
-  <key>StandardOutPath</key>
-  <string>${logPath}</string>
-  <key>StandardErrorPath</key>
-  <string>${errorLogPath}</string>
-  <key>WorkingDirectory</key>
-  <string>${configDir}</string>
-</dict>
-</plist>
-`;
+  const plistContent = buildLaunchAgentPlist({
+    label: 'com.omnikey.daemon',
+    nodePath,
+    backendPath,
+    env: runtimeEnv,
+    logPath,
+    errorLogPath,
+    workingDirectory: configDir,
+  });
   try {
     const launchAgentsDir = path.join(homeDir, 'Library', 'LaunchAgents');
     fs.mkdirSync(launchAgentsDir, { recursive: true });
     fs.writeFileSync(plistPath, plistContent, 'utf-8');
     initLogFiles(logPath, errorLogPath);
-    execSync(`launchctl unload "${plistPath}" || true`);
-    execSync(`launchctl load "${plistPath}"`);
+    try {
+      execFileSync('/bin/launchctl', ['unload', plistPath], { stdio: 'pipe' });
+    } catch {
+      /* not loaded */
+    }
+    execFileSync('/bin/launchctl', ['load', plistPath], { stdio: 'pipe' });
     console.log(`Launch agent created and loaded: ${plistPath}`);
     console.log('Omnikey daemon will auto-restart and persist across reboots.');
     // launchd starts the process via RunAtLoad — no manual spawn needed here.

@@ -34,7 +34,7 @@ use the Software on any number of devices you own or control.
 ## 3. Third-Party Services
 
 The Software integrates with third-party AI providers (OpenAI, Anthropic,
-Google Gemini, Nemotron, and others), search providers, and Model Context
+Google Gemini, OpenAI-compatible open models, and others), search providers, and Model Context
 Protocol servers that you configure. You are solely responsible for:
 
 - Obtaining and paying for your own API keys and subscriptions.

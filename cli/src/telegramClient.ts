@@ -3,7 +3,7 @@ import fs from 'fs';
 import { spawn, type ChildProcess } from 'child_process';
 import { request as httpsRequest } from 'https';
 import inquirer from 'inquirer';
-import { getConfigDir, getConfigPath, readConfig, initLogFiles } from './utils';
+import { getConfigDir, getConfigPath, readConfig, writeConfig, initLogFiles } from './utils';
 
 const REQUIRED_ENV_KEYS = ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID'] as const;
 type RequiredKey = (typeof REQUIRED_ENV_KEYS)[number];
@@ -28,12 +28,9 @@ function resolveBundledEntry(): string {
 }
 
 function persistConfig(values: Record<string, string>): void {
-  const configDir = getConfigDir();
-  const configPath = getConfigPath();
   const existing = readConfig();
   const merged = { ...existing, ...values };
-  fs.mkdirSync(configDir, { recursive: true });
-  fs.writeFileSync(configPath, JSON.stringify(merged, null, 2), 'utf-8');
+  writeConfig(merged);
 }
 
 /**

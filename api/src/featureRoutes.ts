@@ -14,8 +14,9 @@ import { AuthLocals, authMiddleware } from './authMiddleware';
 import { Subscription } from './models/subscription';
 import { decompressString } from './compression';
 import { SubscriptionTaskTemplate } from './models/subscriptionTaskTemplate';
-import { aiClient, AIMessage, getDefaultModel } from './ai-client';
+import { aiClient, AIMessage, getFixedHelperModel } from './ai-client';
 import { recordTokenUsage, UsageMode } from './usageRecorder';
+import { getAgentSettings, selectedAgentModelForProvider } from './agentSettingsStore';
 
 function parseImprovedTextResponse(logger: Logger, response: string): string {
   const match = response.match(/<improved_text>([\s\S]*?)<\/improved_text>/);
@@ -125,23 +126,18 @@ type CompletionUsage = {
   total_tokens?: number;
 };
 
-const PROMPT_ENHANCEMENT_MODEL_BY_PROVIDER: Record<AIProvider, string> = {
-  openai: 'gpt-4o-mini',
-  anthropic: 'claude-haiku-4-5-20251001',
-  gemini: 'gemini-2.5-flash',
-  nemotron: 'nvidia/nemotron-3-nano-30b-a3b',
-};
-
-function getModelForCommand(cmd: EnhanceCommand): string {
+async function getModelForCommand(cmd: EnhanceCommand): Promise<string> {
   // Prompt enhancement and grammar are latency/cost-sensitive helpers, not
   // agent turns. Keep them pinned to cheap provider-specific models so custom
   // or expensive agent model selections never affect keyboard enhancement.
   if (cmd === 'enhance' || cmd === 'grammar') {
-    return PROMPT_ENHANCEMENT_MODEL_BY_PROVIDER[config.aiProvider];
+    return getFixedHelperModel(config.aiProvider);
   }
 
-  // 'task' is the custom-task command and still routes to the smart tier.
-  return getDefaultModel(config.aiProvider, 'smart');
+  // 'task' is the custom-task command and should follow the same DB-backed
+  // provider model selected for OmniAgent turns.
+  const settings = await getAgentSettings();
+  return selectedAgentModelForProvider(settings, config.aiProvider);
 }
 
 function usageModeForCommand(cmd: EnhanceCommand): UsageMode {
@@ -191,7 +187,7 @@ export async function runEnhancementModel(
     return new OmniKeyError(`No system prompt found for command: ${cmd}`, 404);
   }
 
-  const model = getModelForCommand(cmd);
+  const model = await getModelForCommand(cmd);
   const messages = createMessagesParams(cmd, trimmed, prompt);
 
   let rawResponse = '';

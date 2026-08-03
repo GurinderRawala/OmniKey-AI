@@ -41,7 +41,7 @@ namespace OmniKey.Windows.ViewModels
             "openai" => "OpenAI",
             "anthropic" => "Anthropic",
             "gemini" => "Google Gemini",
-            "nemotron" => "NVIDIA Nemotron",
+            "nemotron" => "Open Model",
             _ => Dto.Provider
         };
         public bool IsConfigured => Dto.IsConfigured;
@@ -49,6 +49,7 @@ namespace OmniKey.Windows.ViewModels
         public string BaseUrl => Dto.BaseUrl ?? "Default endpoint";
         public string Model => Dto.Model ?? "Server default";
         public bool SupportsBaseUrl => Provider == "nemotron";
+        public bool SupportsResponsesApiToggle => Provider == "nemotron";
         public bool SupportsModel => Provider == "openai";
 
         /// <summary>Whether this provider is the one currently activated
@@ -73,7 +74,8 @@ namespace OmniKey.Windows.ViewModels
                 string key = IsConfigured
                     ? (string.IsNullOrEmpty(Dto.ApiKeyMasked) ? "••••••••" : Dto.ApiKeyMasked)
                     : "No key saved";
-                return string.IsNullOrWhiteSpace(Dto.BaseUrl) ? key : $"{key}  ·  {Dto.BaseUrl}";
+                string endpoint = string.IsNullOrWhiteSpace(Dto.BaseUrl) ? key : $"{key}  ·  {Dto.BaseUrl}";
+                return Dto.ResponsesApiEnabled == true ? $"{endpoint}  ·  Responses API" : endpoint;
             }
         }
 
@@ -141,6 +143,7 @@ namespace OmniKey.Windows.ViewModels
         [ObservableProperty] private string? runtimeProvider;
         [ObservableProperty] private string apiKeyInput = string.Empty;
         [ObservableProperty] private string baseUrlInput = string.Empty;
+        [ObservableProperty] private bool responsesApiEnabledInput;
         [ObservableProperty] private string openAiModelInput = string.Empty;
 
         // Agent-access state ---------------------------------------------------
@@ -252,6 +255,7 @@ namespace OmniKey.Windows.ViewModels
         {
             ApiKeyInput = string.Empty;
             BaseUrlInput = value?.Dto.BaseUrl ?? string.Empty;
+            ResponsesApiEnabledInput = value?.Dto.ResponsesApiEnabled ?? false;
             // Pre-select the saved model; for OpenAI with nothing saved, show the
             // default (gpt-5.5) so the dropdown always has a valid selection and
             // ModelDirty reads false until the user actually changes it — mirrors
@@ -362,7 +366,14 @@ namespace OmniKey.Windows.ViewModels
             if (SelectedProvider is null) return;
             await RunAsync(async () =>
             {
-                var result = await _api.SaveAIProviderKeyAsync(SelectedProvider.Provider, ApiKeyInput.Trim(), BaseUrlInput.Trim());
+                var responsesApiEnabled = SelectedProvider.SupportsResponsesApiToggle
+                    ? ResponsesApiEnabledInput
+                    : (bool?)null;
+                var result = await _api.SaveAIProviderKeyAsync(
+                    SelectedProvider.Provider,
+                    ApiKeyInput.Trim(),
+                    BaseUrlInput.Trim(),
+                    responsesApiEnabled);
                 SetStatus(result.Message ?? $"Saved {SelectedProvider.DisplayName} API key.", StatusKind.Positive);
                 await LoadAsync();
             }, "Failed to save provider");

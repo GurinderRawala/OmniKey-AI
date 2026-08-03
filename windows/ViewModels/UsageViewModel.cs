@@ -100,7 +100,7 @@ namespace OmniKey.Windows.ViewModels
             new UsageProviderOption { Key = "openai",    Label = "OpenAI" },
             new UsageProviderOption { Key = "anthropic", Label = "Anthropic (Claude)" },
             new UsageProviderOption { Key = "gemini",    Label = "Google Gemini" },
-            new UsageProviderOption { Key = "nemotron",  Label = "NVIDIA Nemotron" },
+            new UsageProviderOption { Key = "nemotron",  Label = "Open Model" },
         };
 
         public ObservableCollection<UsageMeterRow> ModelRows { get; } = new();

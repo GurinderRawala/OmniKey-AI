@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { aiClient, getDefaultModel } from '../../../ai-client';
+import { aiClient, getFixedHelperModel } from '../../../ai-client';
 import { config } from '../../../config';
 import { logger } from '../../../logger';
 import {
@@ -10,7 +10,8 @@ import {
   stripResponseWrappers,
 } from '../utils';
 
-const aiModel = getDefaultModel(config.aiProvider, 'fast');
+// Group classification is a fixed helper, not an agent turn.
+const aiModel = getFixedHelperModel(config.aiProvider);
 
 /**
  * classifyGroup picks ONLY the group NAME for a session. Group descriptions

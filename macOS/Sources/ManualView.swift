@@ -15,7 +15,7 @@ struct ManualView: View {
                         .font(.system(size: 20, weight: .semibold))
                         .foregroundColor(NordTheme.primaryText(colorScheme))
 
-                    Text("Use OmniKey AI anywhere on your Mac. Highlight text in any app, press a shortcut, and OmniKey processes the selection and pastes the result back in place. Powered by your configured LLM provider — OpenAI, Anthropic, Google Gemini, or NVIDIA Nemotron.")
+                    Text("Use OmniKey AI anywhere on your Mac. Highlight text in any app, press a shortcut, and OmniKey processes the selection and pastes the result back in place. Powered by your configured LLM provider — OpenAI, Anthropic, Google Gemini, or an OpenAI-compatible open model.")
                         .font(.system(size: 13))
                         .foregroundColor(NordTheme.secondaryText(colorScheme))
                 }
@@ -130,7 +130,7 @@ struct ManualView: View {
                             bulletRow(text: "OpenAI — GPT family.")
                             bulletRow(text: "Anthropic — Claude family.")
                             bulletRow(text: "Google Gemini — Gemini 2.5 Flash / Pro.")
-                            bulletRow(text: "NVIDIA Nemotron — open weights served via NVIDIA NIM (set a custom Base URL to point at a self-hosted gateway).")
+                            bulletRow(text: "Open Model — any OpenAI-compatible endpoint, including NVIDIA NIM, vLLM, LM Studio, or a local gateway.")
                         }
 
                         sectionSpacer()

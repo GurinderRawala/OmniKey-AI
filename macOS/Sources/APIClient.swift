@@ -986,6 +986,8 @@ final class APIClient: @unchecked Sendable {
         let isConfigured: Bool
         let apiKeyMasked: String?
         let baseUrl: String?
+        let responsesApiEnabled: Bool?
+        let supportsResponsesApiToggle: Bool?
         /// Agent model selected for this provider in the DB-backed agent settings.
         let model: String?
         let modelOptions: [AgentModelOptionDTO]?
@@ -1007,6 +1009,7 @@ final class APIClient: @unchecked Sendable {
     struct AIProviderInput {
         let apiKey: String
         let baseUrl: String?
+        let responsesApiEnabled: Bool?
     }
 
     struct AIProviderMutationResponse: Codable {
@@ -1014,6 +1017,8 @@ final class APIClient: @unchecked Sendable {
         let isConfigured: Bool?
         let apiKeyMasked: String?
         let baseUrl: String?
+        let responsesApiEnabled: Bool?
+        let supportsResponsesApiToggle: Bool?
         let activeProvider: String?
         let activeModel: String?
         let model: String?
@@ -1081,6 +1086,11 @@ final class APIClient: @unchecked Sendable {
         var payload: [String: Any] = ["apiKey": input.apiKey]
         if let baseUrl = input.baseUrl, !baseUrl.isEmpty {
             payload["baseUrl"] = baseUrl
+        } else {
+            payload["baseUrl"] = NSNull()
+        }
+        if let responsesApiEnabled = input.responsesApiEnabled {
+            payload["responsesApiEnabled"] = responsesApiEnabled
         }
         guard let body = try? JSONSerialization.data(withJSONObject: payload) else {
             completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Serialization error"])))

@@ -7,22 +7,21 @@ import { spawn } from 'child_process';
 import { authMiddleware } from './authMiddleware';
 import { config } from './config';
 import { logger } from './logger';
+import { getLocalConfigPath } from './localConfigFile';
 import {
   agentModelOptionsForProvider,
   getAgentSettings,
   modelFieldForProvider,
   selectedAgentModelForProvider,
   updateAgentSettings,
+  writeLocalConfigFile,
 } from './agentSettingsStore';
 
 /**
  * Settings endpoint for managing AI provider API keys stored in
- * `~/.omnikey/config.json`. No database persistence — the JSON file is the
- * source of truth and is the same file the daemon reads via `dotenv` on
- * startup. Changing the active provider rewrites `AI_PROVIDER` and exits
- * the process so the supervising launchd / NSSM relaunches the daemon with
- * the new env. Agent model selection is DB-backed through `agent_settings`
- * and does not require a daemon restart.
+ * `~/.omnikey/config.json`. Provider credentials and endpoint options are
+ * config-file backed and require a daemon restart; selected agent models are
+ * DB-backed through `agent_settings` and take effect on the next turn.
  */
 
 export type AIProviderType = 'openai' | 'anthropic' | 'gemini' | 'nemotron';
@@ -37,6 +36,7 @@ const putSchema = zod.object({
     .url({ message: 'baseUrl must be a valid URL.' })
     .nullable()
     .optional(),
+  responsesApiEnabled: zod.boolean().optional(),
 });
 
 /** Mapping from provider → env var that holds its API key. */
@@ -44,21 +44,22 @@ const PROVIDER_ENV_KEY: Record<AIProviderType, string> = {
   openai: 'OPENAI_API_KEY',
   anthropic: 'ANTHROPIC_API_KEY',
   gemini: 'GEMINI_API_KEY',
-  nemotron: 'NEMOTRON_API_KEY',
+  nemotron: 'OPEN_MODEL_API_KEY',
 };
 
 /** Legacy aliases that should be cleared whenever the canonical env is rewritten. */
 const PROVIDER_LEGACY_ALIASES: Partial<Record<AIProviderType, string[]>> = {
-  nemotron: ['NVIDIA_API_KEY'],
+  nemotron: ['NEMOTRON_API_KEY', 'NVIDIA_API_KEY'],
 };
 
-function getConfigPath(): string {
-  const home = process.env.HOME || process.env.USERPROFILE || os.homedir();
-  return path.join(home, '.omnikey', 'config.json');
-}
+const OPEN_MODEL_BASE_URL_KEYS = ['OPEN_MODEL_BASE_URL', 'NEMOTRON_BASE_URL'] as const;
+const OPEN_MODEL_RESPONSES_API_KEYS = [
+  'OPEN_MODEL_RESPONSES_API_ENABLED',
+  'NEMOTRON_RESPONSES_API_ENABLED',
+] as const;
 
 function readConfigFile(): Record<string, any> {
-  const configPath = getConfigPath();
+  const configPath = getLocalConfigPath();
   try {
     if (fs.existsSync(configPath)) {
       const raw = fs.readFileSync(configPath, 'utf-8');
@@ -68,15 +69,12 @@ function readConfigFile(): Record<string, any> {
       }
     }
   } catch (err) {
-    logger.warn('Could not read ~/.omnikey/config.json — treating as empty.', { error: err });
+    logger.warn('Could not read ~/.omnikey/config.json — treating as empty.', {
+      error: err,
+      configPath,
+    });
   }
   return {};
-}
-
-function writeConfigFile(data: Record<string, any>): void {
-  const configPath = getConfigPath();
-  fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  fs.writeFileSync(configPath, JSON.stringify(data, null, 2), 'utf-8');
 }
 
 /** Mask an API key so a small prefix/suffix is visible (e.g. `sk-…AB12`). */
@@ -97,6 +95,30 @@ function readProviderKey(cfg: Record<string, any>, provider: AIProviderType): st
   return undefined;
 }
 
+function readFirstString(cfg: Record<string, any>, keys: readonly string[]): string | null {
+  for (const key of keys) {
+    const value = cfg[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return null;
+}
+
+function readBooleanConfig(value: unknown, defaultValue: boolean): boolean {
+  if (value === undefined || value === null) return defaultValue;
+  if (typeof value === 'boolean') return value;
+  const normalized = String(value).trim().toLowerCase();
+  return normalized === 'true' || normalized === '1';
+}
+
+function readOpenModelResponsesApiEnabled(cfg: Record<string, any>): boolean {
+  for (const key of OPEN_MODEL_RESPONSES_API_KEYS) {
+    if (cfg[key] !== undefined && cfg[key] !== null) {
+      return readBooleanConfig(cfg[key], config.nemotronResponsesApiEnabled);
+    }
+  }
+  return config.nemotronResponsesApiEnabled;
+}
+
 function describeProvider(
   provider: AIProviderType,
   cfg: Record<string, any>,
@@ -108,9 +130,9 @@ function describeProvider(
     provider,
     isConfigured: Boolean(key),
     apiKeyMasked: maskApiKey(key),
-    baseUrl: provider === 'nemotron'
-      ? (typeof cfg.NEMOTRON_BASE_URL === 'string' ? cfg.NEMOTRON_BASE_URL : null)
-      : null,
+    baseUrl: provider === 'nemotron' ? readFirstString(cfg, OPEN_MODEL_BASE_URL_KEYS) : null,
+    responsesApiEnabled: provider === 'nemotron' ? readOpenModelResponsesApiEnabled(cfg) : null,
+    supportsResponsesApiToggle: provider === 'nemotron',
     model: selectedAgentModelForProvider(settings, provider),
     modelOptions,
     supportsModelSelection: modelOptions.length > 0,
@@ -120,6 +142,9 @@ function describeProvider(
 
 function readActiveProvider(cfg: Record<string, any>): AIProviderType {
   const raw = cfg.AI_PROVIDER;
+  if (raw === 'open_model' || raw === 'open-model' || raw === 'openmodel') {
+    return 'nemotron';
+  }
   if (raw === 'openai' || raw === 'anthropic' || raw === 'gemini' || raw === 'nemotron') {
     return raw;
   }
@@ -213,13 +238,18 @@ export function aiProviderRouter(): express.Router {
 
       if (provider === 'nemotron') {
         if (parsed.baseUrl) {
-          cfg.NEMOTRON_BASE_URL = parsed.baseUrl;
-        } else if (parsed.baseUrl === null) {
+          cfg.OPEN_MODEL_BASE_URL = parsed.baseUrl;
           delete cfg.NEMOTRON_BASE_URL;
+        } else if (parsed.baseUrl === null) {
+          for (const key of OPEN_MODEL_BASE_URL_KEYS) delete cfg[key];
+        }
+        if (parsed.responsesApiEnabled !== undefined) {
+          cfg.OPEN_MODEL_RESPONSES_API_ENABLED = String(parsed.responsesApiEnabled);
+          delete cfg.NEMOTRON_RESPONSES_API_ENABLED;
         }
       }
 
-      writeConfigFile(cfg);
+      writeLocalConfigFile(cfg);
 
       // If the user updated the currently-active provider's key, the running
       // process is now using a stale key — schedule a restart so it picks
@@ -227,7 +257,7 @@ export function aiProviderRouter(): express.Router {
       // pinned in config.json, because the auto-detected fallback may differ
       // from what the user is configuring and we don't want to bounce the
       // server on first-time key save.
-      const explicitActive = typeof cfg.AI_PROVIDER === 'string' ? cfg.AI_PROVIDER : null;
+      const explicitActive = typeof cfg.AI_PROVIDER === 'string' ? readActiveProvider(cfg) : null;
       let restartScheduled = false;
       if (explicitActive === provider) {
         scheduleDaemonRestart(`updated active provider key (${provider})`);
@@ -271,9 +301,10 @@ export function aiProviderRouter(): express.Router {
         delete cfg[alias];
       }
       if (provider === 'nemotron') {
-        delete cfg.NEMOTRON_BASE_URL;
+        for (const key of OPEN_MODEL_BASE_URL_KEYS) delete cfg[key];
+        for (const key of OPEN_MODEL_RESPONSES_API_KEYS) delete cfg[key];
       }
-      writeConfigFile(cfg);
+      writeLocalConfigFile(cfg);
 
       res.status(204).send();
     } catch (err) {
@@ -340,7 +371,7 @@ export function aiProviderRouter(): express.Router {
       }
 
       cfg.AI_PROVIDER = provider;
-      writeConfigFile(cfg);
+      writeLocalConfigFile(cfg);
 
       res.json({
         provider,

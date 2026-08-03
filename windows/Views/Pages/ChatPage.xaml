@@ -1420,6 +1420,72 @@
                                         </DataTemplate>
                                     </ComboBox.ItemTemplate>
                                 </ComboBox>
+                                <ui:Button
+                                    x:Name="CustomModelButton"
+                                    Width="24"
+                                    Height="24"
+                                    Margin="4,0,0,0"
+                                    Padding="0"
+                                    Appearance="Transparent"
+                                    AutomationProperties.Name="Custom agent model"
+                                    Command="{Binding OpenCustomAgentModelCommand}"
+                                    Icon="{ui:SymbolIcon Symbol=Add24, FontSize=12}"
+                                    IsEnabled="{Binding CanOpenCustomAgentModel}"
+                                    ToolTip="Custom model" />
+                                <Popup
+                                    AllowsTransparency="True"
+                                    DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}"
+                                    IsOpen="{Binding IsCustomAgentModelEditorOpen, Mode=TwoWay}"
+                                    Placement="Top"
+                                    PlacementTarget="{Binding ElementName=CustomModelButton}"
+                                    PopupAnimation="Fade"
+                                    StaysOpen="False">
+                                    <Border
+                                        MinWidth="300"
+                                        Margin="0,0,0,8"
+                                        Padding="14"
+                                        Background="{StaticResource Nord.CardBrush}"
+                                        BorderBrush="{StaticResource Nord.BorderBrush}"
+                                        BorderThickness="1"
+                                        CornerRadius="8">
+                                        <StackPanel>
+                                            <TextBlock
+                                                FontFamily="{StaticResource OK.FontFamily}"
+                                                FontSize="14"
+                                                FontWeight="SemiBold"
+                                                Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                                                Text="Custom model" />
+                                            <ui:TextBox
+                                                Margin="0,10,0,6"
+                                                FontFamily="{StaticResource OK.MonoFontFamily}"
+                                                FontSize="13"
+                                                PlaceholderText="provider-model-id"
+                                                Text="{Binding CustomAgentModelInput, UpdateSourceTrigger=PropertyChanged}">
+                                                <ui:TextBox.InputBindings>
+                                                    <KeyBinding Key="Enter" Command="{Binding ApplyCustomAgentModelCommand}" />
+                                                </ui:TextBox.InputBindings>
+                                            </ui:TextBox>
+                                            <TextBlock
+                                                Margin="0,0,0,12"
+                                                FontFamily="{StaticResource OK.FontFamily}"
+                                                FontSize="{StaticResource OK.Font.CaptionSmall}"
+                                                Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                                                Text="{Binding CustomAgentModelHelp}"
+                                                TextWrapping="Wrap" />
+                                            <StackPanel HorizontalAlignment="Right" Orientation="Horizontal">
+                                                <ui:Button
+                                                    Margin="0,0,8,0"
+                                                    Appearance="Transparent"
+                                                    Command="{Binding CancelCustomAgentModelCommand}"
+                                                    Content="Cancel" />
+                                                <ui:Button
+                                                    Appearance="Primary"
+                                                    Command="{Binding ApplyCustomAgentModelCommand}"
+                                                    Content="Apply" />
+                                            </StackPanel>
+                                        </StackPanel>
+                                    </Border>
+                                </Popup>
                             </StackPanel>
                         </Border>
 

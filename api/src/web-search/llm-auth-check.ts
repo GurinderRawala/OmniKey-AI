@@ -1,6 +1,5 @@
 import type { Logger } from 'winston';
-import { aiClient, AIMessage } from '../ai-client';
-import { getDefaultModel } from '../ai-client';
+import { aiClient, AIMessage, getFixedHelperModel } from '../ai-client';
 
 const SYSTEM_PROMPT =
   'You are an expert at detecting whether a web page is showing the real requested content. ' +
@@ -119,7 +118,8 @@ export async function isPageAuthenticated(
     return true;
   }
 
-  const model = getDefaultModel(aiClient.getProvider(), 'fast');
+  // Auth detection is a tiny fixed helper check, not an agent turn.
+  const model = getFixedHelperModel(aiClient.getProvider());
   const messages: AIMessage[] = [
     { role: 'system', content: SYSTEM_PROMPT },
     { role: 'user', content: `URL: ${url}\n\nPage content:\n${content}` },

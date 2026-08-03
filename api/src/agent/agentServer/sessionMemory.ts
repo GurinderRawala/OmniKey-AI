@@ -4,7 +4,7 @@ import {
   AICompletionResult,
   AIMessage,
   estimateHistoryTokens,
-  getDefaultModel,
+  getFixedHelperModel,
   getInputTokenBudget,
 } from '../../ai-client';
 import { config } from '../../config';
@@ -31,7 +31,11 @@ function memoryTriggerTokens(model: string): number {
 }
 
 function resolveMemoryModel(session: SessionState, model?: string): string {
-  return model ?? session.activeModel ?? getDefaultModel(config.aiProvider, 'smart');
+  const resolved = model ?? session.activeModel;
+  if (!resolved) {
+    throw new Error('Agent active model is required for session memory budget resolution.');
+  }
+  return resolved;
 }
 
 function isStoredInstructions(message: AIMessage): boolean {
@@ -247,7 +251,9 @@ export async function ensureSessionMemory(
 
   const transcript = renderTranscriptSlice(pendingMessages, compactedThrough);
   const previousMemory = session.sessionMemory?.trim() || '(none)';
-  const summaryModel = getDefaultModel(config.aiProvider, 'fast');
+  // Memory summaries are fixed helper work, not an agent turn. Keep them on the
+  // provider fast model and keep the main agent model DB-backed.
+  const summaryModel = getFixedHelperModel(config.aiProvider);
 
   const messages: AIMessage[] = [
     {

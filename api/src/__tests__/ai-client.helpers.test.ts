@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   modelSupportsTemperature,
   getDefaultModel,
+  getFixedHelperModel,
   getContextWindowSize,
   getMaxHistoryLength,
   getMaxMessageContentLength,
@@ -122,6 +123,15 @@ describe('getDefaultModel', () => {
   });
 });
 
+describe('getFixedHelperModel', () => {
+  it('returns the fixed fast helper model for each provider', () => {
+    for (const provider of ['openai', 'gemini', 'anthropic', 'nemotron'] as const) {
+      expect(getFixedHelperModel(provider)).toBe(getDefaultModel(provider, 'fast'));
+      expect(getFixedHelperModel(provider)).not.toBe(getDefaultModel(provider, 'smart'));
+    }
+  });
+});
+
 describe('getContextWindowSize', () => {
   it('returns realistic per-model windows for the configured smart tiers', () => {
     // The window is resolved from each provider's active smart-tier model.
@@ -162,10 +172,21 @@ describe('getContextWindowSize', () => {
 });
 
 describe('modelUsesOpenAIResponsesApi', () => {
-  it('routes GPT 5.5 and GPT 5.6 through Responses API', () => {
+  it('routes GPT-5 family models through Responses API', () => {
+    expect(modelUsesOpenAIResponsesApi('gpt-5')).toBe(true);
+    expect(modelUsesOpenAIResponsesApi('gpt-5-mini')).toBe(true);
+    expect(modelUsesOpenAIResponsesApi('gpt-5.1')).toBe(true);
+    expect(modelUsesOpenAIResponsesApi('gpt-5.3')).toBe(true);
     expect(modelUsesOpenAIResponsesApi('gpt-5.5')).toBe(true);
     expect(modelUsesOpenAIResponsesApi('gpt-5.6')).toBe(true);
-    expect(modelUsesOpenAIResponsesApi('gpt-5.1')).toBe(false);
+    expect(modelUsesOpenAIResponsesApi('GPT-5.7')).toBe(true);
+  });
+
+  it('keeps legacy and non-GPT models on the chat-completions path', () => {
+    expect(modelUsesOpenAIResponsesApi('gpt-4o-mini')).toBe(false);
+    expect(modelUsesOpenAIResponsesApi('gpt-4.1')).toBe(false);
+    expect(modelUsesOpenAIResponsesApi('gpt-3.5-turbo')).toBe(false);
+    expect(modelUsesOpenAIResponsesApi('o3-mini')).toBe(false);
   });
 });
 

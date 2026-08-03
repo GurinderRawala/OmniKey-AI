@@ -8,7 +8,7 @@ private enum ProviderKind: String, CaseIterable, Identifiable {
         case .openai:    return "OpenAI"
         case .anthropic: return "Anthropic (Claude)"
         case .gemini:    return "Google Gemini"
-        case .nemotron:  return "NVIDIA Nemotron"
+        case .nemotron:  return "Open Model"
         }
     }
     var keyPlaceholder: String {
@@ -16,11 +16,12 @@ private enum ProviderKind: String, CaseIterable, Identifiable {
         case .openai:    return "sk-..."
         case .anthropic: return "sk-ant-..."
         case .gemini:    return "AIza..."
-        case .nemotron:  return "nvapi-..."
+        case .nemotron:  return "API key or local placeholder"
         }
     }
     var supportsBaseUrl: Bool { self == .nemotron }
-    var baseUrlPlaceholder: String { "https://integrate.api.nvidia.com/v1" }
+    var supportsResponsesApiToggle: Bool { self == .nemotron }
+    var baseUrlPlaceholder: String { "http://localhost:8000/v1" }
 }
 
 private struct ProviderRowState: Identifiable {
@@ -43,6 +44,7 @@ struct AIProvidersSettingsView: View {
     @State private var editingKind: ProviderKind = .openai
     @State private var apiKeyInput: String = ""
     @State private var baseUrlInput: String = ""
+    @State private var responsesApiEnabledInput: Bool = false
 
     // Dialog state
     @State private var pendingDelete: ProviderRowState? = nil
@@ -227,6 +229,11 @@ struct AIProvidersSettingsView: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
+                if dto.supportsResponsesApiToggle == true, dto.responsesApiEnabled == true {
+                    Text("· Responses API")
+                        .font(.system(size: 12))
+                        .foregroundColor(NordTheme.accentGreen(colorScheme))
+                }
             }
 
             HStack(spacing: 8) {
@@ -287,7 +294,17 @@ struct AIProvidersSettingsView: View {
                         .foregroundColor(NordTheme.secondaryText(colorScheme))
                     TextField(editingKind.baseUrlPlaceholder, text: $baseUrlInput)
                         .textFieldStyle(.roundedBorder)
-                    Text("Leave blank to use NVIDIA's public NIM endpoint.")
+                    Text("Leave blank to use the default endpoint, or set any OpenAI-compatible /v1 base URL.")
+                        .font(.system(size: 11))
+                        .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.85))
+                }
+            }
+
+            if editingKind.supportsResponsesApiToggle {
+                VStack(alignment: .leading, spacing: 6) {
+                    Toggle("Use Responses API", isOn: $responsesApiEnabledInput)
+                        .font(.system(size: 12, weight: .medium))
+                    Text("Enable only when the configured gateway exposes /v1/responses. Leave off for standard Chat Completions.")
                         .font(.system(size: 11))
                         .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.85))
                 }
@@ -317,8 +334,9 @@ struct AIProvidersSettingsView: View {
     private func startEditing(_ kind: ProviderKind) {
         editingKind = kind
         apiKeyInput = ""
-        let existing = rows.first(where: { $0.kind == kind })?.dto.baseUrl ?? ""
-        baseUrlInput = existing
+        let existing = rows.first(where: { $0.kind == kind })?.dto
+        baseUrlInput = existing?.baseUrl ?? ""
+        responsesApiEnabledInput = existing?.responsesApiEnabled ?? false
         statusMessage = ""
         isEditing = true
     }
@@ -345,6 +363,8 @@ struct AIProvidersSettingsView: View {
                             isConfigured: false,
                             apiKeyMasked: nil,
                             baseUrl: nil,
+                            responsesApiEnabled: nil,
+                            supportsResponsesApiToggle: nil,
                             model: nil,
                             modelOptions: nil,
                             supportsModelSelection: nil,
@@ -371,7 +391,8 @@ struct AIProvidersSettingsView: View {
 
         let input = APIClient.AIProviderInput(
             apiKey: trimmedKey,
-            baseUrl: trimmedBase.isEmpty ? nil : trimmedBase
+            baseUrl: trimmedBase.isEmpty ? nil : trimmedBase,
+            responsesApiEnabled: editingKind.supportsResponsesApiToggle ? responsesApiEnabledInput : nil
         )
         let providerRaw = editingKind.rawValue
 

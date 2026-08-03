@@ -104,13 +104,10 @@ const DEFAULT_MODELS: Record<AIProvider, { fast: string; smart: string }> = {
   openai: { fast: 'gpt-4o-mini', smart: 'gpt-5.5' },
   gemini: { fast: 'gemini-2.5-flash', smart: 'gemini-2.5-pro' },
   anthropic: { fast: 'claude-haiku-4-5-20251001', smart: 'claude-opus-4-5' },
-  // NVIDIA Nemotron is exposed through the OpenAI-compatible NIM endpoint at
-  // https://integrate.api.nvidia.com/v1. The "fast" tier maps to Nemotron Nano
-  // for high-throughput sub-agent workloads; the "smart" tier maps to Nemotron
-  // Ultra — the frontier-level model in the family — for complex multi-agent
-  // reasoning, planning, code generation, and deep research. Drop down to
-  // Nemotron Super (`nvidia/nemotron-3-super-120b-a12b`) here if single-GPU
-  // data-center deployment is required.
+  // Generic OpenAI-compatible open-model provider. The defaults remain NVIDIA
+  // Nemotron because the legacy provider id is still `nemotron`, but users can
+  // type any exact model id from the chat model picker and point the base URL at
+  // any compatible gateway.
   nemotron: {
     fast: 'nvidia/nemotron-3-nano-30b-a3b',
     smart: 'nvidia/nemotron-3-ultra-550b-a55b',
@@ -118,12 +115,16 @@ const DEFAULT_MODELS: Record<AIProvider, { fast: string; smart: string }> = {
 };
 
 export function getDefaultModel(provider: AIProvider, tier: 'fast' | 'smart'): string {
-  // For the OpenAI smart tier, honour the user's OPENAI_MODEL selection from
-  // config.json / env. The fast tier (gpt-4o-mini) is always fixed.
-  if (tier === 'smart' && provider === 'openai' && config.openaiModel) {
-    return config.openaiModel;
-  }
   return DEFAULT_MODELS[provider][tier];
+}
+
+/**
+ * Fixed low-cost model for helper checks and keyboard shortcuts. This is
+ * intentionally not DB-backed: changing the selected agent model should affect
+ * agent/task turns, not tiny classifier/auth/shortcut helpers.
+ */
+export function getFixedHelperModel(provider: AIProvider): string {
+  return DEFAULT_MODELS[provider].fast;
 }
 
 /**
@@ -158,7 +159,7 @@ export function modelSupportsTemperature(model: string): boolean {
 
 /**
  * Realistic context-window sizes (in tokens) for the specific models this app
- * uses, plus common alternatives a deployment might pin via OPENAI_MODEL.
+ * uses, plus common alternatives a deployment might select from the model picker.
  *
  * These are the *real* published windows — getting them right matters because
  * the char budgets below are derived from them, and an over-stated window means
@@ -200,7 +201,7 @@ function contextWindowForModel(model: string, provider: AIProvider): number {
   // Google Gemini — 1.5 and 2.5 families expose a ~1M-token window.
   if (/^gemini/.test(m)) return 1_048_576;
 
-  // NVIDIA Nemotron — 256K native on the stock NIM endpoint.
+  // Nemotron defaults — 256K native on the stock NIM endpoint.
   if (/nemotron/.test(m)) return 262_144;
 
   return CONTEXT_WINDOW_BY_PROVIDER[provider];
@@ -609,13 +610,13 @@ class AnthropicAdapter {
 // ---------------------------------------------------------------------------
 
 /**
- * GPT-5.5 should be routed through OpenAI's Responses API rather than Chat
- * Completions so it can use native function-calling semantics.
+ * Current GPT-5 family models should be routed through OpenAI's Responses API
+ * rather than Chat Completions so they can use the newer reasoning/tool-calling
+ * semantics. Keeping GPT-5.1 on the older chat path can leave the agent stuck
+ * producing reasoning text without a final answer/tool call.
  */
-export const RESPONSES_API_MODEL = 'gpt-5.5';
-
 export function modelUsesOpenAIResponsesApi(model: string): boolean {
-  return /^gpt-5\.[56](\b|[-_])/i.test(model);
+  return /^gpt-5(?:$|[._-])/i.test(model);
 }
 
 /**
@@ -875,6 +876,8 @@ class OpenAIResponsesAdapter {
       ...(instructions ? { instructions } : {}),
       input,
       tools,
+      ...(modelSupportsTemperature(model) ? { temperature: options.temperature ?? 0.2 } : {}),
+      ...(options.maxTokens ? { max_output_tokens: options.maxTokens } : {}),
       ...openAICacheRequestOptions(options),
     });
     return fromResponsesOutput(response, model);
@@ -892,6 +895,8 @@ class OpenAIResponsesAdapter {
       model,
       ...(instructions ? { instructions } : {}),
       input,
+      ...(modelSupportsTemperature(model) ? { temperature: options.temperature ?? 0.3 } : {}),
+      ...(options.maxTokens ? { max_output_tokens: options.maxTokens } : {}),
       ...openAICacheRequestOptions(options),
     });
 
@@ -916,32 +921,32 @@ class OpenAIResponsesAdapter {
 }
 
 // ---------------------------------------------------------------------------
-// Nemotron adapter (NVIDIA NIM — OpenAI-compatible REST API)
+// Open model adapter (OpenAI-compatible REST API)
 // ---------------------------------------------------------------------------
 
 /**
- * NVIDIA Nemotron models are served behind an OpenAI-compatible endpoint at
- * `https://integrate.api.nvidia.com/v1` (the NVIDIA NIM gateway, also used by
- * self-hosted NIM microservices). Because the wire protocol matches OpenAI's
- * Chat Completions API, we reuse the `openai` SDK by constructing a client
- * with a custom `baseURL`. This keeps the message/tool-call conversion logic
- * identical to OpenAI and avoids pulling in another transport library.
+ * The legacy `nemotron` provider slot now acts as a generic open-model path:
+ * it can target NVIDIA NIM, vLLM, LM Studio, Ollama/OpenAI-compatible gateways,
+ * or any other server that speaks an OpenAI-compatible API. Chat Completions is
+ * the default because it is the broadest common denominator; users can opt into
+ * Responses API when their gateway exposes `/v1/responses`.
  *
- * Notes on Nemotron-specific quirks:
+ * Notes on open-model quirks:
  *  - The endpoint accepts `temperature`, `top_p`, `max_tokens`, and `tools`
  *    in the standard OpenAI shape, so no schema translation is needed.
- *  - Image generation is not exposed for the text-only Nemotron models, so
+ *  - Image generation is not exposed for this text-only provider path, so
  *    `generateImage` is intentionally not implemented (the unified `AIClient`
  *    surfaces a clear error for unsupported providers).
- *  - Self-hosted NIM deployments can be targeted by setting the
- *    `NEMOTRON_BASE_URL` env var (handled in `config.ts`). The API key can be
- *    any non-empty string for self-hosted NIM.
+ *  - Local deployments can use any non-empty API key if the server requires a
+ *    placeholder value rather than a real credential.
  */
 class NemotronAdapter {
   private client: OpenAI;
+  private useResponsesApi: boolean;
 
-  constructor(apiKey: string, baseURL: string) {
+  constructor(apiKey: string, baseURL: string, useResponsesApi = false) {
     this.client = new OpenAI({ apiKey, baseURL, fetch: http1Fetch as unknown as typeof fetch });
+    this.useResponsesApi = useResponsesApi;
   }
 
   async complete(
@@ -949,6 +954,21 @@ class NemotronAdapter {
     messages: AIMessage[],
     options: CompletionOptions,
   ): Promise<AICompletionResult> {
+    if (this.useResponsesApi) {
+      const { instructions, input } = toResponsesInput(messages);
+      const tools = options.tools?.length ? toResponsesTools(options.tools) : [];
+
+      const response = await (this.client.responses as any).create({
+        model,
+        ...(instructions ? { instructions } : {}),
+        input,
+        tools,
+        ...(modelSupportsTemperature(model) ? { temperature: options.temperature ?? 0.2 } : {}),
+        ...(options.maxTokens ? { max_output_tokens: options.maxTokens } : {}),
+      });
+      return fromResponsesOutput(response, model);
+    }
+
     const oaiMessages = toOpenAIMessages(messages);
     const tools = options.tools?.length ? toOpenAITools(options.tools) : undefined;
 
@@ -958,7 +978,7 @@ class NemotronAdapter {
       tools: tools?.length ? tools : undefined,
       ...(modelSupportsTemperature(model) ? { temperature: options.temperature ?? 0.2 } : {}),
       max_tokens: options.maxTokens,
-    });
+    } as any);
 
     const choice = completion.choices[0];
     const msg = choice.message;
@@ -1003,19 +1023,50 @@ class NemotronAdapter {
     options: CompletionOptions,
     onDelta: (delta: string) => void,
   ): Promise<{ usage?: AIUsage; model: string }> {
+    if (this.useResponsesApi) {
+      const { instructions, input } = toResponsesInput(messages);
+
+      const stream = (this.client.responses as any).stream({
+        model,
+        ...(instructions ? { instructions } : {}),
+        input,
+        ...(modelSupportsTemperature(model) ? { temperature: options.temperature ?? 0.3 } : {}),
+        ...(options.maxTokens ? { max_output_tokens: options.maxTokens } : {}),
+      });
+
+      for await (const event of stream as AsyncIterable<any>) {
+        if (event.type === 'response.output_text.delta' && event.delta) {
+          onDelta(event.delta as string);
+        }
+      }
+
+      let usage: AIUsage | undefined;
+      try {
+        const finalResponse = await stream.finalResponse();
+        if (finalResponse?.usage) {
+          usage = usageFromOpenAIResponsesUsage(finalResponse.usage);
+        }
+      } catch {
+        // finalResponse may throw if the stream was already consumed.
+      }
+
+      return { usage, model };
+    }
+
     const oaiMessages = toOpenAIMessages(messages);
 
-    const stream = await this.client.chat.completions.create({
+    const stream = (await this.client.chat.completions.create({
       model,
       messages: oaiMessages,
       ...(modelSupportsTemperature(model) ? { temperature: options.temperature ?? 0.3 } : {}),
+      max_tokens: options.maxTokens,
       stream: true,
       stream_options: { include_usage: true },
-    });
+    } as any)) as unknown as AsyncIterable<any>;
 
     let usage: AIUsage | undefined;
 
-    for await (const part of stream as AsyncIterable<any>) {
+    for await (const part of stream) {
       const delta = part.choices?.[0]?.delta?.content ?? '';
       if (delta) {
         onDelta(delta);
@@ -1188,11 +1239,15 @@ export class AIClient {
   private gemini?: GeminiAdapter;
   private nemotron?: NemotronAdapter;
 
-  constructor(provider: AIProvider, apiKey: string, options: { nemotronBaseURL?: string } = {}) {
+  constructor(
+    provider: AIProvider,
+    apiKey: string,
+    options: { nemotronBaseURL?: string; nemotronResponsesApiEnabled?: boolean } = {},
+  ) {
     this.provider = provider;
     if (provider === 'openai') {
       // Instantiate both adapters so routing can be selected per request.
-      // GPT-5.5+ agent models use Responses API, while GPT-5.1 and older chat
+      // Current GPT-5 family models use Responses API, while legacy chat
       // models continue to use Chat Completions.
       this.openaiResponses = new OpenAIResponsesAdapter(apiKey);
       this.openai = new OpenAIAdapter(apiKey);
@@ -1201,10 +1256,11 @@ export class AIClient {
     } else if (provider === 'gemini') {
       this.gemini = new GeminiAdapter(apiKey);
     } else if (provider === 'nemotron') {
-      // Default to the public NVIDIA NIM gateway. Self-hosted NIM deployments
-      // can override this via `NEMOTRON_BASE_URL` (see config.ts).
+      // Default to the public NVIDIA NIM gateway for backward compatibility.
+      // OPEN_MODEL_BASE_URL / NEMOTRON_BASE_URL can point at any compatible
+      // gateway, and the model id comes from the chat model selector.
       const baseURL = options.nemotronBaseURL || 'https://integrate.api.nvidia.com/v1';
-      this.nemotron = new NemotronAdapter(apiKey, baseURL);
+      this.nemotron = new NemotronAdapter(apiKey, baseURL, options.nemotronResponsesApiEnabled);
     }
   }
 
@@ -1265,7 +1321,7 @@ export class AIClient {
    * Centralising this check means agent tool registration and system-prompt
    * builders no longer need to keep a hand-maintained allow/deny list of
    * providers — they ask the client directly. Currently OpenAI and Gemini
-   * support image generation; Anthropic and Nemotron (text-only) do not.
+   * support image generation; Anthropic and the open-model path do not.
    */
   supportsImageGeneration(): boolean {
     return this.provider === 'openai' || this.provider === 'gemini';
@@ -1274,7 +1330,7 @@ export class AIClient {
   /**
    * Generates an image with the currently configured provider.
    *
-   * Supported providers are OpenAI and Gemini. Anthropic and Nemotron do not
+   * Supported providers are OpenAI and Gemini. Anthropic and open models do not
    * currently expose a text-to-image generation endpoint in this project.
    *
    * @param options - Unified image-generation options.
@@ -1527,4 +1583,5 @@ function toGeminiTools(tools: AITool[]): GeminiTool[] {
 
 export const aiClient = new AIClient(config.aiProvider, config.aiApiKey, {
   nemotronBaseURL: config.nemotronBaseUrl,
+  nemotronResponsesApiEnabled: config.nemotronResponsesApiEnabled,
 });

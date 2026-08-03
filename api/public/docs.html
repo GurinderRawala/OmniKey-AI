@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OmniKey Docs - Getting Started, Telegram, Agent Instructions</title>
+    <meta
+      name="description"
+      content="OmniKey documentation for setup, Telegram integration, built-in agent instructions, Open Model providers, and the latest release notes."
+    />
+    <link rel="canonical" href="https://omnikeyai.com/docs" />
+    <link rel="icon" type="image/png" href="/icon.png" />
+    <link rel="apple-touch-icon" href="/icon.png" />
+    <link rel="stylesheet" href="/style.css" />
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+  </head>
+  <body>
+    <nav class="nav">
+      <div class="nav-inner">
+        <a href="/" class="nav-logo">
+          <img src="/icon.png" alt="OmniKey" class="nav-icon" />
+          <span>OmniKey</span>
+        </a>
+        <div class="nav-links">
+          <a href="/#omniagent" class="nav-link-new">OmniAgent</a>
+          <a href="/#features">Features</a>
+          <a href="/#mcp-servers">MCP Servers</a>
+          <a href="/docs" class="nav-link-active">Docs</a>
+          <a href="/#getting-started">Get started</a>
+        </div>
+        <div class="nav-actions">
+          <a
+            href="https://github.com/GurinderRawala/OmniKey-AI"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="nav-github"
+            aria-label="Star OmniKey on GitHub"
+          >
+            <svg viewBox="0 0 16 16" fill="currentColor" width="13" height="13" aria-hidden="true">
+              <path
+                d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.751.751 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z"
+              />
+            </svg>
+            <span class="nav-github-label">GitHub</span>
+          </a>
+          <a href="/#download" class="nav-download">Download</a>
+        </div>
+        <button
+          type="button"
+          class="nav-hamburger"
+          id="nav-hamburger"
+          aria-label="Open menu"
+          aria-expanded="false"
+          aria-controls="mobile-menu"
+        >
+          <span class="nav-hamburger-bar"></span>
+          <span class="nav-hamburger-bar"></span>
+          <span class="nav-hamburger-bar"></span>
+        </button>
+      </div>
+      <div class="mobile-menu" id="mobile-menu" hidden>
+        <nav class="mobile-menu-links" aria-label="Mobile">
+          <a href="/#omniagent" class="mobile-menu-link mobile-menu-link-new">OmniAgent</a>
+          <a href="/#features" class="mobile-menu-link">Features</a>
+          <a href="/#mcp-servers" class="mobile-menu-link">MCP Servers</a>
+          <a href="/docs" class="mobile-menu-link mobile-menu-link-active">Docs</a>
+          <a href="/#getting-started" class="mobile-menu-link">Get started</a>
+        </nav>
+        <div class="mobile-menu-actions">
+          <a href="/#download" class="mobile-menu-download">Download for macOS / Windows</a>
+          <a
+            href="https://github.com/GurinderRawala/OmniKey-AI"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="mobile-menu-github"
+          >
+            <svg viewBox="0 0 16 16" fill="currentColor" width="15" height="15" aria-hidden="true">
+              <path
+                d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.751.751 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z"
+              />
+            </svg>
+            Star on GitHub
+          </a>
+        </div>
+      </div>
+    </nav>
+
+    <main class="docs-main">
+      <section class="docs-hero">
+        <span class="docs-kicker">Documentation</span>
+        <h1>Set up OmniKey, connect Telegram, and run better agent sessions.</h1>
+        <p>
+          A compact guide for local setup, provider configuration, saved task instructions,
+          Telegram commands, and the changes shipping in the latest release.
+        </p>
+        <div class="docs-actions">
+          <a href="#getting-started" class="btn btn-primary">Start setup</a>
+          <a href="#changelog" class="btn btn-secondary">See what is new</a>
+        </div>
+      </section>
+
+      <section class="docs-quick-grid" aria-label="Documentation sections">
+        <a href="#getting-started" class="docs-quick-card">
+          <span>01</span>
+          <strong>Getting Started</strong>
+          <p>Install the CLI, configure a provider, start the daemon, and open the desktop app.</p>
+        </a>
+        <a href="#telegram" class="docs-quick-card">
+          <span>02</span>
+          <strong>Telegram Integration</strong>
+          <p>Create a bot, save credentials, run the daemon, and use remote commands.</p>
+        </a>
+        <a href="#agent-instructions" class="docs-quick-card">
+          <span>03</span>
+          <strong>Agent Instructions</strong>
+          <p>Use saved templates, custom models, MCP tools, and live steering during a run.</p>
+        </a>
+        <a href="#changelog" class="docs-quick-card">
+          <span>04</span>
+          <strong>Changelog</strong>
+          <p>Review the provider, Telegram, steering, and Windows updates in this release.</p>
+        </a>
+      </section>
+
+      <div class="docs-layout">
+        <aside class="docs-sidebar" aria-label="Docs navigation">
+          <a href="#getting-started">Getting started</a>
+          <a href="#providers">AI providers</a>
+          <a href="#telegram">Telegram</a>
+          <a href="#agent-instructions">Agent instructions</a>
+          <a href="#changelog">Changelog</a>
+        </aside>
+
+        <div class="docs-content">
+          <section class="docs-section" id="getting-started">
+            <span class="section-label">Getting started</span>
+            <h2>Install and run OmniKey locally</h2>
+            <p>
+              OmniKey runs a local backend daemon and a desktop app. The CLI is the fastest way to
+              configure providers, start services, and manage optional integrations.
+            </p>
+
+            <div class="docs-step-list">
+              <article class="docs-step">
+                <span>1</span>
+                <div>
+                  <h3>Install the CLI</h3>
+                  <p>Use Homebrew on macOS, or npm anywhere Node.js is available.</p>
+                  <pre><code>brew install GurinderRawala/omnikey/omnikey-cli
+
+# or
+npm install -g omnikey-cli</code></pre>
+                </div>
+              </article>
+
+              <article class="docs-step">
+                <span>2</span>
+                <div>
+                  <h3>Configure your first provider</h3>
+                  <p>
+                    The onboarding flow writes your local OmniKey config and validates the provider
+                    details before the daemon starts.
+                  </p>
+                  <pre><code>omnikey onboard</code></pre>
+                </div>
+              </article>
+
+              <article class="docs-step">
+                <span>3</span>
+                <div>
+                  <h3>Start the backend daemon</h3>
+                  <p>
+                    Keep the daemon running while the desktop app, Telegram bridge, and agent
+                    sessions are active.
+                  </p>
+                  <pre><code>omnikey daemon</code></pre>
+                </div>
+              </article>
+
+              <article class="docs-step">
+                <span>4</span>
+                <div>
+                  <h3>Install the desktop app</h3>
+                  <p>
+                    Download the native app and sign in to the same local daemon from your machine.
+                  </p>
+                  <div class="docs-inline-actions">
+                    <a href="/macos/download" class="btn btn-secondary btn-mac">Download macOS</a>
+                    <a href="/windows/download" class="btn btn-secondary btn-win">Download Windows</a>
+                  </div>
+                </div>
+              </article>
+            </div>
+          </section>
+
+          <section class="docs-section" id="providers">
+            <span class="section-label">AI providers</span>
+            <h2>Choose a hosted or OpenAI-compatible model</h2>
+            <p>
+              OmniKey supports OpenAI, Anthropic, Gemini, and Open Model providers. The Open Model
+              option is for OpenAI-compatible APIs such as self-hosted or open source model
+              gateways.
+            </p>
+            <div class="docs-table-wrap">
+              <table class="docs-table">
+                <thead>
+                  <tr>
+                    <th>Provider</th>
+                    <th>Use it for</th>
+                    <th>Common settings</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>OpenAI</td>
+                    <td>GPT models and Responses API workflows.</td>
+                    <td><code>OPENAI_API_KEY</code></td>
+                  </tr>
+                  <tr>
+                    <td>Anthropic</td>
+                    <td>Claude Sonnet or Opus agent runs.</td>
+                    <td><code>ANTHROPIC_API_KEY</code></td>
+                  </tr>
+                  <tr>
+                    <td>Gemini</td>
+                    <td>Google Gemini models.</td>
+                    <td><code>GEMINI_API_KEY</code></td>
+                  </tr>
+                  <tr>
+                    <td>Open Model</td>
+                    <td>Any OpenAI-compatible model endpoint.</td>
+                    <td><code>OPEN_MODEL_API_KEY</code>, <code>OPEN_MODEL_BASE_URL</code></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="docs-callout">
+              <strong>Custom models:</strong> use the chat page model selector to enter the exact
+              model string exposed by your provider. Enable Responses API only when that endpoint
+              supports OpenAI Responses-compatible requests.
+            </div>
+          </section>
+
+          <section class="docs-section" id="telegram">
+            <span class="section-label">Telegram integration</span>
+            <h2>Control OmniAgent from Telegram</h2>
+            <p>
+              The Telegram daemon lets you start, resume, stop, and inspect agent sessions from a
+              configured chat. Commands from other chats are ignored.
+            </p>
+
+            <div class="docs-step-list">
+              <article class="docs-step">
+                <span>1</span>
+                <div>
+                  <h3>Create a Telegram bot</h3>
+                  <p>
+                    Open <a href="https://t.me/BotFather" target="_blank" rel="noopener noreferrer">@BotFather</a>,
+                    run <code>/newbot</code>, and save the token as
+                    <code>TELEGRAM_BOT_TOKEN</code>.
+                  </p>
+                </div>
+              </article>
+
+              <article class="docs-step">
+                <span>2</span>
+                <div>
+                  <h3>Find your chat ID</h3>
+                  <p>
+                    Send your bot a message, then fetch updates and copy the
+                    <code>chat.id</code>. Group and channel IDs are negative.
+                  </p>
+                  <pre><code>curl "https://api.telegram.org/bot&lt;TELEGRAM_BOT_TOKEN&gt;/getUpdates"</code></pre>
+                </div>
+              </article>
+
+              <article class="docs-step">
+                <span>3</span>
+                <div>
+                  <h3>Start the Telegram daemon</h3>
+                  <p>
+                    The CLI prompts for missing credentials, validates the token, and installs the
+                    local service.
+                  </p>
+                  <pre><code>omnikey telegram start
+
+# or start the backend and Telegram bridge together
+omnikey daemon --telegram</code></pre>
+                </div>
+              </article>
+            </div>
+
+            <div class="docs-table-wrap">
+              <table class="docs-table">
+                <thead>
+                  <tr>
+                    <th>Command</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><code>/cmd</code></td>
+                    <td>Start a guided OmniAgent task or resume a recent session.</td>
+                  </tr>
+                  <tr>
+                    <td><code>/cmd --verbose</code></td>
+                    <td>Stream shell output, tool calls, reasoning updates, and final answers.</td>
+                  </tr>
+                  <tr>
+                    <td><code>/model</code></td>
+                    <td>Choose the active model for the current provider.</td>
+                  </tr>
+                  <tr>
+                    <td><code>/task</code></td>
+                    <td>Show the active reasoning snapshot or last final answer.</td>
+                  </tr>
+                  <tr>
+                    <td><code>/stop</code></td>
+                    <td>Abort the running session cleanly.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div class="docs-callout">
+              <strong>Port setting:</strong> the Telegram bridge uses
+              <code>OMNIKEY_TELEGRAM_PORT</code>, defaulting to <code>6666</code>, so it does not
+              collide with generic <code>PORT</code> settings from other apps.
+            </div>
+          </section>
+
+          <section class="docs-section" id="agent-instructions">
+            <span class="section-label">Built-in agent instructions</span>
+            <h2>Save repeatable task behavior</h2>
+            <p>
+              Saved task instructions let you keep durable behavior for common workflows. Select a
+              template before a run, or mention the instruction by name when you want OmniAgent to
+              apply it to the current task.
+            </p>
+
+            <div class="docs-two-col">
+              <article class="docs-panel">
+                <h3>Coding Agent template</h3>
+                <p>
+                  New installs seed a Coding Agent instruction set if it is missing. It asks the
+                  agent to review current changes, keep edits scoped, use the right tools, validate
+                  before finishing, and report what changed.
+                </p>
+                <pre><code>Review current changes first.
+Keep edits minimal and aligned with the codebase.
+Use terminal, file, git, Playwright, or MCP tools when they help.
+Run focused validation and report remaining risk.</code></pre>
+              </article>
+
+              <article class="docs-panel">
+                <h3>MCP tools and steering</h3>
+                <p>
+                  File, Playwright, and Git MCP entries are created during setup when they are not
+                  already present. While a run is active, use live steering from chat to add guidance
+                  to the current session instead of queueing a separate follow-up.
+                </p>
+                <ul class="docs-badge-list">
+                  <li>Saved instructions</li>
+                  <li>Custom model IDs</li>
+                  <li>Live steering</li>
+                  <li>Responses API toggle</li>
+                  <li>MCP tool setup</li>
+                </ul>
+              </article>
+            </div>
+          </section>
+
+          <section class="docs-section" id="changelog">
+            <span class="section-label">Changelog</span>
+            <h2>What is new in the latest release</h2>
+            <p>
+              These notes summarize the current public release line for the CLI/API and desktop apps.
+            </p>
+
+            <div class="docs-changelog">
+              <article>
+                <h3>CLI and API v1.6.23</h3>
+                <ul>
+                  <li>Open Model provider supports generic OpenAI-compatible endpoints.</li>
+                  <li>Open Model settings use <code>OPEN_MODEL_API_KEY</code> and <code>OPEN_MODEL_BASE_URL</code>.</li>
+                  <li>Responses API routing is enabled for GPT-5 family models.</li>
+                  <li>Optional Responses API toggle is available for compatible Open Model endpoints.</li>
+                  <li>Telegram reliability improvements keep long-running task output and final answers flowing.</li>
+                  <li>Default Coding Agent instructions and file, Playwright, and Git MCP entries are seeded when missing.</li>
+                </ul>
+              </article>
+              <article>
+                <h3>macOS app v1.4.2</h3>
+                <ul>
+                  <li>Chat composer can steer a running OmniAgent task without queueing a new turn.</li>
+                  <li>Input state now switches between Send, Steer, and Stop while a task is active.</li>
+                  <li>Steering messages are inserted into the active conversation with a visible steering label.</li>
+                  <li>Streaming continuation output stays attached to the current session after steering.</li>
+                </ul>
+              </article>
+              <article>
+                <h3>Windows app v1.19.2</h3>
+                <ul>
+                  <li>Chat composer can steer a running OmniAgent task.</li>
+                  <li>Input state now switches between Send, Steer, and Stop.</li>
+                  <li>Steering messages appear in conversation history and preserve streamed continuation output.</li>
+                  <li>Custom model entry is available from the chat model selector.</li>
+                </ul>
+              </article>
+            </div>
+          </section>
+        </div>
+      </div>
+    </main>
+
+    <footer>
+      <p>
+        OmniKey &copy; <span id="year"></span> &nbsp;·&nbsp;
+        <a href="/docs">Docs</a> &nbsp;·&nbsp;
+        <a
+          href="https://github.com/GurinderRawala/OmniKey-AI"
+          target="_blank"
+          rel="noopener noreferrer"
+          >GitHub</a
+        >
+      </p>
+    </footer>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
