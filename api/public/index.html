@@ -136,22 +136,38 @@
 
     <!-- ── Hero ── -->
     <section class="hero">
-      <div class="hero-bg">
-        <div class="hero-glow hero-glow-1"></div>
-        <div class="hero-glow hero-glow-2"></div>
+      <div class="hero-bg" aria-hidden="true">
+        <div class="hero-grid"></div>
+        <div class="hero-signal hero-signal-a"></div>
+        <div class="hero-signal hero-signal-b"></div>
       </div>
       <div class="hero-content">
+        <div class="hero-logo-lockup">
+          <img src="/icon.png" alt="OmniKey" class="hero-brand-icon" />
+          <div>
+            <span class="hero-brand-name">OmniKey</span>
+            <span class="hero-brand-meta">AI text enhancement anywhere</span>
+          </div>
+        </div>
+
         <div class="hero-badge">
           <span class="hero-badge-dot"></span>
           Free &amp; Open Source &nbsp;·&nbsp; macOS + Windows
         </div>
+
         <h1 class="hero-title">
-          <span class="gradient-text">AI-powered</span> text<br />enhancement, anywhere.
+          <span class="gradient-text">AI-powered</span> text <br />enhancement, anywhere.
         </h1>
         <p class="hero-desc">
           Select any text, press a shortcut — OmniKey enhances prompts, fixes grammar, and runs
           custom AI tasks in any app, on any screen.
         </p>
+
+        <div class="hero-actions">
+          <a href="#download" class="btn btn-primary">Download OmniKey</a>
+          <a href="#demo" class="btn btn-secondary">See it in action</a>
+        </div>
+
         <div class="hero-install">
           <div class="code-block hero-install-block">
             <div class="code-block-header">
@@ -173,26 +189,54 @@
             <pre data-code-content="install-win" hidden><code>iwr -useb https://omnikeyai.ca/install.ps1 | iex</code></pre>
           </div>
         </div>
+
+        <div class="hero-proof-grid" aria-label="Product highlights">
+          <div>
+            <span>Any app</span>
+            <strong>Works where you type</strong>
+          </div>
+          <div>
+            <span>Shortcut</span>
+            <strong>Keyboard-first flow</strong>
+          </div>
+          <div>
+            <span>BYO model</span>
+            <strong>OpenAI, Anthropic, Gemini</strong>
+          </div>
+        </div>
+
+        <div class="hero-console" aria-hidden="true">
+          <div class="hero-console-top">
+            <span></span>
+            <span></span>
+            <span></span>
+            <strong>omnikey.workflow</strong>
+          </div>
+          <div class="hero-console-body">
+            <p><span>1</span> Select rough text in any app</p>
+            <p><span>2</span> Press your OmniKey shortcut</p>
+            <p><span>3</span> Let your chosen model clean it up</p>
+            <p><span>4</span> Paste the improved version back</p>
+          </div>
+        </div>
+
         <p class="hero-note">macOS 13+ &nbsp;·&nbsp; Windows 10/11 x64 &nbsp;·&nbsp; Free to use</p>
       </div>
     </section>
 
-    <!-- ── Providers bar ── -->
-    <div class="providers-bar">
-      <span class="providers-label">Works with</span>
-      <div class="providers-list">
-        <span class="provider-badge">OpenAI</span>
-        <span class="provider-sep">·</span>
-        <span class="provider-badge">Anthropic</span>
-        <span class="provider-sep">·</span>
-        <span class="provider-badge">Google Gemini</span>
-        <span class="provider-sep">·</span>
-        <span class="provider-badge">Open Model</span>
+    <!-- ── Provider strip ── -->
+    <section class="project-strip" aria-label="Supported AI providers">
+      <span class="project-strip-label">Works with</span>
+      <div class="project-strip-list">
+        <span>OpenAI</span>
+        <span>Anthropic</span>
+        <span>Google Gemini</span>
+        <span>OpenAI-compatible models</span>
       </div>
-    </div>
+    </section>
 
     <!-- ── Demo showcase ── -->
-    <div class="demo-showcase">
+    <div class="demo-showcase" id="demo">
       <p class="demo-showcase-eyebrow">See it in action</p>
       <div class="demo-card">
         <div class="demo-header">
@@ -226,6 +270,46 @@
         </div>
       </div>
     </div>
+
+    <!-- ── Workflow trust ── -->
+    <section class="oss-section" id="workflow">
+      <div class="oss-inner">
+        <div class="oss-copy">
+          <span class="section-label">Built for daily work</span>
+          <h2>Your AI follows you into the app you are already using.</h2>
+          <p>
+            OmniKey stays out of the way until you need it: improve a prompt, rewrite a sentence,
+            run an agent task, or switch providers without moving your work into a separate tab.
+          </p>
+          <div class="oss-actions">
+            <a href="#demo" class="btn btn-primary">Watch the flow</a>
+            <a href="/docs" class="btn btn-secondary">Read the docs</a>
+          </div>
+        </div>
+        <div class="oss-grid" aria-label="OmniKey workflow details">
+          <article>
+            <span>01</span>
+            <h3>Keyboard-first</h3>
+            <p>Trigger AI from the app you are already in, then keep typing.</p>
+          </article>
+          <article>
+            <span>02</span>
+            <h3>Use your providers</h3>
+            <p>OpenAI, Anthropic, Gemini, or any OpenAI-compatible endpoint.</p>
+          </article>
+          <article>
+            <span>03</span>
+            <h3>Agent when needed</h3>
+            <p>Move from a quick rewrite to an OmniAgent task without changing tools.</p>
+          </article>
+          <article>
+            <span>04</span>
+            <h3>Open when it matters</h3>
+            <p>Free to use, inspectable, and flexible enough for self-hosted workflows.</p>
+          </article>
+        </div>
+      </div>
+    </section>
 
     <main>
       <!-- ── OmniAgent (new) ── -->
@@ -535,7 +619,7 @@
             </div>
           </div>
           <div class="usage-card highlight">
-            <div class="usage-icon">🤖</div>
+            <div class="usage-icon">AI</div>
             <div class="usage-body">
               <h3>Run the AI Agent</h3>
               <p>
@@ -1129,6 +1213,46 @@ omnikey telegram stop     # stop the daemon</code></pre>
                 manual from the menu bar / system tray icon.
               </p>
             </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── Contribute ── -->
+      <section class="contribute-section">
+        <div class="contribute-panel">
+          <div class="contribute-copy">
+            <span class="section-label">Contribute</span>
+            <h2>Help shape a better desktop AI layer.</h2>
+            <p>
+              OmniKey has useful surfaces for contributors: native app UX, provider adapters, agent
+              reliability, MCP integrations, docs, release automation, and Telegram workflows.
+            </p>
+          </div>
+          <div class="contribute-list" aria-label="Contribution areas">
+            <a
+              href="https://github.com/GurinderRawala/OmniKey-AI/issues"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <span>Issues</span>
+              Report bugs, rough edges, or missing integrations.
+            </a>
+            <a
+              href="https://github.com/GurinderRawala/OmniKey-AI/pulls"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <span>Pull requests</span>
+              Improve the API, CLI, Telegram bridge, macOS app, or Windows app.
+            </a>
+            <a
+              href="https://github.com/GurinderRawala/OmniKey-AI/blob/main/README.md"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <span>Docs</span>
+              Make setup, providers, MCP, and agent workflows easier to understand.
+            </a>
           </div>
         </div>
       </section>

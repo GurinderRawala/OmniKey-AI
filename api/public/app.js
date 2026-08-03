@@ -410,3 +410,54 @@ document.getElementById('year').textContent = new Date().getFullYear();
   // Expose a manual trigger for testing / future entry points
   window.__omnikeyShowStarModal = open;
 })();
+
+// ── Render any remaining static [data-lucide] icons in the markup ──
+(function () {
+  if (typeof window.lucide === 'undefined' || typeof window.lucide.createIcons !== 'function') {
+    return;
+  }
+  const nodes = document.querySelectorAll('[data-lucide]');
+  if (nodes.length) window.lucide.createIcons({ nodes: Array.from(nodes) });
+})();
+
+// ── Docs: reading progress + sidebar scroll-spy ──
+(function () {
+  const sidebar = document.getElementById('docs-sidebar');
+  const bar = document.getElementById('docs-progress-bar');
+  if (!sidebar && !bar) return;
+
+  const links = sidebar ? Array.from(sidebar.querySelectorAll('a[href^="#"]')) : [];
+  const sections = links
+    .map((link) => document.getElementById(link.getAttribute('href').slice(1)))
+    .filter(Boolean);
+
+  let ticking = false;
+
+  function update() {
+    ticking = false;
+
+    if (bar) {
+      const max = document.documentElement.scrollHeight - window.innerHeight;
+      const ratio = max > 0 ? Math.min(1, Math.max(0, window.scrollY / max)) : 0;
+      bar.style.width = (ratio * 100).toFixed(2) + '%';
+    }
+
+    if (!sections.length) return;
+    const line = window.scrollY + window.innerHeight * 0.28;
+    let active = 0;
+    sections.forEach((section, i) => {
+      if (section.offsetTop <= line) active = i;
+    });
+    links.forEach((link, i) => link.classList.toggle('is-active', i === active));
+  }
+
+  function onScroll() {
+    if (ticking) return;
+    ticking = true;
+    window.requestAnimationFrame(update);
+  }
+
+  window.addEventListener('scroll', onScroll, { passive: true });
+  window.addEventListener('resize', onScroll);
+  update();
+})();

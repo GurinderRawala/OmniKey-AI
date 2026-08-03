@@ -87,8 +87,14 @@
       </div>
     </nav>
 
+    <div class="docs-progress" aria-hidden="true"><span id="docs-progress-bar"></span></div>
+
     <main class="docs-main">
       <section class="docs-hero">
+        <div class="docs-hero-bg" aria-hidden="true">
+          <div class="docs-hero-grid"></div>
+          <div class="docs-hero-glow"></div>
+        </div>
         <span class="docs-kicker">Documentation</span>
         <h1>Set up OmniKey, connect Telegram, and run better agent sessions.</h1>
         <p>
@@ -103,29 +109,34 @@
 
       <section class="docs-quick-grid" aria-label="Documentation sections">
         <a href="#getting-started" class="docs-quick-card">
-          <span>01</span>
+          <span class="docs-quick-icon" aria-hidden="true"><i data-lucide="rocket"></i></span>
           <strong>Getting Started</strong>
           <p>Install the CLI, configure a provider, start the daemon, and open the desktop app.</p>
+          <span class="docs-quick-go" aria-hidden="true">Read<i data-lucide="arrow-right"></i></span>
         </a>
         <a href="#telegram" class="docs-quick-card">
-          <span>02</span>
+          <span class="docs-quick-icon" aria-hidden="true"><i data-lucide="send"></i></span>
           <strong>Telegram Integration</strong>
           <p>Create a bot, save credentials, run the daemon, and use remote commands.</p>
+          <span class="docs-quick-go" aria-hidden="true">Read<i data-lucide="arrow-right"></i></span>
         </a>
         <a href="#agent-instructions" class="docs-quick-card">
-          <span>03</span>
+          <span class="docs-quick-icon" aria-hidden="true"><i data-lucide="sparkles"></i></span>
           <strong>Agent Instructions</strong>
           <p>Use saved templates, custom models, MCP tools, and live steering during a run.</p>
+          <span class="docs-quick-go" aria-hidden="true">Read<i data-lucide="arrow-right"></i></span>
         </a>
         <a href="#changelog" class="docs-quick-card">
-          <span>04</span>
+          <span class="docs-quick-icon" aria-hidden="true"><i data-lucide="git-commit-horizontal"></i></span>
           <strong>Changelog</strong>
           <p>Review the provider, Telegram, steering, and Windows updates in this release.</p>
+          <span class="docs-quick-go" aria-hidden="true">Read<i data-lucide="arrow-right"></i></span>
         </a>
       </section>
 
       <div class="docs-layout">
-        <aside class="docs-sidebar" aria-label="Docs navigation">
+        <aside class="docs-sidebar" id="docs-sidebar" aria-label="Docs navigation">
+          <p class="docs-sidebar-title">On this page</p>
           <a href="#getting-started">Getting started</a>
           <a href="#providers">AI providers</a>
           <a href="#telegram">Telegram</a>
@@ -237,9 +248,10 @@ npm install -g omnikey-cli</code></pre>
               </table>
             </div>
             <div class="docs-callout">
-              <strong>Custom models:</strong> use the chat page model selector to enter the exact
+              <span class="docs-callout-icon" aria-hidden="true"><i data-lucide="info"></i></span>
+              <div><strong>Custom models:</strong> use the chat page model selector to enter the exact
               model string exposed by your provider. Enable Responses API only when that endpoint
-              supports OpenAI Responses-compatible requests.
+              supports OpenAI Responses-compatible requests.</div>
             </div>
           </section>
 
@@ -326,9 +338,10 @@ omnikey daemon --telegram</code></pre>
             </div>
 
             <div class="docs-callout">
-              <strong>Port setting:</strong> the Telegram bridge uses
+              <span class="docs-callout-icon" aria-hidden="true"><i data-lucide="info"></i></span>
+              <div><strong>Port setting:</strong> the Telegram bridge uses
               <code>OMNIKEY_TELEGRAM_PORT</code>, defaulting to <code>6666</code>, so it does not
-              collide with generic <code>PORT</code> settings from other apps.
+              collide with generic <code>PORT</code> settings from other apps.</div>
             </div>
           </section>
 
@@ -401,7 +414,8 @@ Run focused validation and report remaining risk.</code></pre>
               data-github-releases="https://api.github.com/repos/GurinderRawala/OmniKey-AI/releases?per_page=5"
             >
               <article>
-                <h3>CLI and API v1.6.24</h3>
+                <span class="docs-changelog-badge badge-cli">CLI &amp; API</span>
+                <h3>CLI and API <em>v1.6.24</em></h3>
                 <ul>
                   <li>Provider settings consistently honor custom daemon config paths.</li>
                   <li>Open Model provider supports generic OpenAI-compatible endpoints.</li>
@@ -413,7 +427,8 @@ Run focused validation and report remaining risk.</code></pre>
                 </ul>
               </article>
               <article>
-                <h3>macOS app v1.4.2</h3>
+                <span class="docs-changelog-badge badge-mac">macOS</span>
+                <h3>macOS app <em>v1.4.2</em></h3>
                 <ul>
                   <li>Chat composer can steer a running OmniAgent task without queueing a new turn.</li>
                   <li>Input state now switches between Send, Steer, and Stop while a task is active.</li>
@@ -422,7 +437,8 @@ Run focused validation and report remaining risk.</code></pre>
                 </ul>
               </article>
               <article>
-                <h3>Windows app v1.19.2</h3>
+                <span class="docs-changelog-badge badge-win">Windows</span>
+                <h3>Windows app <em>v1.19.2</em></h3>
                 <ul>
                   <li>Chat composer can steer a running OmniAgent task.</li>
                   <li>Input state now switches between Send, Steer, and Stop.</li>
