@@ -26,7 +26,7 @@ const program = new Command();
 program
   .name('omnikey')
   .description('Omnikey CLI for onboarding and configuration')
-  .version('1.6.23', '-v, --version', 'output the current version');
+  .version('1.6.24', '-v, --version', 'output the current version');
 
 program
   .command('onboard')

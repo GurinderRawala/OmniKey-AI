@@ -9,7 +9,7 @@ import {
   TASK_OUTPUT_FORMAT_INSTRUCTION,
   taskPromptSystemInstruction,
 } from './prompts';
-import { AIProvider, config } from './config';
+import { config } from './config';
 import { AuthLocals, authMiddleware } from './authMiddleware';
 import { Subscription } from './models/subscription';
 import { decompressString } from './compression';
