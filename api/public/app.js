@@ -443,7 +443,7 @@ document.getElementById('year').textContent = new Date().getFullYear();
     }
 
     if (!sections.length) return;
-    const line = window.scrollY + window.innerHeight * 0.28;
+    const line = window.scrollY + 128;
     let active = 0;
     sections.forEach((section, i) => {
       if (section.offsetTop <= line) active = i;

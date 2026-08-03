@@ -3,10 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>OmniKey Docs - Getting Started, Telegram, Agent Instructions</title>
+    <title>OmniKey Docs - Setup, Commands, Scheduling, MCP, Telegram</title>
     <meta
       name="description"
-      content="OmniKey documentation for setup, Telegram integration, built-in agent instructions, Open Model providers, and the latest release notes."
+      content="OmniKey documentation for setup, CLI commands, usage metrics, authenticated browser access, scheduled jobs, MCP servers, Telegram, saved instructions, providers, and release notes."
     />
     <link rel="canonical" href="https://omnikeyai.com/docs" />
     <link rel="icon" type="image/png" href="/icon.png" />
@@ -96,14 +96,14 @@
           <div class="docs-hero-glow"></div>
         </div>
         <span class="docs-kicker">Documentation</span>
-        <h1>Set up OmniKey, connect Telegram, and run better agent sessions.</h1>
+        <h1>Set up OmniKey and master the agent workflow.</h1>
         <p>
-          A compact guide for local setup, provider configuration, saved task instructions,
-          Telegram commands, and the changes shipping in the latest release.
+          A practical guide for local setup, CLI commands, usage metrics, browser access, scheduled jobs,
+          MCP tools, saved instructions, Telegram control, and the latest release notes.
         </p>
         <div class="docs-actions">
           <a href="#getting-started" class="btn btn-primary">Start setup</a>
-          <a href="#changelog" class="btn btn-secondary">See what is new</a>
+          <a href="#cli-commands" class="btn btn-secondary">View commands</a>
         </div>
       </section>
 
@@ -114,22 +114,52 @@
           <p>Install the CLI, configure a provider, start the daemon, and open the desktop app.</p>
           <span class="docs-quick-go" aria-hidden="true">Read<i data-lucide="arrow-right"></i></span>
         </a>
+        <a href="#omni-agent" class="docs-quick-card">
+          <span class="docs-quick-icon" aria-hidden="true"><i data-lucide="bot"></i></span>
+          <strong>omniAgent</strong>
+          <p>Turn omniAgent into a specialist with task instructions, project paths, and tools.</p>
+          <span class="docs-quick-go" aria-hidden="true">Read<i data-lucide="arrow-right"></i></span>
+        </a>
+        <a href="#at-commands" class="docs-quick-card">
+          <span class="docs-quick-icon" aria-hidden="true"><i data-lucide="at-sign"></i></span>
+          <strong>@ Commands</strong>
+          <p>Use inline commands anywhere to rewrite text, ask questions, or run omniAgent.</p>
+          <span class="docs-quick-go" aria-hidden="true">Read<i data-lucide="arrow-right"></i></span>
+        </a>
+        <a href="#cli-commands" class="docs-quick-card">
+          <span class="docs-quick-icon" aria-hidden="true"><i data-lucide="terminal"></i></span>
+          <strong>CLI Commands</strong>
+          <p>Run agents, manage services, open browser access, schedule jobs, and control MCPs.</p>
+          <span class="docs-quick-go" aria-hidden="true">Read<i data-lucide="arrow-right"></i></span>
+        </a>
+        <a href="#usage-metrics" class="docs-quick-card">
+          <span class="docs-quick-icon" aria-hidden="true"><i data-lucide="chart-no-axes-column"></i></span>
+          <strong>Usage Metrics</strong>
+          <p>Enable token recording and review consumption in the desktop Usage page.</p>
+          <span class="docs-quick-go" aria-hidden="true">Read<i data-lucide="arrow-right"></i></span>
+        </a>
+        <a href="#browser-access" class="docs-quick-card">
+          <span class="docs-quick-icon" aria-hidden="true"><i data-lucide="globe"></i></span>
+          <strong>Browser Access</strong>
+          <p>Grant OmniKey a dedicated authenticated browser profile for private web pages.</p>
+          <span class="docs-quick-go" aria-hidden="true">Read<i data-lucide="arrow-right"></i></span>
+        </a>
+        <a href="#scheduled-jobs" class="docs-quick-card">
+          <span class="docs-quick-icon" aria-hidden="true"><i data-lucide="calendar-clock"></i></span>
+          <strong>Scheduled Jobs</strong>
+          <p>Configure recurring and one-time automation from the desktop app or CLI.</p>
+          <span class="docs-quick-go" aria-hidden="true">Read<i data-lucide="arrow-right"></i></span>
+        </a>
+        <a href="#mcp-servers" class="docs-quick-card">
+          <span class="docs-quick-icon" aria-hidden="true"><i data-lucide="plug-zap"></i></span>
+          <strong>MCP Servers</strong>
+          <p>Connect external tools over stdio, HTTP, or SSE and clarify built-in defaults.</p>
+          <span class="docs-quick-go" aria-hidden="true">Read<i data-lucide="arrow-right"></i></span>
+        </a>
         <a href="#telegram" class="docs-quick-card">
           <span class="docs-quick-icon" aria-hidden="true"><i data-lucide="send"></i></span>
           <strong>Telegram Integration</strong>
           <p>Create a bot, save credentials, run the daemon, and use remote commands.</p>
-          <span class="docs-quick-go" aria-hidden="true">Read<i data-lucide="arrow-right"></i></span>
-        </a>
-        <a href="#agent-instructions" class="docs-quick-card">
-          <span class="docs-quick-icon" aria-hidden="true"><i data-lucide="sparkles"></i></span>
-          <strong>Agent Instructions</strong>
-          <p>Use saved templates, custom models, MCP tools, and live steering during a run.</p>
-          <span class="docs-quick-go" aria-hidden="true">Read<i data-lucide="arrow-right"></i></span>
-        </a>
-        <a href="#changelog" class="docs-quick-card">
-          <span class="docs-quick-icon" aria-hidden="true"><i data-lucide="git-commit-horizontal"></i></span>
-          <strong>Changelog</strong>
-          <p>Review the provider, Telegram, steering, and Windows updates in this release.</p>
           <span class="docs-quick-go" aria-hidden="true">Read<i data-lucide="arrow-right"></i></span>
         </a>
       </section>
@@ -138,7 +168,14 @@
         <aside class="docs-sidebar" id="docs-sidebar" aria-label="Docs navigation">
           <p class="docs-sidebar-title">On this page</p>
           <a href="#getting-started">Getting started</a>
+          <a href="#omni-agent">omniAgent</a>
+          <a href="#at-commands">@ commands</a>
           <a href="#providers">AI providers</a>
+          <a href="#cli-commands">CLI commands</a>
+          <a href="#usage-metrics">Usage metrics</a>
+          <a href="#browser-access">Browser access</a>
+          <a href="#scheduled-jobs">Scheduled jobs</a>
+          <a href="#mcp-servers">MCP servers</a>
           <a href="#telegram">Telegram</a>
           <a href="#agent-instructions">Agent instructions</a>
           <a href="#changelog">Changelog</a>
@@ -206,6 +243,160 @@ npm install -g omnikey-cli</code></pre>
             </div>
           </section>
 
+          <section class="docs-section" id="omni-agent">
+            <span class="section-label">omniAgent</span>
+            <h2>Turn omniAgent into the specialist your task needs</h2>
+            <p>
+              omniAgent is the task-focused chat experience inside the desktop app. Add a saved task
+              instruction to transform it into a coding agent, research assistant, release reviewer,
+              support analyst, operations helper, or any other specialist workflow. Then provide the
+              concrete goal in chat, including a project path, URL, file, or data source when the
+              task should start from a specific place.
+            </p>
+            <p>
+              You can also invoke omniAgent from any app: type an <code>@omniAgent</code> instruction,
+              select that text, and press <span class="key">⌘T</span> / <span class="key">Ctrl+T</span>.
+              OmniKey sends the selected command to the agent without requiring you to switch to the
+              chat window first.
+            </p>
+            <div class="docs-step-list">
+              <article class="docs-step">
+                <span>1</span>
+                <div>
+                  <h3>Add or select a task instruction</h3>
+                  <p>
+                    Task instructions define the specialist behavior: how omniAgent should inspect
+                    context, which tools it can use, what quality bar to follow, how to validate the
+                    work, and what to include in the final answer. Save reusable instructions for
+                    common roles, then select the right one before starting a chat.
+                  </p>
+                </div>
+              </article>
+              <article class="docs-step">
+                <span>2</span>
+                <div>
+                  <h3>Give omniAgent the target and goal</h3>
+                  <p>
+                    Type the outcome you want in natural language. For project work, include the
+                    local path, such as <code>/Users/you/projects/app</code>, plus the exact task:
+                    fix a bug, review changes, add a feature, investigate logs, write docs, or run a
+                    release check. omniAgent uses the path as the working context and begins from
+                    there.
+                  </p>
+                </div>
+              </article>
+              <article class="docs-step">
+                <span>3</span>
+                <div>
+                  <h3>Let connected tools do the work</h3>
+                  <p>
+                    While the task runs, omniAgent can use every enabled tool it is connected to,
+                    including MCP servers, terminal commands, filesystem access, web fetch, and an
+                    authenticated browser profile for pages that require login. Tool availability
+                    depends on your local setup, enabled MCP servers, and browser access settings.
+                  </p>
+                </div>
+              </article>
+            </div>
+            <div class="docs-callout">
+              <span class="docs-callout-icon" aria-hidden="true"><i data-lucide="sparkles"></i></span>
+              <div>
+                <strong>Example:</strong> select a Coding Agent instruction, then ask
+                <code>In /Users/you/projects/api, review the current changes, fix any blockers, and
+                run the smallest meaningful verification.</code> omniAgent will work from that path
+                and use the tools available to complete the task.
+              </div>
+            </div>
+          </section>
+
+          <section class="docs-section" id="at-commands">
+            <span class="section-label">Advanced usage</span>
+            <h2>Unlimited Flexibility with @ Commands</h2>
+            <p>
+              Prefix selected text with <code>@</code> when you want OmniKey to follow an inline
+              instruction instead of only applying a fixed shortcut behavior. Write the command in
+              any app, select it, and press an OmniKey shortcut. OmniKey reads the selected text,
+              uses your configured provider, and pastes the result back in place.
+            </p>
+            <div class="docs-table-wrap">
+              <table class="docs-table">
+                <thead>
+                  <tr>
+                    <th>Command or shortcut</th>
+                    <th>What it does</th>
+                    <th>How to use it</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><code>⌘E</code> / <code>Ctrl+E</code></td>
+                    <td>Enhance a Prompt: expands rough text into a stronger, clearer prompt.</td>
+                    <td>Select any text in any app, then press the enhance shortcut.</td>
+                  </tr>
+                  <tr>
+                    <td><code>⌘G</code> / <code>Ctrl+G</code></td>
+                    <td>Fix Grammar &amp; Clarity: corrects spelling, grammar, and readability.</td>
+                    <td>Select text, press the grammar shortcut, and OmniKey preserves your meaning.</td>
+                  </tr>
+                  <tr>
+                    <td><code>⌘T</code> / <code>Ctrl+T</code></td>
+                    <td>Run a Custom Task: applies your saved task instruction to selected text.</td>
+                    <td>Create task instructions in the menu bar app, then select text and run the task shortcut.</td>
+                  </tr>
+                  <tr>
+                    <td><code>@omnikeyai</code></td>
+                    <td>Ask OmniKey Anything: runs the instruction you write after the command.</td>
+                    <td>Start selected text with <code>@omnikeyai</code>, then press any OmniKey shortcut.</td>
+                  </tr>
+                  <tr>
+                    <td><code>@omniAgent</code></td>
+                    <td>Run the AI agent: starts an omniAgent task from selected text.</td>
+                    <td>Start selected text with <code>@omniAgent</code>, then press <code>⌘T</code> / <code>Ctrl+T</code>.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="docs-two-col">
+              <article class="docs-panel">
+                <h3>Ask OmniKey Anything with <code>@omnikeyai</code></h3>
+                <p>
+                  Use <code>@omnikeyai</code> for flexible one-shot instructions that should return a
+                  direct answer or transformed text. It is powered by your configured provider, such
+                  as OpenAI, Anthropic, Gemini, or an OpenAI-compatible open model.
+                </p>
+                <pre><code>@omnikeyai write this text into valid markdown format</code></pre>
+                <p>
+                  This is best for formatting, rewriting, summarizing, translating, drafting, or
+                  answering a focused question without launching a full agent workflow.
+                </p>
+              </article>
+              <article class="docs-panel">
+                <h3>Run omniAgent anywhere with <code>@omniAgent</code></h3>
+                <p>
+                  Use <code>@omniAgent</code> when the task needs more than a quick text response.
+                  Select the command and press <span class="key">⌘T</span> /
+                  <span class="key">Ctrl+T</span>. omniAgent can gather context from your terminal
+                  and the web, combine saved task instructions if configured, use connected MCPs and
+                  authenticated browser access, complete the task, and paste the result.
+                </p>
+                <pre><code>@omniAgent find all TODO comments in my project and summarise them</code></pre>
+                <p>
+                  Add a project path, URL, or file name when you want the agent to start from a
+                  specific place, for example <code>@omniAgent in /Users/you/projects/api, review the
+                  current changes and run validation</code>.
+                </p>
+              </article>
+            </div>
+            <div class="docs-callout">
+              <span class="docs-callout-icon" aria-hidden="true"><i data-lucide="search"></i></span>
+              <div>
+                <strong>Web search support:</strong> omniAgent can use configured search providers
+                such as DuckDuckGo, Serper, Brave Search, Tavily, and SearXNG when the task needs web
+                context.
+              </div>
+            </div>
+          </section>
+
           <section class="docs-section" id="providers">
             <span class="section-label">AI providers</span>
             <h2>Choose a hosted or OpenAI-compatible model</h2>
@@ -214,6 +405,14 @@ npm install -g omnikey-cli</code></pre>
               option is for OpenAI-compatible APIs such as self-hosted or open source model
               gateways.
             </p>
+            <div class="docs-callout">
+              <span class="docs-callout-icon" aria-hidden="true"><i data-lucide="info"></i></span>
+              <div>
+                <strong>Provider setup:</strong> start with <code>omnikey onboard</code> or update
+                provider settings in the desktop app. The active provider and model can be changed
+                before each chat, scheduled job, or Telegram task.
+              </div>
+            </div>
             <div class="docs-table-wrap">
               <table class="docs-table">
                 <thead>
@@ -252,6 +451,355 @@ npm install -g omnikey-cli</code></pre>
               <div><strong>Custom models:</strong> use the chat page model selector to enter the exact
               model string exposed by your provider. Enable Responses API only when that endpoint
               supports OpenAI Responses-compatible requests.</div>
+            </div>
+          </section>
+
+          <section class="docs-section" id="cli-commands">
+            <span class="section-label">CLI commands</span>
+            <h2>Run and manage OmniKey from the CLI</h2>
+            <p>
+              The desktop app is the easiest place to chat with OmniAgent, but the CLI is useful for
+              setup, automation, services, and quick maintenance. Most commands expect the local
+              daemon to be available.
+            </p>
+            <div class="docs-table-wrap">
+              <table class="docs-table">
+                <thead>
+                  <tr>
+                    <th>Command</th>
+                    <th>Use it for</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><code>omnikey onboard</code></td>
+                    <td>Configure your first provider and write the local OmniKey config.</td>
+                  </tr>
+                  <tr>
+                    <td><code>omnikey daemon</code></td>
+                    <td>Start the backend used by the desktop app, CLI commands, and agent sessions.</td>
+                  </tr>
+                  <tr>
+                    <td><code>omnikey status</code></td>
+                    <td>Check whether the local daemon is reachable and healthy.</td>
+                  </tr>
+                  <tr>
+                    <td><code>omnikey grant-browser-access</code></td>
+                    <td>Run the one-time guided setup for authenticated browser tab reading.</td>
+                  </tr>
+                  <tr>
+                    <td><code>omnikey browser open</code></td>
+                    <td>Reopen the saved OmniKey browser profile after browser access is configured.</td>
+                  </tr>
+                  <tr>
+                    <td><code>omnikey schedule ...</code></td>
+                    <td>Create, list, remove, or immediately run scheduled jobs.</td>
+                  </tr>
+                  <tr>
+                    <td><code>omnikey mcp ...</code></td>
+                    <td>Add, list, update, toggle, or remove MCP servers available to the agent.</td>
+                  </tr>
+                  <tr>
+                    <td><code>omnikey telegram ...</code></td>
+                    <td>Install, start, stop, restart, inspect, and tail logs for the Telegram daemon.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="docs-callout">
+              <span class="docs-callout-icon" aria-hidden="true"><i data-lucide="lightbulb"></i></span>
+              <div>
+                <strong>Tip:</strong> use the desktop app for day-to-day agent conversations, saved
+                instructions, model selection, scheduled jobs, and MCP server edits. Use CLI commands
+                when you need repeatable setup, service control, or terminal automation.
+              </div>
+            </div>
+          </section>
+
+          <section class="docs-section" id="usage-metrics">
+            <span class="section-label">Usage metrics</span>
+            <h2>Track token consumption in the desktop app</h2>
+            <p>
+              OmniKey can record per-call usage metrics so the desktop Usage page shows how many
+              tokens your AI calls consume. Usage recording is controlled from the Settings window
+              and is persisted in the local agent settings database, so changes take effect without
+              restarting the daemon.
+            </p>
+            <div class="docs-step-list">
+              <article class="docs-step">
+                <span>1</span>
+                <div>
+                  <h3>Enable usage recording</h3>
+                  <p>
+                    Open <strong>Settings &rarr; Agent Access</strong> in the desktop app and turn on
+                    <strong>Usage recording</strong>. When enabled, OmniKey stores the model, mode,
+                    thread/session, and token counts for each AI call. Self-hosted installs keep
+                    detailed recording off by default, so enable it if you want the Usage page to
+                    populate from that point forward.
+                  </p>
+                </div>
+              </article>
+              <article class="docs-step">
+                <span>2</span>
+                <div>
+                  <h3>Open the Usage page</h3>
+                  <p>
+                    In the desktop Settings window, choose <strong>Usage</strong>. The page reads
+                    recorded metrics from <code>/api/usage</code> and lets you filter by time range
+                    and provider. It reports token counts only, using values recorded from actual AI
+                    calls instead of estimated provider pricing.
+                  </p>
+                </div>
+              </article>
+              <article class="docs-step">
+                <span>3</span>
+                <div>
+                  <h3>Review consumption by model and session</h3>
+                  <p>
+                    The Usage page shows total tokens, input tokens, output tokens, request count,
+                    average daily tokens, daily token split, tokens by provider/model, and recent
+                    sessions with recorded token totals. Use it to spot heavy workflows, compare
+                    models, and understand how much context each agent session consumes.
+                  </p>
+                </div>
+              </article>
+            </div>
+            <div class="docs-callout">
+              <span class="docs-callout-icon" aria-hidden="true"><i data-lucide="info"></i></span>
+              <div>
+                <strong>Recording starts when enabled:</strong> disabling usage recording stops new
+                detailed rows from being saved. Existing context counters in active sessions are not
+                affected, and previously recorded Usage page data remains available for the selected
+                range.
+              </div>
+            </div>
+          </section>
+
+          <section class="docs-section" id="browser-access">
+            <span class="section-label">Authenticated browser access</span>
+            <h2>Let OmniAgent read pages you are signed in to</h2>
+            <p>
+              Browser access is for pages that normal web fetch cannot reach, such as private
+              dashboards, internal docs, or account pages. OmniKey uses a dedicated browser profile
+              so your main browser profile is not modified.
+            </p>
+            <div class="docs-two-col">
+              <article class="docs-panel">
+                <h3>Recommended guided setup</h3>
+                <p>
+                  Run the CLI flow once. It detects supported browsers, creates a saved debug
+                  profile under <code>~/.omnikey/browser-debug-profiles/</code>, finds a port,
+                  registers a login startup entry, launches the browser, and verifies access.
+                </p>
+                <pre><code>omnikey grant-browser-access</code></pre>
+                <p>
+                  Sign in to the sites OmniAgent should use inside the opened OmniKey browser
+                  profile. Those sessions persist between restarts.
+                </p>
+              </article>
+              <article class="docs-panel">
+                <h3>Reopen or change access</h3>
+                <p>
+                  Reopen the saved profile whenever you need to refresh logins or start the debug
+                  browser manually.
+                </p>
+                <pre><code>omnikey browser open</code></pre>
+                <p>
+                  Re-run <code>omnikey grant-browser-access</code> to update the browser, profile,
+                  port, or startup behavior. On macOS Apple Events mode may require enabling
+                  <strong>Allow JavaScript from Apple Events</strong> in the selected browser.
+                </p>
+              </article>
+            </div>
+
+            <h3 class="docs-subsection-title">Manual setup</h3>
+            <p>
+              Use the manual method only if the guided CLI flow is unavailable or you need to wire a
+              custom browser/profile yourself. OmniKey supports Chrome, Brave, and Edge on Windows;
+              and Chrome, Brave, Edge, Arc, Vivaldi, Opera, Chromium, and Safari on macOS.
+            </p>
+            <div class="docs-step-list">
+              <article class="docs-step">
+                <span>1</span>
+                <div>
+                  <h3>Windows remote debugging port</h3>
+                  <p>
+                    Modern Chrome-based browsers require <code>--remote-debugging-port</code> to use
+                    a dedicated <code>--user-data-dir</code>, not your everyday browser profile.
+                    Create a profile folder, close every browser window, and launch the browser from
+                    PowerShell.
+                  </p>
+                  <pre><code>mkdir "$env:USERPROFILE\.omnikey\browser-debug-profiles\chrome-default"
+
+&amp; "C:\Program Files\Google\Chrome\Application\chrome.exe" `
+  '--remote-debugging-port=9222' `
+  "--user-data-dir=$env:USERPROFILE\.omnikey\browser-debug-profiles\chrome-default" `
+  '--no-first-run' '--no-default-browser-check'</code></pre>
+                  <p>
+                    Sign in inside the fresh window. To start it on login, add the same command as a
+                    Registry Run value under
+                    <code>HKCU\Software\Microsoft\Windows\CurrentVersion\Run</code>.
+                  </p>
+                </div>
+              </article>
+              <article class="docs-step">
+                <span>2</span>
+                <div>
+                  <h3>macOS remote debugging port</h3>
+                  <p>
+                    For Chrome-based browsers on macOS, create a dedicated profile folder, quit the
+                    browser fully with <strong>⌘Q</strong>, and launch it from Terminal with a debug
+                    port.
+                  </p>
+                  <pre><code>mkdir -p ~/.omnikey/browser-debug-profiles/chrome-default
+
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  --remote-debugging-port=9222 \
+  --user-data-dir="$HOME/.omnikey/browser-debug-profiles/chrome-default" \
+  --no-first-run --no-default-browser-check</code></pre>
+                  <p>
+                    Replace the app path for Brave, Edge, Arc, Vivaldi, Opera, or Chromium. To
+                    auto-start on login, create a launchd agent at
+                    <code>~/Library/LaunchAgents/com.omnikey.browser-debug.plist</code> with
+                    <code>RunAtLoad = true</code> pointing to the same command.
+                  </p>
+                </div>
+              </article>
+              <article class="docs-step">
+                <span>3</span>
+                <div>
+                  <h3>macOS Apple Events access</h3>
+                  <p>
+                    Chrome, Brave, Edge, Arc, Vivaldi, Opera, and Chromium can expose tab content
+                    through Apple Events. In the browser menu bar, open
+                    <strong>View &rarr; Developer &rarr; Allow JavaScript from Apple Events</strong>,
+                    make sure it is checked, then restart the browser.
+                  </p>
+                  <p>
+                    For Safari, go to <strong>Safari &rarr; Settings &rarr; Advanced</strong>, enable
+                    <strong>Show features for web developers</strong>, then open
+                    <strong>Develop &rarr; Allow JavaScript from Apple Events</strong> and make sure
+                    it is checked.
+                  </p>
+                </div>
+              </article>
+            </div>
+          </section>
+
+          <section class="docs-section" id="scheduled-jobs">
+            <span class="section-label">Automation</span>
+            <h2>Schedule prompts to run automatically</h2>
+            <p>
+              Scheduled jobs run OmniAgent prompts on a recurring cadence or at a one-time date and
+              time. Use them for status reports, reminders, routine research, cleanup checks, or any
+              repeatable agent workflow.
+            </p>
+            <div class="docs-step-list">
+              <article class="docs-step">
+                <span>1</span>
+                <div>
+                  <h3>Open Scheduled Jobs in the desktop app</h3>
+                  <p>
+                    From the OmniKey menu bar on macOS or system tray on Windows, choose
+                    <strong>Scheduled Jobs</strong>. The window shows each job, whether it is enabled,
+                    and when it will run next.
+                  </p>
+                </div>
+              </article>
+              <article class="docs-step">
+                <span>2</span>
+                <div>
+                  <h3>Create the job</h3>
+                  <p>
+                    Click <strong>Add Job</strong>, enter a clear label, write the prompt OmniAgent
+                    should run, choose the model or instruction set if needed, and select either a
+                    recurring schedule or a one-time run time.
+                  </p>
+                </div>
+              </article>
+              <article class="docs-step">
+                <span>3</span>
+                <div>
+                  <h3>Manage and test it</h3>
+                  <p>
+                    Use <strong>Enable</strong>/<strong>Disable</strong> to pause work without
+                    deleting it, <strong>Edit</strong> to adjust prompts or timing, and
+                    <strong>Run Now</strong> to verify the job immediately.
+                  </p>
+                </div>
+              </article>
+            </div>
+            <div class="docs-table-wrap">
+              <table class="docs-table">
+                <thead>
+                  <tr>
+                    <th>CLI command</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><code>omnikey schedule add</code></td>
+                    <td>Create a job with an interactive label, prompt, schedule type, and timing flow.</td>
+                  </tr>
+                  <tr>
+                    <td><code>omnikey schedule list</code></td>
+                    <td>List jobs with status and next run details.</td>
+                  </tr>
+                  <tr>
+                    <td><code>omnikey schedule remove</code></td>
+                    <td>Choose a job interactively and confirm deletion.</td>
+                  </tr>
+                  <tr>
+                    <td><code>omnikey schedule run-now &lt;job-id&gt;</code></td>
+                    <td>Trigger a scheduled job immediately without waiting for its next run.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="docs-section" id="mcp-servers">
+            <span class="section-label">MCP servers</span>
+            <h2>Extend OmniAgent with external tools</h2>
+            <p>
+              MCP servers expose tool capabilities to OmniAgent, such as filesystem access,
+              browser automation, GitHub, databases, internal APIs, or custom company tools. Once a
+              server is registered and enabled, OmniAgent can discover and call its tools when they
+              are relevant to the task.
+            </p>
+            <div class="docs-two-col">
+              <article class="docs-panel">
+                <h3>Manage servers in the desktop app</h3>
+                <p>
+                  Open <strong>MCP Servers</strong> from the menu bar or system tray. Add a server,
+                  choose <strong>stdio</strong>, <strong>HTTP</strong>, or <strong>SSE</strong>, then
+                  provide the command, URL, arguments, headers, and environment variables required by
+                  that server. Toggle a server off to keep it configured but unavailable to agents.
+                </p>
+              </article>
+              <article class="docs-panel">
+                <h3>Manage servers from the CLI</h3>
+                <pre><code>omnikey mcp add
+omnikey mcp list
+omnikey mcp remove
+omnikey mcp toggle &lt;id&gt;
+omnikey mcp update &lt;id&gt;</code></pre>
+                <p>
+                  The add and update flows are interactive and reuse existing values as defaults
+                  when editing.
+                </p>
+              </article>
+            </div>
+            <div class="docs-callout">
+              <span class="docs-callout-icon" aria-hidden="true"><i data-lucide="shield-check"></i></span>
+              <div>
+                <strong>Built-in vs. configured MCPs:</strong> OmniKey includes built-in agent
+                instructions that tell the agent when to use tools. Setup may also seed common MCP
+                entries such as filesystem, Playwright, or Git if they are missing. These defaults
+                are not a requirement to add your own servers, and disabling a configured MCP only
+                removes that tool source from future agent runs.
+              </div>
             </div>
           </section>
 
@@ -346,12 +894,12 @@ omnikey daemon --telegram</code></pre>
           </section>
 
           <section class="docs-section" id="agent-instructions">
-            <span class="section-label">Built-in agent instructions</span>
+            <span class="section-label">Built-in instructions</span>
             <h2>Save repeatable task behavior</h2>
             <p>
-              Saved task instructions let you keep durable behavior for common workflows. Select a
-              template before a run, or mention the instruction by name when you want OmniAgent to
-              apply it to the current task.
+              Saved instructions are reusable guidance blocks for common workflows. They are separate
+              from MCP servers: instructions shape how the agent behaves, while MCP servers provide
+              additional tools the agent may call.
             </p>
 
             <div class="docs-two-col">
@@ -359,8 +907,8 @@ omnikey daemon --telegram</code></pre>
                 <h3>Coding Agent template</h3>
                 <p>
                   New installs seed a Coding Agent instruction set if it is missing. It asks the
-                  agent to review current changes, keep edits scoped, use the right tools, validate
-                  before finishing, and report what changed.
+                  agent to inspect the repository first, keep edits scoped, preserve user work,
+                  validate changes, and report what changed.
                 </p>
                 <pre><code>Review current changes first.
 Keep edits minimal and aligned with the codebase.
@@ -369,18 +917,18 @@ Run focused validation and report remaining risk.</code></pre>
               </article>
 
               <article class="docs-panel">
-                <h3>MCP tools and steering</h3>
+                <h3>How to use instructions</h3>
                 <p>
-                  File, Playwright, and Git MCP entries are created during setup when they are not
-                  already present. While a run is active, use live steering from chat to add guidance
-                  to the current session instead of queueing a separate follow-up.
+                  In the desktop app, choose a saved instruction before starting a task, or mention
+                  the instruction by name in your prompt. While a run is active, send live steering
+                  from chat to add guidance without starting a separate follow-up session.
                 </p>
                 <ul class="docs-badge-list">
-                  <li>Saved instructions</li>
-                  <li>Custom model IDs</li>
+                  <li>Saved templates</li>
+                  <li>Per-task guidance</li>
                   <li>Live steering</li>
-                  <li>Responses API toggle</li>
-                  <li>MCP tool setup</li>
+                  <li>Model selection</li>
+                  <li>MCP-aware runs</li>
                 </ul>
               </article>
             </div>

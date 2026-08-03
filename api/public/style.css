@@ -1800,7 +1800,7 @@ footer a:hover {
 
 .docs-quick-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
   margin-bottom: 56px;
 }
@@ -1908,6 +1908,12 @@ footer a:hover {
   line-height: 1.35;
   letter-spacing: 0;
   margin-bottom: 8px;
+}
+
+.docs-section .docs-subsection-title {
+  display: block;
+  margin-top: 48px;
+  margin-bottom: 14px;
 }
 
 .docs-section p {
