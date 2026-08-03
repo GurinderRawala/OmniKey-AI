@@ -1938,10 +1938,15 @@ footer a:hover {
   display: grid;
   grid-template-columns: 38px minmax(0, 1fr);
   gap: 16px;
+  min-width: 0;
   padding: 18px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.025);
+}
+
+.docs-step > div {
+  min-width: 0;
 }
 
 .docs-step > span {
@@ -2191,6 +2196,7 @@ footer a:hover {
 
   .docs-step {
     grid-template-columns: 1fr;
+    padding: 16px;
   }
 
   .docs-section h2 {
@@ -3625,6 +3631,21 @@ body.star-modal-open {
 .docs-table td code,
 .docs-table th code {
   white-space: nowrap;
+}
+
+.docs-section p code,
+.docs-section li code,
+.docs-callout code {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.docs-step pre,
+.docs-panel pre {
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
 }
 
 /* ── Docs: changelog ── */
