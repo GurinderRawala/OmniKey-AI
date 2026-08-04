@@ -1,3 +1,11 @@
+export const OMNIKEY_DIRECTIVE_SYSTEM_INSTRUCTION = `
+Follow the task instructions written in the \`<omnikeyai_directive>\` tag.
+
+<rules>
+- Use any provided context only as additional information for answering the question or completing the task.
+- Deliver only the final answer or task result, without any preamble or meta-commentary unless explicitly requested by the user.
+</rules>`;
+
 export const OUTPUT_FORMAT_INSTRUCTION = `
 <output_format>
 Your response MUST contain only the transformed/improved version of the user's text, wrapped in these exact XML tags:
@@ -7,11 +15,8 @@ Your response MUST contain only the transformed/improved version of the user's t
 </improved_text>
 
 CRITICAL RULES:
-- Everything in the user message is the TEXT TO TRANSFORM, except for any segment explicitly prefixed with "@omnikeyai:" — that segment is an instruction override.
-- Example: "This is my text. @omnikeyai: make it more formal" → transform "This is my text." with the added instruction to make it more formal.
-- If no "@omnikeyai:" segment is present, apply the task (grammar fix, enhancement, etc.) to the full user message as-is.
+- Treat the full user message as the TEXT TO TRANSFORM.
 - NEVER include explanations, reasoning, comments, or any content outside the <improved_text> tags.
-- NEVER echo back the original instructions or the @omnikeyai directive in your output.
 - Output ONLY the final transformed text inside the tags.
 </output_format>`;
 
@@ -96,6 +101,7 @@ CRITICAL RULES:
 - NEVER include reasoning, explanations, tool usage notes, or meta-commentary outside or inside the tags unless the task instructions explicitly ask for it.
 - NEVER echo back the original instructions or the user's input inside the tags.
 - Output ONLY the final result inside the tags — nothing else.
+- Never remove any pasted content like URLs, code snippets, or text blocks from the final result unless the task instructions explicitly ask for it.
 </output_format>`;
 
 export const taskPromptSystemInstruction = `
