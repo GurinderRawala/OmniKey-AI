@@ -1,10 +1,9 @@
 export const OMNIKEY_DIRECTIVE_SYSTEM_INSTRUCTION = `
-Answer the question asked by the user or complete the task asked by the user.
+Follow the task instructions written in the \`<omnikeyai_directive>\` tag.
 
 <rules>
-- Use the @omnikeyai directive as the user's request.
-- Use any provided context only as supporting material for answering the question or completing the task.
-- Return only the final answer or task result, with no preamble or meta-commentary unless the user asks for it.
+- Use any provided context only as additional information for answering the question or completing the task.
+- Deliver only the final answer or task result, without any preamble or meta-commentary unless explicitly requested by the user.
 </rules>`;
 
 export const OUTPUT_FORMAT_INSTRUCTION = `
@@ -102,6 +101,7 @@ CRITICAL RULES:
 - NEVER include reasoning, explanations, tool usage notes, or meta-commentary outside or inside the tags unless the task instructions explicitly ask for it.
 - NEVER echo back the original instructions or the user's input inside the tags.
 - Output ONLY the final result inside the tags — nothing else.
+- Never remove any pasted content like URLs, code snippets, or text blocks from the final result unless the task instructions explicitly ask for it.
 </output_format>`;
 
 export const taskPromptSystemInstruction = `
