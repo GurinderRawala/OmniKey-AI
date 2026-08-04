@@ -42,7 +42,11 @@ vi.mock('../agentSettingsStore', () => ({
   selectedAgentModelForProvider: mocks.selectedAgentModelForProvider,
 }));
 
-import { createMessagesParams, runEnhancementModel } from '../featureRoutes';
+import {
+  createOmniKeyDirectiveMessages,
+  runEnhancementModel,
+  runOmniKeyDirectiveModel,
+} from '../featureRoutes';
 import type { Subscription } from '../models/subscription';
 
 function makeLogger() {
@@ -143,37 +147,30 @@ describe('runEnhancementModel — temperature per command', () => {
   });
 });
 
-describe('@omnikeyai directive messages', () => {
+describe('@omnikeyai directive model', () => {
   it('uses only directive instructions and context instead of the shortcut prompt', () => {
-    const messages = createMessagesParams(
-      'grammar',
-      'ignored raw input',
-      'grammar shortcut prompt',
-      {
-        instructions: 'Summarize this as three bullets.',
-        context: 'A long source document.',
-      },
-    );
+    const messages = createOmniKeyDirectiveMessages({
+      instructions: 'Summarize this as three bullets.',
+      context: 'A long source document.',
+    });
 
     expect(messages).toHaveLength(2);
     expect(messages[0].role).toBe('system');
-    expect(messages[0].content).toContain('executing a one-shot user directive');
+    expect(messages[0].content).toContain(
+      'Answer the question asked by the user or complete the task asked by the user.',
+    );
     expect(messages[0].content).not.toContain('grammar shortcut prompt');
     expect(messages[1].content).toContain(
       '<omnikeyai_directive>\nSummarize this as three bullets.\n</omnikeyai_directive>',
     );
     expect(messages[1].content).toContain('<context>\nA long source document.\n</context>');
-    expect(messages[1].content).not.toContain('ignored raw input');
   });
 
   it('uses the smart model with no temperature and skips shortcut prompt loading', async () => {
-    const result = await runEnhancementModel(
+    const result = await runOmniKeyDirectiveModel(
       makeLogger(),
-      '@omnikeyai explain this',
-      'enhance',
-      fakeSubscription,
-      undefined,
       { instructions: 'explain this', context: '' },
+      fakeSubscription,
     );
 
     expect(result).not.toBeNull();

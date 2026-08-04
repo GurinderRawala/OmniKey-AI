@@ -34,40 +34,45 @@ const enhanceRequestSchema = zod.object({
   text: zod.string(),
 });
 
-export type OmniKeyDirective = {
+type OmniKeyDirective = {
   instructions: string;
   context: string;
 };
 
-type FeatureLocals = AuthLocals & {
-  omniKeyDirective?: OmniKeyDirective;
-};
-
 const OMNIKEY_DIRECTIVE_PATTERN = /(?:^|(?<=\s))@omnikeyai\b(?!\.)\s*:?\s*/i;
 
-/**
- * Detects the one-shot @omnikeyai mode before any feature-specific handler runs.
- * The handler can then bypass its shortcut prompt and execute only the directive.
- */
-export function omniKeyDirectiveMiddleware(
-  req: Request,
-  res: Response<any, FeatureLocals>,
-  next: NextFunction,
-): void {
-  const text = typeof req.body?.text === 'string' ? req.body.text : '';
+function extractOmniKeyDirective(text: string): OmniKeyDirective | null {
   const match = OMNIKEY_DIRECTIVE_PATTERN.exec(text);
+  if (!match) return null;
 
-  if (match) {
-    const instructions = text.slice(match.index + match[0].length).trim();
-    if (instructions) {
-      res.locals.omniKeyDirective = {
-        instructions,
-        context: text.slice(0, match.index).trim(),
-      };
-    }
+  const instructions = text.slice(match.index + match[0].length).trim();
+  if (!instructions) return null;
+
+  return {
+    instructions,
+    context: text.slice(0, match.index).trim(),
+  };
+}
+
+/**
+ * Detects @omnikeyai before any feature-specific handler runs. Directive
+ * requests are handled here so enhance/grammar/custom-task flows remain their
+ * normal shortcut flows.
+ */
+export async function omniKeyDirectiveMiddleware(
+  req: Request,
+  res: Response<any, AuthLocals>,
+  next: NextFunction,
+): Promise<void> {
+  const text = typeof req.body?.text === 'string' ? req.body.text : '';
+  const directive = extractOmniKeyDirective(text);
+
+  if (!directive) {
+    next();
+    return;
   }
 
-  next();
+  await handleOmniKeyDirectiveRequest(req, res, directive);
 }
 
 export async function getPromptForCommand(
@@ -181,25 +186,24 @@ function usageModeForCommand(cmd: EnhanceCommand): UsageMode {
   return cmd === 'task' ? 'custom-task' : cmd;
 }
 
+export function createOmniKeyDirectiveMessages(directive: OmniKeyDirective): AIMessage[] {
+  return [
+    {
+      role: 'system',
+      content: [OMNIKEY_DIRECTIVE_SYSTEM_INSTRUCTION, TASK_OUTPUT_FORMAT_INSTRUCTION].join('\n'),
+    },
+    {
+      role: 'user',
+      content: `<omnikeyai_directive>\n${directive.instructions}\n</omnikeyai_directive>\n<context>\n${directive.context}\n</context>`,
+    },
+  ];
+}
+
 export function createMessagesParams(
   cmd: EnhanceCommand,
   input: string,
   prompt: string,
-  directive?: OmniKeyDirective,
 ): AIMessage[] {
-  if (directive) {
-    return [
-      {
-        role: 'system',
-        content: [OMNIKEY_DIRECTIVE_SYSTEM_INSTRUCTION, TASK_OUTPUT_FORMAT_INSTRUCTION].join('\n'),
-      },
-      {
-        role: 'user',
-        content: `<omnikeyai_directive>\n${directive.instructions}\n</omnikeyai_directive>\n<context>\n${directive.context}\n</context>`,
-      },
-    ];
-  }
-
   if (cmd === 'task') {
     return [
       {
@@ -232,21 +236,18 @@ export async function runEnhancementModel(
   cmd: EnhanceCommand,
   subscription: Subscription,
   onDelta?: (delta: string) => void,
-  directive?: OmniKeyDirective,
 ): Promise<{ rawResponse: string; usage?: CompletionUsage; model: string } | OmniKeyError | null> {
   const trimmed = text.trim();
 
-  // Directive mode must not load or apply the shortcut's own prompt. It uses
-  // the smart model because it executes a request rather than rewriting text.
-  const prompt = directive ? '' : await getPromptForCommand(logger, cmd, subscription);
+  const prompt = await getPromptForCommand(logger, cmd, subscription);
 
-  if (!directive && !prompt) {
+  if (!prompt) {
     logger.error(`No system prompt found for command: ${cmd}`);
     return new OmniKeyError(`No system prompt found for command: ${cmd}`, 404);
   }
 
-  const model = await getModelForCommand(directive ? 'task' : cmd);
-  const messages = createMessagesParams(cmd, trimmed, prompt ?? '', directive);
+  const model = await getModelForCommand(cmd);
+  const messages = createMessagesParams(cmd, trimmed, prompt);
 
   let rawResponse = '';
   let usage: CompletionUsage | undefined;
@@ -257,7 +258,7 @@ export async function runEnhancementModel(
   // omitting `temperature` keeps the request shape uniform across providers
   // and lets each model use its own tuned default. The fast-tier models used
   // by `enhance` and `grammar` keep the previous 0.3 default.
-  const completionOptions = cmd === 'task' || directive ? {} : { temperature: 0.3 };
+  const completionOptions = cmd === 'task' ? {} : { temperature: 0.3 };
   const result = await aiClient.streamComplete(model, messages, completionOptions, (delta) => {
     rawResponse += delta;
     if (onDelta) onDelta(delta);
@@ -273,19 +274,11 @@ async function enhanceText(
   text: string,
   cmd: EnhanceCommand,
   subscription: Subscription,
-  directive?: OmniKeyDirective,
 ): Promise<string | OmniKeyError> {
   const trimmed = text.trim();
 
   try {
-    const result = await runEnhancementModel(
-      logger,
-      trimmed,
-      cmd,
-      subscription,
-      undefined,
-      directive,
-    );
+    const result = await runEnhancementModel(logger, trimmed, cmd, subscription);
 
     if (!result || result instanceof OmniKeyError) {
       return result instanceof OmniKeyError ? result : new OmniKeyError('Unknown error', 500);
@@ -310,11 +303,111 @@ async function enhanceText(
   }
 }
 
+export async function runOmniKeyDirectiveModel(
+  logger: Logger,
+  directive: OmniKeyDirective,
+  subscription: Subscription,
+  onDelta?: (delta: string) => void,
+): Promise<{ rawResponse: string; usage?: CompletionUsage; model: string } | null> {
+  const model = await getModelForCommand('task');
+  const messages = createOmniKeyDirectiveMessages(directive);
+
+  let rawResponse = '';
+  const result = await aiClient.streamComplete(model, messages, {}, (delta) => {
+    rawResponse += delta;
+    if (onDelta) onDelta(delta);
+  });
+
+  return { rawResponse, usage: result.usage, model };
+}
+
+async function handleOmniKeyDirectiveRequest(
+  req: Request,
+  res: Response<any, AuthLocals>,
+  directive: OmniKeyDirective,
+): Promise<void> {
+  const { logger, subscription } = res.locals;
+  const wantsStream = req.header('x-omnikey-stream') === 'true';
+
+  if (wantsStream) {
+    await streamOmniKeyDirectiveResponse(res, directive);
+    return;
+  }
+
+  try {
+    const result = await runOmniKeyDirectiveModel(logger, directive, subscription);
+    if (!result) {
+      res.status(500).json({ error: 'Unknown error' });
+      return;
+    }
+
+    const enhanced = result.rawResponse.trim();
+    await recordTokenUsage(logger, subscription, result.usage, result.model, 'custom-task');
+
+    if (!enhanced) {
+      logger.warn('LLM returned empty content for @omnikeyai directive.');
+      res.json({ result: '' });
+      return;
+    }
+
+    logger.info(`LLM response received for @omnikeyai directive, length: ${enhanced.length}`);
+    res.json({ result: parseImprovedTextResponse(logger, enhanced) });
+  } catch (err) {
+    logger.error(
+      `Error calling OpenAI for @omnikeyai directive: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    res.status(500).json({ error: 'Internal server error.' });
+  }
+}
+
+async function streamOmniKeyDirectiveResponse(
+  res: Response<any, AuthLocals>,
+  directive: OmniKeyDirective,
+): Promise<void> {
+  const { logger, subscription } = res.locals;
+  let headersSent = false;
+
+  const ensureHeadersSent = () => {
+    if (!headersSent) {
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-cache');
+
+      (res as any).flushHeaders?.();
+      headersSent = true;
+    }
+  };
+
+  try {
+    const result = await runOmniKeyDirectiveModel(logger, directive, subscription, (delta) => {
+      if (!delta) return;
+      ensureHeadersSent();
+      res.write(delta);
+    });
+
+    if (result?.usage) {
+      await recordTokenUsage(logger, subscription, result.usage, result.model, 'custom-task');
+    }
+
+    if (!headersSent) ensureHeadersSent();
+    res.end();
+  } catch (err) {
+    logger.error('Error streaming @omnikeyai directive response.', { error: err });
+    try {
+      if (!headersSent) {
+        res.status(500).json({ error: 'Internal server error.' });
+      } else {
+        res.end();
+      }
+    } catch {
+      // ignore secondary errors when ending stream
+    }
+  }
+}
+
 async function streamEnhanceResponse(
-  res: Response<any, FeatureLocals>,
+  res: Response<any, AuthLocals>,
   text: string,
   cmd: EnhanceCommand,
-  directive?: OmniKeyDirective,
 ): Promise<void> {
   const { logger, subscription } = res.locals;
   const trimmed = text.trim();
@@ -332,18 +425,11 @@ async function streamEnhanceResponse(
   };
 
   try {
-    const result = await runEnhancementModel(
-      logger,
-      trimmed,
-      cmd,
-      subscription,
-      (delta) => {
-        if (!delta) return;
-        ensureHeadersSent();
-        res.write(delta);
-      },
-      directive,
-    );
+    const result = await runEnhancementModel(logger, trimmed, cmd, subscription, (delta) => {
+      if (!delta) return;
+      ensureHeadersSent();
+      res.write(delta);
+    });
 
     if (result instanceof OmniKeyError) {
       logger.error('Error during streaming enhancement model execution.', {
@@ -399,24 +485,18 @@ async function streamEnhanceResponse(
 }
 
 function makeEnhanceHandler(cmd: EnhanceCommand) {
-  return async (req: Request, res: Response<any, FeatureLocals>) => {
+  return async (req: Request, res: Response<any, AuthLocals>) => {
     const { logger, subscription } = res.locals;
     try {
       const body = enhanceRequestSchema.parse(req.body);
       const wantsStream = req.header('x-omnikey-stream') === 'true';
 
       if (wantsStream) {
-        await streamEnhanceResponse(res, body.text, cmd, res.locals.omniKeyDirective);
+        await streamEnhanceResponse(res, body.text, cmd);
         return;
       }
 
-      const result = await enhanceText(
-        logger,
-        body.text,
-        cmd,
-        subscription,
-        res.locals.omniKeyDirective,
-      );
+      const result = await enhanceText(logger, body.text, cmd, subscription);
 
       if (result instanceof OmniKeyError) {
         logger.error('Error during enhanceText execution.', {
@@ -429,7 +509,7 @@ function makeEnhanceHandler(cmd: EnhanceCommand) {
       return res.json({ result });
     } catch (err) {
       logger.error('Error processing enhance request.', { error: err });
-      return res.status(500).json({ error: 'Internal server error.' });
+      res.status(500).json({ error: 'Internal server error.' });
     }
   };
 }
