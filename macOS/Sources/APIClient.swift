@@ -1,7 +1,7 @@
 import Foundation
 
 final class APIClient: @unchecked Sendable {
-        /// Indicates if the self-hosted OmniKey config is detected
+    /// Indicates if the self-hosted OmniKey config is detected.
     /// Reads the self-hosted config and returns the port if present, else nil
     private static func selfHostedPort() -> String? {
         // Use FileManager and NSHomeDirectory to resolve the config path reliably
@@ -33,15 +33,16 @@ final class APIClient: @unchecked Sendable {
         return nil
     }
 
-    static let isSelfHosted: Bool = {
-        return selfHostedPort() != nil
-    }()
+    static var isSelfHosted: Bool {
+        selfHostedPort() != nil
+    }
+
     /// Base URL resolution order:
     /// 1. Check for the self-hosted OmniKey setup in `~/.omnikey/config.json`
     /// 2. Environment variable `OMNIKEY_BACKEND_URL` at runtime
     /// 3. Info.plist key `OMNIKEY_BACKEND_URL` (set by build_release_dmg.sh)
     /// 4. Fallback to local development server at http://localhost:7071
-    static let baseURL: URL = {
+    static var baseURL: URL {
         if let port = selfHostedPort() {
             return URL(string: "http://localhost:\(port)")!
         }
@@ -58,14 +59,14 @@ final class APIClient: @unchecked Sendable {
         }
         // Default local backend for development
         return URL(string: "http://localhost:7071")!
-    }()
+    }
 
-    private let enhancePromptURL = APIClient.baseURL.appendingPathComponent("api/feature/enhance")
-    private let enhanceGrammarURL = APIClient.baseURL.appendingPathComponent("api/feature/grammar")
-    private let customTaskURL = APIClient.baseURL.appendingPathComponent("api/feature/custom-task")
-    private let taskTemplatesBaseURL = APIClient.baseURL.appendingPathComponent("api/instructions/templates")
-    private let scheduledJobsBaseURL = APIClient.baseURL.appendingPathComponent("api/scheduled-jobs")
-    private let mcpServersBaseURL = APIClient.baseURL.appendingPathComponent("api/mcp-servers")
+    private var enhancePromptURL: URL { APIClient.baseURL.appendingPathComponent("api/feature/enhance") }
+    private var enhanceGrammarURL: URL { APIClient.baseURL.appendingPathComponent("api/feature/grammar") }
+    private var customTaskURL: URL { APIClient.baseURL.appendingPathComponent("api/feature/custom-task") }
+    private var taskTemplatesBaseURL: URL { APIClient.baseURL.appendingPathComponent("api/instructions/templates") }
+    private var scheduledJobsBaseURL: URL { APIClient.baseURL.appendingPathComponent("api/scheduled-jobs") }
+    private var mcpServersBaseURL: URL { APIClient.baseURL.appendingPathComponent("api/mcp-servers") }
 
     // MARK: - Shared error helpers
 

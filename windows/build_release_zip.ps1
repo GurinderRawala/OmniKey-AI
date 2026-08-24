@@ -83,40 +83,13 @@ OmniKey AI $APP_VERSION – Windows ($Runtime)
 
 What's new in $APP_VERSION
 --------------------------
-- Projects: chats are now grouped by project in the sidebar — collapsible "folder"
-  headers per group, a session-count badge, and per-header collapse state that
-  survives streaming turns.
-- Projects: new project picker in the composer toolbar (next to the task-instruction
-  selector) — pick the project for your next turn, mirrors the macOS "Select project"
-  menu. Auto-hides until the backend has classified at least one group.
-- Projects: the chosen project is stamped onto the outbound message and the optimistic
-  session placeholder, so new chats appear under the right header immediately.
-- Chat: messages now sit in a centered 820 DIP reading column on large monitors and
-  stretch edge-to-edge on smaller windows — matches the macOS layout exactly. User
-  bubbles stay pinned right, assistant content stays pinned left, on every viewport.
-- Chat: new Final Answer card with a soft "paper" surface (mirrors macOS), copy
-  button anchored bottom-right so it no longer overlaps long markdown headings,
-  and an "Answer" tooltip on copy.
-- Chat: animated typing indicator (pulsing sparkle + three staggered dots) appears
-  the moment you send your first message — matches macOS TypingDotsView.
-- Chat: extra breathing room between thinking-timeline steps so the agent's
-  intermediate reasoning reads as discrete actions instead of a cramped wall.
-- Markdown: brand-new Nord-themed renderer — no more white-background leaks from
-  the underlying MdXaml engine on paragraphs, blockquotes, lists, tables, or
-  inline code.
-- Markdown: bullets and numbered lists are no longer clipped on the left edge.
-- Markdown: inline code now renders as a soft pill (BadgeFill) instead of a dark
-  slab; fenced code blocks keep their rounded macOS-style chrome with language
-  label + copy.
-- MCP Servers: editor now supports custom HTTP headers — one Key: Value per line,
-  monospace input, persisted alongside the URL. Authorization headers are
-  unredacted on edit so they round-trip cleanly, and stale fetches won't clobber
-  what you're typing.
-- Composer: capped + centered at 820 DIP on wide monitors for a balanced layout,
-  full pane width on smaller windows.
-- Theme: shared interactive-surface brushes (Hover, Press, CodeBackground,
-  UserBubble, AssistantText, DangerSoft, FinalAnswerSurface, BadgeFill) promoted
-  to NordTheme.xaml so every page stays in visual lockstep.
+- Onboarding: new self-hosted setup flow helps you install omnikey-cli,
+  configure a provider, and start the local daemon without landing on a
+  license-key wall.
+- Self-hosted: the app now reopens onboarding when the saved daemon port is not
+  actually responding.
+- Updates: the chat sidebar now warns when omnikey-cli has an update; clicking
+  it updates the CLI and guides daemon restart on Windows.
 
 Installation
 ------------

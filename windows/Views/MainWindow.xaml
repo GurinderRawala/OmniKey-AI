@@ -9,9 +9,9 @@
     xmlns:vm="clr-namespace:OmniKey.Windows.ViewModels"
     Title="{Binding ApplicationTitle}"
     Width="1180"
-    Height="760"
+    Height="820"
     MinWidth="940"
-    MinHeight="620"
+    MinHeight="720"
     d:DataContext="{d:DesignInstance Type=vm:MainWindowViewModel, IsDesignTimeCreatable=True}"
     ExtendsContentIntoTitleBar="True"
     WindowBackdropType="Mica"
@@ -126,5 +126,4 @@
         </ui:NavigationView>
     </Grid>
 </ui:FluentWindow>
-
 

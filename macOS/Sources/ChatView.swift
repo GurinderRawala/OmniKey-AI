@@ -71,6 +71,7 @@ struct ChatSidebarView: View {
     /// header when a newer app version is on the Sparkle appcast. The
     /// button hides itself when there is nothing to update to.
     @ObservedObject private var updateChecker: AppUpdateChecker = .shared
+    @ObservedObject private var cliUpdateChecker: CLIUpdateChecker = .shared
 
     private static let ungroupedName = "Other"
 
@@ -80,11 +81,30 @@ struct ChatSidebarView: View {
             //    newer version than what is currently installed) ─────────
             if updateChecker.isUpdateAvailable {
                 ChatSidebarUpdateBanner(
-                    latestVersion: updateChecker.latestShortVersion,
+                    title: "Update desktop app",
+                    subtitle: updateChecker.latestShortVersion.map { "Version \($0)" },
+                    systemImage: "arrow.down.circle.fill",
+                    help: updateChecker.latestShortVersion.map { "Install OmniKey \($0)" } ?? "Install the latest OmniKey update",
                     onUpdate: { AppDelegate.shared?.checkForUpdates() }
                 )
                 .padding(.horizontal, 10)
                 .padding(.top, 10)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+
+            if cliUpdateChecker.isUpdateAvailable {
+                ChatSidebarUpdateBanner(
+                    title: cliUpdateChecker.isUpdating ? "Updating omnikey-cli" : "Update omnikey-cli",
+                    subtitle: cliUpdateChecker.isUpdating
+                        ? (cliUpdateChecker.statusMessage ?? "Updating...")
+                        : (cliUpdateChecker.statusMessage ?? cliUpdateChecker.latestVersion.map { "Version \($0)" }),
+                    systemImage: "terminal.fill",
+                    isWorking: cliUpdateChecker.isUpdating,
+                    help: "Update omnikey-cli and restart the local daemon",
+                    onUpdate: { cliUpdateChecker.updateAndRestartDaemon() }
+                )
+                .padding(.horizontal, 10)
+                .padding(.top, updateChecker.isUpdateAvailable ? 6 : 10)
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }
 
@@ -134,6 +154,7 @@ struct ChatSidebarView: View {
                         // — the refresh button doubles as a manual
                         // check for a newer app version.
                         updateChecker.refreshNow()
+                        cliUpdateChecker.refreshNow()
                     }
                 }
                 SidebarIconButton(icon: "square.and.pencil", help: "New Chat (\u{2318}N)") {
@@ -578,16 +599,15 @@ private struct ChatSidebarGroupHeader: View {
 
 // MARK: - Sidebar Update Banner
 
-/// Compact "Update available" pill shown above the sidebar header when
-/// `AppUpdateChecker` detects that a newer app version is published on
-/// the Sparkle appcast. Tapping the pill hands off to Sparkle's
-/// standard update flow (`AppDelegate.checkForUpdates`), which shows
-/// the familiar release-notes dialog and drives the download +
-/// install. Hidden entirely when there is nothing to update to — the
-/// view is only rendered when `isUpdateAvailable` is true, so no idle
-/// space is reserved.
+/// Compact update pill shown above the sidebar header. The same visual
+/// affordance is used for app updates and omnikey-cli updates so users
+/// learn one place to look for required maintenance.
 private struct ChatSidebarUpdateBanner: View {
-    let latestVersion: String?
+    let title: String
+    let subtitle: String?
+    let systemImage: String
+    var isWorking: Bool = false
+    let help: String
     let onUpdate: () -> Void
     @Environment(\.colorScheme) private var colorScheme
     @State private var isHovering: Bool = false
@@ -595,15 +615,24 @@ private struct ChatSidebarUpdateBanner: View {
     var body: some View {
         Button(action: onUpdate) {
             HStack(spacing: 8) {
-                Image(systemName: "arrow.down.circle.fill")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(NordTheme.accentAmber(colorScheme))
+                ZStack {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(NordTheme.accentAmber(colorScheme))
+                        .opacity(isWorking ? 0 : 1)
+                    if isWorking {
+                        ProgressView()
+                            .scaleEffect(0.48)
+                            .frame(width: 14, height: 14)
+                    }
+                }
+                .frame(width: 14, height: 14)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("Update available")
+                    Text(title)
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundColor(NordTheme.primaryText(colorScheme))
-                    if let v = latestVersion, !v.isEmpty {
-                        Text("Version \(v)")
+                    if let subtitle, !subtitle.isEmpty {
+                        Text(subtitle)
                             .font(.system(size: 10))
                             .foregroundColor(NordTheme.secondaryText(colorScheme))
                     }
@@ -627,9 +656,10 @@ private struct ChatSidebarUpdateBanner: View {
             .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
         .buttonStyle(.plain)
+        .disabled(isWorking)
         .onHover { isHovering = $0 }
-        .help(latestVersion.map { "Install OmniKey \($0)" } ?? "Install the latest OmniKey update")
-        .accessibilityLabel(latestVersion.map { "Update to version \($0)" } ?? "Update available")
+        .help(help)
+        .accessibilityLabel(title)
     }
 }
 
@@ -830,6 +860,11 @@ struct ChatSidebarRailView: View {
     /// available — the affordance survives sidebar collapse without
     /// consuming a dedicated row.
     @ObservedObject private var updateChecker: AppUpdateChecker = .shared
+    @ObservedObject private var cliUpdateChecker: CLIUpdateChecker = .shared
+
+    private var hasUpdateAvailable: Bool {
+        updateChecker.isUpdateAvailable || cliUpdateChecker.isUpdateAvailable
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -845,7 +880,7 @@ struct ChatSidebarRailView: View {
                                 .fill(Color.clear)
                         )
                         .contentShape(Rectangle())
-                    if updateChecker.isUpdateAvailable {
+                    if hasUpdateAvailable {
                         // Amber dot in the corner of the expand
                         // button — non-interactive, purely a hint
                         // to expand the sidebar and click "Update".
@@ -861,7 +896,7 @@ struct ChatSidebarRailView: View {
                 }
             }
             .buttonStyle(.plain)
-            .help(updateChecker.isUpdateAvailable ? "Update available — expand sidebar" : "Expand sidebar")
+            .help(hasUpdateAvailable ? "Update available — expand sidebar" : "Expand sidebar")
             .padding(.top, 16)
 
             // New chat button

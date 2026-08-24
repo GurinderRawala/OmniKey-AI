@@ -238,9 +238,10 @@ namespace OmniKey.Windows
     {
         private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(60) };
 
-        // Read config once; both BaseUrl and IsSelfHosted are derived from this single call
-        // so they are always consistent with each other.
-        private static readonly string? _selfHostedPort = ReadSelfHostedPort();
+        // BaseUrl and IsSelfHosted are derived from the same cached config
+        // snapshot and can be refreshed after first-run onboarding writes
+        // ~/.omnikey/config.json.
+        private static string? _selfHostedPort = ReadSelfHostedPort();
 
         /// <summary>
         /// Base URL resolution order (mirrors macOS APIClient.swift):
@@ -248,13 +249,22 @@ namespace OmniKey.Windows
         /// 2. OMNIKEY_BACKEND_URL environment variable
         /// 3. Fallback: https://omnikeyai.ca (production)
         /// </summary>
-        public static readonly string BaseUrl = _selfHostedPort is { Length: > 0 } port
-            ? $"http://localhost:{port}"
-            : Environment.GetEnvironmentVariable("OMNIKEY_BACKEND_URL") is { Length: > 0 } env
-                ? env
-                : "https://omnikeyai.ca";
+        public static string BaseUrl { get; private set; } = ResolveBaseUrl(_selfHostedPort);
 
-        public static readonly bool IsSelfHosted = _selfHostedPort != null;
+        public static bool IsSelfHosted => _selfHostedPort != null;
+
+        public static void ReloadRuntimeConfiguration()
+        {
+            _selfHostedPort = ReadSelfHostedPort();
+            BaseUrl = ResolveBaseUrl(_selfHostedPort);
+        }
+
+        private static string ResolveBaseUrl(string? selfHostedPort) =>
+            selfHostedPort is { Length: > 0 } port
+                ? $"http://localhost:{port}"
+                : Environment.GetEnvironmentVariable("OMNIKEY_BACKEND_URL") is { Length: > 0 } env
+                    ? env
+                    : "https://omnikeyai.ca";
 
         /// Reads OMNIKEY_PORT from ~/.omnikey/config.json.
         /// Returns the port string when found, null otherwise.

@@ -21,6 +21,7 @@ namespace OmniKey.Windows
         private readonly NotifyIcon _notifyIcon;
         private readonly ApiClient _apiClient = new();
         private bool _isProcessing;
+        private bool _isAuthorized;
         private ToolStripMenuItem? _statusMenuItem;
 
         public HotkeyForm()
@@ -54,6 +55,8 @@ namespace OmniKey.Windows
                     contextMenu.Show(Cursor.Position.X, workArea.Bottom);
                 }
             };
+
+            Program.AuthorizationSucceeded += OnAuthorizationSucceeded;
         }
 
         protected override void OnLoad(EventArgs e)
@@ -67,6 +70,7 @@ namespace OmniKey.Windows
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
             UnregisterHotkeys();
+            Program.AuthorizationSucceeded -= OnAuthorizationSucceeded;
             _notifyIcon.Visible = false;
             _notifyIcon.Dispose();
             base.OnFormClosing(e);
@@ -83,6 +87,14 @@ namespace OmniKey.Windows
             if (!TermsAcceptance.HasAcceptedCurrent && !ShowTermsForm())
                 return;
 
+            if (await SelfHostedBootstrap.ShouldShowFirstRunOnboardingAsync())
+            {
+                _isAuthorized = false;
+                UpdateStatus("Setup required");
+                Program.ShowMainWindow<LicensePage>();
+                return;
+            }
+
             if (ApiClient.IsSelfHosted)
             {
                 // Self-hosted backend issues a JWT without a subscription key.
@@ -91,6 +103,7 @@ namespace OmniKey.Windows
                 // ready yet — the agent will retry on first use).
                 UpdateStatus("Activating\u2026 (self-hosted)");
                 bool ok = await SubscriptionManager.Instance.ActivateStoredKeyAsync();
+                _isAuthorized = true;
                 UpdateStatus(ok ? "Active (self-hosted)" : "Active (self-hosted)");
                 return;
             }
@@ -101,13 +114,16 @@ namespace OmniKey.Windows
                 bool ok = await SubscriptionManager.Instance.ActivateStoredKeyAsync();
                 if (ok)
                 {
+                    _isAuthorized = true;
                     UpdateStatus("Active");
                     return;
                 }
             }
 
-            // No key, or activation failed – show the license form
-            ShowLicenseForm();
+            // No key, or activation failed: send the user to the WPF setup page.
+            _isAuthorized = false;
+            UpdateStatus("Setup required");
+            Program.ShowMainWindow<LicensePage>();
         }
 
         /// <summary>
@@ -146,6 +162,20 @@ namespace OmniKey.Windows
                 UpdateStatus("Active");
             else
                 Application.Exit();
+        }
+
+        private void OnAuthorizationSucceeded()
+        {
+            if (IsDisposed) return;
+
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(OnAuthorizationSucceeded));
+                return;
+            }
+
+            _isAuthorized = true;
+            UpdateStatus(ApiClient.IsSelfHosted ? "Active (self-hosted)" : "Active");
         }
 
         private void UpdateStatus(string status)
@@ -243,6 +273,13 @@ namespace OmniKey.Windows
 
         private async Task HandleHotkeyAsync(int id)
         {
+            if (!_isAuthorized)
+            {
+                ShowBalloon("OmniKey AI", "Finish OmniKey setup before using shortcuts.");
+                Program.ShowMainWindow<LicensePage>();
+                return;
+            }
+
             if (_isProcessing)
             {
                 ShowBalloon("OmniKey AI", "Already processing a selection. Please wait\u2026");
@@ -410,4 +447,3 @@ namespace OmniKey.Windows
         private static extern bool SetForegroundWindow(IntPtr hWnd);
     }
 }
-

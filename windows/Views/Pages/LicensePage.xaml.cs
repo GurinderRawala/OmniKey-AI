@@ -8,7 +8,13 @@ namespace OmniKey.Windows.Views.Pages
         public LicensePage()
         {
             InitializeComponent();
-            DataContext = new LicenseViewModel();
+            var vm = new LicenseViewModel();
+            DataContext = vm;
+            Loaded += async (_, _) =>
+            {
+                if (vm.LoadCommand.CanExecute(null))
+                    await vm.LoadCommand.ExecuteAsync(null);
+            };
         }
     }
 }

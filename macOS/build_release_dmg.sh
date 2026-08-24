@@ -127,9 +127,9 @@ cat > "${INFO_PLIST}" <<EOF
     <key>CFBundleIdentifier</key>
     <string>${BUNDLE_ID}</string>
     <key>CFBundleVersion</key>
-    <string>53</string>
+    <string>54</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.4.3</string>
+    <string>1.5.0</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>LSMinimumSystemVersion</key>
@@ -150,12 +150,12 @@ cat > "${INFO_PLIST}" <<EOF
     <true/>
 
     <!-- Note: we intentionally do NOT set LSUIElement. The app starts in
-         `.accessory` mode at runtime (so there's no Dock icon at idle), but
+         accessory mode at runtime (so there's no Dock icon at idle), but
          LSUIElement=true *also* removes the application's menu bar entirely,
          which breaks native full-screen on the chat window (the title bar
          can no longer be revealed by hovering at the top of the screen).
-         By leaving LSUIElement out, AppKit installs our `NSApp.mainMenu`
-         the moment we promote to `.regular`, and full-screen reveal works
+         By leaving LSUIElement out, AppKit installs our NSApp.mainMenu
+         the moment we promote to regular mode, and full-screen reveal works
          normally. -->
 
     <!-- Required for global keyboard monitoring / shortcuts -->

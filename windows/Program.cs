@@ -17,6 +17,8 @@ namespace OmniKey.Windows
         private static App? _wpfApp;
         private static MainWindow? _mainWindow;
 
+        public static event Action? AuthorizationSucceeded;
+
         public static App WpfApp =>
             _wpfApp ?? throw new InvalidOperationException("WPF application not initialized.");
 
@@ -106,5 +108,7 @@ namespace OmniKey.Windows
 
         /// <summary>Convenience generic for type-safe page navigation.</summary>
         public static void ShowMainWindow<TPage>() where TPage : Page => ShowMainWindow(typeof(TPage));
+
+        public static void NotifyAuthorizationSucceeded() => AuthorizationSucceeded?.Invoke();
     }
 }

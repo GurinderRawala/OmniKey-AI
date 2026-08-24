@@ -75,20 +75,21 @@ final class LicenseWindow: NSWindow {
     }
 }
 
-/// NSWindowController hosting the LicenseView used to enter and
-/// activate the subscription key.
+/// NSWindowController hosting the LicenseView used for first-run setup
+/// and subscription activation.
 final class LicenseWindowController: NSWindowController {
     convenience init() {
         let rootView = LicenseView()
         let hostingController = NSHostingController(rootView: rootView)
 
         let window = LicenseWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 240),
-            styleMask: [.titled, .closable, .miniaturizable],
+            contentRect: NSRect(x: 0, y: 0, width: 860, height: 760),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
-        window.title = "OmniKey AI · License & Activation"
+        window.title = "OmniKey AI · Setup"
+        window.minSize = NSSize(width: 780, height: 680)
         window.center()
         window.isReleasedWhenClosed = false
         window.contentViewController = hostingController

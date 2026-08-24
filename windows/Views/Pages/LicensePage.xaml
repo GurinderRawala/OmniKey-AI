@@ -5,20 +5,522 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
-    Title="Subscription"
+    Title="Setup"
     Background="Transparent"
-    d:DesignHeight="600"
+    d:DesignHeight="700"
     d:DesignWidth="980"
     ScrollViewer.CanContentScroll="False"
     mc:Ignorable="d">
 
+    <Page.Resources>
+        <Style x:Key="FieldLabel" TargetType="TextBlock">
+            <Setter Property="Margin" Value="0,0,0,6" />
+            <Setter Property="FontFamily" Value="{StaticResource OK.FontFamily}" />
+            <Setter Property="FontSize" Value="{StaticResource OK.Font.CaptionSmall}" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="{StaticResource Nord.SecondaryTextBrush}" />
+        </Style>
+    </Page.Resources>
+
     <Grid Margin="24,20,24,20">
+        <Grid Visibility="{Binding IsCheckingSetup, Converter={StaticResource BooleanToVisibilityConverter}}">
+            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                <ui:ProgressRing
+                    Width="28"
+                    Height="28"
+                    HorizontalAlignment="Center"
+                    IsIndeterminate="True" />
+                <TextBlock
+                    Margin="0,14,0,0"
+                    FontFamily="{StaticResource OK.FontFamily}"
+                    FontSize="{StaticResource OK.Font.Body}"
+                    FontWeight="SemiBold"
+                    Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                    Text="Checking local OmniKey setup..." />
+            </StackPanel>
+        </Grid>
+
+        <!-- First-run local onboarding -->
+        <Border
+            MaxWidth="820"
+            Padding="0"
+            HorizontalAlignment="Center"
+            VerticalAlignment="Center"
+            Background="{StaticResource Nord.PanelBackgroundBrush}"
+            CornerRadius="14"
+            Visibility="{Binding ShowOnboarding, Converter={StaticResource BooleanToVisibilityConverter}}">
+            <Border.Effect>
+                <DropShadowEffect
+                    BlurRadius="22"
+                    Direction="270"
+                    Opacity="0.45"
+                    ShadowDepth="6"
+                    Color="Black" />
+            </Border.Effect>
+
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+
+                <StackPanel
+                    Grid.Row="0"
+                    Margin="0,28,0,20"
+                    HorizontalAlignment="Center">
+                    <ui:SymbolIcon
+                        HorizontalAlignment="Center"
+                        FontSize="36"
+                        Foreground="{StaticResource Nord.AccentBrush}"
+                        Symbol="Server24" />
+                    <TextBlock
+                        Margin="0,12,0,4"
+                        HorizontalAlignment="Center"
+                        FontFamily="{StaticResource OK.FontFamily}"
+                        FontSize="{StaticResource OK.Font.Title}"
+                        FontWeight="SemiBold"
+                        Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                        Text="Set up OmniKey" />
+                    <TextBlock
+                        HorizontalAlignment="Center"
+                        FontFamily="{StaticResource OK.FontFamily}"
+                        FontSize="{StaticResource OK.Font.Body}"
+                        Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                        Text="Use the free local daemon with your own provider key." />
+                </StackPanel>
+
+                <Border
+                    Grid.Row="1"
+                    Height="1"
+                    Background="{StaticResource Nord.BorderBrush}" />
+
+                <StackPanel Grid.Row="2" Margin="24,20,24,24">
+                    <TabControl
+                        MinHeight="330"
+                        SelectedIndex="{Binding SelectedOnboardingTabIndex, Mode=TwoWay}">
+                        <TabItem Header="Self-hosted (free)">
+                            <Grid Margin="0,18,0,0">
+                                <StackPanel>
+                                    <Grid Margin="0,0,0,18">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" Orientation="Horizontal">
+                                            <Border
+                                                Width="24"
+                                                Height="24"
+                                                Background="{StaticResource Nord.AccentBrush}"
+                                                CornerRadius="12">
+                                                <TextBlock
+                                                    HorizontalAlignment="Center"
+                                                    VerticalAlignment="Center"
+                                                    FontFamily="{StaticResource OK.FontFamily}"
+                                                    FontSize="{StaticResource OK.Font.CaptionSmall}"
+                                                    FontWeight="SemiBold"
+                                                    Foreground="White"
+                                                    Text="1" />
+                                            </Border>
+                                            <TextBlock
+                                                Margin="8,0,0,0"
+                                                VerticalAlignment="Center"
+                                                FontFamily="{StaticResource OK.FontFamily}"
+                                                FontSize="{StaticResource OK.Font.CaptionSmall}"
+                                                FontWeight="SemiBold"
+                                                Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                                                Text="Install" />
+                                        </StackPanel>
+                                        <Border
+                                            Grid.Column="1"
+                                            Height="1"
+                                            Margin="12,0"
+                                            VerticalAlignment="Center"
+                                            Background="{StaticResource Nord.BorderBrush}" />
+                                        <StackPanel Grid.Column="2" Orientation="Horizontal">
+                                            <Border
+                                                Width="24"
+                                                Height="24"
+                                                Background="{StaticResource Nord.AccentBrush}"
+                                                CornerRadius="12"
+                                                Opacity="0.55" />
+                                            <TextBlock
+                                                Margin="-18,0,0,0"
+                                                VerticalAlignment="Center"
+                                                FontFamily="{StaticResource OK.FontFamily}"
+                                                FontSize="{StaticResource OK.Font.CaptionSmall}"
+                                                FontWeight="SemiBold"
+                                                Foreground="White"
+                                                Text="2" />
+                                            <TextBlock
+                                                Margin="12,0,0,0"
+                                                VerticalAlignment="Center"
+                                                FontFamily="{StaticResource OK.FontFamily}"
+                                                FontSize="{StaticResource OK.Font.CaptionSmall}"
+                                                FontWeight="SemiBold"
+                                                Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                                                Text="Configure" />
+                                        </StackPanel>
+                                    </Grid>
+
+                                    <StackPanel Visibility="{Binding IsInstallStep, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                        <Border
+                                            Padding="14,12"
+                                            Background="{StaticResource Nord.EditorBackgroundBrush}"
+                                            BorderBrush="{StaticResource Nord.BorderBrush}"
+                                            BorderThickness="1"
+                                            CornerRadius="8">
+                                            <StackPanel Orientation="Horizontal">
+                                                <ui:SymbolIcon
+                                                    Margin="0,0,12,0"
+                                                    VerticalAlignment="Top"
+                                                    FontSize="20"
+                                                    Foreground="{StaticResource Nord.AccentBrush}"
+                                                    Symbol="WindowConsole20" />
+                                                <StackPanel>
+                                                    <TextBlock
+                                                        FontFamily="{StaticResource OK.FontFamily}"
+                                                        FontSize="{StaticResource OK.Font.Headline}"
+                                                        FontWeight="SemiBold"
+                                                        Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                                                        Text="Install the local daemon tools" />
+                                                    <TextBlock
+                                                        Margin="0,4,0,0"
+                                                        MaxWidth="620"
+                                                        FontFamily="{StaticResource OK.FontFamily}"
+                                                        FontSize="{StaticResource OK.Font.Caption}"
+                                                        Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                                                        Text="OmniKey will check omnikey-cli and install or update it in the background."
+                                                        TextWrapping="Wrap" />
+                                                </StackPanel>
+                                            </StackPanel>
+                                        </Border>
+
+                                        <Grid Margin="0,20,0,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <ui:Button
+                                                Grid.Column="0"
+                                                Appearance="Primary"
+                                                Command="{Binding InstallCliCommand}"
+                                                Content="{Binding InstallCliButtonText}"
+                                                Icon="{ui:SymbolIcon Symbol=ArrowDownload24}" />
+                                            <ui:Button
+                                                Grid.Column="2"
+                                                Command="{Binding NextSetupCommand}"
+                                                Content="Next"
+                                                Icon="{ui:SymbolIcon Symbol=ArrowRight24}" />
+                                        </Grid>
+                                    </StackPanel>
+
+                                    <StackPanel Visibility="{Binding IsConfigureStep, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                        <Border
+                                            Padding="14,12"
+                                            Background="{StaticResource Nord.EditorBackgroundBrush}"
+                                            BorderBrush="{StaticResource Nord.BorderBrush}"
+                                            BorderThickness="1"
+                                            CornerRadius="8">
+                                            <StackPanel Orientation="Horizontal">
+                                                <ui:SymbolIcon
+                                                    Margin="0,0,12,0"
+                                                    VerticalAlignment="Top"
+                                                    FontSize="20"
+                                                    Foreground="{StaticResource Nord.AccentBrush}"
+                                                    Symbol="Key24" />
+                                                <StackPanel>
+                                                    <TextBlock
+                                                        FontFamily="{StaticResource OK.FontFamily}"
+                                                        FontSize="{StaticResource OK.Font.Headline}"
+                                                        FontWeight="SemiBold"
+                                                        Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                                                        Text="Connect an AI provider" />
+                                                    <TextBlock
+                                                        Margin="0,4,0,0"
+                                                        MaxWidth="620"
+                                                        FontFamily="{StaticResource OK.FontFamily}"
+                                                        FontSize="{StaticResource OK.Font.Caption}"
+                                                        Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                                                        Text="Your key is saved locally in %USERPROFILE%\.omnikey\config.json and read only by the local daemon."
+                                                        TextWrapping="Wrap" />
+                                                </StackPanel>
+                                            </StackPanel>
+                                        </Border>
+
+                                        <StackPanel Margin="0,18,0,0">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="260" />
+                                                </Grid.ColumnDefinitions>
+                                                <StackPanel Grid.Column="0" Margin="0,0,18,0">
+                                                    <TextBlock
+                                                        Style="{StaticResource FieldLabel}"
+                                                        Text="PROVIDER" />
+                                                    <ComboBox
+                                                        DisplayMemberPath="DisplayName"
+                                                        FontFamily="{StaticResource OK.FontFamily}"
+                                                        FontSize="13"
+                                                        ItemsSource="{Binding ProviderOptions}"
+                                                        SelectedItem="{Binding SelectedProvider, Mode=TwoWay}" />
+                                                </StackPanel>
+
+                                                <Grid
+                                                    Grid.Column="1"
+                                                    Visibility="{Binding ShowOpenModelResponsesApi, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                                                        <TextBlock Style="{StaticResource FieldLabel}" Text="RESPONSES API" />
+                                                        <TextBlock
+                                                            FontFamily="{StaticResource OK.FontFamily}"
+                                                            FontSize="{StaticResource OK.Font.CaptionSmall}"
+                                                            Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                                                            Text="Enable only when your gateway supports /v1/responses."
+                                                            TextWrapping="Wrap" />
+                                                    </StackPanel>
+                                                    <ui:ToggleSwitch
+                                                        Grid.Column="1"
+                                                        VerticalAlignment="Top"
+                                                        AutomationProperties.Name="Use Responses API"
+                                                        IsChecked="{Binding ResponsesApiEnabledInput, Mode=TwoWay}" />
+                                                </Grid>
+                                            </Grid>
+
+                                            <TextBlock
+                                                Margin="0,14,0,0"
+                                                Style="{StaticResource FieldLabel}"
+                                                Text="API KEY" />
+                                            <ui:TextBox
+                                                FontFamily="{StaticResource OK.MonoFontFamily}"
+                                                FontSize="13"
+                                                PlaceholderText="{Binding SelectedProvider.KeyPlaceholder}"
+                                                Text="{Binding ApiKeyInput, UpdateSourceTrigger=PropertyChanged}" />
+
+                                            <StackPanel Visibility="{Binding ShowOpenModelBaseUrl, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                                <TextBlock
+                                                    Margin="0,14,0,0"
+                                                    Style="{StaticResource FieldLabel}"
+                                                    Text="BASE URL (OPTIONAL)" />
+                                                <ui:TextBox
+                                                    FontFamily="{StaticResource OK.MonoFontFamily}"
+                                                    FontSize="13"
+                                                    PlaceholderText="http://localhost:8000/v1"
+                                                    Text="{Binding BaseUrlInput, UpdateSourceTrigger=PropertyChanged}" />
+                                                <TextBlock
+                                                    Margin="0,6,0,0"
+                                                    FontFamily="{StaticResource OK.FontFamily}"
+                                                    FontSize="{StaticResource OK.Font.CaptionSmall}"
+                                                    Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                                                    Text="Leave blank for the default OpenAI-compatible gateway."
+                                                    TextWrapping="Wrap" />
+                                            </StackPanel>
+                                        </StackPanel>
+
+                                        <Border
+                                            Margin="0,16,0,0"
+                                            Padding="14,12"
+                                            Background="{StaticResource Nord.EditorBackgroundBrush}"
+                                            BorderBrush="{StaticResource Nord.BorderBrush}"
+                                            BorderThickness="1"
+                                            CornerRadius="8"
+                                            Visibility="{Binding ShowWindowsDaemonInstructions, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                            <StackPanel>
+                                                <TextBlock
+                                                    FontFamily="{StaticResource OK.FontFamily}"
+                                                    FontSize="{StaticResource OK.Font.Caption}"
+                                                    FontWeight="SemiBold"
+                                                    Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                                                    Text="Open PowerShell as Administrator and run:" />
+                                                <TextBox
+                                                    Margin="0,8,0,8"
+                                                    Padding="8,6"
+                                                    Background="{StaticResource Nord.WindowBackgroundBrush}"
+                                                    BorderBrush="{StaticResource Nord.BorderBrush}"
+                                                    BorderThickness="1"
+                                                    FontFamily="{StaticResource OK.MonoFontFamily}"
+                                                    FontSize="13"
+                                                    Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                                                    IsReadOnly="True"
+                                                    Text="{Binding WindowsDaemonCommand}" />
+                                                <TextBlock
+                                                    FontFamily="{StaticResource OK.FontFamily}"
+                                                    FontSize="{StaticResource OK.Font.CaptionSmall}"
+                                                    Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                                                    Text="When the command completes, return here and click Check Daemon."
+                                                    TextWrapping="Wrap" />
+                                            </StackPanel>
+                                        </Border>
+
+                                        <Grid Margin="0,20,0,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <ui:Button
+                                                Grid.Column="0"
+                                                Command="{Binding BackSetupCommand}"
+                                                Content="Back"
+                                                Icon="{ui:SymbolIcon Symbol=ArrowLeft24}" />
+                                            <ui:ProgressRing
+                                                Grid.Column="2"
+                                                Width="16"
+                                                Height="16"
+                                                Margin="0,0,10,0"
+                                                IsIndeterminate="True"
+                                                Visibility="{Binding IsStartingDaemon, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                                            <ui:Button
+                                                Grid.Column="3"
+                                                Appearance="Primary"
+                                                Command="{Binding StartDaemonCommand}"
+                                                Content="{Binding StartDaemonButtonText}"
+                                                Icon="{ui:SymbolIcon Symbol=Play24}" />
+                                        </Grid>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Grid>
+                        </TabItem>
+
+                        <TabItem Header="SaaS">
+                            <StackPanel Margin="0,18,0,0">
+                                <Border
+                                    Padding="14,12"
+                                    Background="{StaticResource Nord.EditorBackgroundBrush}"
+                                    BorderBrush="{StaticResource Nord.BorderBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="8">
+                                    <StackPanel Orientation="Horizontal">
+                                        <ui:SymbolIcon
+                                            Margin="0,0,12,0"
+                                            VerticalAlignment="Top"
+                                            FontSize="20"
+                                            Foreground="{StaticResource Nord.AccentAmberBrush}"
+                                            Symbol="ErrorCircle24" />
+                                        <StackPanel>
+                                            <TextBlock
+                                                FontFamily="{StaticResource OK.FontFamily}"
+                                                FontSize="{StaticResource OK.Font.Headline}"
+                                                FontWeight="SemiBold"
+                                                Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                                                Text="SaaS is unavailable" />
+                                            <TextBlock
+                                                Margin="0,4,0,0"
+                                                MaxWidth="620"
+                                                FontFamily="{StaticResource OK.FontFamily}"
+                                                FontSize="{StaticResource OK.Font.Caption}"
+                                                Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                                                Text="Omnikey is not offering SaaS right now; please run the local daemon."
+                                                TextWrapping="Wrap" />
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Border>
+
+                                <TextBlock
+                                    Margin="0,18,0,0"
+                                    Style="{StaticResource FieldLabel}"
+                                    Text="LICENSE KEY" />
+                                <ui:TextBox
+                                    IsEnabled="False"
+                                    PlaceholderText="SaaS activation is currently disabled" />
+                            </StackPanel>
+                        </TabItem>
+                    </TabControl>
+
+                    <StackPanel
+                        Margin="0,18,0,0"
+                        Orientation="Horizontal"
+                        Visibility="{Binding StatusMessage, Converter={StaticResource StringToVisibilityConverter}}">
+                        <ui:SymbolIcon
+                            Margin="0,0,8,0"
+                            VerticalAlignment="Top"
+                            FontSize="16"
+                            Foreground="{Binding StatusBrush}"
+                            Symbol="Info24" />
+                        <TextBlock
+                            MaxWidth="650"
+                            FontFamily="{StaticResource OK.FontFamily}"
+                            FontSize="{StaticResource OK.Font.CaptionSmall}"
+                            Foreground="{Binding StatusBrush}"
+                            Text="{Binding StatusMessage}"
+                            TextWrapping="Wrap" />
+                    </StackPanel>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- Existing self-hosted notice for already-configured local installs -->
         <Border
             MaxWidth="520"
-            VerticalAlignment="Center"
             Padding="0"
+            HorizontalAlignment="Center"
+            VerticalAlignment="Center"
             Background="{StaticResource Nord.PanelBackgroundBrush}"
-            CornerRadius="14">
+            CornerRadius="14"
+            Visibility="{Binding ShowSelfHostedNotice, Converter={StaticResource BooleanToVisibilityConverter}}">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <StackPanel
+                    Grid.Row="0"
+                    Margin="0,28,0,20"
+                    HorizontalAlignment="Center">
+                    <ui:SymbolIcon
+                        HorizontalAlignment="Center"
+                        FontSize="36"
+                        Foreground="{StaticResource Nord.AccentGreenBrush}"
+                        Symbol="Server24" />
+                    <TextBlock
+                        Margin="0,12,0,4"
+                        HorizontalAlignment="Center"
+                        FontFamily="{StaticResource OK.FontFamily}"
+                        FontSize="{StaticResource OK.Font.Title}"
+                        FontWeight="SemiBold"
+                        Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                        Text="Self-hosted mode" />
+                    <TextBlock
+                        HorizontalAlignment="Center"
+                        FontFamily="{StaticResource OK.FontFamily}"
+                        FontSize="{StaticResource OK.Font.Body}"
+                        Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                        Text="No subscription key is required." />
+                </StackPanel>
+
+                <Border
+                    Grid.Row="1"
+                    Height="1"
+                    Background="{StaticResource Nord.BorderBrush}" />
+
+                <TextBlock
+                    Grid.Row="2"
+                    Margin="24,20,24,24"
+                    FontFamily="{StaticResource OK.FontFamily}"
+                    FontSize="{StaticResource OK.Font.Caption}"
+                    Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                    Text="OmniKey is configured to talk to your local backend and is ready to use."
+                    TextWrapping="Wrap" />
+            </Grid>
+        </Border>
+
+        <!-- Legacy subscription activation for non-first-run cloud setups -->
+        <Border
+            MaxWidth="520"
+            Padding="0"
+            HorizontalAlignment="Center"
+            VerticalAlignment="Center"
+            Background="{StaticResource Nord.PanelBackgroundBrush}"
+            CornerRadius="14"
+            Visibility="{Binding ShowSubscriptionForm, Converter={StaticResource BooleanToVisibilityConverter}}">
             <Border.Effect>
                 <DropShadowEffect
                     BlurRadius="22"
@@ -35,7 +537,6 @@
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
-                <!-- Header -->
                 <StackPanel
                     Grid.Row="0"
                     Margin="0,28,0,20"
@@ -49,7 +550,7 @@
                         Margin="0,12,0,4"
                         HorizontalAlignment="Center"
                         FontFamily="{StaticResource OK.FontFamily}"
-                        FontSize="{StaticResource OK.Font.Display}"
+                        FontSize="{StaticResource OK.Font.Title}"
                         FontWeight="SemiBold"
                         Foreground="{StaticResource Nord.PrimaryTextBrush}"
                         Text="Activate OmniKey" />
@@ -66,54 +567,8 @@
                     Height="1"
                     Background="{StaticResource Nord.BorderBrush}" />
 
-                <!-- Self-hosted notice (shown only when ApiClient.IsSelfHosted) -->
-                <Border
-                    Grid.Row="2"
-                    Margin="24,20,24,24"
-                    Padding="14,12"
-                    Background="{StaticResource Nord.EditorBackgroundBrush}"
-                    BorderBrush="{StaticResource Nord.BorderBrush}"
-                    BorderThickness="1"
-                    CornerRadius="8"
-                    Visibility="{Binding IsSelfHosted, Converter={StaticResource BooleanToVisibilityConverter}}">
-                    <StackPanel Orientation="Horizontal">
-                        <ui:SymbolIcon
-                            Margin="0,0,10,0"
-                            VerticalAlignment="Top"
-                            FontSize="18"
-                            Foreground="{StaticResource Nord.AccentGreenBrush}"
-                            Symbol="Server24" />
-                        <StackPanel>
-                            <TextBlock
-                                FontFamily="{StaticResource OK.FontFamily}"
-                                FontSize="{StaticResource OK.Font.Body}"
-                                FontWeight="SemiBold"
-                                Foreground="{StaticResource Nord.PrimaryTextBrush}"
-                                Text="Self-hosted mode" />
-                            <TextBlock
-                                Margin="0,4,0,0"
-                                MaxWidth="400"
-                                FontFamily="{StaticResource OK.FontFamily}"
-                                FontSize="{StaticResource OK.Font.Caption}"
-                                Foreground="{StaticResource Nord.SecondaryTextBrush}"
-                                Text="No subscription key is required. OmniKey is talking to your self-hosted backend and is ready to use."
-                                TextWrapping="Wrap" />
-                        </StackPanel>
-                    </StackPanel>
-                </Border>
-
-                <!-- Form (hidden in self-hosted mode) -->
-                <StackPanel
-                    Grid.Row="2"
-                    Margin="24,20,24,24"
-                    Visibility="{Binding IsSelfHosted, Converter={StaticResource InverseBooleanToVisibilityConverter}}">
-                    <TextBlock
-                        Margin="0,0,0,8"
-                        FontFamily="{StaticResource OK.FontFamily}"
-                        FontSize="{StaticResource OK.Font.CaptionSmall}"
-                        FontWeight="SemiBold"
-                        Foreground="{StaticResource Nord.SecondaryTextBrush}"
-                        Text="SUBSCRIPTION KEY" />
+                <StackPanel Grid.Row="2" Margin="24,20,24,24">
+                    <TextBlock Style="{StaticResource FieldLabel}" Text="SUBSCRIPTION KEY" />
                     <ui:TextBox
                         FontFamily="{StaticResource OK.MonoFontFamily}"
                         FontSize="13"
@@ -122,7 +577,8 @@
 
                     <StackPanel
                         Margin="0,18,0,0"
-                        Orientation="Horizontal">
+                        Orientation="Horizontal"
+                        Visibility="{Binding StatusMessage, Converter={StaticResource StringToVisibilityConverter}}">
                         <ui:ProgressRing
                             Width="14"
                             Height="14"
@@ -135,7 +591,7 @@
                             FontSize="{StaticResource OK.Font.CaptionSmall}"
                             Foreground="{Binding StatusBrush}"
                             Text="{Binding StatusMessage}"
-                            TextTrimming="CharacterEllipsis" />
+                            TextWrapping="Wrap" />
                     </StackPanel>
 
                     <Grid Margin="0,20,0,0">

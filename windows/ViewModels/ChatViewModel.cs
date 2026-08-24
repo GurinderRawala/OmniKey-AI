@@ -4,6 +4,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Media;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -23,6 +24,8 @@ namespace OmniKey.Windows.ViewModels
         private bool _suppressDefaultTemplateFeedback;
         private bool _suppressSelectedGroupFeedback;
         private bool _suppressAgentModelFeedback;
+        private bool _isCheckingCliUpdate;
+        private DateTimeOffset? _lastCliUpdateCheckAt;
 
         public ObservableCollection<AgentSessionInfo> Sessions { get; } = new();
         public ObservableCollection<ChatMessageRow> Messages { get; } = new();
@@ -64,6 +67,10 @@ namespace OmniKey.Windows.ViewModels
         [ObservableProperty] private bool isSidebarCollapsed;
         [ObservableProperty] private bool isCustomAgentModelEditorOpen;
         [ObservableProperty] private string customAgentModelInput = string.Empty;
+        [ObservableProperty] private bool isCliUpdateAvailable;
+        [ObservableProperty] private string cliUpdateVersion = string.Empty;
+        [ObservableProperty] private bool isUpdatingCli;
+        [ObservableProperty] private string cliUpdateStatusMessage = string.Empty;
 
         /// <summary>
         /// Sentinel row injected at the top of <see cref="AvailableTaskTemplates"/>.
@@ -205,6 +212,24 @@ namespace OmniKey.Windows.ViewModels
 
         public bool CanApplyCustomAgentModel =>
             CanChangeAgentModel && !string.IsNullOrWhiteSpace(CustomAgentModelInput);
+
+        public string CliUpdateBannerTitle =>
+            IsUpdatingCli ? "Updating omnikey-cli" : "Update omnikey-cli";
+
+        public string CliUpdateBannerSubtitle
+        {
+            get
+            {
+                if (!string.IsNullOrWhiteSpace(CliUpdateStatusMessage))
+                    return CliUpdateStatusMessage;
+
+                return string.IsNullOrWhiteSpace(CliUpdateVersion)
+                    ? "New CLI version available"
+                    : $"Version {CliUpdateVersion}";
+            }
+        }
+
+        public bool CanUpdateCli => IsCliUpdateAvailable && !IsUpdatingCli;
 
         public string InputText
         {
@@ -365,6 +390,68 @@ namespace OmniKey.Windows.ViewModels
             // Populate the composer's model pill. Mirrors macOS ChatView.onAppear
             // calling fetchAgentModelOptions().
             _model.FetchAgentModelOptions();
+            _ = CheckCliUpdateAsync();
+        }
+
+        [RelayCommand(CanExecute = nameof(CanUpdateCli))]
+        private async Task UpdateCliAsync()
+        {
+            if (IsUpdatingCli) return;
+
+            IsUpdatingCli = true;
+            CliUpdateStatusMessage = "Updating omnikey-cli...";
+
+            try
+            {
+                await SelfHostedBootstrap.InstallOrUpdateCliAsync();
+                int? port = SelfHostedBootstrap.ConfiguredDaemonPort();
+                CliUpdateVersion = string.Empty;
+                CliUpdateStatusMessage = port is int p
+                    ? $"Updated. Run as Administrator: omnikey daemon --port {p}"
+                    : "Updated. Finish self-hosted setup to start the daemon.";
+            }
+            catch (Exception ex)
+            {
+                CliUpdateStatusMessage = ex.Message;
+            }
+            finally
+            {
+                IsUpdatingCli = false;
+            }
+        }
+
+        private async Task CheckCliUpdateAsync(bool force = false)
+        {
+            if (_isCheckingCliUpdate || IsUpdatingCli) return;
+            if (!force &&
+                _lastCliUpdateCheckAt is DateTimeOffset last &&
+                DateTimeOffset.UtcNow - last < TimeSpan.FromSeconds(30))
+            {
+                return;
+            }
+
+            _isCheckingCliUpdate = true;
+            _lastCliUpdateCheckAt = DateTimeOffset.UtcNow;
+
+            try
+            {
+                CliUpdateStatus status = await SelfHostedBootstrap.CheckCliUpdateAsync();
+                _ui.Post(_ =>
+                {
+                    CliUpdateVersion = status.LatestVersion ?? string.Empty;
+                    IsCliUpdateAvailable = status.IsUpdateAvailable;
+                    if (status.IsUpdateAvailable)
+                        CliUpdateStatusMessage = string.Empty;
+                }, null);
+            }
+            catch
+            {
+                // Missing npm/network access should not interrupt chat.
+            }
+            finally
+            {
+                _isCheckingCliUpdate = false;
+            }
         }
 
         [RelayCommand]
@@ -461,6 +548,30 @@ namespace OmniKey.Windows.ViewModels
         {
             ApplyCustomAgentModelCommand.NotifyCanExecuteChanged();
             OnPropertyChanged(nameof(CanApplyCustomAgentModel));
+        }
+
+        partial void OnIsCliUpdateAvailableChanged(bool value)
+        {
+            UpdateCliCommand.NotifyCanExecuteChanged();
+            OnPropertyChanged(nameof(CanUpdateCli));
+        }
+
+        partial void OnCliUpdateVersionChanged(string value)
+        {
+            OnPropertyChanged(nameof(CliUpdateBannerSubtitle));
+        }
+
+        partial void OnIsUpdatingCliChanged(bool value)
+        {
+            UpdateCliCommand.NotifyCanExecuteChanged();
+            OnPropertyChanged(nameof(CanUpdateCli));
+            OnPropertyChanged(nameof(CliUpdateBannerTitle));
+            OnPropertyChanged(nameof(CliUpdateBannerSubtitle));
+        }
+
+        partial void OnCliUpdateStatusMessageChanged(string value)
+        {
+            OnPropertyChanged(nameof(CliUpdateBannerSubtitle));
         }
 
         private void OnModelStateChanged(object? sender, EventArgs e) =>

@@ -58,6 +58,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         // for the rationale. Driven from launch so the chat sidebar's
         // "Update" button becomes available as soon as the sidebar mounts.
         AppUpdateChecker.shared.start()
+        CLIUpdateChecker.shared.start()
 
         // Observe every OmniKey window so we can show / hide the Dock
         // icon based on whether any user-facing window is on screen.
@@ -128,6 +129,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     /// from `applicationDidFinishLaunching` so it can be deferred behind
     /// the first-launch Terms & Conditions acceptance.
     private func beginSubscriptionFlow() {
+        SelfHostedBootstrap.shouldShowFirstRunOnboarding { [weak self] shouldShowOnboarding in
+            Task { @MainActor in
+                guard let self else { return }
+                if shouldShowOnboarding {
+                    self.isAuthorized = false
+                    self.updateAuthStatusUI()
+                    self.showLicenseWindow()
+                    return
+                }
+
+                self.continueSubscriptionFlow()
+            }
+        }
+    }
+
+    private func continueSubscriptionFlow() {
         // Self-hosted: call /activate with an empty key to obtain a JWT
         // (the backend issues one without requiring a subscription key).
         // We still need the token for the agent WebSocket, so we cannot skip this.
@@ -491,6 +508,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         }
 
         statusMenuItem?.title = title
+        licenseMenuItem?.isHidden = APIClient.isSelfHosted
         taskInstructionsMenuItem?.isEnabled = isAuthorized
         scheduledJobsMenuItem?.isEnabled = isAuthorized
         mcpServersMenuItem?.isEnabled = isAuthorized

@@ -113,8 +113,8 @@ app.get('/macos/appcast', (req, res) => {
 
   // These should match the values embedded into the macOS app
   // Info.plist in macOS/build_release_dmg.sh.
-  const bundleVersion = '53';
-  const shortVersion = '1.4.3';
+  const bundleVersion = '54';
+  const shortVersion = '1.5.0';
 
   const xml = `<?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0"
@@ -145,7 +145,7 @@ app.get('/macos/appcast', (req, res) => {
 // ── Windows distribution endpoints ───────────────────────────────────────────
 // These should match the values in windows/OmniKey.Windows.csproj
 // <Version> and windows/build_release_zip.ps1 $APP_VERSION.
-const WIN_VERSION = '1.19.3';
+const WIN_VERSION = '1.20.0';
 const WIN_ZIP_FILENAME = 'OmniKeyAI-windows-win-x64.zip';
 const WIN_ZIP_PATH = path.join(process.cwd(), 'windows', WIN_ZIP_FILENAME);
 
@@ -198,9 +198,9 @@ app.get('/windows/update', (req, res) => {
     releaseNotes: [
       `What's new in ${WIN_VERSION}`,
       ``,
-      ` Chat: you can now steer a running OmniAgent task from the composer instead of waiting for the current run to finish and queueing the message.`,
-      ` Chat: the input now switches between Send, Steer, and Stop states so mid-run guidance lands in the active session.`,
-      ` Chat: steering messages are shown in the conversation history and keep streamed continuation output intact if you stop or retry.`,
+      ` Onboarding: new self-hosted setup flow helps users install omnikey-cli, configure a provider, and start the local daemon without landing on a license-key wall.`,
+      ` Self-hosted: the app now reopens onboarding when the saved daemon port is not actually responding.`,
+      ` Updates: the chat sidebar now warns when omnikey-cli has an update; clicking it updates the CLI and guides daemon restart on Windows.`,
     ].join('\n'),
   });
 });
