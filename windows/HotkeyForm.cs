@@ -23,6 +23,7 @@ namespace OmniKey.Windows
         private bool _isProcessing;
         private bool _isAuthorized;
         private ToolStripMenuItem? _statusMenuItem;
+        private ToastWindow? _toast;
 
         public HotkeyForm()
         {
@@ -73,6 +74,8 @@ namespace OmniKey.Windows
             Program.AuthorizationSucceeded -= OnAuthorizationSucceeded;
             _notifyIcon.Visible = false;
             _notifyIcon.Dispose();
+            _toast?.Dispose();
+            _toast = null;
             base.OnFormClosing(e);
         }
 
@@ -427,11 +430,27 @@ namespace OmniKey.Windows
             UnregisterHotKey(Handle, HOTKEY_ID_TASK);
         }
 
+        /// <summary>
+        /// How long hotkey feedback stays on screen. These are transient
+        /// acknowledgements ("Text updated.", "Enhancing Prompt…") that the
+        /// user reads at a glance, so they clear quickly instead of sitting
+        /// over whatever they went back to typing in.
+        /// </summary>
+        private static readonly TimeSpan ToastDuration = TimeSpan.FromMilliseconds(1600);
+
+        /// <summary>
+        /// Routed through <see cref="ToastWindow"/> rather than the tray
+        /// balloon: the shell ignores ShowBalloonTip's timeout on Windows
+        /// 10/11 and holds the notification for the system duration (5s+),
+        /// which is far too long for per-keystroke feedback. See ToastWindow
+        /// for the full rationale.
+        /// </summary>
         private void ShowBalloon(string title, string text)
         {
-            _notifyIcon.BalloonTipTitle = title;
-            _notifyIcon.BalloonTipText  = text;
-            _notifyIcon.ShowBalloonTip(3000);
+            if (IsDisposed) return;
+
+            _toast ??= new ToastWindow();
+            _toast.Show(title, text, ToastDuration);
         }
 
         [DllImport("user32.dll")]

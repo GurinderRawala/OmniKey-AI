@@ -61,6 +61,13 @@ namespace OmniKey.Windows.ViewModels
         [ObservableProperty]
         private string windowsDaemonCommand = string.Empty;
 
+        /// <summary>
+        /// Only true once the automatic elevated start has actually failed —
+        /// the manual command is a recovery path now, not the default one.
+        /// </summary>
+        [ObservableProperty]
+        private bool showElevatedTerminalFallback;
+
         private int? windowsDaemonPort;
 
         public bool CanActivate => !IsActivating && !string.IsNullOrWhiteSpace(SubscriptionKey);
@@ -72,7 +79,7 @@ namespace OmniKey.Windows.ViewModels
             SelectedProvider is not null &&
             !string.IsNullOrWhiteSpace(ApiKeyInput);
         public string InstallCliButtonText => IsInstallingCli ? "Checking omnikey-cli..." : "Install omnikey-cli";
-        public string StartDaemonButtonText => ShowWindowsDaemonInstructions ? "Check Daemon" : "Show Admin Command";
+        public string StartDaemonButtonText => ShowWindowsDaemonInstructions ? "Check Daemon" : "Start Daemon";
 
         public bool IsSelfHosted => ApiClient.IsSelfHosted;
         public bool ShowSubscriptionForm => !IsCheckingSetup && !ShowOnboarding && !IsSelfHosted;
@@ -266,17 +273,92 @@ namespace OmniKey.Windows.ViewModels
 
                 windowsDaemonPort = port;
                 WindowsDaemonCommand = $"omnikey daemon --port {port}";
-                ShowWindowsDaemonInstructions = true;
-                SetStatus("Config saved. Open PowerShell as Administrator, run the command below, then click Check Daemon.", StatusKind.Positive);
             }
             catch (Exception ex)
             {
                 IsStartingDaemon = false;
-                SetStatus("Daemon instructions failed: " + ex.Message, StatusKind.Negative);
+                SetStatus("Daemon setup failed: " + ex.Message, StatusKind.Negative);
+                return;
+            }
+
+            // Start the daemon ourselves instead of making the user copy a
+            // command into an elevated terminal. UAC consent is unavoidable
+            // (see SelfHostedBootstrap.StartDaemonElevated), but that is one
+            // click rather than a manual context switch, and on approval the
+            // daemon runs hidden with no console window.
+            SetStatus("Requesting administrator permission to start the local daemon...", StatusKind.Neutral);
+            var launch = SelfHostedBootstrap.StartDaemonElevated(port);
+
+            if (launch.Outcome == ElevatedLaunchOutcome.Started)
+            {
+                SetStatus($"Starting the local daemon on port {port}...", StatusKind.Neutral);
+                if (await SelfHostedBootstrap.WaitForDaemonAsync(port, TimeSpan.FromSeconds(30)))
+                {
+                    await FinishLocalSignInAsync();
+                    IsStartingDaemon = false;
+                    return;
+                }
+
+                RevealManualDaemonFallback();
+                SetStatus(
+                    $"Administrator permission was granted, but nothing answered on port {port}. Open Admin Terminal to watch it start and see any error, or run the command below yourself.",
+                    StatusKind.Negative);
+                IsStartingDaemon = false;
+                return;
+            }
+
+            RevealManualDaemonFallback();
+            SetStatus(
+                launch.Outcome == ElevatedLaunchOutcome.DeclinedByUser
+                    ? "Starting the daemon needs administrator rights, and the permission prompt was dismissed. Click Open Admin Terminal to try again, or run the command below in an elevated PowerShell."
+                    : "Could not start the daemon automatically: " + launch.Message + " Use Open Admin Terminal, or run the command below in an elevated PowerShell.",
+                StatusKind.Negative);
+            IsStartingDaemon = false;
+        }
+
+        /// <summary>
+        /// Opens a visible elevated PowerShell running the daemon. Offered as
+        /// an explicit button rather than fired automatically after a declined
+        /// UAC prompt — re-prompting the instant someone clicks "No" is how
+        /// users learn to reflexively dismiss consent dialogs.
+        /// </summary>
+        [RelayCommand]
+        private async Task OpenAdminTerminalAsync()
+        {
+            if (windowsDaemonPort is not int port) return;
+
+            IsStartingDaemon = true;
+            var launch = SelfHostedBootstrap.OpenElevatedDaemonTerminal(port);
+
+            if (launch.Outcome != ElevatedLaunchOutcome.Started)
+            {
+                IsStartingDaemon = false;
+                SetStatus(
+                    launch.Outcome == ElevatedLaunchOutcome.DeclinedByUser
+                        ? "Administrator permission was declined again. Run the command below in an elevated PowerShell, then click Check Daemon."
+                        : "Could not open an elevated terminal: " + launch.Message,
+                    StatusKind.Negative);
+                return;
+            }
+
+            SetStatus($"Waiting for the daemon to answer on port {port}...", StatusKind.Neutral);
+            if (await SelfHostedBootstrap.WaitForDaemonAsync(port, TimeSpan.FromSeconds(30)))
+            {
+                await FinishLocalSignInAsync();
+                IsStartingDaemon = false;
                 return;
             }
 
             IsStartingDaemon = false;
+            SetStatus(
+                "Still no response from the daemon. Check the elevated terminal for errors, then click Check Daemon.",
+                StatusKind.Negative);
+        }
+
+        private void RevealManualDaemonFallback()
+        {
+            ShowWindowsDaemonInstructions = true;
+            ShowElevatedTerminalFallback = true;
         }
 
         private async Task CheckManualDaemonAsync(int port)
@@ -292,9 +374,18 @@ namespace OmniKey.Windows.ViewModels
                 return;
             }
 
+            await FinishLocalSignInAsync();
+            IsStartingDaemon = false;
+        }
+
+        /// <summary>
+        /// Shared tail of every path that gets the daemon running: activate
+        /// the stored key and hand the user off to the chat page.
+        /// </summary>
+        private async Task FinishLocalSignInAsync()
+        {
             SetStatus("Daemon is ready. Finishing local sign-in...", StatusKind.Positive);
             bool activated = await SubscriptionManager.Instance.ActivateStoredKeyAsync();
-            IsStartingDaemon = false;
 
             if (activated)
             {
@@ -336,6 +427,7 @@ namespace OmniKey.Windows.ViewModels
             windowsDaemonPort = null;
             WindowsDaemonCommand = string.Empty;
             ShowWindowsDaemonInstructions = false;
+            ShowElevatedTerminalFallback = false;
         }
     }
 }

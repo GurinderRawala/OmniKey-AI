@@ -388,6 +388,35 @@ namespace OmniKey.Windows
         public bool HasDisplayedTaskInstruction =>
             DisplayedTaskInstructionHeading != "No task instructions";
 
+        /// <summary>
+        /// The project name to display in the composer chip. Counterpart to
+        /// <see cref="DisplayedTaskInstructionHeading"/>: editable while the
+        /// session can still be configured, then locked to the session.
+        ///
+        /// The middle fallback matters. A session's <c>group_name</c> is
+        /// assigned by the backend only after the first final answer, so
+        /// between "user sends the first message" and "classification lands"
+        /// <see cref="AgentSessionInfo.GroupName"/> is still empty. Reading it
+        /// alone would flash "No project" over a chat the user had explicitly
+        /// filed, so we fall back to the group they picked on the way in.
+        /// </summary>
+        public string DisplayedProjectGroupName
+        {
+            get
+            {
+                if (CanChangeSessionSetup)
+                    return SelectedGroup?.GroupName ?? "No project";
+
+                var locked = ActiveSession?.GroupName;
+                if (!string.IsNullOrEmpty(locked))
+                    return locked!;
+
+                return string.IsNullOrEmpty(SelectedGroup?.GroupName)
+                    ? "No project"
+                    : SelectedGroup!.GroupName;
+            }
+        }
+
 
         /// <summary>One-shot signal consumed by the sidebar: when set, the
         /// sidebar expands whichever group currently contains this session

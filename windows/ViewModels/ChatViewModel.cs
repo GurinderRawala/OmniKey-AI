@@ -310,6 +310,20 @@ namespace OmniKey.Windows.ViewModels
             ? "Default task instruction (used for Ctrl+T)"
             : "Task instructions are locked to this session";
 
+        /// <summary>Project name to display in the composer's project chip.
+        /// Locked to the session's group once a chat has started — see
+        /// <see cref="ChatModel.DisplayedProjectGroupName"/>.</summary>
+        public string DisplayedProjectGroupName => _model.DisplayedProjectGroupName;
+
+        /// <summary>Tooltip for the composer's project chip. Mirrors
+        /// <see cref="TaskInstructionTooltip"/>: a chat is filed under one
+        /// project for its whole life, so the picker closes once the session
+        /// exists. Only the model pill stays live after that, because the
+        /// served model can legitimately change between turns.</summary>
+        public string ProjectTooltip => CanChangeSessionSetup
+            ? "Project this chat belongs to (mirrors macOS)"
+            : "Project is locked to this session";
+
         /// <summary>Fraction of the context window already consumed, 0..1.</summary>
         public double ContextUsedFraction
         {
@@ -696,6 +710,8 @@ namespace OmniKey.Windows.ViewModels
             OnPropertyChanged(nameof(IsSessionSetupLocked));
             OnPropertyChanged(nameof(DisplayedTaskInstructionHeading));
             OnPropertyChanged(nameof(TaskInstructionTooltip));
+            OnPropertyChanged(nameof(DisplayedProjectGroupName));
+            OnPropertyChanged(nameof(ProjectTooltip));
             OnPropertyChanged(nameof(ActiveAgentModelLabel));
             OnPropertyChanged(nameof(ActiveAIProvider));
             OnPropertyChanged(nameof(ActiveAIProviderLabel));

@@ -34,6 +34,24 @@ namespace OmniKey.Windows
         public bool IsUpdateAvailable { get; init; }
     }
 
+    internal enum ElevatedLaunchOutcome
+    {
+        /// <summary>The elevated process was created.</summary>
+        Started,
+
+        /// <summary>The user dismissed the UAC consent dialog.</summary>
+        DeclinedByUser,
+
+        /// <summary>Elevation was accepted (or not reached) but launching failed.</summary>
+        Failed,
+    }
+
+    internal sealed class ElevatedLaunchResult
+    {
+        public ElevatedLaunchOutcome Outcome { get; init; }
+        public string Message { get; init; } = "";
+    }
+
     internal static class SelfHostedBootstrap
     {
         private sealed class ShellCommandResult
@@ -351,6 +369,141 @@ Write-Output ""OMNIKEY_INSTALL_VERSION=$refreshed""
             {
                 return false;
             }
+        }
+
+        // ─── Elevated daemon launch ───────────────────────────────────
+
+        /// <summary>
+        /// ShellExecute's error code when the user dismisses the UAC consent
+        /// dialog (ERROR_CANCELLED). Surfaced as a Win32Exception.
+        /// </summary>
+        private const int ErrorCancelled = 1223;
+
+        /// <summary>
+        /// Starts <c>omnikey daemon --port {port}</c> elevated, with no
+        /// visible console.
+        ///
+        /// Windows has no way to silently acquire administrator rights from a
+        /// non-elevated process — that is precisely what UAC exists to
+        /// prevent, so any "run this as admin without asking" approach is by
+        /// definition a UAC bypass. What we *can* do is ask the OS to launch
+        /// the child elevated via the <c>runas</c> verb, which shows the
+        /// standard consent dialog once. After the user approves, the daemon
+        /// runs elevated and hidden, so from their point of view it starts in
+        /// the background and no terminal is involved.
+        ///
+        /// Elevation requires UseShellExecute, which rules out redirecting
+        /// stdout/stderr — success is therefore confirmed by health-probing
+        /// the port (<see cref="WaitForDaemonAsync"/>) rather than by reading
+        /// process output.
+        /// </summary>
+        public static ElevatedLaunchResult StartDaemonElevated(int port)
+            => LaunchElevated(port, hidden: true);
+
+        /// <summary>
+        /// Fallback for when the hidden launch is declined or fails: opens a
+        /// visible elevated PowerShell that runs the daemon and stays open
+        /// (<c>-NoExit</c>) so the user can read any error itself. Still
+        /// requires the same one-time UAC consent.
+        /// </summary>
+        public static ElevatedLaunchResult OpenElevatedDaemonTerminal(int port)
+            => LaunchElevated(port, hidden: false);
+
+        private static ElevatedLaunchResult LaunchElevated(int port, bool hidden)
+        {
+            string shell = ResolvePowerShell();
+            string command = BuildDaemonCommand(port);
+
+            // -NoProfile so a user's profile script can't interfere with, or
+            // slow down, an elevated launch they can't see.
+            string arguments = hidden
+                ? $"-NoProfile -NonInteractive -Command \"{command}\""
+                : $"-NoExit -NoProfile -Command \"{command}\"";
+
+            var psi = new ProcessStartInfo
+            {
+                FileName = shell,
+                Arguments = arguments,
+                // Both required for the runas verb to take effect.
+                UseShellExecute = true,
+                Verb = "runas",
+                WindowStyle = hidden ? ProcessWindowStyle.Hidden : ProcessWindowStyle.Normal,
+                WorkingDirectory = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            };
+
+            try
+            {
+                using var process = Process.Start(psi);
+                if (process is null)
+                {
+                    return new ElevatedLaunchResult
+                    {
+                        Outcome = ElevatedLaunchOutcome.Failed,
+                        Message = "Windows did not start the elevated process.",
+                    };
+                }
+
+                return new ElevatedLaunchResult { Outcome = ElevatedLaunchOutcome.Started };
+            }
+            catch (System.ComponentModel.Win32Exception ex) when (ex.NativeErrorCode == ErrorCancelled)
+            {
+                return new ElevatedLaunchResult
+                {
+                    Outcome = ElevatedLaunchOutcome.DeclinedByUser,
+                    Message = "Administrator permission was declined.",
+                };
+            }
+            catch (Exception ex)
+            {
+                return new ElevatedLaunchResult
+                {
+                    Outcome = ElevatedLaunchOutcome.Failed,
+                    Message = ex.Message,
+                };
+            }
+        }
+
+        /// <summary>
+        /// The daemon command to run under the elevated shell.
+        ///
+        /// Prefers the absolute path to the npm shim over the bare "omnikey"
+        /// name. Elevation can hand the child a different PATH than this
+        /// process sees (notably when the admin account differs from the
+        /// logged-in user), and %APPDATA%\npm is a per-user directory, so
+        /// resolving by name is not reliable from an elevated context.
+        /// </summary>
+        private static string BuildDaemonCommand(int port)
+        {
+            string? shim = ResolveOmniKeyShim();
+            if (shim is null)
+                return $"omnikey daemon --port {port}";
+
+            // & is required to invoke a quoted path; the quotes survive
+            // because the whole -Command argument is itself quoted. Single
+            // quotes inside the path are doubled — PowerShell's escape inside
+            // a single-quoted string — so a username containing an apostrophe
+            // can't terminate the literal early.
+            string escaped = shim.Replace("'", "''");
+            return $"& '{escaped}' daemon --port {port}";
+        }
+
+        /// <summary>
+        /// Absolute path to the globally installed omnikey shim, or null when
+        /// it cannot be found (in which case the caller falls back to PATH).
+        /// </summary>
+        public static string? ResolveOmniKeyShim()
+        {
+            string npmDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "npm");
+
+            foreach (string name in new[] { "omnikey.cmd", "omnikey.ps1", "omnikey" })
+            {
+                string candidate = Path.Combine(npmDir, name);
+                if (File.Exists(candidate))
+                    return candidate;
+            }
+
+            return null;
         }
 
         private static async Task<ShellCommandResult> ExecutePowerShellAsync(string script)

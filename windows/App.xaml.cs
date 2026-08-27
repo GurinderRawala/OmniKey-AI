@@ -20,6 +20,12 @@ namespace OmniKey.Windows
             base.OnStartup(e);
             ApplicationThemeManager.Apply(ApplicationTheme.Dark, WindowBackdropType.Mica);
 
+            // Wheel scrolling is broken by default in this app: controls that
+            // swallow MouseWheel without scrolling leave pages draggable by
+            // scrollbar but dead to the wheel. Installed here, once, so every
+            // window and page is covered. See MouseWheelRouter.
+            MouseWheelRouter.Install();
+
             // The app lives in the tray and must survive a recoverable failure
             // (e.g. the self-hosted backend being down while the user edits
             // Settings). Without these handlers any exception that escapes a

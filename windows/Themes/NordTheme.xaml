@@ -137,7 +137,20 @@
                             which makes labels feel less "thin".
           4. Segoe UI Variable Text / Segoe UI — base Windows fallback.
     -->
-    <FontFamily x:Key="OK.FontFamily">Aptos, Inter, Segoe UI Variable Display, Segoe UI Variable Text, Segoe UI</FontFamily>
+    <!--
+        Windows system font, deliberately. An embedded Inter was tried and
+        reverted: WPF renders bundled fonts without the aggressive hinting
+        Windows ships for its own UI faces, so Inter read as thin and soft at
+        11-14px, and setting TextOptions.TextFormattingMode="Display" on the
+        window did not fix it (measured: pixel-identical output, because the
+        attached property never reached the NavigationView-hosted pages).
+
+        Aptos and Inter were also dropped from the head of this stack. Neither
+        ships with Windows — Aptos needs Office 2024+, Inter is a manual
+        install — so on a stock machine they only ever added two failed
+        lookups before landing on Segoe UI Variable anyway.
+    -->
+    <FontFamily x:Key="OK.FontFamily">Segoe UI Variable Display, Segoe UI Variable Text, Segoe UI</FontFamily>
     <FontFamily x:Key="OK.MonoFontFamily">Cascadia Mono, JetBrains Mono, Consolas</FontFamily>
 
     <sys:Double x:Key="OK.Font.Display">26</sys:Double>
@@ -149,5 +162,30 @@
     <sys:Double x:Key="OK.Font.CaptionSmall">11</sys:Double>
     <sys:Double x:Key="OK.Font.Eyebrow">10</sys:Double>
     <sys:Double x:Key="OK.Font.MonoInline">12.5</sys:Double>
+
+    <!--
+        Placeholder text drawn on top of a borderless composer ComboBox
+        while it has no SelectedItem. WPF's ComboBox has no PlaceholderText
+        of its own (unlike ui:TextBox), and these pickers legitimately sit
+        empty on a cold start — AvailableAgentModels loads async, and the
+        template/project lists are briefly Clear()ed during a resync — so
+        without this they render as a blank chip with no hint of purpose.
+
+        Consumers pair it with a DataTrigger on the sibling ComboBox's
+        SelectedItem (the trigger can't live here because it needs a
+        per-instance ElementName). IsHitTestVisible=False keeps clicks
+        falling through to the ComboBox underneath; the right margin
+        clears the chevron so long hints ellipsize instead of colliding.
+    -->
+    <Style x:Key="OK.ComboPlaceholderText" TargetType="TextBlock">
+        <Setter Property="Margin" Value="11,0,26,0" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="IsHitTestVisible" Value="False" />
+        <Setter Property="FontFamily" Value="{StaticResource OK.FontFamily}" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="Foreground" Value="{StaticResource Nord.SecondaryTextBrush}" />
+        <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+        <Setter Property="Visibility" Value="Collapsed" />
+    </Style>
 
 </ResourceDictionary>

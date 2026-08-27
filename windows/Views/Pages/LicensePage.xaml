@@ -20,6 +20,96 @@
             <Setter Property="FontWeight" Value="SemiBold" />
             <Setter Property="Foreground" Value="{StaticResource Nord.SecondaryTextBrush}" />
         </Style>
+
+        <!--
+            Hosting-mode switch, restyled as a segmented control.
+
+            The stock WPF TabControl template renders Win32-era notched tabs:
+            a 1px system-grey outline with almost no selected/unselected
+            contrast, which on the dark Nord surface left the two modes
+            near-invisible and read as chrome rather than a choice the user is
+            being asked to make. A filled accent chip inside a recessed track
+            is unambiguous at a glance and matches the pill vocabulary already
+            used across the composer and session pages.
+        -->
+        <Style x:Key="OnboardingTabItem" TargetType="TabItem">
+            <Setter Property="FontFamily" Value="{StaticResource OK.FontFamily}" />
+            <Setter Property="FontSize" Value="{StaticResource OK.Font.Body}" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="{StaticResource Nord.SecondaryTextBrush}" />
+            <Setter Property="MinWidth" Value="170" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TabItem">
+                        <Border
+                            x:Name="Chip"
+                            Padding="20,10"
+                            Background="Transparent"
+                            CornerRadius="9"
+                            SnapsToDevicePixels="True">
+                            <ContentPresenter
+                                HorizontalAlignment="Center"
+                                VerticalAlignment="Center"
+                                ContentSource="Header"
+                                TextElement.Foreground="{TemplateBinding Foreground}" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <!-- Hover before selection so the selected chip's
+                                 accent fill is not overpainted by the hover
+                                 wash when the pointer rests on it. -->
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Chip" Property="Background" Value="{StaticResource Nord.HoverBrush}" />
+                                <Setter Property="Foreground" Value="{StaticResource Nord.PrimaryTextBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Chip" Property="Background" Value="{StaticResource Nord.AccentBrush}" />
+                                <Setter Property="Foreground" Value="White" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.5" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="OnboardingTabControl" TargetType="TabControl">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TabControl">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+                            <!-- Recessed track. UniformGrid (not the default
+                                 TabPanel) so both chips take the width of the
+                                 wider label — otherwise "SaaS" renders as a
+                                 stub next to "Self-hosted (free)" and the pair
+                                 stops reading as one switch. -->
+                            <Border
+                                Grid.Row="0"
+                                Padding="4"
+                                HorizontalAlignment="Center"
+                                Background="{StaticResource Nord.EditorBackgroundBrush}"
+                                BorderBrush="{StaticResource Nord.BorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="12">
+                                <UniformGrid IsItemsHost="True" Rows="1" />
+                            </Border>
+                            <ContentPresenter
+                                x:Name="PART_SelectedContentHost"
+                                Grid.Row="1"
+                                ContentSource="SelectedContent" />
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </Page.Resources>
 
     <Grid Margin="24,20,24,20">
@@ -40,11 +130,23 @@
             </StackPanel>
         </Grid>
 
-        <!-- First-run local onboarding -->
+        <!-- First-run local onboarding.
+
+             HorizontalAlignment is Stretch, not Center, on purpose. With
+             Center the card is sized to its content, so switching tabs
+             resized the whole card: the self-hosted pane's 620px-capped
+             paragraphs pushed it out to the 820 cap, while the much shorter
+             SaaS pane let it collapse inward — the card visibly snapped
+             narrower mid-onboarding. Stretch makes the width a function of
+             the available space instead (min(available, 820)), so content no
+             longer drives it and the card holds still across tab switches.
+             WPF arranges a Stretch element that has been clamped by MaxWidth
+             using the same centering offset as Center, so this stays centered
+             and still shrinks gracefully on a narrow window. -->
         <Border
             MaxWidth="820"
             Padding="0"
-            HorizontalAlignment="Center"
+            HorizontalAlignment="Stretch"
             VerticalAlignment="Center"
             Background="{StaticResource Nord.PanelBackgroundBrush}"
             CornerRadius="14"
@@ -98,71 +200,119 @@
                 <StackPanel Grid.Row="2" Margin="24,20,24,24">
                     <TabControl
                         MinHeight="330"
-                        SelectedIndex="{Binding SelectedOnboardingTabIndex, Mode=TwoWay}">
-                        <TabItem Header="Self-hosted (free)">
+                        ItemContainerStyle="{StaticResource OnboardingTabItem}"
+                        SelectedIndex="{Binding SelectedOnboardingTabIndex, Mode=TwoWay}"
+                        Style="{StaticResource OnboardingTabControl}">
+                        <TabItem>
+                            <TabItem.Header>
+                                <StackPanel Orientation="Horizontal">
+                                    <ui:SymbolIcon
+                                        Margin="0,0,8,0"
+                                        VerticalAlignment="Center"
+                                        FontSize="16"
+                                        Symbol="Server24" />
+                                    <TextBlock VerticalAlignment="Center" Text="Self-hosted (free)" />
+                                </StackPanel>
+                            </TabItem.Header>
                             <Grid Margin="0,18,0,0">
                                 <StackPanel>
-                                    <Grid Margin="0,0,0,18">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="Auto" />
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="Auto" />
-                                        </Grid.ColumnDefinitions>
-                                        <StackPanel Grid.Column="0" Orientation="Horizontal">
-                                            <Border
-                                                Width="24"
-                                                Height="24"
-                                                Background="{StaticResource Nord.AccentBrush}"
-                                                CornerRadius="12">
-                                                <TextBlock
-                                                    HorizontalAlignment="Center"
-                                                    VerticalAlignment="Center"
-                                                    FontFamily="{StaticResource OK.FontFamily}"
-                                                    FontSize="{StaticResource OK.Font.CaptionSmall}"
-                                                    FontWeight="SemiBold"
-                                                    Foreground="White"
-                                                    Text="1" />
-                                            </Border>
+                                    <!-- Step rail. Centered as a group rather than
+                                         pinned to both edges: a star-width spacer
+                                         column used to shove "Install" hard left and
+                                         "Configure" hard right, which read as two
+                                         unrelated labels on a wide window. A fixed
+                                         connector inside a centered StackPanel keeps
+                                         the pair reading as one sequence at any width. -->
+                                    <StackPanel
+                                        Margin="0,0,0,18"
+                                        HorizontalAlignment="Center"
+                                        Orientation="Horizontal">
+                                        <Border
+                                            Width="24"
+                                            Height="24"
+                                            Background="{StaticResource Nord.AccentBrush}"
+                                            CornerRadius="12">
                                             <TextBlock
-                                                Margin="8,0,0,0"
+                                                HorizontalAlignment="Center"
                                                 VerticalAlignment="Center"
                                                 FontFamily="{StaticResource OK.FontFamily}"
                                                 FontSize="{StaticResource OK.Font.CaptionSmall}"
                                                 FontWeight="SemiBold"
-                                                Foreground="{StaticResource Nord.PrimaryTextBrush}"
-                                                Text="Install" />
-                                        </StackPanel>
+                                                Foreground="White"
+                                                Text="1" />
+                                        </Border>
+                                        <TextBlock
+                                            Margin="8,0,0,0"
+                                            VerticalAlignment="Center"
+                                            FontFamily="{StaticResource OK.FontFamily}"
+                                            FontSize="{StaticResource OK.Font.CaptionSmall}"
+                                            FontWeight="SemiBold"
+                                            Text="Install">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Foreground" Value="{StaticResource Nord.PrimaryTextBrush}" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsConfigureStep}" Value="True">
+                                                            <Setter Property="Foreground" Value="{StaticResource Nord.SecondaryTextBrush}" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
                                         <Border
-                                            Grid.Column="1"
+                                            Width="48"
                                             Height="1"
                                             Margin="12,0"
                                             VerticalAlignment="Center"
                                             Background="{StaticResource Nord.BorderBrush}" />
-                                        <StackPanel Grid.Column="2" Orientation="Horizontal">
-                                            <Border
-                                                Width="24"
-                                                Height="24"
-                                                Background="{StaticResource Nord.AccentBrush}"
-                                                CornerRadius="12"
-                                                Opacity="0.55" />
+                                        <!-- The "2" is nested inside its bullet and
+                                             centered, matching step 1. It previously
+                                             sat in an empty Border and was dragged back
+                                             over it with Margin="-18,0,0,0", which put
+                                             the glyph ~3px left of the circle's center. -->
+                                        <Border
+                                            Width="24"
+                                            Height="24"
+                                            Background="{StaticResource Nord.AccentBrush}"
+                                            CornerRadius="12">
+                                            <Border.Style>
+                                                <Style TargetType="Border">
+                                                    <Setter Property="Opacity" Value="0.55" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsConfigureStep}" Value="True">
+                                                            <Setter Property="Opacity" Value="1" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Border.Style>
                                             <TextBlock
-                                                Margin="-18,0,0,0"
+                                                HorizontalAlignment="Center"
                                                 VerticalAlignment="Center"
                                                 FontFamily="{StaticResource OK.FontFamily}"
                                                 FontSize="{StaticResource OK.Font.CaptionSmall}"
                                                 FontWeight="SemiBold"
                                                 Foreground="White"
                                                 Text="2" />
-                                            <TextBlock
-                                                Margin="12,0,0,0"
-                                                VerticalAlignment="Center"
-                                                FontFamily="{StaticResource OK.FontFamily}"
-                                                FontSize="{StaticResource OK.Font.CaptionSmall}"
-                                                FontWeight="SemiBold"
-                                                Foreground="{StaticResource Nord.SecondaryTextBrush}"
-                                                Text="Configure" />
-                                        </StackPanel>
-                                    </Grid>
+                                        </Border>
+                                        <TextBlock
+                                            Margin="8,0,0,0"
+                                            VerticalAlignment="Center"
+                                            FontFamily="{StaticResource OK.FontFamily}"
+                                            FontSize="{StaticResource OK.Font.CaptionSmall}"
+                                            FontWeight="SemiBold"
+                                            Text="Configure">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Foreground" Value="{StaticResource Nord.SecondaryTextBrush}" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsConfigureStep}" Value="True">
+                                                            <Setter Property="Foreground" Value="{StaticResource Nord.PrimaryTextBrush}" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </StackPanel>
 
                                     <StackPanel Visibility="{Binding IsInstallStep, Converter={StaticResource BooleanToVisibilityConverter}}">
                                         <Border
@@ -336,7 +486,14 @@
                                                     FontSize="{StaticResource OK.Font.Caption}"
                                                     FontWeight="SemiBold"
                                                     Foreground="{StaticResource Nord.PrimaryTextBrush}"
-                                                    Text="Open PowerShell as Administrator and run:" />
+                                                    Text="Start the daemon manually" />
+                                                <TextBlock
+                                                    Margin="0,4,0,0"
+                                                    FontFamily="{StaticResource OK.FontFamily}"
+                                                    FontSize="{StaticResource OK.Font.CaptionSmall}"
+                                                    Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                                                    Text="Open Admin Terminal launches an elevated PowerShell and runs this for you. To do it yourself, open PowerShell as Administrator and run:"
+                                                    TextWrapping="Wrap" />
                                                 <TextBox
                                                     Margin="0,8,0,8"
                                                     Padding="8,6"
@@ -348,12 +505,22 @@
                                                     Foreground="{StaticResource Nord.PrimaryTextBrush}"
                                                     IsReadOnly="True"
                                                     Text="{Binding WindowsDaemonCommand}" />
-                                                <TextBlock
-                                                    FontFamily="{StaticResource OK.FontFamily}"
-                                                    FontSize="{StaticResource OK.Font.CaptionSmall}"
-                                                    Foreground="{StaticResource Nord.SecondaryTextBrush}"
-                                                    Text="When the command completes, return here and click Check Daemon."
-                                                    TextWrapping="Wrap" />
+                                                <StackPanel Orientation="Horizontal">
+                                                    <ui:Button
+                                                        Appearance="Primary"
+                                                        Command="{Binding OpenAdminTerminalCommand}"
+                                                        Content="Open Admin Terminal"
+                                                        Icon="{ui:SymbolIcon Symbol=WindowConsole20}"
+                                                        Visibility="{Binding ShowElevatedTerminalFallback, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                                                    <TextBlock
+                                                        Margin="12,0,0,0"
+                                                        VerticalAlignment="Center"
+                                                        FontFamily="{StaticResource OK.FontFamily}"
+                                                        FontSize="{StaticResource OK.Font.CaptionSmall}"
+                                                        Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                                                        Text="Then click Check Daemon."
+                                                        TextWrapping="Wrap" />
+                                                </StackPanel>
                                             </StackPanel>
                                         </Border>
 
@@ -388,7 +555,17 @@
                             </Grid>
                         </TabItem>
 
-                        <TabItem Header="SaaS">
+                        <TabItem>
+                            <TabItem.Header>
+                                <StackPanel Orientation="Horizontal">
+                                    <ui:SymbolIcon
+                                        Margin="0,0,8,0"
+                                        VerticalAlignment="Center"
+                                        FontSize="16"
+                                        Symbol="Cloud24" />
+                                    <TextBlock VerticalAlignment="Center" Text="SaaS" />
+                                </StackPanel>
+                            </TabItem.Header>
                             <StackPanel Margin="0,18,0,0">
                                 <Border
                                     Padding="14,12"

@@ -955,18 +955,25 @@ class NemotronAdapter {
     options: CompletionOptions,
   ): Promise<AICompletionResult> {
     if (this.useResponsesApi) {
-      const { instructions, input } = toResponsesInput(messages);
-      const tools = options.tools?.length ? toResponsesTools(options.tools) : [];
+      // Same downgrade as streamComplete: gateways that only speak
+      // /chat/completions must not turn an opt-in flag into a hard failure.
+      // Nothing has been returned to the caller yet, so retrying is free.
+      try {
+        const { instructions, input } = toResponsesInput(messages);
+        const tools = options.tools?.length ? toResponsesTools(options.tools) : [];
 
-      const response = await (this.client.responses as any).create({
-        model,
-        ...(instructions ? { instructions } : {}),
-        input,
-        tools,
-        ...(modelSupportsTemperature(model) ? { temperature: options.temperature ?? 0.2 } : {}),
-        ...(options.maxTokens ? { max_output_tokens: options.maxTokens } : {}),
-      });
-      return fromResponsesOutput(response, model);
+        const response = await (this.client.responses as any).create({
+          model,
+          ...(instructions ? { instructions } : {}),
+          input,
+          tools,
+          ...(modelSupportsTemperature(model) ? { temperature: options.temperature ?? 0.2 } : {}),
+          ...(options.maxTokens ? { max_output_tokens: options.maxTokens } : {}),
+        });
+        return fromResponsesOutput(response, model);
+      } catch {
+        this.useResponsesApi = false;
+      }
     }
 
     const oaiMessages = toOpenAIMessages(messages);
@@ -1024,35 +1031,64 @@ class NemotronAdapter {
     onDelta: (delta: string) => void,
   ): Promise<{ usage?: AIUsage; model: string }> {
     if (this.useResponsesApi) {
-      const { instructions, input } = toResponsesInput(messages);
+      // Track whether anything reached the caller. The Responses API is
+      // opt-in via OPEN_MODEL_RESPONSES_API_ENABLED, but "open model" covers
+      // any OpenAI-compatible gateway, and most of them (NVIDIA NIM included)
+      // implement only /chat/completions. Against those, the SDK's stream
+      // helper fails while assembling the response — "missing content at
+      // index 0" — after emitting nothing. Falling back to chat completions
+      // turns a hard, silent breakage into a transparent downgrade.
+      let emitted = 0;
 
-      const stream = (this.client.responses as any).stream({
-        model,
-        ...(instructions ? { instructions } : {}),
-        input,
-        ...(modelSupportsTemperature(model) ? { temperature: options.temperature ?? 0.3 } : {}),
-        ...(options.maxTokens ? { max_output_tokens: options.maxTokens } : {}),
-      });
-
-      for await (const event of stream as AsyncIterable<any>) {
-        if (event.type === 'response.output_text.delta' && event.delta) {
-          onDelta(event.delta as string);
-        }
-      }
-
-      let usage: AIUsage | undefined;
       try {
-        const finalResponse = await stream.finalResponse();
-        if (finalResponse?.usage) {
-          usage = usageFromOpenAIResponsesUsage(finalResponse.usage);
-        }
-      } catch {
-        // finalResponse may throw if the stream was already consumed.
-      }
+        const { instructions, input } = toResponsesInput(messages);
 
-      return { usage, model };
+        const stream = (this.client.responses as any).stream({
+          model,
+          ...(instructions ? { instructions } : {}),
+          input,
+          ...(modelSupportsTemperature(model) ? { temperature: options.temperature ?? 0.3 } : {}),
+          ...(options.maxTokens ? { max_output_tokens: options.maxTokens } : {}),
+        });
+
+        for await (const event of stream as AsyncIterable<any>) {
+          if (event.type === 'response.output_text.delta' && event.delta) {
+            emitted += 1;
+            onDelta(event.delta as string);
+          }
+        }
+
+        let usage: AIUsage | undefined;
+        try {
+          const finalResponse = await stream.finalResponse();
+          if (finalResponse?.usage) {
+            usage = usageFromOpenAIResponsesUsage(finalResponse.usage);
+          }
+        } catch {
+          // finalResponse may throw if the stream was already consumed.
+        }
+
+        return { usage, model };
+      } catch (err) {
+        // Only safe to retry if the caller has seen nothing yet; re-running
+        // after partial output would duplicate text mid-stream.
+        if (emitted > 0) throw err;
+
+        // Latch the downgrade so every later call skips the doomed round
+        // trip instead of paying for it again.
+        this.useResponsesApi = false;
+      }
     }
 
+    return this.streamViaChatCompletions(model, messages, options, onDelta);
+  }
+
+  private async streamViaChatCompletions(
+    model: string,
+    messages: AIMessage[],
+    options: CompletionOptions,
+    onDelta: (delta: string) => void,
+  ): Promise<{ usage?: AIUsage; model: string }> {
     const oaiMessages = toOpenAIMessages(messages);
 
     const stream = (await this.client.chat.completions.create({

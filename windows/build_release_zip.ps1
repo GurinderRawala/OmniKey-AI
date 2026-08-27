@@ -83,13 +83,30 @@ OmniKey AI $APP_VERSION – Windows ($Runtime)
 
 What's new in $APP_VERSION
 --------------------------
-- Onboarding: new self-hosted setup flow helps you install omnikey-cli,
-  configure a provider, and start the local daemon without landing on a
-  license-key wall.
-- Self-hosted: the app now reopens onboarding when the saved daemon port is not
-  actually responding.
-- Updates: the chat sidebar now warns when omnikey-cli has an update; clicking
-  it updates the CLI and guides daemon restart on Windows.
+Fixes
+- Startup: the app could crash on launch instead of opening the chat window.
+- Scrolling: the mouse wheel did nothing on every page (Usage, Settings, MCP
+  Servers and the rest). Only dragging the scrollbar worked.
+- Shortcuts: Ctrl+E and Ctrl+G silently returned your text unchanged on
+  open-model providers whose gateway does not implement the OpenAI Responses
+  API. OmniKey now falls back to chat completions automatically.
+- Composer: the task-instruction chip turned black and became unreadable once a
+  chat started.
+
+Improvements
+- Daemon: starting the local daemon no longer means copying an admin command
+  into a terminal. OmniKey launches it elevated for you after one Windows
+  permission prompt, with an "Open Admin Terminal" fallback if you decline.
+- Alerts: hotkey notifications now clear in well under a second instead of
+  lingering, and no longer change width per message.
+- Composer: the project picker locks to the session once a chat starts,
+  matching task instructions. The model can still be changed between turns.
+  Empty dropdowns now say what they are for.
+- Onboarding: the Self-hosted / SaaS switch is a proper segmented control, the
+  card no longer changes width when you switch tabs, and the step rail is
+  centred and tracks the step you are actually on.
+- Chat sidebar: tighter alignment and spacing, and the list no longer shifts
+  when you hover a row.
 
 Installation
 ------------
