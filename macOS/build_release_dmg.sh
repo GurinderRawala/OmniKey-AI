@@ -127,9 +127,9 @@ cat > "${INFO_PLIST}" <<EOF
     <key>CFBundleIdentifier</key>
     <string>${BUNDLE_ID}</string>
     <key>CFBundleVersion</key>
-    <string>54</string>
+    <string>55</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.5.0</string>
+    <string>1.5.1</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>LSMinimumSystemVersion</key>
