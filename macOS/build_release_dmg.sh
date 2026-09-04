@@ -127,9 +127,9 @@ cat > "${INFO_PLIST}" <<EOF
     <key>CFBundleIdentifier</key>
     <string>${BUNDLE_ID}</string>
     <key>CFBundleVersion</key>
-    <string>55</string>
+    <string>56</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.5.1</string>
+    <string>1.5.2</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>LSMinimumSystemVersion</key>
@@ -184,6 +184,30 @@ else
   err "Did SwiftPM finish fetching/building the Sparkle package?"
   exit 1
 fi
+
+# 5b. Embed Swift Package resource bundles used by the binary.
+# SwiftPM emits one `<Package>_<Module>.bundle` per package target
+# that declares resources. At runtime, Textual looks up its bundle
+# through `Bundle.main.resourceURL` (which is `Contents/Resources/`
+# for a macOS `.app`) and gracefully returns `nil` when the bundle
+# is missing, so `Contents/Resources/` is the correct install site
+# and also keeps the `.app` layout valid for `codesign --strict`
+# (a bundle at the `.app` root would fail signature verification
+# with "unsealed contents present in the bundle root"). Currently
+# emitted bundles:
+#   - textual_Textual.bundle       (Prism syntax-highlighter theme)
+#   - swiftui-math_SwiftUIMath.bundle (math font used by Textual;
+#     dormant unless LaTeX math is rendered)
+info "Embedding Swift Package resource bundles into app bundle..."
+embedded_bundles=0
+shopt -s nullglob
+for bundle in "${BUILD_DIR}"/*.bundle; do
+  info "  • $(basename "${bundle}")"
+  cp -R "${bundle}" "${APP_BUNDLE}/Contents/Resources/"
+  embedded_bundles=$((embedded_bundles + 1))
+done
+shopt -u nullglob
+info "Embedded ${embedded_bundles} SwiftPM resource bundle(s)."
 
 # 6. Codesign the app bundle
 info "Code signing app bundle with Developer ID certificate..."

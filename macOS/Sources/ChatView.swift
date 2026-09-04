@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import Textual
 
 // MARK: - Root
 
@@ -3286,19 +3287,32 @@ struct FinalAnswerView: View {
         // container without ever feeling bright. The copy icon stays
         // permanently anchored bottom-right.
         VStack(alignment: .trailing, spacing: 6) {
-            // The final answer is rendered by a single, read-only
-            // `NSTextView` (see `SelectableMarkdownTextView`) instead
-            // of the SwiftUI `ChatMarkdownView`. SwiftUI's
-            // `.textSelection(.enabled)` only makes each individual
-            // `Text` selectable, so users could highlight one
-            // paragraph but never drag across headings, lists, and
-            // multiple paragraphs to copy a larger chunk of the
-            // answer. Backing the answer with one NSTextView gives us
-            // native, cross-block selection while still preserving
-            // the markdown styling (bold / italic / inline code /
-            // links / headings / bullet lists / block quotes / fenced
-            // code).
-            SelectableMarkdownTextView(text: text, colorScheme: colorScheme)
+            // The final answer is rendered by Textual's
+            // `StructuredText`, which builds on SwiftUI's own text
+            // rendering pipeline but ships a proper multi-block text
+            // selection implementation. That gives users native
+            // click-and-drag selection across headings, paragraphs,
+            // lists, block quotes, and tables — the single biggest
+            // gap in every previous rendering approach we tried
+            // (per-`Text` `.textSelection(.enabled)`, NSTextView with
+            // hand-built NSAttributedString spacing, MarkdownUI).
+            //
+            // We start from the `.gitHub` preset for typography +
+            // spacing (which fixes the paragraph-alignment issues
+            // the ad-hoc NSParagraphStyle helper produced) and
+            // overlay a Nord-flavoured `InlineStyle` so code spans,
+            // links, and strong text match the rest of the app.
+            // A slightly larger base font makes the answer easier to
+            // read at typical chat window widths — the `.gitHub`
+            // preset's default of ~13pt looked cramped against the
+            // surrounding chrome. `.font(...)` sets the body size;
+            // headings scale off it proportionally through Textual's
+            // font-scale system.
+            StructuredText(markdown: text)
+                .textual.structuredTextStyle(.gitHub)
+                .textual.inlineStyle(nordInlineStyle)
+                .textual.textSelection(.enabled)
+                .font(.system(size: 14.5))
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             ChatCopyButton(text: text, title: "Copy answer")
@@ -3317,6 +3331,34 @@ struct FinalAnswerView: View {
         )
     }
 
+    /// Inline styling shared across the final answer. Applied on top
+    /// of `.gitHub`, this only overrides the runs whose default look
+    /// (blue link colour, red inline-code chip, plain strikethrough)
+    /// would clash with the Nord palette used elsewhere in the chat.
+    ///
+    /// Backticks (`.code`) get a heavier semibold weight and a
+    /// slightly larger relative size (0.92 vs the previous 0.85) so
+    /// inline code reads as a strong, scannable chip against
+    /// surrounding prose rather than shrinking away from it.
+    private var nordInlineStyle: InlineStyle {
+        InlineStyle()
+            .link(
+                .foregroundColor(NordTheme.accentBlue(colorScheme)),
+                .underlineStyle(.single)
+            )
+            .code(
+                .monospaced,
+                .fontScale(0.92),
+                .fontWeight(.semibold),
+                .foregroundColor(NordTheme.primaryText(colorScheme)),
+                .backgroundColor(NordTheme.badgeFill(colorScheme))
+            )
+            .strong(.fontWeight(.semibold))
+            .strikethrough(
+                .foregroundColor(NordTheme.secondaryText(colorScheme))
+            )
+    }
+
     /// Subtle, never-bright paper colour:
     /// - dark mode → a small lift above the window background
     /// - light mode → a near-white tint, kept noticeably below pure white
@@ -3327,327 +3369,6 @@ struct FinalAnswerView: View {
             return Color(red: 50 / 255, green: 50 / 255, blue: 54 / 255).opacity(0.85)
         default:
             return Color(red: 252 / 255, green: 252 / 255, blue: 254 / 255)
-        }
-    }
-}
-
-// MARK: - Selectable Markdown Text View
-
-/// NSTextView subclass that reports its laid-out height as its
-/// intrinsic content size, so SwiftUI's layout system can size the
-/// hosting view to exactly the height needed to render the answer.
-final class IntrinsicSelectableTextView: NSTextView {
-    override var intrinsicContentSize: NSSize {
-        guard let container = textContainer,
-              let layoutManager
-        else { return super.intrinsicContentSize }
-        layoutManager.ensureLayout(for: container)
-        let used = layoutManager.usedRect(for: container)
-        return NSSize(
-            width: NSView.noIntrinsicMetric,
-            height: ceil(used.height) + textContainerInset.height * 2
-        )
-    }
-
-    override func didChangeText() {
-        super.didChangeText()
-        invalidateIntrinsicContentSize()
-    }
-
-    override func setFrameSize(_ newSize: NSSize) {
-        super.setFrameSize(newSize)
-        // Width changes reflow the text → the intrinsic height needs
-        // to be recomputed so wrapped lines don't get clipped.
-        invalidateIntrinsicContentSize()
-    }
-}
-
-/// Read-only, selectable NSTextView-backed view used to render the
-/// assistant's final answer. Unlike SwiftUI's `Text` (whose
-/// `textSelection(.enabled)` only exposes selection *within* a single
-/// `Text` view), a single NSTextView lets the user drag-select across
-/// every paragraph, heading, list item, and quote in the answer—
-/// then Cmd-C copies the exact excerpt they highlighted.
-///
-/// Styling is derived from the same markdown block parser used by
-/// `ChatMarkdownView`, so bold / italic / inline code / links /
-/// headings / bullet lists / block quotes / fenced code blocks all
-/// look consistent with the rest of the transcript. Fenced code
-/// blocks are inlined as monospaced text with a subtle background
-/// wash rather than a separate framed view; users still get a
-/// per-answer "Copy answer" button in `FinalAnswerView` for the
-/// common "grab everything" case.
-private struct SelectableMarkdownTextView: NSViewRepresentable {
-    let text: String
-    let colorScheme: ColorScheme
-
-    private static let baseFontSize: CGFloat = 13
-    /// Horizontal padding matching `ChatMarkdownView`'s previous layout
-    /// (`FinalAnswerView` still applies its own outer padding). The
-    /// NSTextView draws its own text-container inset of zero so the
-    /// selection highlight lines up exactly with the surrounding
-    /// SwiftUI padding.
-    private static let textInsets = NSSize(width: 0, height: 0)
-
-    func makeNSView(context _: Context) -> IntrinsicSelectableTextView {
-        // Directly host an NSTextView (no enclosing NSScrollView) so
-        // its `intrinsicContentSize` drives the SwiftUI height. The
-        // enclosing SwiftUI ScrollView already handles the transcript
-        // scroll, and using NSTextView's intrinsic size avoids the
-        // "1-pt tall placeholder" bug NSScrollView produces when its
-        // documentView is smaller than the visible content area.
-        let textView = IntrinsicSelectableTextView()
-        textView.isEditable = false
-        textView.isSelectable = true
-        textView.drawsBackground = false
-        textView.backgroundColor = .clear
-        textView.textContainerInset = Self.textInsets
-        textView.textContainer?.lineFragmentPadding = 0
-        textView.textContainer?.widthTracksTextView = true
-        textView.isHorizontallyResizable = false
-        textView.isVerticallyResizable = true
-        textView.linkTextAttributes = [
-            .foregroundColor: NSColor(NordTheme.accentBlue(colorScheme)),
-            .underlineStyle: NSUnderlineStyle.single.rawValue,
-            .cursor: NSCursor.pointingHand,
-        ]
-        // Attributed content is applied in `updateNSView` so the
-        // initial state and any subsequent SwiftUI updates share the
-        // same code path.
-        return textView
-    }
-
-    func updateNSView(_ textView: IntrinsicSelectableTextView, context _: Context) {
-        let attributed = Self.buildAttributedString(
-            from: text,
-            colorScheme: colorScheme
-        )
-
-        // Preserve any existing selection when the text is unchanged
-        // (SwiftUI republishes on every streaming token). Only rewrite
-        // storage when the source string has actually changed.
-        let currentString = textView.textStorage?.string ?? ""
-        if currentString != attributed.string {
-            textView.textStorage?.setAttributedString(attributed)
-        }
-
-        textView.linkTextAttributes = [
-            .foregroundColor: NSColor(NordTheme.accentBlue(colorScheme)),
-            .underlineStyle: NSUnderlineStyle.single.rawValue,
-            .cursor: NSCursor.pointingHand,
-        ]
-
-        textView.invalidateIntrinsicContentSize()
-    }
-
-    // MARK: - Attributed string construction
-
-    private static func buildAttributedString(
-        from source: String,
-        colorScheme: ColorScheme
-    ) -> NSAttributedString {
-        let blocks = ChatMarkdownView.parseBlocks(from: source)
-        let output = NSMutableAttributedString()
-
-        for (index, block) in blocks.enumerated() {
-            if index > 0 {
-                output.append(NSAttributedString(
-                    string: "\n",
-                    attributes: [.font: NSFont.systemFont(ofSize: baseFontSize)]
-                ))
-            }
-            append(block: block, to: output, colorScheme: colorScheme)
-        }
-
-        return output
-    }
-
-    private static func append(
-        block: ChatMarkdownView.MarkdownBlock,
-        to output: NSMutableAttributedString,
-        colorScheme: ColorScheme
-    ) {
-        switch block {
-        case let .paragraph(text):
-            output.append(inlineAttributed(
-                text,
-                fontSize: baseFontSize,
-                weight: .regular,
-                colorScheme: colorScheme
-            ))
-        case let .heading(level, text):
-            output.append(inlineAttributed(
-                text,
-                fontSize: headingSize(level),
-                weight: .semibold,
-                colorScheme: colorScheme
-            ))
-        case let .list(items):
-            for (i, item) in items.enumerated() {
-                if i > 0 {
-                    output.append(NSAttributedString(string: "\n"))
-                }
-                let indent = String(repeating: "  ", count: max(item.level - 1, 0))
-                let marker: String
-                if let checked = item.checked {
-                    marker = checked ? "☑ " : "☐ "
-                } else {
-                    marker = (item.marker ?? "•") + " "
-                }
-                let prefix = NSMutableAttributedString(
-                    string: indent + marker,
-                    attributes: [
-                        .font: NSFont.systemFont(ofSize: baseFontSize, weight: .medium),
-                        .foregroundColor: NSColor(NordTheme.secondaryText(colorScheme)),
-                    ]
-                )
-                output.append(prefix)
-                output.append(inlineAttributed(
-                    item.text,
-                    fontSize: baseFontSize,
-                    weight: .regular,
-                    colorScheme: colorScheme
-                ))
-            }
-        case let .quote(text):
-            let quoted = inlineAttributed(
-                text,
-                fontSize: baseFontSize,
-                weight: .regular,
-                colorScheme: colorScheme
-            )
-            let mutable = NSMutableAttributedString(attributedString: quoted)
-            let paragraph = NSMutableParagraphStyle()
-            paragraph.headIndent = 12
-            paragraph.firstLineHeadIndent = 12
-            mutable.addAttributes(
-                [
-                    .paragraphStyle: paragraph,
-                    .foregroundColor: NSColor(NordTheme.secondaryText(colorScheme)),
-                ],
-                range: NSRange(location: 0, length: mutable.length)
-            )
-            output.append(mutable)
-        case let .code(_, code):
-            let mono = NSAttributedString(
-                string: code,
-                attributes: [
-                    .font: NSFont.monospacedSystemFont(
-                        ofSize: max(baseFontSize - 0.25, 10.5),
-                        weight: .regular
-                    ),
-                    .foregroundColor: NSColor(NordTheme.primaryText(colorScheme)),
-                    .backgroundColor: NSColor(NordTheme.badgeFill(colorScheme)),
-                ]
-            )
-            output.append(mono)
-        case .divider:
-            output.append(NSAttributedString(
-                string: "────────",
-                attributes: [
-                    .font: NSFont.systemFont(ofSize: baseFontSize),
-                    .foregroundColor: NSColor(NordTheme.border(colorScheme)),
-                ]
-            ))
-        case let .table(header, rows):
-            let tableLines: [String] = ([header] + rows).map { $0.joined(separator: "\t") }
-            let joined = tableLines.joined(separator: "\n")
-            output.append(NSAttributedString(
-                string: joined,
-                attributes: [
-                    .font: NSFont.systemFont(ofSize: baseFontSize),
-                    .foregroundColor: NSColor(NordTheme.primaryText(colorScheme)),
-                ]
-            ))
-        }
-    }
-
-    private static func inlineAttributed(
-        _ prose: String,
-        fontSize: CGFloat,
-        weight: NSFont.Weight,
-        colorScheme: ColorScheme
-    ) -> NSAttributedString {
-        let opts = AttributedString.MarkdownParsingOptions(
-            allowsExtendedAttributes: true,
-            interpretedSyntax: .inlineOnlyPreservingWhitespace,
-            failurePolicy: .returnPartiallyParsedIfPossible
-        )
-        let parsed = (try? AttributedString(markdown: prose, options: opts))
-            ?? AttributedString(prose)
-        let nsAttributed = NSMutableAttributedString(
-            attributedString: NSAttributedString(parsed)
-        )
-
-        let baseFont = NSFont.systemFont(ofSize: fontSize, weight: weight)
-        let fullRange = NSRange(location: 0, length: nsAttributed.length)
-        let baseColor = NSColor(NordTheme.primaryText(colorScheme))
-        nsAttributed.addAttributes(
-            [.font: baseFont, .foregroundColor: baseColor],
-            range: fullRange
-        )
-
-        // Re-apply markdown intents that the base attributes just
-        // stomped: bold, italic, monospaced inline code, and links
-        // must survive the uniform pass above.
-        nsAttributed.enumerateAttribute(
-            .inlinePresentationIntent,
-            in: fullRange
-        ) { value, range, _ in
-            let rawUInt: UInt
-            if let raw = value as? Int { rawUInt = UInt(bitPattern: raw) }
-            else if let raw = value as? UInt { rawUInt = raw }
-            else { return }
-            let intent = InlinePresentationIntent(rawValue: rawUInt)
-            var symbolic: NSFontDescriptor.SymbolicTraits = []
-            if intent.contains(.stronglyEmphasized) { symbolic.insert(.bold) }
-            if intent.contains(.emphasized) { symbolic.insert(.italic) }
-            if intent.contains(.code) {
-                let mono = NSFont.monospacedSystemFont(
-                    ofSize: max(fontSize - 0.25, 10.5),
-                    weight: .regular
-                )
-                nsAttributed.addAttribute(.font, value: mono, range: range)
-                nsAttributed.addAttribute(
-                    .backgroundColor,
-                    value: NSColor(NordTheme.badgeFill(colorScheme)),
-                    range: range
-                )
-            } else if !symbolic.isEmpty {
-                var descriptor = baseFont.fontDescriptor
-                descriptor = descriptor.withSymbolicTraits(symbolic)
-                if let styled = NSFont(descriptor: descriptor, size: fontSize) {
-                    nsAttributed.addAttribute(.font, value: styled, range: range)
-                }
-            }
-        }
-
-        // Preserve links (SwiftUI's AttributedString maps them onto
-        // `.link`; NSAttributedString consumes the same key).
-        nsAttributed.enumerateAttribute(.link, in: fullRange) { value, range, _ in
-            guard value != nil else { return }
-            nsAttributed.addAttribute(
-                .foregroundColor,
-                value: NSColor(NordTheme.accentBlue(colorScheme)),
-                range: range
-            )
-            nsAttributed.addAttribute(
-                .underlineStyle,
-                value: NSUnderlineStyle.single.rawValue,
-                range: range
-            )
-        }
-
-        return nsAttributed
-    }
-
-    private static func headingSize(_ level: Int) -> CGFloat {
-        switch level {
-        case 1: return baseFontSize + 4
-        case 2: return baseFontSize + 2
-        case 3: return baseFontSize + 1
-        case 4: return baseFontSize
-        default: return max(baseFontSize - 1, 11)
         }
     }
 }
