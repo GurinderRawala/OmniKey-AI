@@ -259,7 +259,8 @@ export async function getAgentSettings(): Promise<AgentSettingsSnapshot> {
     if (!row.anthropicModel) backfill.anthropicModel = defaults.anthropicModel;
     if (!row.geminiModel) backfill.geminiModel = defaults.geminiModel;
     if (!row.nemotronModel) backfill.nemotronModel = defaults.nemotronModel;
-    if (row.browserAccessEnabled && !row.browserAccessMethod && defaults.browserAccessMethod) {
+    if (defaults.browserAccessEnabled && !row.browserAccessMethod && defaults.browserAccessMethod) {
+      backfill.browserAccessEnabled = true;
       backfill.browserAccessMethod = defaults.browserAccessMethod;
       backfill.browserDebugPort = defaults.browserDebugPort;
       backfill.browserDebugBrowserName = defaults.browserDebugBrowserName;

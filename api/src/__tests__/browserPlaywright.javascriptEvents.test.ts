@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   execFileSync: vi.fn(),
@@ -16,9 +16,21 @@ vi.mock('../config', () => ({
   },
 }));
 
-import { fetchWithPlaywright, isBrowserOpenWithUrl } from '../web-search/browser-playwright';
+import {
+  browserTabUrlMatches,
+  fetchWithPlaywright,
+  isBrowserOpenWithUrl,
+} from '../web-search/browser-playwright';
 
 describe('JavaScript Events browser tab detection', () => {
+  beforeAll(() => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin');
+  });
+
+  afterAll(() => {
+    vi.restoreAllMocks();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.execSync.mockImplementation((command: string) => {
@@ -44,6 +56,27 @@ describe('JavaScript Events browser tab detection', () => {
       }
       throw new Error(`Unexpected command: ${command}`);
     });
+  });
+
+  it('matches the exact URL including query parameters and ignores fragments', () => {
+    expect(
+      browserTabUrlMatches(
+        'https://github.com/example/private/pull/4?view=files#discussion',
+        'https://github.com/example/private/pull/4?view=files#top',
+      ),
+    ).toBe(true);
+    expect(
+      browserTabUrlMatches(
+        'https://github.com/example/private/pull/4',
+        'https://github.com/example/private/pull/42',
+      ),
+    ).toBe(false);
+    expect(
+      browserTabUrlMatches(
+        'https://github.com/example/private/pull/4?view=files',
+        'https://github.com/example/private/pull/4?view=conversation',
+      ),
+    ).toBe(false);
   });
 
   it('finds a target in a non-first Chrome tab', async () => {

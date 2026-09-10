@@ -102,6 +102,7 @@ namespace OmniKey.Windows
 
         public string? BrowserDebugBrowserName { get; set; }
         public int? BrowserDebugPort { get; set; }
+        public string? BrowserDebugUserDataDir { get; set; }
         public string? BrowserAccessMethod { get; set; }
         public List<string> BrowserJavascriptEventBrowsers { get; set; } = new();
 

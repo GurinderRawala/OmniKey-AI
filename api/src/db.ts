@@ -167,60 +167,76 @@ const COLUMN_MIGRATIONS: ColumnMigration[] = [
 
 async function runSQLiteMigrations(logger: Logger): Promise<void> {
   const addedAgentSettingsColumns = new Set<string>();
-  for (const { table, column, definition } of COLUMN_MIGRATIONS) {
-    const rows = (await sequelize.query(`PRAGMA table_info(${table})`))[0] as Array<{
-      name: string;
-    }>;
-    const exists = rows.some((r) => r.name === column);
-    if (!exists) {
-      await sequelize.query(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
-      if (table === 'agent_settings') addedAgentSettingsColumns.add(column);
-      logger.info(`SQLite migration: added column ${table}.${column}`);
+  const transaction = await sequelize.transaction();
+  try {
+    for (const { table, column, definition } of COLUMN_MIGRATIONS) {
+      const rows = (
+        await sequelize.query(`PRAGMA table_info(${table})`, { transaction })
+      )[0] as Array<{
+        name: string;
+      }>;
+      const exists = rows.some((r) => r.name === column);
+      if (!exists) {
+        await sequelize.query(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`, {
+          transaction,
+        });
+        if (table === 'agent_settings') addedAgentSettingsColumns.add(column);
+        logger.info(`SQLite migration: added column ${table}.${column}`);
+      }
     }
-  }
 
-  // ADD COLUMN applies the SQL default to every pre-existing row. Replace
-  // those mechanical defaults with the user's legacy config/env values once,
-  // during the same upgrade that introduces the DB-backed fields.
-  if (addedAgentSettingsColumns.has('terminal_access')) {
-    await sequelize.query('UPDATE agent_settings SET terminal_access = ? WHERE id = ?', {
-      replacements: [config.terminalAccess, 'default'],
-    });
-  }
-  if (addedAgentSettingsColumns.has('web_search_enabled')) {
-    await sequelize.query('UPDATE agent_settings SET web_search_enabled = ? WHERE id = ?', {
-      replacements: [config.webSearchEnabled ? 1 : 0, 'default'],
-    });
-  }
-  if (addedAgentSettingsColumns.has('usage_recording_enabled')) {
-    await sequelize.query('UPDATE agent_settings SET usage_recording_enabled = ? WHERE id = ?', {
-      replacements: [config.usageRecordingEnabled ? 1 : 0, 'default'],
-    });
-  }
-  if (addedAgentSettingsColumns.has('browser_access_enabled')) {
-    const enabled = config.browserAccessEnabled || Boolean(config.browserDebugExecutable);
-    await sequelize.query('UPDATE agent_settings SET browser_access_enabled = ? WHERE id = ?', {
-      replacements: [enabled ? 1 : 0, 'default'],
-    });
-  }
-  if (addedAgentSettingsColumns.has('browser_access_method') && config.browserDebugExecutable) {
-    await sequelize.query(
-      `UPDATE agent_settings SET browser_access_method = 'debug-profile' WHERE id = ?`,
-      { replacements: ['default'] },
-    );
-  }
-  const legacyBrowserColumns: Array<[string, unknown]> = [
-    ['browser_debug_port', config.browserDebugPort],
-    ['browser_debug_browser_name', config.browserDebugBrowserName],
-    ['browser_debug_executable', config.browserDebugExecutable],
-    ['browser_debug_user_data_dir', config.browserDebugUserDataDir],
-  ];
-  for (const [column, value] of legacyBrowserColumns) {
-    if (addedAgentSettingsColumns.has(column) && value !== undefined) {
-      await sequelize.query(`UPDATE agent_settings SET ${column} = ? WHERE id = ?`, {
-        replacements: [value, 'default'],
+    // ADD COLUMN applies the SQL default to every pre-existing row. Replace
+    // those mechanical defaults with the user's legacy config/env values in
+    // the same transaction that introduces the DB-backed fields.
+    if (addedAgentSettingsColumns.has('terminal_access')) {
+      await sequelize.query('UPDATE agent_settings SET terminal_access = ? WHERE id = ?', {
+        replacements: [config.terminalAccess, 'default'],
+        transaction,
       });
     }
+    if (addedAgentSettingsColumns.has('web_search_enabled')) {
+      await sequelize.query('UPDATE agent_settings SET web_search_enabled = ? WHERE id = ?', {
+        replacements: [config.webSearchEnabled ? 1 : 0, 'default'],
+        transaction,
+      });
+    }
+    if (addedAgentSettingsColumns.has('usage_recording_enabled')) {
+      await sequelize.query('UPDATE agent_settings SET usage_recording_enabled = ? WHERE id = ?', {
+        replacements: [config.usageRecordingEnabled ? 1 : 0, 'default'],
+        transaction,
+      });
+    }
+    if (addedAgentSettingsColumns.has('browser_access_enabled')) {
+      const enabled = config.browserAccessEnabled || Boolean(config.browserDebugExecutable);
+      await sequelize.query('UPDATE agent_settings SET browser_access_enabled = ? WHERE id = ?', {
+        replacements: [enabled ? 1 : 0, 'default'],
+        transaction,
+      });
+    }
+    if (addedAgentSettingsColumns.has('browser_access_method') && config.browserDebugExecutable) {
+      await sequelize.query(
+        `UPDATE agent_settings SET browser_access_method = 'debug-profile' WHERE id = ?`,
+        { replacements: ['default'], transaction },
+      );
+    }
+    const legacyBrowserColumns: Array<[string, unknown]> = [
+      ['browser_debug_port', config.browserDebugPort],
+      ['browser_debug_browser_name', config.browserDebugBrowserName],
+      ['browser_debug_executable', config.browserDebugExecutable],
+      ['browser_debug_user_data_dir', config.browserDebugUserDataDir],
+    ];
+    for (const [column, value] of legacyBrowserColumns) {
+      if (addedAgentSettingsColumns.has(column) && value !== undefined) {
+        await sequelize.query(`UPDATE agent_settings SET ${column} = ? WHERE id = ?`, {
+          replacements: [value, 'default'],
+          transaction,
+        });
+      }
+    }
+    await transaction.commit();
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
   }
 
   // mcp_servers was originally created with UNIQUE on both subscription_id and

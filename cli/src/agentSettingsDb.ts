@@ -48,10 +48,47 @@ function close(db: sqlite3.Database): Promise<void> {
   });
 }
 
+function legacyBrowserSettings(cfg: Record<string, any>): StoredBrowserAccessSettings {
+  const configuredMethod = cfg.BROWSER_ACCESS_METHOD;
+  const method: BrowserAccessMethod | null =
+    configuredMethod === 'debug-profile' || configuredMethod === 'javascript-events'
+      ? configuredMethod
+      : cfg.BROWSER_DEBUG_EXECUTABLE
+        ? 'debug-profile'
+        : null;
+  const rawBrowsers = cfg.BROWSER_JAVASCRIPT_EVENT_BROWSERS;
+  const browsers = Array.isArray(rawBrowsers)
+    ? rawBrowsers.filter((value): value is string => typeof value === 'string')
+    : typeof rawBrowsers === 'string'
+      ? rawBrowsers
+          .split(',')
+          .map((value) => value.trim())
+          .filter(Boolean)
+      : [];
+  const rawPort = Number(cfg.BROWSER_DEBUG_PORT);
+  return {
+    browserAccessEnabled:
+      cfg.BROWSER_ACCESS_ENABLED === true ||
+      Boolean(cfg.BROWSER_DEBUG_EXECUTABLE) ||
+      method !== null,
+    browserAccessMethod: method,
+    browserDebugPort: Number.isInteger(rawPort) && rawPort > 0 ? rawPort : null,
+    browserDebugBrowserName:
+      typeof cfg.BROWSER_DEBUG_BROWSER_NAME === 'string' ? cfg.BROWSER_DEBUG_BROWSER_NAME : null,
+    browserDebugExecutable:
+      typeof cfg.BROWSER_DEBUG_EXECUTABLE === 'string' ? cfg.BROWSER_DEBUG_EXECUTABLE : null,
+    browserDebugUserDataDir:
+      typeof cfg.BROWSER_DEBUG_USER_DATA_DIR === 'string' ? cfg.BROWSER_DEBUG_USER_DATA_DIR : null,
+    browserJavascriptEventBrowsers: browsers,
+  };
+}
+
 async function ensureAgentSettingsSchema(db: sqlite3.Database): Promise<void> {
-  await run(
-    db,
-    `CREATE TABLE IF NOT EXISTS agent_settings (
+  await run(db, 'BEGIN IMMEDIATE');
+  try {
+    await run(
+      db,
+      `CREATE TABLE IF NOT EXISTS agent_settings (
       id VARCHAR(255) NOT NULL PRIMARY KEY,
       terminal_access VARCHAR(255) NOT NULL DEFAULT 'full',
       web_search_enabled TINYINT(1) NOT NULL DEFAULT 1,
@@ -64,57 +101,101 @@ async function ensureAgentSettingsSchema(db: sqlite3.Database): Promise<void> {
       browser_debug_user_data_dir VARCHAR(2000), browser_javascript_event_browsers JSON,
       createdAt DATETIME NOT NULL, updatedAt DATETIME NOT NULL
     )`,
-  );
-
-  const columns = await new Promise<Array<{ name: string }>>((resolve, reject) => {
-    db.all('PRAGMA table_info(agent_settings)', (error, rows) =>
-      error ? reject(error) : resolve(rows as Array<{ name: string }>),
     );
-  });
-  const existing = new Set(columns.map((column) => column.name));
-  const additions: Array<[string, string]> = [
-    ['terminal_access', "VARCHAR(255) NOT NULL DEFAULT 'full'"],
-    ['web_search_enabled', 'TINYINT(1) NOT NULL DEFAULT 1'],
-    ['usage_recording_enabled', 'TINYINT(1) NOT NULL DEFAULT 0'],
-    ['browser_access_enabled', 'TINYINT(1) NOT NULL DEFAULT 0'],
-    ['openai_model', 'VARCHAR(255)'],
-    ['anthropic_model', 'VARCHAR(255)'],
-    ['gemini_model', 'VARCHAR(255)'],
-    ['nemotron_model', 'VARCHAR(255)'],
-    ['browser_access_method', 'VARCHAR(32)'],
-    ['browser_debug_port', 'INTEGER'],
-    ['browser_debug_browser_name', 'VARCHAR(255)'],
-    ['browser_debug_executable', 'VARCHAR(2000)'],
-    ['browser_debug_user_data_dir', 'VARCHAR(2000)'],
-    ['browser_javascript_event_browsers', 'JSON'],
-  ];
-  for (const [column, definition] of additions) {
-    if (!existing.has(column))
-      await run(db, `ALTER TABLE agent_settings ADD COLUMN ${column} ${definition}`);
-  }
 
-  const cfg = readConfig();
-  const now = new Date().toISOString();
-  await run(
-    db,
-    `INSERT OR IGNORE INTO agent_settings
+    const columns = await new Promise<Array<{ name: string }>>((resolve, reject) => {
+      db.all('PRAGMA table_info(agent_settings)', (error, rows) =>
+        error ? reject(error) : resolve(rows as Array<{ name: string }>),
+      );
+    });
+    const existing = new Set(columns.map((column) => column.name));
+    const additions: Array<[string, string]> = [
+      ['terminal_access', "VARCHAR(255) NOT NULL DEFAULT 'full'"],
+      ['web_search_enabled', 'TINYINT(1) NOT NULL DEFAULT 1'],
+      ['usage_recording_enabled', 'TINYINT(1) NOT NULL DEFAULT 0'],
+      ['browser_access_enabled', 'TINYINT(1) NOT NULL DEFAULT 0'],
+      ['openai_model', 'VARCHAR(255)'],
+      ['anthropic_model', 'VARCHAR(255)'],
+      ['gemini_model', 'VARCHAR(255)'],
+      ['nemotron_model', 'VARCHAR(255)'],
+      ['browser_access_method', 'VARCHAR(32)'],
+      ['browser_debug_port', 'INTEGER'],
+      ['browser_debug_browser_name', 'VARCHAR(255)'],
+      ['browser_debug_executable', 'VARCHAR(2000)'],
+      ['browser_debug_user_data_dir', 'VARCHAR(2000)'],
+      ['browser_javascript_event_browsers', 'JSON'],
+    ];
+    const browserColumns = new Set([
+      'browser_access_enabled',
+      'browser_access_method',
+      'browser_debug_port',
+      'browser_debug_browser_name',
+      'browser_debug_executable',
+      'browser_debug_user_data_dir',
+      'browser_javascript_event_browsers',
+    ]);
+    let addedBrowserColumn = false;
+    for (const [column, definition] of additions) {
+      if (!existing.has(column)) {
+        await run(db, `ALTER TABLE agent_settings ADD COLUMN ${column} ${definition}`);
+        if (browserColumns.has(column)) addedBrowserColumn = true;
+      }
+    }
+
+    const cfg = readConfig();
+    const browser = legacyBrowserSettings(cfg);
+    const now = new Date().toISOString();
+    await run(
+      db,
+      `INSERT OR IGNORE INTO agent_settings
       (id, terminal_access, web_search_enabled, usage_recording_enabled,
-       browser_access_enabled, openai_model, anthropic_model, gemini_model,
+       browser_access_enabled, browser_access_method, browser_debug_port,
+       browser_debug_browser_name, browser_debug_executable, browser_debug_user_data_dir,
+       browser_javascript_event_browsers, openai_model, anthropic_model, gemini_model,
        nemotron_model, createdAt, updatedAt)
-     VALUES ('default', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      cfg.TERMINAL_ACCESS === 'limited' ? 'limited' : 'full',
-      cfg.WEB_SEARCH_ENABLED === false ? 0 : 1,
-      cfg.USAGE_RECORDING_ENABLED === true ? 1 : 0,
-      cfg.BROWSER_ACCESS_ENABLED === true || Boolean(cfg.BROWSER_DEBUG_EXECUTABLE) ? 1 : 0,
-      cfg.OPENAI_MODEL || 'gpt-5.6',
-      cfg.ANTHROPIC_MODEL || 'claude-opus-4-5',
-      cfg.GEMINI_MODEL || 'gemini-2.5-pro',
-      cfg.OPEN_MODEL_MODEL || cfg.NEMOTRON_MODEL || 'nvidia/nemotron-3-ultra-550b-a55b',
-      now,
-      now,
-    ],
-  );
+     VALUES ('default', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        cfg.TERMINAL_ACCESS === 'limited' ? 'limited' : 'full',
+        cfg.WEB_SEARCH_ENABLED === false ? 0 : 1,
+        cfg.USAGE_RECORDING_ENABLED === true ? 1 : 0,
+        browser.browserAccessEnabled ? 1 : 0,
+        browser.browserAccessMethod,
+        browser.browserDebugPort,
+        browser.browserDebugBrowserName,
+        browser.browserDebugExecutable,
+        browser.browserDebugUserDataDir,
+        JSON.stringify(browser.browserJavascriptEventBrowsers),
+        cfg.OPENAI_MODEL || 'gpt-5.6',
+        cfg.ANTHROPIC_MODEL || 'claude-opus-4-5',
+        cfg.GEMINI_MODEL || 'gemini-2.5-pro',
+        cfg.OPEN_MODEL_MODEL || cfg.NEMOTRON_MODEL || 'nvidia/nemotron-3-ultra-550b-a55b',
+        now,
+        now,
+      ],
+    );
+    if (addedBrowserColumn && browser.browserAccessEnabled && browser.browserAccessMethod) {
+      await run(
+        db,
+        `UPDATE agent_settings SET browser_access_enabled = 1, browser_access_method = ?,
+         browser_debug_port = ?, browser_debug_browser_name = ?, browser_debug_executable = ?,
+         browser_debug_user_data_dir = ?, browser_javascript_event_browsers = ?, updatedAt = ?
+       WHERE id = 'default'`,
+        [
+          browser.browserAccessMethod,
+          browser.browserDebugPort,
+          browser.browserDebugBrowserName,
+          browser.browserDebugExecutable,
+          browser.browserDebugUserDataDir,
+          JSON.stringify(browser.browserJavascriptEventBrowsers),
+          now,
+        ],
+      );
+    }
+    await run(db, 'COMMIT');
+  } catch (error) {
+    await run(db, 'ROLLBACK').catch(() => undefined);
+    throw error;
+  }
 }
 
 export async function saveBrowserAccessSettings(

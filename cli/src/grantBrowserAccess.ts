@@ -253,6 +253,8 @@ async function setupDebuggingPort(
   browser: InstalledBrowser,
   options: { profile?: string; nonInteractive?: boolean } = {},
 ): Promise<void> {
+  const previousSettings = await readBrowserAccessSettings();
+  const previousStartup = captureStartupEntry();
   if (hasExistingStartupEntry()) {
     const location = isWindows
       ? `Registry: ${WINDOWS_RUN_KEY}\\${WINDOWS_RUN_VALUE_NAME}`
@@ -296,7 +298,9 @@ async function setupDebuggingPort(
         removeLegacyBrowserConfig();
         console.log('Startup entry removed.');
       } catch (err) {
+        await restoreBrowserSetup(previousSettings, previousStartup);
         console.error('Failed to remove entry:', err instanceof Error ? err.message : String(err));
+        if (options.nonInteractive) throw err;
       }
       return;
     }
@@ -471,6 +475,7 @@ async function setupDebuggingPort(
       console.log(`LaunchAgent written to:\n  ${MACOS_LAUNCH_AGENT_PATH}`);
     }
   } catch (err) {
+    await restoreBrowserSetup(previousSettings, previousStartup);
     console.error(
       'Failed to register startup entry:',
       err instanceof Error ? err.message : String(err),
@@ -493,6 +498,7 @@ async function setupDebuggingPort(
 
   const spawnErrorMsg = await launchBrowserDebugProfile(browser.executablePath, launchArgs);
   if (spawnErrorMsg) {
+    await restoreBrowserSetup(previousSettings, previousStartup);
     console.error(`Failed to launch browser: ${spawnErrorMsg}`);
     printLaunchHint(browser.executablePath, launchArgs);
     if (options.nonInteractive) throw new Error(`Failed to launch browser: ${spawnErrorMsg}`);
@@ -503,12 +509,17 @@ async function setupDebuggingPort(
   const portUp = await waitForDebugPort(port);
 
   if (portUp) {
-    await persistDebugConfig({
-      browserName: browser.name,
-      executablePath: browser.executablePath,
-      userDataDir: debugUserDataDir,
-      port,
-    });
+    try {
+      await persistDebugConfig({
+        browserName: browser.name,
+        executablePath: browser.executablePath,
+        userDataDir: debugUserDataDir,
+        port,
+      });
+    } catch (error) {
+      await restoreBrowserSetup(previousSettings, previousStartup);
+      throw error;
+    }
     console.log(`Saved browser debug configuration to the settings database.\n`);
     console.log(
       `\nDebug port ${port} is active.\n` +
@@ -518,6 +529,7 @@ async function setupDebuggingPort(
         `No daemon restart is required.`,
     );
   } else {
+    await restoreBrowserSetup(previousSettings, previousStartup);
     console.error(
       `\nCould not reach localhost:${port} after 15 s.\n` +
         `Possible causes:\n` +
@@ -629,6 +641,10 @@ const MACOS_LAUNCH_AGENT_PATH = path.join(
 
 function registerWindowsStartup(executablePath: string, launchArgs: string[]): void {
   const cmd = `"${executablePath}" ${launchArgs.map(quoteArgWindows).join(' ')}`;
+  setWindowsStartup(cmd);
+}
+
+function setWindowsStartup(cmd: string): void {
   const ps =
     `Set-ItemProperty -Path '${WINDOWS_RUN_KEY}' ` +
     `-Name '${WINDOWS_RUN_VALUE_NAME}' ` +
@@ -686,6 +702,72 @@ function removeMacOSLaunchAgent(): void {
     execSync(`launchctl unload "${MACOS_LAUNCH_AGENT_PATH}"`, { stdio: ['pipe', 'pipe', 'pipe'] });
   } catch {}
   fs.unlinkSync(MACOS_LAUNCH_AGENT_PATH);
+}
+
+type StartupEntrySnapshot =
+  | { platform: 'windows'; command: string | null }
+  | { platform: 'macos'; plist: string | null };
+
+function captureStartupEntry(): StartupEntrySnapshot {
+  if (isWindows) {
+    try {
+      const ps =
+        `(Get-ItemProperty -Path '${WINDOWS_RUN_KEY}' ` +
+        `-Name '${WINDOWS_RUN_VALUE_NAME}' -ErrorAction SilentlyContinue)` +
+        `.${WINDOWS_RUN_VALUE_NAME}`;
+      const command = execSync(
+        `powershell -NoProfile -NonInteractive -Command "${ps.replace(/"/g, '\\"')}"`,
+        { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] },
+      ).trim();
+      return { platform: 'windows', command: command && command !== '$null' ? command : null };
+    } catch (error) {
+      throw new Error(
+        `Could not snapshot the existing Windows startup entry: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+  return {
+    platform: 'macos',
+    plist: fs.existsSync(MACOS_LAUNCH_AGENT_PATH)
+      ? fs.readFileSync(MACOS_LAUNCH_AGENT_PATH, 'utf8')
+      : null,
+  };
+}
+
+function restoreStartupEntry(snapshot: StartupEntrySnapshot): void {
+  if (snapshot.platform === 'windows') {
+    if (snapshot.command === null) removeWindowsStartup();
+    else setWindowsStartup(snapshot.command);
+    return;
+  }
+  removeMacOSLaunchAgent();
+  if (snapshot.plist !== null) {
+    fs.mkdirSync(path.dirname(MACOS_LAUNCH_AGENT_PATH), { recursive: true });
+    fs.writeFileSync(MACOS_LAUNCH_AGENT_PATH, snapshot.plist, 'utf8');
+    execSync(`launchctl load "${MACOS_LAUNCH_AGENT_PATH}"`, {
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+  }
+}
+
+async function restoreBrowserSetup(
+  settings: Awaited<ReturnType<typeof readBrowserAccessSettings>>,
+  startup: StartupEntrySnapshot,
+): Promise<void> {
+  let restoreError: unknown;
+  try {
+    restoreStartupEntry(startup);
+  } catch (error) {
+    restoreError = error;
+  }
+  if (settings) {
+    try {
+      await saveBrowserAccessSettings(settings);
+    } catch (error) {
+      restoreError ??= error;
+    }
+  }
+  if (restoreError) throw restoreError;
 }
 
 const MACOS_PROCESS_NAMES: Record<string, string> = {
@@ -755,18 +837,25 @@ async function setupAppleScript(selectedBrowsers?: string[]): Promise<void> {
     }
   }
 
-  // Switching methods should also stop auto-launching the old debug profile.
-  removeMacOSLaunchAgent();
-  await saveBrowserAccessSettings({
-    browserAccessEnabled: true,
-    browserAccessMethod: 'javascript-events',
-    browserDebugPort: null,
-    browserDebugBrowserName: null,
-    browserDebugExecutable: null,
-    browserDebugUserDataDir: null,
-    browserJavascriptEventBrowsers: selectedNames,
-  });
-  removeLegacyBrowserConfig();
+  const previousSettings = await readBrowserAccessSettings();
+  const previousStartup = captureStartupEntry();
+  try {
+    // Switching methods should also stop auto-launching the old debug profile.
+    removeMacOSLaunchAgent();
+    await saveBrowserAccessSettings({
+      browserAccessEnabled: true,
+      browserAccessMethod: 'javascript-events',
+      browserDebugPort: null,
+      browserDebugBrowserName: null,
+      browserDebugExecutable: null,
+      browserDebugUserDataDir: null,
+      browserJavascriptEventBrowsers: selectedNames,
+    });
+    removeLegacyBrowserConfig();
+  } catch (error) {
+    await restoreBrowserSetup(previousSettings, previousStartup);
+    throw error;
+  }
 
   console.log(
     'Saved JavaScript Events access to the settings database. ' +

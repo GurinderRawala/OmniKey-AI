@@ -15,6 +15,19 @@ type BrowserFetchSettings = Pick<
   'browserAccessMethod' | 'browserDebugPort' | 'browserJavascriptEventBrowsers'
 >;
 
+/** Match the requested resource exactly while treating URL fragments as client-only state. */
+export function browserTabUrlMatches(requestedUrl: string, openTabUrl: string): boolean {
+  try {
+    const requested = new URL(requestedUrl);
+    const openTab = new URL(openTabUrl);
+    requested.hash = '';
+    openTab.hash = '';
+    return requested.href === openTab.href;
+  } catch {
+    return false;
+  }
+}
+
 // ─── Browser catalogue ────────────────────────────────────────────────────────
 
 interface BrowserCandidate {
@@ -225,8 +238,6 @@ async function fetchWithCDP(
   workingPorts: number[],
   log: Logger,
 ): Promise<{ content: string; finalUrl: string } | null> {
-  const targetBase = url.split('?')[0]; // strip query for prefix match
-
   for (const port of workingPorts) {
     log.info('browser-playwright: CDP — debug endpoint found, connecting', { port });
 
@@ -239,7 +250,7 @@ async function fetchWithCDP(
       let matchedPage: Page | null = null;
       for (const context of cdpBrowser.contexts()) {
         for (const page of context.pages()) {
-          if (page.url().startsWith(targetBase)) {
+          if (browserTabUrlMatches(url, page.url())) {
             matchedPage = page;
             break;
           }
@@ -645,12 +656,12 @@ type JxaTabExtractionResult = {
  * tab even though JXA exposes the complete set.
  */
 function extractChromiumTabWithJxa(appName: string, url: string): JxaTabExtractionResult {
-  const targetBase = url.split('?')[0];
+  const targetUrl = url.split('#')[0];
   const expression =
     "String(document.body?.innerText || document.body?.textContent || '').slice(0, 500000)";
   const script = [
     `const browser = Application(${JSON.stringify(appName)});`,
-    `const targetBase = ${JSON.stringify(targetBase)};`,
+    `const targetUrl = ${JSON.stringify(targetUrl)};`,
     `const expression = ${JSON.stringify(expression)};`,
     'let result = { found: false, content: "", windowIndex: null, tabIndex: null };',
     'outer: for (let windowIndex = 0; windowIndex < browser.windows().length; windowIndex++) {',
@@ -658,7 +669,7 @@ function extractChromiumTabWithJxa(appName: string, url: string): JxaTabExtracti
     '  const tabs = browserWindow.tabs();',
     '  for (let tabIndex = 0; tabIndex < tabs.length; tabIndex++) {',
     '    const tab = tabs[tabIndex];',
-    '    if (!String(tab.url() || "").startsWith(targetBase)) continue;',
+    '    if (String(tab.url() || "").split("#")[0] !== targetUrl) continue;',
     '    const previousActiveTab = Number(browserWindow.activeTabIndex());',
     '    try {',
     '      browserWindow.activeTabIndex = tabIndex + 1;',

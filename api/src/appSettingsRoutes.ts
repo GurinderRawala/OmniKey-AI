@@ -87,6 +87,7 @@ export function appSettingsRouter(): express.Router {
         browserAccessMethod: settings.browserAccessMethod,
         browserDebugBrowserName: settings.browserDebugBrowserName,
         browserDebugPort: settings.browserDebugPort,
+        browserDebugUserDataDir: settings.browserDebugUserDataDir,
         browserJavascriptEventBrowsers: settings.browserJavascriptEventBrowsers,
         runtime: {
           terminalAccess: settings.terminalAccess,
