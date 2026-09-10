@@ -44,6 +44,38 @@ interface ColumnMigration {
 }
 
 const COLUMN_MIGRATIONS: ColumnMigration[] = [
+  // DB-backed runtime/Agent Access settings. Older self-hosted databases may
+  // have an agent_settings table created before some or all of these fields.
+  {
+    table: 'agent_settings',
+    column: 'terminal_access',
+    definition: "VARCHAR(255) NOT NULL DEFAULT 'full'",
+  },
+  {
+    table: 'agent_settings',
+    column: 'web_search_enabled',
+    definition: 'TINYINT(1) NOT NULL DEFAULT 1',
+  },
+  {
+    table: 'agent_settings',
+    column: 'usage_recording_enabled',
+    definition: 'TINYINT(1) NOT NULL DEFAULT 1',
+  },
+  {
+    table: 'agent_settings',
+    column: 'browser_access_enabled',
+    definition: 'TINYINT(1) NOT NULL DEFAULT 0',
+  },
+  { table: 'agent_settings', column: 'openai_model', definition: 'VARCHAR(255)' },
+  { table: 'agent_settings', column: 'anthropic_model', definition: 'VARCHAR(255)' },
+  { table: 'agent_settings', column: 'gemini_model', definition: 'VARCHAR(255)' },
+  { table: 'agent_settings', column: 'nemotron_model', definition: 'VARCHAR(255)' },
+  { table: 'agent_settings', column: 'browser_access_method', definition: 'VARCHAR(32)' },
+  { table: 'agent_settings', column: 'browser_debug_port', definition: 'INTEGER' },
+  { table: 'agent_settings', column: 'browser_debug_browser_name', definition: 'VARCHAR(255)' },
+  { table: 'agent_settings', column: 'browser_debug_executable', definition: 'VARCHAR(2000)' },
+  { table: 'agent_settings', column: 'browser_debug_user_data_dir', definition: 'VARCHAR(2000)' },
+  { table: 'agent_settings', column: 'browser_javascript_event_browsers', definition: 'JSON' },
   // Added: context-window tracking (prompt token count of last API call)
   {
     table: 'agent_sessions',
@@ -134,6 +166,7 @@ const COLUMN_MIGRATIONS: ColumnMigration[] = [
 ];
 
 async function runSQLiteMigrations(logger: Logger): Promise<void> {
+  const addedAgentSettingsColumns = new Set<string>();
   for (const { table, column, definition } of COLUMN_MIGRATIONS) {
     const rows = (await sequelize.query(`PRAGMA table_info(${table})`))[0] as Array<{
       name: string;
@@ -141,7 +174,52 @@ async function runSQLiteMigrations(logger: Logger): Promise<void> {
     const exists = rows.some((r) => r.name === column);
     if (!exists) {
       await sequelize.query(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+      if (table === 'agent_settings') addedAgentSettingsColumns.add(column);
       logger.info(`SQLite migration: added column ${table}.${column}`);
+    }
+  }
+
+  // ADD COLUMN applies the SQL default to every pre-existing row. Replace
+  // those mechanical defaults with the user's legacy config/env values once,
+  // during the same upgrade that introduces the DB-backed fields.
+  if (addedAgentSettingsColumns.has('terminal_access')) {
+    await sequelize.query('UPDATE agent_settings SET terminal_access = ? WHERE id = ?', {
+      replacements: [config.terminalAccess, 'default'],
+    });
+  }
+  if (addedAgentSettingsColumns.has('web_search_enabled')) {
+    await sequelize.query('UPDATE agent_settings SET web_search_enabled = ? WHERE id = ?', {
+      replacements: [config.webSearchEnabled ? 1 : 0, 'default'],
+    });
+  }
+  if (addedAgentSettingsColumns.has('usage_recording_enabled')) {
+    await sequelize.query('UPDATE agent_settings SET usage_recording_enabled = ? WHERE id = ?', {
+      replacements: [config.usageRecordingEnabled ? 1 : 0, 'default'],
+    });
+  }
+  if (addedAgentSettingsColumns.has('browser_access_enabled')) {
+    const enabled = config.browserAccessEnabled || Boolean(config.browserDebugExecutable);
+    await sequelize.query('UPDATE agent_settings SET browser_access_enabled = ? WHERE id = ?', {
+      replacements: [enabled ? 1 : 0, 'default'],
+    });
+  }
+  if (addedAgentSettingsColumns.has('browser_access_method') && config.browserDebugExecutable) {
+    await sequelize.query(
+      `UPDATE agent_settings SET browser_access_method = 'debug-profile' WHERE id = ?`,
+      { replacements: ['default'] },
+    );
+  }
+  const legacyBrowserColumns: Array<[string, unknown]> = [
+    ['browser_debug_port', config.browserDebugPort],
+    ['browser_debug_browser_name', config.browserDebugBrowserName],
+    ['browser_debug_executable', config.browserDebugExecutable],
+    ['browser_debug_user_data_dir', config.browserDebugUserDataDir],
+  ];
+  for (const [column, value] of legacyBrowserColumns) {
+    if (addedAgentSettingsColumns.has(column) && value !== undefined) {
+      await sequelize.query(`UPDATE agent_settings SET ${column} = ? WHERE id = ?`, {
+        replacements: [value, 'default'],
+      });
     }
   }
 
@@ -229,9 +307,8 @@ export async function initDatabase(logger: Logger): Promise<void> {
       await runSQLiteMigrations(logger);
       if (config.isSelfHosted) {
         try {
-          const { seedDefaultSelfHostedAgentAssets } = await import(
-            './agent/defaultSelfHostedSeeds'
-          );
+          const { seedDefaultSelfHostedAgentAssets } =
+            await import('./agent/defaultSelfHostedSeeds');
           await seedDefaultSelfHostedAgentAssets(logger);
         } catch (err) {
           logger.error('Default self-hosted agent asset seed failed; continuing startup', {

@@ -1212,6 +1212,8 @@ final class APIClient: @unchecked Sendable {
         let usageRecordingEnabled: Bool
         let browserDebugBrowserName: String?
         let browserDebugPort: Int?
+        let browserAccessMethod: String?
+        let browserJavascriptEventBrowsers: [String]?
     }
 
     /// Server response shape for the GET endpoint. The "runtime" object is
@@ -1224,6 +1226,8 @@ final class APIClient: @unchecked Sendable {
         let usageRecordingEnabled: Bool
         let browserDebugBrowserName: String?
         let browserDebugPort: Int?
+        let browserAccessMethod: String?
+        let browserJavascriptEventBrowsers: [String]?
     }
 
     /// Response from the PATCH endpoint and the browser-access POST endpoint.
@@ -1272,7 +1276,9 @@ final class APIClient: @unchecked Sendable {
                     browserAccessEnabled: decoded.browserAccessEnabled,
                     usageRecordingEnabled: decoded.usageRecordingEnabled,
                     browserDebugBrowserName: decoded.browserDebugBrowserName,
-                    browserDebugPort: decoded.browserDebugPort
+                    browserDebugPort: decoded.browserDebugPort,
+                    browserAccessMethod: decoded.browserAccessMethod,
+                    browserJavascriptEventBrowsers: decoded.browserJavascriptEventBrowsers
                 )))
             } catch { completion(.failure(error)) }
         }
@@ -1429,11 +1435,9 @@ final class APIClient: @unchecked Sendable {
         task.resume()
     }
 
-    /// Toggle authenticated browser session access. Enabling spawns
-    /// `omnikey grant-browser-access` inside a new Terminal window so the
-    /// existing interactive prompts (browser pick, profile name, etc.) work
-    /// unchanged. Disabling clears the saved BROWSER_DEBUG_* config and
-    /// removes the macOS LaunchAgent.
+    /// Toggle authenticated browser session access. Native setup enables it
+    /// through the parameterized CLI; this endpoint disables it and removes
+    /// the macOS debug-profile LaunchAgent.
     func setBrowserAccessEnabled(
         _ enabled: Bool,
         completion: @escaping @Sendable (Result<BrowserAccessMutationResponse, Error>) -> Void

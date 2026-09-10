@@ -1,6 +1,6 @@
 import { providerSupportsImageGeneration } from '../ai-client';
 import { config } from '../config';
-import { readBrowserDebugConfig } from '../agentSettingsStore';
+import { browserDebugConfigFromSettings } from '../agentSettingsStore';
 import type { AgentSettingsSnapshot } from '../agentSettingsStore';
 
 // MCP server names and descriptions are user-controlled and embedded into the agent
@@ -26,23 +26,33 @@ function sanitizeMcpField(value: string | null | undefined, maxLength = 200): st
 export function getAgentPrompt(
   platform: string | undefined,
   hasTaskInstructions: boolean,
-  installedMcps: Array<{ name: string; description?: string | null; transport: string }> = [],
-  settings?: Pick<
+  installedMcps: Array<{ name: string; description?: string | null; transport: string }>,
+  settings: Pick<
     AgentSettingsSnapshot,
-    'terminalAccess' | 'webSearchEnabled' | 'browserAccessEnabled'
+    | 'terminalAccess'
+    | 'webSearchEnabled'
+    | 'browserAccessEnabled'
+    | 'browserAccessMethod'
+    | 'browserDebugPort'
+    | 'browserDebugBrowserName'
+    | 'browserDebugExecutable'
+    | 'browserDebugUserDataDir'
+    | 'browserJavascriptEventBrowsers'
   >,
 ): string {
   const isWindows =
     config.terminalPlatform?.toLowerCase() === 'windows' || platform?.toLowerCase() === 'windows';
-  const debugConfig = readBrowserDebugConfig();
-  const webToolsEnabled = settings?.webSearchEnabled ?? config.webSearchEnabled;
-  const browserAccessEnabled =
-    settings?.browserAccessEnabled ??
-    (config.browserAccessEnabled || debugConfig.browserAccessConfigured);
-  const browserAutomationEnabled =
-    browserAccessEnabled && debugConfig.browserDebugPort !== undefined;
+  const debugConfig = browserDebugConfigFromSettings(settings);
+  const webToolsEnabled = settings.webSearchEnabled;
+  const browserAccessEnabled = settings.browserAccessEnabled;
+  const debugBrowserAutomationEnabled =
+    browserAccessEnabled &&
+    settings.browserAccessMethod === 'debug-profile' &&
+    debugConfig.browserDebugPort !== undefined;
+  const javascriptEventsEnabled =
+    browserAccessEnabled && settings.browserAccessMethod === 'javascript-events';
   const imageGenerationEnabled = providerSupportsImageGeneration(config.aiProvider);
-  const terminalAccessLimited = settings?.terminalAccess === 'limited';
+  const terminalAccessLimited = settings.terminalAccess === 'limited';
   const nativeToolNames = [
     webToolsEnabled ? 'web_search' : null,
     webToolsEnabled ? 'web_fetch' : null,
@@ -54,7 +64,7 @@ export function getAgentPrompt(
   return `
 You are an AI agent with the following capabilities:
 - **Shell execution** (\`shell_script\` tool) — call this native function with \`{ "script": "..." }\` to run commands on the user's machine; the terminal output is returned to you automatically as the tool result.${terminalAccessLimited ? ' Terminal access is LIMITED to read-only inspection commands.' : ''}
-${webToolsEnabled ? '- **Web tools** — call `web_search` and `web_fetch` via native function calling to retrieve live information from the internet.' : '- **Web tools disabled** — do not call `web_search` or `web_fetch`; use `shell_script` for retrieval if live data is required.'}${imageGenerationEnabled ? '\n- **Image generation** — call `generate_image` via native function calling to produce images.' : ''}${browserAutomationEnabled ? "\n- **Browser automation** — control the user's running browser via Playwright scripts passed to the `shell_script` tool." : ''}
+${webToolsEnabled ? '- **Web tools** — call `web_search` and `web_fetch` via native function calling to retrieve live information from the internet.' : '- **Web tools disabled** — do not call `web_search` or `web_fetch`; use `shell_script` for retrieval if live data is required.'}${imageGenerationEnabled ? '\n- **Image generation** — call `generate_image` via native function calling to produce images.' : ''}${debugBrowserAutomationEnabled ? "\n- **Browser automation** — control the user's debug-profile browser via Playwright scripts passed to the `shell_script` tool." : ''}${javascriptEventsEnabled ? '\n- **Authenticated browser access** — retrieve authenticated pages through `web_fetch`, with JavaScript Events available as the interactive fallback.' : ''}
 ${installedMcps.length > 0 ? '- **MCP tools** — native function calls for integrations; see installed servers below.' : ''}
 
 Use these capabilities to take real action. Default to doing rather than asking.
@@ -71,16 +81,29 @@ ${
 - Default to calling \`shell_script\` for anything involving the machine, network, files, processes, environment variables, or system state — never answer from training data alone.
 ${terminalAccessLimited ? '- **Limited terminal access:** Use only read-only inspection commands. Do not write, delete, install, configure, restart services, kill processes, or make mutating network calls. If the task requires mutation, respond with `<final_answer>` explaining that terminal access is limited.' : '- **Read vs. write:** For open-ended or ambiguous requests, run safe read-only commands first to understand the current state. When the user **explicitly** asks to create, update, delete, configure, or run something, do it directly; no need to ask for confirmation unless the scope is genuinely unclear.\n- **Package installation:** Install any package required to complete the task. Include the install step as its own phase so you can confirm it succeeded before building on it. Prefer project-local or user scope; avoid `sudo`/admin unless the user explicitly asks.'}
 ${
-  browserAutomationEnabled
-    ? `- **Browser automation:** Use browser automation proactively when needed to complete the task.
-  - Do NOT wait for explicit user wording like "use browser" if interaction is obviously required to get the final result.
-  - If \`web_search\` or \`web_fetch\` do not provide enough usable context (blocked pages, incomplete data, client-rendered content, authentication walls, dynamic tables, hidden details, or repeated low-value fetch results), immediately switch to Playwright-based browser interaction.
+  debugBrowserAutomationEnabled
+    ? `- **Authenticated browser access via debug profile:** Always use the built-in web tools first. Use \`web_search\` to discover relevant pages and \`web_fetch\` to retrieve a URL; \`web_fetch\` is configured to read authenticated content from the debug profile.
+  - Do not run a Playwright script merely to fetch an authenticated page. Only use Playwright when the task requires interaction with the page (such as clicking, typing, selecting, scrolling, or submitting), or when the web-tool result does not contain additional information required to complete the task.
+  - When Playwright is required, do not wait for explicit user wording like "use browser" if the needed interaction or missing information is clear from the task and web-tool results.
   - Call the \`shell_script\` tool with Node.js + \`playwright-core\` scripts — one phase at a time (phasing rules below apply).
   - **Phase 1 — ensure dependencies:** Check and install \`playwright-core\` if missing:
     \`node -e "require('/tmp/playwright-runner/node_modules/playwright-core')" 2>/dev/null || npm install --prefix /tmp/playwright-runner playwright-core --silent\`
   - **Phase 2 — connect and navigate:** Connect to the running browser via CDP at \`http://localhost:${debugConfig.browserDebugPort}\`. If CDP fails, fall back to launching a persistent context using the debug profile at \`${debugConfig.browserDebugUserDataDir}\` with the executable at \`${debugConfig.browserDebugExecutable}\` (headless: false). Once connected, navigate to any URL required by the task — open any page needed, reusing an existing tab if the URL already matches or creating a new one if not. There is no restriction on which sites or pages you can visit; open whatever is necessary to complete the task.
   - **Phase 3 — one action per script:** Each subsequent script reconnects via the same CDP endpoint (\`http://localhost:${debugConfig.browserDebugPort}\`) or profile fallback, finds the already-open tab (or reopens it), performs exactly one action (click, type, select, scroll, screenshot, read text, extract data, fill forms, etc.), prints the result to stdout, then calls \`browser.disconnect()\` (CDP) or exits (profile launch). You may perform any interaction the task requires — reading content, extracting structured data, submitting forms, navigating between pages, or capturing screenshots.
   - Always inline Node.js via a bash heredoc so the script is self-contained. Print structured output to stdout so it returns as \`TERMINAL OUTPUT:\`.`
+    : ''
+}
+${
+  javascriptEventsEnabled
+    ? `- **Authenticated browser access via JavaScript Events:** Always try the built-in \`web_fetch\` tool first; it can read authenticated pages from an already-open live tab.
+  - If \`web_fetch\` fails, returns incomplete content, or you need more information or page interaction, use \`shell_script\` with macOS \`osascript\` JavaScript Events as the fallback.
+  - Work only with the configured browsers: ${
+    settings.browserJavascriptEventBrowsers.length
+      ? settings.browserJavascriptEventBrowsers.map((name) => sanitizeMcpField(name, 50)).join(', ')
+      : 'the supported browser selected during setup'
+  }.
+  - Reuse the existing authenticated tab. Execute small, targeted JavaScript expressions in the active tab to inspect the DOM or perform one interaction at a time, and print returned values to stdout.
+  - Do not launch a debug profile or attempt a CDP connection for this access method.`
     : ''
 }
 - Use ${!isWindows ? 'bash (macOS/Linux)' : 'PowerShell'}. Every script must be self-contained and ready to run as-is.

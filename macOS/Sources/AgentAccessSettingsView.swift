@@ -10,8 +10,8 @@ import SwiftUI
 ///
 /// Agent Access values are persisted in the backend's agent_settings table
 /// and are read by the agent at turn time, so simple changes do not restart
-/// the daemon. Enabling browser access spawns the interactive CLI in
-/// Terminal.app because the browser/profile prompts still live there.
+/// the daemon. Browser setup choices are collected natively and passed to a
+/// non-interactive CLI process running in the user's login shell.
 struct AgentAccessSettingsView: View {
     @Environment(\.colorScheme) private var colorScheme
 
@@ -21,6 +21,8 @@ struct AgentAccessSettingsView: View {
     @State private var browserAccessEnabled: Bool = false
     @State private var browserDebugBrowserName: String? = nil
     @State private var browserDebugPort: Int? = nil
+    @State private var browserAccessMethod: String? = nil
+    @State private var browserJavascriptEventBrowsers: [String] = []
 
     @State private var isLoading: Bool = false
     @State private var statusMessage: String = ""
@@ -32,6 +34,10 @@ struct AgentAccessSettingsView: View {
     @State private var pendingWebSearch: Bool? = nil
     @State private var pendingUsageRecording: Bool? = nil
     @State private var pendingBrowserAccess: Bool? = nil
+    @State private var showBrowserSetup = false
+    @State private var setupBrowserMethod: BrowserAccessSetup.Method = .debugProfile
+    @State private var setupBrowser = "Chrome"
+    @State private var setupProfile = "default"
 
     private let apiClient = APIClient()
 
@@ -139,20 +145,24 @@ struct AgentAccessSettingsView: View {
             ),
             titleVisibility: .visible
         ) {
-            Button((pendingBrowserAccess == true) ? "Continue in Terminal" : "Disable") {
-                if let enabled = pendingBrowserAccess {
+            Button((pendingBrowserAccess == true) ? "Configure" : "Disable") {
+                if pendingBrowserAccess == true {
                     pendingBrowserAccess = nil
-                    applyBrowserAccess(enabled)
+                    showBrowserSetup = true
+                } else {
+                    pendingBrowserAccess = nil
+                    applyBrowserAccess(false)
                 }
             }
             Button("Cancel", role: .cancel) { pendingBrowserAccess = nil }
         } message: {
             if pendingBrowserAccess == true {
-                Text("OmniKey will open a Terminal window and run `omnikey grant-browser-access`. Follow the prompts there to pick a browser and an Omnikey debug profile — the same steps as the CLI command.")
+                Text("Choose the access method, browser, and debug profile in OmniKey. Setup runs in the background using your login-shell environment.")
             } else {
-                Text("This clears the saved browser debug profile (BROWSER_DEBUG_* keys) from ~/.omnikey/config.json and removes the macOS LaunchAgent. The debug profile directory itself is preserved so you can re-enable later without signing in again.")
+                Text("This clears authenticated browser access from the settings database and removes the macOS debug-profile LaunchAgent. The debug profile directory itself is preserved so you can re-enable later without signing in again.")
             }
         }
+        .sheet(isPresented: $showBrowserSetup) { browserSetupSheet }
     }
 
     // MARK: - Header
@@ -289,7 +299,7 @@ struct AgentAccessSettingsView: View {
         settingCard(
             icon: "safari.fill",
             title: "Authenticated browser access",
-            subtitle: "Let the agent read content from your logged-in browser tabs via a dedicated debug profile."
+            subtitle: "Let the agent read logged-in tabs via a debug profile or JavaScript Events."
         ) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
@@ -312,21 +322,99 @@ struct AgentAccessSettingsView: View {
                     Spacer()
                 }
 
-                if browserAccessEnabled,
-                   let name = browserDebugBrowserName, !name.isEmpty {
+                if browserAccessEnabled {
                     HStack(spacing: 6) {
                         Image(systemName: "checkmark.seal.fill")
                             .font(.system(size: 11))
                             .foregroundColor(NordTheme.accentGreen(colorScheme))
-                        Text("Configured: \(name)" + (browserDebugPort.map { "  ·  port \($0)" } ?? ""))
+                        Text(browserAccessDescription)
                             .font(.system(size: 12, design: .monospaced))
                             .foregroundColor(NordTheme.secondaryText(colorScheme))
                     }
                 }
 
-                Text("Enabling opens a Terminal window with `omnikey grant-browser-access`. Pick a browser and an Omnikey debug profile — the same prompts as the CLI. Disabling clears the saved profile config and removes the auto-launch LaunchAgent.")
+                Text("Enabling asks for the method, browser, and profile in OmniKey, then runs setup in your login shell without opening Terminal or restarting the daemon.")
                     .font(.system(size: 11))
                     .foregroundColor(NordTheme.secondaryText(colorScheme))
+            }
+        }
+    }
+
+    private var browserAccessDescription: String {
+        if browserAccessMethod == "javascript-events" {
+            let browsers = browserJavascriptEventBrowsers.isEmpty
+                ? "configured browser"
+                : browserJavascriptEventBrowsers.joined(separator: ", ")
+            return "JavaScript Events: \(browsers)"
+        }
+        let browser = browserDebugBrowserName ?? "browser"
+        return "Debug profile: \(browser)" + (browserDebugPort.map { "  ·  port \($0)" } ?? "")
+    }
+
+    private var debugBrowserChoices: [String] {
+        let candidates: [(String, [String])] = [
+            ("Chrome", ["/Applications/Google Chrome.app", NSHomeDirectory() + "/Applications/Google Chrome.app"]),
+            ("Brave", ["/Applications/Brave Browser.app", NSHomeDirectory() + "/Applications/Brave Browser.app"]),
+            ("Edge", ["/Applications/Microsoft Edge.app", NSHomeDirectory() + "/Applications/Microsoft Edge.app"]),
+            ("Arc", ["/Applications/Arc.app", NSHomeDirectory() + "/Applications/Arc.app"]),
+            ("Vivaldi", ["/Applications/Vivaldi.app", NSHomeDirectory() + "/Applications/Vivaldi.app"]),
+            ("Opera", ["/Applications/Opera.app", NSHomeDirectory() + "/Applications/Opera.app"]),
+            ("Chromium", ["/Applications/Chromium.app", NSHomeDirectory() + "/Applications/Chromium.app"]),
+        ]
+        return candidates.filter { candidate in
+            candidate.1.contains { FileManager.default.fileExists(atPath: $0) }
+        }.map(\.0)
+    }
+
+    private var javascriptBrowserChoices: [String] {
+        debugBrowserChoices + (FileManager.default.fileExists(atPath: "/Applications/Safari.app") ? ["Safari"] : [])
+    }
+
+    private var currentSetupBrowserChoices: [String] {
+        setupBrowserMethod == .debugProfile ? debugBrowserChoices : javascriptBrowserChoices
+    }
+
+    private var browserSetupSheet: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Authenticated browser setup").font(.title2.weight(.semibold))
+            Picker("Access method", selection: $setupBrowserMethod) {
+                ForEach(BrowserAccessSetup.Method.allCases) { method in
+                    Text(method.label).tag(method)
+                }
+            }.pickerStyle(.segmented)
+            Picker("Browser", selection: $setupBrowser) {
+                ForEach(currentSetupBrowserChoices, id: \.self) { Text($0).tag($0) }
+            }
+            if setupBrowserMethod == .debugProfile {
+                TextField("Profile name", text: $setupProfile)
+                Text("The selected browser will close and reopen with the dedicated OmniKey profile.")
+                    .font(.caption)
+                    .foregroundColor(NordTheme.secondaryText(colorScheme))
+            } else {
+                Text("Enable “Allow JavaScript from Apple Events” in the selected browser's Developer settings before using this method.")
+                    .font(.caption)
+                    .foregroundColor(NordTheme.secondaryText(colorScheme))
+            }
+            HStack {
+                Spacer()
+                Button("Cancel") { showBrowserSetup = false }
+                    .disabled(isLoading)
+                Button("Enable") { runBrowserSetup() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(isLoading || currentSetupBrowserChoices.isEmpty || (setupBrowserMethod == .debugProfile && setupProfile.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
+            }
+        }
+        .padding(24)
+        .frame(width: 480)
+        .interactiveDismissDisabled(isLoading)
+        .onAppear {
+            if !currentSetupBrowserChoices.contains(setupBrowser), let first = currentSetupBrowserChoices.first {
+                setupBrowser = first
+            }
+        }
+        .onChange(of: setupBrowserMethod) { _, _ in
+            if !currentSetupBrowserChoices.contains(setupBrowser), let first = currentSetupBrowserChoices.first {
+                setupBrowser = first
             }
         }
     }
@@ -382,6 +470,8 @@ struct AgentAccessSettingsView: View {
                     browserAccessEnabled = response.browserAccessEnabled
                     browserDebugBrowserName = response.browserDebugBrowserName
                     browserDebugPort = response.browserDebugPort
+                    browserAccessMethod = response.browserAccessMethod
+                    browserJavascriptEventBrowsers = response.browserJavascriptEventBrowsers ?? []
                 case .failure(let error):
                     statusMessage = "Failed to load settings: \(error.localizedDescription)"
                 }
@@ -445,9 +535,7 @@ struct AgentAccessSettingsView: View {
 
     private func applyBrowserAccess(_ enabled: Bool) {
         isLoading = true
-        statusMessage = enabled
-            ? "Launching browser-access setup in Terminal…"
-            : "Disabling browser access…"
+        statusMessage = "Disabling browser access…"
         apiClient.setBrowserAccessEnabled(enabled) { result in
             DispatchQueue.main.async {
                 switch result {
@@ -456,20 +544,36 @@ struct AgentAccessSettingsView: View {
                     if let message = resp.message, !message.isEmpty {
                         statusMessage = message
                     } else {
-                        statusMessage = enabled
-                            ? "Browser access setup started in Terminal."
-                            : "Browser access disabled."
+                        statusMessage = "Browser access disabled."
                     }
-                    // When enabling, the user still needs to finish the
-                    // Terminal-based prompts before BROWSER_DEBUG_* values are
-                    // present. A short refresh delay makes that progress show
-                    // up if they complete it quickly.
-                    DispatchQueue.main.asyncAfter(deadline: .now() + (enabled ? 3.0 : 0.1)) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                         loadSettings()
                     }
                 case .failure(let error):
                     isLoading = false
                     statusMessage = "Failed to toggle browser access: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    private func runBrowserSetup() {
+        isLoading = true
+        statusMessage = "Configuring browser access in the background…"
+        BrowserAccessSetup.configure(
+            method: setupBrowserMethod,
+            browser: setupBrowser,
+            profile: setupProfile.trimmingCharacters(in: .whitespacesAndNewlines)
+        ) { result in
+            DispatchQueue.main.async {
+                isLoading = false
+                switch result {
+                case .success:
+                    showBrowserSetup = false
+                    statusMessage = "Authenticated browser access enabled."
+                    loadSettings()
+                case .failure(let error):
+                    statusMessage = "Browser setup failed: \(error.localizedDescription)"
                 }
             }
         }

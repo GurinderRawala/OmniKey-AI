@@ -157,7 +157,7 @@ describe('@omnikeyai directive model', () => {
     expect(messages).toHaveLength(2);
     expect(messages[0].role).toBe('system');
     expect(messages[0].content).toContain(
-      'Answer the question asked by the user or complete the task asked by the user.',
+      'Follow the task instructions written in the `<omnikeyai_directive>` tag.',
     );
     expect(messages[0].content).not.toContain('grammar shortcut prompt');
     expect(messages[1].content).toContain(

@@ -6,6 +6,7 @@ import http from 'http';
 import os from 'os';
 import { execSync, spawn } from 'child_process';
 import { getConfigDir, readConfig, writeConfig, isWindows } from './utils';
+import { readBrowserAccessSettings, saveBrowserAccessSettings } from './agentSettingsDb';
 
 interface BrowserEntry {
   name: string;
@@ -15,6 +16,14 @@ interface BrowserEntry {
 
 interface InstalledBrowser extends BrowserEntry {
   executablePath: string;
+}
+
+export interface GrantBrowserAccessOptions {
+  method?: 'debug-profile' | 'javascript-events';
+  browser?: string;
+  profile?: string;
+  browsers?: string[];
+  nonInteractive?: boolean;
 }
 
 const home = os.homedir();
@@ -155,24 +164,40 @@ async function findAvailablePort(startPort = 9222): Promise<number> {
   throw new Error('No available port found in range 9222–9321');
 }
 
-function persistDebugPort(port: number): void {
-  const cfg = readConfig();
-  cfg['BROWSER_DEBUG_PORT'] = port;
-  writeConfig(cfg);
-}
-
-function persistDebugConfig(params: {
+async function persistDebugConfig(params: {
   browserName: string;
   executablePath: string;
   userDataDir: string;
   port: number;
-}): void {
-  const cfg = readConfig();
-  cfg['BROWSER_DEBUG_PORT'] = params.port;
-  cfg['BROWSER_DEBUG_BROWSER_NAME'] = params.browserName;
-  cfg['BROWSER_DEBUG_EXECUTABLE'] = params.executablePath;
-  cfg['BROWSER_DEBUG_USER_DATA_DIR'] = params.userDataDir;
+}): Promise<void> {
+  await saveBrowserAccessSettings({
+    browserAccessEnabled: true,
+    browserAccessMethod: 'debug-profile',
+    browserDebugPort: params.port,
+    browserDebugBrowserName: params.browserName,
+    browserDebugExecutable: params.executablePath,
+    browserDebugUserDataDir: params.userDataDir,
+    browserJavascriptEventBrowsers: [],
+  });
 
+  removeLegacyBrowserConfig();
+}
+
+function removeLegacyBrowserConfig(): void {
+  // Remove legacy browser settings after the DB write succeeds. Keeping other
+  // config values intact lets older installations migrate without a restart.
+  const cfg = readConfig();
+  for (const key of [
+    'BROWSER_ACCESS_ENABLED',
+    'BROWSER_ACCESS_METHOD',
+    'BROWSER_DEBUG_PORT',
+    'BROWSER_DEBUG_BROWSER_NAME',
+    'BROWSER_DEBUG_EXECUTABLE',
+    'BROWSER_DEBUG_USER_DATA_DIR',
+    'BROWSER_JAVASCRIPT_EVENT_BROWSERS',
+  ]) {
+    delete cfg[key];
+  }
   writeConfig(cfg);
 }
 
@@ -224,7 +249,10 @@ function launchBrowserDebugProfile(
   });
 }
 
-async function setupDebuggingPort(browser: InstalledBrowser): Promise<void> {
+async function setupDebuggingPort(
+  browser: InstalledBrowser,
+  options: { profile?: string; nonInteractive?: boolean } = {},
+): Promise<void> {
   if (hasExistingStartupEntry()) {
     const location = isWindows
       ? `Registry: ${WINDOWS_RUN_KEY}\\${WINDOWS_RUN_VALUE_NAME}`
@@ -232,18 +260,20 @@ async function setupDebuggingPort(browser: InstalledBrowser): Promise<void> {
 
     console.log(`\nA permanent browser debug startup entry already exists:\n  ${location}`);
 
-    const { action } = await inquirer.prompt([
-      {
-        type: 'list',
-        name: 'action',
-        message: 'What would you like to do?',
-        choices: [
-          { name: 'Update browser / debug profile / port settings', value: 'update' },
-          { name: 'Remove it (disable permanent startup)', value: 'remove' },
-          { name: 'Cancel', value: 'cancel' },
-        ],
-      },
-    ]);
+    const { action } = options.nonInteractive
+      ? { action: 'update' }
+      : await inquirer.prompt([
+          {
+            type: 'list',
+            name: 'action',
+            message: 'What would you like to do?',
+            choices: [
+              { name: 'Update browser / debug profile / port settings', value: 'update' },
+              { name: 'Remove it (disable permanent startup)', value: 'remove' },
+              { name: 'Cancel', value: 'cancel' },
+            ],
+          },
+        ]);
 
     if (action === 'cancel') return;
 
@@ -254,6 +284,16 @@ async function setupDebuggingPort(browser: InstalledBrowser): Promise<void> {
         } else {
           removeMacOSLaunchAgent();
         }
+        await saveBrowserAccessSettings({
+          browserAccessEnabled: false,
+          browserAccessMethod: null,
+          browserDebugPort: null,
+          browserDebugBrowserName: null,
+          browserDebugExecutable: null,
+          browserDebugUserDataDir: null,
+          browserJavascriptEventBrowsers: [],
+        });
+        removeLegacyBrowserConfig();
         console.log('Startup entry removed.');
       } catch (err) {
         console.error('Failed to remove entry:', err instanceof Error ? err.message : String(err));
@@ -285,7 +325,15 @@ async function setupDebuggingPort(browser: InstalledBrowser): Promise<void> {
   let debugUserDataDir: string;
   let debugProfileLabel: string;
 
-  if (existingDebugProfiles.length > 0) {
+  if (options.nonInteractive) {
+    const profileName = options.profile?.trim();
+    if (!profileName) throw new Error('--profile is required for non-interactive debug setup.');
+    const safeProfileName = profileName.toLowerCase().replace(/[^a-z0-9._-]+/g, '-');
+    if (!safeProfileName) throw new Error('The debug profile name is invalid.');
+    debugProfileLabel = profileName;
+    debugUserDataDir = path.join(debugRootDir, `${safeBrowserName}-${safeProfileName}`);
+    fs.mkdirSync(debugUserDataDir, { recursive: true });
+  } else if (existingDebugProfiles.length > 0) {
     const { profileMode } = await inquirer.prompt([
       {
         type: 'list',
@@ -375,15 +423,6 @@ async function setupDebuggingPort(browser: InstalledBrowser): Promise<void> {
   const port = await findAvailablePort(9222);
   console.log(`\nAvailable debug port: ${port}`);
 
-  persistDebugPort(port);
-  persistDebugConfig({
-    browserName: browser.name,
-    executablePath: browser.executablePath,
-    userDataDir: debugUserDataDir,
-    port,
-  });
-  console.log(`Saved browser debug configuration to config.\n`);
-
   const launchArgs = [
     `--remote-debugging-port=${port}`,
     `--user-data-dir=${debugUserDataDir}`,
@@ -395,8 +434,10 @@ async function setupDebuggingPort(browser: InstalledBrowser): Promise<void> {
     `Omnikey debug profile:\n  ${debugProfileLabel}\n` + `Profile path:\n  ${debugUserDataDir}\n`,
   );
 
-  console.log(`Close any open ${browser.name} windows, then press Enter.`);
-  await inquirer.prompt([{ type: 'input', name: '_', message: 'Press Enter when ready…' }]);
+  if (!options.nonInteractive) {
+    console.log(`Close any open ${browser.name} windows, then press Enter.`);
+    await inquirer.prompt([{ type: 'input', name: '_', message: 'Press Enter when ready…' }]);
+  }
 
   console.log(`Closing any remaining ${browser.name} processes…`);
   killBrowserProcesses(browser.name);
@@ -435,6 +476,9 @@ async function setupDebuggingPort(browser: InstalledBrowser): Promise<void> {
       err instanceof Error ? err.message : String(err),
     );
     printLaunchHint(browser.executablePath, launchArgs);
+    if (options.nonInteractive) {
+      throw new Error('Failed to register the browser debug-profile startup entry.');
+    }
     return;
   }
 
@@ -451,6 +495,7 @@ async function setupDebuggingPort(browser: InstalledBrowser): Promise<void> {
   if (spawnErrorMsg) {
     console.error(`Failed to launch browser: ${spawnErrorMsg}`);
     printLaunchHint(browser.executablePath, launchArgs);
+    if (options.nonInteractive) throw new Error(`Failed to launch browser: ${spawnErrorMsg}`);
     return;
   }
 
@@ -458,6 +503,13 @@ async function setupDebuggingPort(browser: InstalledBrowser): Promise<void> {
   const portUp = await waitForDebugPort(port);
 
   if (portUp) {
+    await persistDebugConfig({
+      browserName: browser.name,
+      executablePath: browser.executablePath,
+      userDataDir: debugUserDataDir,
+      port,
+    });
+    console.log(`Saved browser debug configuration to the settings database.\n`);
     console.log(
       `\nDebug port ${port} is active.\n` +
         `Verify at: http://localhost:${port}/json\n` +
@@ -478,6 +530,9 @@ async function setupDebuggingPort(browser: InstalledBrowser): Promise<void> {
           ? `  & "${browser.executablePath}" ${launchArgs.map(quoteArgWindows).join(' ')}`
           : `  "${browser.executablePath}" ${launchArgs.map(quoteArgPosix).join(' ')}`),
     );
+    if (options.nonInteractive) {
+      throw new Error(`Could not reach the browser debug port ${port} after setup.`);
+    }
   }
 }
 
@@ -644,7 +699,7 @@ const MACOS_PROCESS_NAMES: Record<string, string> = {
   Safari: 'Safari',
 };
 
-async function setupAppleScript(): Promise<void> {
+async function setupAppleScript(selectedBrowsers?: string[]): Promise<void> {
   const chromiumInstalled = getInstalledBrowsers(MACOS_BROWSERS);
   const safariPresent = fs.existsSync('/Applications/Safari.app');
 
@@ -658,15 +713,24 @@ async function setupAppleScript(): Promise<void> {
     return;
   }
 
-  const { selectedNames }: { selectedNames: string[] } = await inquirer.prompt([
-    {
-      type: 'checkbox',
-      name: 'selectedNames',
-      message: 'Select browsers to enable "Allow JavaScript from Apple Events":',
-      choices,
-      validate: (input: string[]) => input.length > 0 || 'Select at least one browser.',
-    },
-  ]);
+  const selectedNames: string[] = selectedBrowsers?.length
+    ? selectedBrowsers
+    : (
+        await inquirer.prompt([
+          {
+            type: 'checkbox',
+            name: 'selectedNames',
+            message: 'Select browsers to enable "Allow JavaScript from Apple Events":',
+            choices,
+            validate: (input: string[]) => input.length > 0 || 'Select at least one browser.',
+          },
+        ])
+      ).selectedNames;
+  const supportedNames = new Set(choices.map((choice) => choice.value));
+  const unsupported = selectedNames.filter((name) => !supportedNames.has(name));
+  if (unsupported.length) {
+    throw new Error(`Unsupported or unavailable browser(s): ${unsupported.join(', ')}`);
+  }
 
   console.log('\nFollow these steps for each selected browser:\n');
 
@@ -691,12 +755,35 @@ async function setupAppleScript(): Promise<void> {
     }
   }
 
-  console.log('Once enabled, Omnikey can read content directly from the active tab.');
+  // Switching methods should also stop auto-launching the old debug profile.
+  removeMacOSLaunchAgent();
+  await saveBrowserAccessSettings({
+    browserAccessEnabled: true,
+    browserAccessMethod: 'javascript-events',
+    browserDebugPort: null,
+    browserDebugBrowserName: null,
+    browserDebugExecutable: null,
+    browserDebugUserDataDir: null,
+    browserJavascriptEventBrowsers: selectedNames,
+  });
+  removeLegacyBrowserConfig();
+
+  console.log(
+    'Saved JavaScript Events access to the settings database. ' +
+      'Omnikey can read content directly from the active tab; no daemon restart is required.',
+  );
 }
 
-export async function grantBrowserAccess(): Promise<void> {
-  if (!isWindows) {
-    const { method } = await inquirer.prompt([
+export async function grantBrowserAccess(options: GrantBrowserAccessOptions = {}): Promise<void> {
+  let method = options.method;
+  if (method && method !== 'debug-profile' && method !== 'javascript-events') {
+    throw new Error('--method must be debug-profile or javascript-events.');
+  }
+  if (options.nonInteractive && !method) {
+    throw new Error('--method is required with --non-interactive.');
+  }
+  if (!isWindows && !method) {
+    ({ method } = await inquirer.prompt([
       {
         type: 'list',
         name: 'method',
@@ -704,20 +791,24 @@ export async function grantBrowserAccess(): Promise<void> {
         choices: [
           {
             name: 'Remote Debugging Port  — launch browser with CDP; works on all Chromium browsers',
-            value: 'debugging-port',
+            value: 'debug-profile',
           },
           {
             name: 'AppleScript  — read live tabs without relaunching; requires "Allow JavaScript from Apple Events"',
-            value: 'applescript',
+            value: 'javascript-events',
           },
         ],
       },
-    ]);
+    ]));
+  }
 
-    if (method === 'applescript') {
-      await setupAppleScript();
-      return;
+  if (method === 'javascript-events') {
+    if (isWindows) throw new Error('JavaScript Events browser access is only available on macOS.');
+    if (options.nonInteractive && !options.browsers?.length) {
+      throw new Error('--browsers is required for non-interactive JavaScript Events setup.');
     }
+    await setupAppleScript(options.browsers);
+    return;
   }
 
   const catalogue = isWindows ? WINDOWS_BROWSERS : MACOS_BROWSERS;
@@ -732,16 +823,27 @@ export async function grantBrowserAccess(): Promise<void> {
     return;
   }
 
-  const { browser }: { browser: InstalledBrowser } = await inquirer.prompt([
-    {
-      type: 'list',
-      name: 'browser',
-      message: 'Select the browser to set up:',
-      choices: installed.map((b) => ({ name: b.name, value: b })),
-    },
-  ]);
+  let browser: InstalledBrowser | undefined;
+  if (options.browser) {
+    browser = installed.find(
+      (candidate) => candidate.name.toLowerCase() === options.browser!.trim().toLowerCase(),
+    );
+    if (!browser) throw new Error(`Browser is not installed or unsupported: ${options.browser}`);
+  } else if (options.nonInteractive) {
+    throw new Error('--browser is required for non-interactive debug-profile setup.');
+  } else {
+    ({ browser } = await inquirer.prompt([
+      {
+        type: 'list',
+        name: 'browser',
+        message: 'Select the browser to set up:',
+        choices: installed.map((b) => ({ name: b.name, value: b })),
+      },
+    ]));
+  }
 
-  await setupDebuggingPort(browser);
+  if (!browser) throw new Error('No browser was selected.');
+  await setupDebuggingPort(browser, options);
 }
 
 interface DebugConfig {
@@ -811,12 +913,11 @@ async function recoverDebugConfig(): Promise<DebugConfig | null> {
 }
 
 export async function reopenBrowserDebugProfile(): Promise<void> {
-  let cfg = readConfig();
-
-  let executablePath: string = cfg['BROWSER_DEBUG_EXECUTABLE'] || '';
-  let userDataDir: string = cfg['BROWSER_DEBUG_USER_DATA_DIR'] || '';
-  let port = Number(cfg['BROWSER_DEBUG_PORT']);
-  let browserName: string = cfg['BROWSER_DEBUG_BROWSER_NAME'] || '';
+  const stored = await readBrowserAccessSettings();
+  let executablePath = stored?.browserDebugExecutable || '';
+  let userDataDir = stored?.browserDebugUserDataDir || '';
+  let port = Number(stored?.browserDebugPort);
+  let browserName = stored?.browserDebugBrowserName || '';
 
   // If the config is incomplete (e.g. created by an older version of grant-browser-access),
   // try to recover by scanning the browser-debug-profiles directory.
@@ -834,8 +935,7 @@ export async function reopenBrowserDebugProfile(): Promise<void> {
     browserName = browserName || recovered.browserName;
     if (!Number.isFinite(port) || port <= 0) port = recovered.port;
     // Persist the recovered values so future runs skip this step.
-    persistDebugConfig({ browserName, executablePath, userDataDir, port });
-    cfg = readConfig();
+    await persistDebugConfig({ browserName, executablePath, userDataDir, port });
   }
 
   if (!Number.isFinite(port) || port <= 0) {

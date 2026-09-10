@@ -1,6 +1,6 @@
 import fs from 'fs';
 import { config, AIProvider, TerminalAccessMode } from './config';
-import { AgentSettings } from './models/agentSettings';
+import { AgentSettings, BrowserAccessMethod } from './models/agentSettings';
 import { logger } from './logger';
 import { getLocalConfigPath, writeLocalConfigJson } from './localConfigFile';
 
@@ -18,6 +18,12 @@ export type AgentSettingsSnapshot = {
   webSearchEnabled: boolean;
   usageRecordingEnabled: boolean;
   browserAccessEnabled: boolean;
+  browserAccessMethod: BrowserAccessMethod | null;
+  browserDebugPort: number | null;
+  browserDebugBrowserName: string | null;
+  browserDebugExecutable: string | null;
+  browserDebugUserDataDir: string | null;
+  browserJavascriptEventBrowsers: string[];
   openaiModel: string;
   anthropicModel: string;
   geminiModel: string;
@@ -29,6 +35,12 @@ export type AgentSettingsPatch = Partial<{
   webSearchEnabled: boolean;
   usageRecordingEnabled: boolean;
   browserAccessEnabled: boolean;
+  browserAccessMethod: BrowserAccessMethod | null;
+  browserDebugPort: number | null;
+  browserDebugBrowserName: string | null;
+  browserDebugExecutable: string | null;
+  browserDebugUserDataDir: string | null;
+  browserJavascriptEventBrowsers: string[];
   openaiModel: string;
   anthropicModel: string;
   geminiModel: string;
@@ -126,18 +138,44 @@ function readTerminalAccess(value: unknown): TerminalAccessMode {
 
 function legacyDefaults(): Omit<AgentSettingsSnapshot, 'id'> {
   const cfg = readLocalConfigFile();
+  const browserDebugExecutable = firstString(
+    cfg.BROWSER_DEBUG_EXECUTABLE,
+    config.browserDebugExecutable,
+  );
+  const browserAccessMethod =
+    cfg.BROWSER_ACCESS_METHOD === 'javascript-events'
+      ? 'javascript-events'
+      : browserDebugExecutable
+        ? 'debug-profile'
+        : null;
+  const rawJavascriptBrowsers = cfg.BROWSER_JAVASCRIPT_EVENT_BROWSERS;
   return {
     terminalAccess: readTerminalAccess(cfg.TERMINAL_ACCESS ?? config.terminalAccess),
     webSearchEnabled: readBoolean(cfg.WEB_SEARCH_ENABLED, config.webSearchEnabled),
     usageRecordingEnabled: readBoolean(cfg.USAGE_RECORDING_ENABLED, config.usageRecordingEnabled),
     browserAccessEnabled:
       readBoolean(cfg.BROWSER_ACCESS_ENABLED, config.browserAccessEnabled) ||
-      Boolean(cfg.BROWSER_DEBUG_EXECUTABLE ?? config.browserDebugExecutable),
+      Boolean(browserDebugExecutable) ||
+      browserAccessMethod === 'javascript-events',
+    browserAccessMethod,
+    browserDebugPort: (() => {
+      const value = Number(cfg.BROWSER_DEBUG_PORT ?? config.browserDebugPort);
+      return Number.isFinite(value) && value > 0 ? value : null;
+    })(),
+    browserDebugBrowserName:
+      firstString(cfg.BROWSER_DEBUG_BROWSER_NAME, config.browserDebugBrowserName) ?? null,
+    browserDebugExecutable: browserDebugExecutable ?? null,
+    browserDebugUserDataDir:
+      firstString(cfg.BROWSER_DEBUG_USER_DATA_DIR, config.browserDebugUserDataDir) ?? null,
+    browserJavascriptEventBrowsers: Array.isArray(rawJavascriptBrowsers)
+      ? rawJavascriptBrowsers.filter((value): value is string => typeof value === 'string')
+      : [],
     openaiModel:
       firstString(cfg.OPENAI_MODEL, config.openaiModel) ?? defaultModelForProvider('openai'),
     anthropicModel: firstString(cfg.ANTHROPIC_MODEL) ?? defaultModelForProvider('anthropic'),
     geminiModel: firstString(cfg.GEMINI_MODEL) ?? defaultModelForProvider('gemini'),
-    nemotronModel: firstString(cfg.OPEN_MODEL_MODEL, cfg.NEMOTRON_MODEL) ?? defaultModelForProvider('nemotron'),
+    nemotronModel:
+      firstString(cfg.OPEN_MODEL_MODEL, cfg.NEMOTRON_MODEL) ?? defaultModelForProvider('nemotron'),
   };
 }
 
@@ -155,6 +193,22 @@ function rowToSnapshot(row: AgentSettings): AgentSettingsSnapshot {
     webSearchEnabled: Boolean(row.webSearchEnabled),
     usageRecordingEnabled: Boolean(row.usageRecordingEnabled),
     browserAccessEnabled: Boolean(row.browserAccessEnabled),
+    browserAccessMethod:
+      row.browserAccessMethod === 'debug-profile' || row.browserAccessMethod === 'javascript-events'
+        ? row.browserAccessMethod
+        : null,
+    browserDebugPort:
+      typeof row.browserDebugPort === 'number' && row.browserDebugPort > 0
+        ? row.browserDebugPort
+        : null,
+    browserDebugBrowserName: firstString(row.browserDebugBrowserName) ?? null,
+    browserDebugExecutable: firstString(row.browserDebugExecutable) ?? null,
+    browserDebugUserDataDir: firstString(row.browserDebugUserDataDir) ?? null,
+    browserJavascriptEventBrowsers: Array.isArray(row.browserJavascriptEventBrowsers)
+      ? row.browserJavascriptEventBrowsers.filter(
+          (value): value is string => typeof value === 'string',
+        )
+      : [],
     openaiModel: normalizeModel('openai', row.openaiModel ?? defaults.openaiModel),
     anthropicModel: normalizeModel('anthropic', row.anthropicModel ?? defaults.anthropicModel),
     geminiModel: normalizeModel('gemini', row.geminiModel ?? defaults.geminiModel),
@@ -172,6 +226,12 @@ export async function getAgentSettings(): Promise<AgentSettingsSnapshot> {
       webSearchEnabled: defaults.webSearchEnabled,
       usageRecordingEnabled: defaults.usageRecordingEnabled,
       browserAccessEnabled: defaults.browserAccessEnabled,
+      browserAccessMethod: defaults.browserAccessMethod,
+      browserDebugPort: defaults.browserDebugPort,
+      browserDebugBrowserName: defaults.browserDebugBrowserName,
+      browserDebugExecutable: defaults.browserDebugExecutable,
+      browserDebugUserDataDir: defaults.browserDebugUserDataDir,
+      browserJavascriptEventBrowsers: defaults.browserJavascriptEventBrowsers,
       openaiModel: defaults.openaiModel,
       anthropicModel: defaults.anthropicModel,
       geminiModel: defaults.geminiModel,
@@ -190,6 +250,24 @@ export async function getAgentSettings(): Promise<AgentSettingsSnapshot> {
       geminiModel: defaults.geminiModel,
       nemotronModel: defaults.nemotronModel,
     });
+  } else {
+    // Columns added to an existing database are nullable. Populate model
+    // choices and legacy browser-profile details once so runtime reads never
+    // need to fall back to process environment after migration.
+    const backfill: Partial<AgentSettings> = {};
+    if (!row.openaiModel) backfill.openaiModel = defaults.openaiModel;
+    if (!row.anthropicModel) backfill.anthropicModel = defaults.anthropicModel;
+    if (!row.geminiModel) backfill.geminiModel = defaults.geminiModel;
+    if (!row.nemotronModel) backfill.nemotronModel = defaults.nemotronModel;
+    if (row.browserAccessEnabled && !row.browserAccessMethod && defaults.browserAccessMethod) {
+      backfill.browserAccessMethod = defaults.browserAccessMethod;
+      backfill.browserDebugPort = defaults.browserDebugPort;
+      backfill.browserDebugBrowserName = defaults.browserDebugBrowserName;
+      backfill.browserDebugExecutable = defaults.browserDebugExecutable;
+      backfill.browserDebugUserDataDir = defaults.browserDebugUserDataDir;
+      backfill.browserJavascriptEventBrowsers = defaults.browserJavascriptEventBrowsers;
+    }
+    if (Object.keys(backfill).length) await row.update(backfill);
   }
   return rowToSnapshot(row);
 }
@@ -228,36 +306,25 @@ export function isSupportedAgentModel(provider: AIProvider, model: string): bool
   return agentModelOptionsForProvider(provider).some((option) => option.id === model);
 }
 
-export function readBrowserDebugConfig(): {
-  browserAccessConfigured: boolean;
+export function browserDebugConfigFromSettings(
+  settings: Pick<
+    AgentSettingsSnapshot,
+    | 'browserAccessMethod'
+    | 'browserDebugPort'
+    | 'browserDebugBrowserName'
+    | 'browserDebugExecutable'
+    | 'browserDebugUserDataDir'
+  >,
+): {
   browserDebugPort?: number;
   browserDebugBrowserName?: string;
   browserDebugExecutable?: string;
   browserDebugUserDataDir?: string;
 } {
-  const cfg = readLocalConfigFile();
-  const rawPort = cfg.BROWSER_DEBUG_PORT ?? config.browserDebugPort;
-  const parsedPort =
-    typeof rawPort === 'number'
-      ? rawPort
-      : Number.isFinite(Number(rawPort))
-        ? Number(rawPort)
-        : undefined;
-  const browserDebugExecutable = firstString(
-    cfg.BROWSER_DEBUG_EXECUTABLE,
-    config.browserDebugExecutable,
-  );
   return {
-    browserAccessConfigured: Boolean(browserDebugExecutable),
-    browserDebugPort: parsedPort && parsedPort > 0 ? parsedPort : undefined,
-    browserDebugBrowserName: firstString(
-      cfg.BROWSER_DEBUG_BROWSER_NAME,
-      config.browserDebugBrowserName,
-    ),
-    browserDebugExecutable,
-    browserDebugUserDataDir: firstString(
-      cfg.BROWSER_DEBUG_USER_DATA_DIR,
-      config.browserDebugUserDataDir,
-    ),
+    browserDebugPort: settings.browserDebugPort ?? undefined,
+    browserDebugBrowserName: settings.browserDebugBrowserName ?? undefined,
+    browserDebugExecutable: settings.browserDebugExecutable ?? undefined,
+    browserDebugUserDataDir: settings.browserDebugUserDataDir ?? undefined,
   };
 }
