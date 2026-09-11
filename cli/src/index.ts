@@ -22,11 +22,12 @@ import {
 } from './telegramDaemon';
 
 const program = new Command();
+const { version: cliVersion } = require('../package.json') as { version: string };
 
 program
   .name('omnikey')
   .description('Omnikey CLI for onboarding and configuration')
-  .version('1.6.26', '-v, --version', 'output the current version');
+  .version(cliVersion, '-v, --version', 'output the current version');
 
 program
   .command('onboard')
