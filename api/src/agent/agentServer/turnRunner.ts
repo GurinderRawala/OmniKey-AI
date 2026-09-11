@@ -510,12 +510,27 @@ async function runAgentTurnInternal(
           });
         }
 
+        const useJavascriptEventsFallback =
+          webToolFailed &&
+          agentSettings.browserAccessEnabled &&
+          agentSettings.browserAccessMethod === 'javascript-events' &&
+          (clientMessage.platform?.toLowerCase() === 'macos' ||
+            config.terminalPlatform?.toLowerCase() === 'macos');
+
         pushToSessionHistory(logger, session, {
           role: 'user',
           content: webToolFailed
             ? [
                 'IMPORTANT: The web search tool failed and is unavailable. Do NOT attempt any further web calls or ask the user to run commands manually.',
-                'You MUST retrieve any needed data by calling the shell_script tool to run terminal commands (curl, grep, cat, etc.).',
+                ...(useJavascriptEventsFallback
+                  ? [
+                      'Authenticated browser access is configured for JavaScript Events on macOS.',
+                      'You MUST call shell_script with `osascript -l JavaScript` to enumerate every tab in each configured browser, locate the requested URL or hostname, and execute targeted JavaScript in that authenticated tab.',
+                      'Do NOT retry the URL with curl or another unauthenticated HTTP client. If the exact page is not open, use JavaScript Events to navigate an existing authenticated tab before extracting it.',
+                    ]
+                  : [
+                      'You MUST retrieve any needed data by calling the shell_script tool to run terminal commands (curl, grep, cat, etc.).',
+                    ]),
                 'The shell script output will be returned to you automatically.',
                 '',
                 'Respond with exactly one of:',

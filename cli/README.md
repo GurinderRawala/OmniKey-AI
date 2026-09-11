@@ -219,6 +219,13 @@ Opens the same interactive flow as `mcp add` for the server identified by `<id>`
 
 Omnikey can read content from your authenticated browser tabs when fetching web pages that require a login. `omnikey grant-browser-access` performs a guided, one-time setup to enable this.
 
+Desktop apps use the non-interactive form so every choice can be collected in native UI and setup can run in the user's background login shell without opening a terminal:
+
+```bash
+omnikey grant-browser-access --non-interactive --method debug-profile --browser Chrome --profile default
+omnikey grant-browser-access --non-interactive --method javascript-events --browsers Chrome,Safari
+```
+
 After setup, run `omnikey browser open` at any time to relaunch the browser with its saved Omnikey debug profile (kills any running instance first, cleans up stale lock files, then re-launches and confirms the debug port is active).
 
 ### Windows
@@ -228,7 +235,7 @@ On Windows the only supported method is **Remote Debugging Port (CDP)**:
 1. Detects installed browsers (Chrome, Edge, Brave).
 2. Prompts you to select a browser and profile.
 3. Finds an available port starting at 9222.
-4. Saves `BROWSER_DEBUG_PORT` to `~/.omnikey/config.json`.
+4. Saves the access method, debug port, browser, executable, and profile path to the SQLite `agent_settings` row.
 5. Registers a **Windows Registry Run key** (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run\OmnikeyBrowserDebug`) so the browser launches automatically with `--remote-debugging-port=<port>` on every login.
 6. Force-kills any running browser processes, waits until they are fully gone, then launches the browser immediately.
 7. Verifies the debug port is reachable at `http://127.0.0.1:<port>/json` and reports success or a diagnostic error.
@@ -245,14 +252,16 @@ Same flow as Windows, but the startup entry is written as a **launchd agent** (`
 
 Supported browsers: Chrome, Brave, Edge, Arc, Vivaldi, Opera, Chromium.
 
-#### AppleScript
+#### JavaScript Events (AppleScript)
 
 No port or browser restart needed. Omnikey reads the live tab content directly via Apple Events.
 
-The CLI automatically enables **"Allow JavaScript from Apple Events"** for every selected browser:
+The selected browsers are saved in SQLite. During agent execution, `web_fetch` is attempted first; if it cannot retrieve enough authenticated content, JavaScript Events are used against the live tab as the fallback. No daemon restart is required when either browser-access method changes.
 
-- **Chrome / Brave / Edge / Arc / Vivaldi / Opera** — patches the `devtools.allow_javascript_apple_events` key in each profile's `Preferences` JSON file. The browser must be closed before patching (the CLI will warn you if it is still running).
-- **Safari** — runs `defaults write com.apple.Safari AllowJavaScriptFromAppleEvents -bool YES`.
+The CLI shows how to enable **"Allow JavaScript from Apple Events"** for every selected browser:
+
+- **Chrome / Brave / Edge / Arc / Vivaldi / Opera** — enable it from the browser's Developer settings.
+- **Safari** — enable developer features, then choose **Develop → Allow JavaScript from Apple Events**.
 
 Both changes are permanent and survive reboots. Restart each browser once after setup for the change to take effect.
 

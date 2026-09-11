@@ -181,7 +181,8 @@ export const config = {
   terminalPlatform: getEnv('TERMINAL_PLATFORM', false),
   blockSaas: getBooleanEnv('BLOCK_SAAS', false),
 
-  // User-configured CDP debug port (set by `omnikey grant-browser-access`)
+  // Legacy browser-access values. These are read only while migrating an
+  // existing config.json/env setup into the agent_settings SQLite row.
   browserDebugPort: (() => {
     const raw = getEnv('BROWSER_DEBUG_PORT', false);
     if (!raw) return undefined;
@@ -192,7 +193,8 @@ export const config = {
   browserDebugExecutable: getEnv('BROWSER_DEBUG_EXECUTABLE', false),
   browserDebugUserDataDir: getEnv('BROWSER_DEBUG_USER_DATA_DIR', false),
 
-  // Agent capability toggles, surfaced in the macOS Settings UI.
+  // Legacy Agent Access values. Runtime execution reads agent_settings; these
+  // values only seed/migrate a database that does not have settings yet.
   // terminalAccess controls how broad the shell tool is — 'full' exposes the
   // shell_script tool as-is; 'limited' restricts the tool description so the
   // model only runs read-only / safe commands and the prompts discourage
@@ -201,9 +203,7 @@ export const config = {
   // webSearchEnabled controls whether web_search / web_fetch tools are
   // registered with the agent at all. Defaults to true.
   webSearchEnabled: getBooleanEnv('WEB_SEARCH_ENABLED', true),
-  // browserAccessEnabled toggles authenticated browser session reading.
-  // Setting it to true triggers `omnikey grant-browser-access` from the
-  // settings endpoint (similar to `restart-daemon`).
+  // Legacy authenticated-browser toggle.
   browserAccessEnabled: getBooleanEnv('BROWSER_ACCESS_ENABLED', false),
   // usageRecordingEnabled controls whether detailed per-call token usage rows
   // are persisted for the Usage dashboard. Cloud defaults to true to preserve

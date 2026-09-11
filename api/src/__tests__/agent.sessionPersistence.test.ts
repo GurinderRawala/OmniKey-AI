@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => {
     },
     complete: vi.fn(),
     executeTool: vi.fn(),
+    getAgentSettings: vi.fn(),
     runScript: vi.fn(),
   };
 });
@@ -47,17 +48,7 @@ vi.mock('../agent/agentPrompts', () => ({
 }));
 
 vi.mock('../agentSettingsStore', () => ({
-  getAgentSettings: vi.fn(async () => ({
-    id: 'default',
-    terminalAccess: 'full',
-    webSearchEnabled: true,
-    usageRecordingEnabled: true,
-    browserAccessEnabled: false,
-    openaiModel: 'test-model',
-    anthropicModel: 'test-model',
-    geminiModel: 'test-model',
-    nemotronModel: 'test-model',
-  })),
+  getAgentSettings: mocks.getAgentSettings,
   selectedAgentModelForProvider: vi.fn(() => 'test-model'),
 }));
 
@@ -179,6 +170,19 @@ describe('agent session persistence checkpoints', () => {
     mocks.agentSession.destroy.mockResolvedValue(0);
     mocks.agentSession.increment.mockResolvedValue([1]);
     mocks.executeTool.mockResolvedValue('tool result');
+    mocks.getAgentSettings.mockResolvedValue({
+      id: 'default',
+      terminalAccess: 'full',
+      webSearchEnabled: true,
+      usageRecordingEnabled: true,
+      browserAccessEnabled: false,
+      browserAccessMethod: null,
+      browserJavascriptEventBrowsers: [],
+      openaiModel: 'test-model',
+      anthropicModel: 'test-model',
+      geminiModel: 'test-model',
+      nemotronModel: 'test-model',
+    });
     mocks.runScript.mockResolvedValue({ output: 'script output', isError: false });
     activeSessions.clear();
     pendingShellScripts.clear();
@@ -294,17 +298,15 @@ describe('agent session persistence checkpoints', () => {
     });
     const send = vi.fn();
 
-    mocks.complete
-      .mockReturnValueOnce(firstCompletion)
-      .mockResolvedValueOnce({
-        assistantMessage: {
-          role: 'assistant',
-          content: '<final_answer>\nFollowed the steering update.\n</final_answer>',
-        },
+    mocks.complete.mockReturnValueOnce(firstCompletion).mockResolvedValueOnce({
+      assistantMessage: {
+        role: 'assistant',
         content: '<final_answer>\nFollowed the steering update.\n</final_answer>',
-        finish_reason: 'stop',
-        model: 'test-model',
-      });
+      },
+      content: '<final_answer>\nFollowed the steering update.\n</final_answer>',
+      finish_reason: 'stop',
+      model: 'test-model',
+    });
 
     const turn = runAgentTurn(
       'session-1',
@@ -345,7 +347,9 @@ describe('agent session persistence checkpoints', () => {
     expect(mocks.complete).toHaveBeenCalledTimes(2);
     expect(mocks.executeTool).not.toHaveBeenCalled();
     expect(
-      send.mock.calls.some(([msg]) => String(msg.content).includes('Followed the steering update.')),
+      send.mock.calls.some(([msg]) =>
+        String(msg.content).includes('Followed the steering update.'),
+      ),
     ).toBe(true);
 
     const histories = historyUpdateCalls().map(parsedHistoryFromCall);
@@ -384,18 +388,20 @@ describe('agent session persistence checkpoints', () => {
         groupLocked: false,
       };
     });
-    mocks.agentSession.update.mockImplementation(async (values: { historyJson?: string; turns?: number }) => {
-      if (Object.prototype.hasOwnProperty.call(values, 'historyJson')) {
-        storedHistoryJson = values.historyJson ?? storedHistoryJson;
-        storedTurns = values.turns ?? storedTurns;
-        const history = JSON.parse(storedHistoryJson ?? '[]') as Array<{ content: string }>;
-        if (history.some((msg) => msg.content.includes('Stale final answer'))) {
-          resolveFinalPersistStarted();
-          await finalPersistRelease;
+    mocks.agentSession.update.mockImplementation(
+      async (values: { historyJson?: string; turns?: number }) => {
+        if (Object.prototype.hasOwnProperty.call(values, 'historyJson')) {
+          storedHistoryJson = values.historyJson ?? storedHistoryJson;
+          storedTurns = values.turns ?? storedTurns;
+          const history = JSON.parse(storedHistoryJson ?? '[]') as Array<{ content: string }>;
+          if (history.some((msg) => msg.content.includes('Stale final answer'))) {
+            resolveFinalPersistStarted();
+            await finalPersistRelease;
+          }
         }
-      }
-      return [1];
-    });
+        return [1];
+      },
+    );
 
     mocks.complete
       .mockResolvedValueOnce({
@@ -448,9 +454,9 @@ describe('agent session persistence checkpoints', () => {
     await turn;
 
     expect(mocks.complete).toHaveBeenCalledTimes(2);
-    expect(send.mock.calls.some(([msg]) => String(msg.content).includes('Stale final answer'))).toBe(
-      false,
-    );
+    expect(
+      send.mock.calls.some(([msg]) => String(msg.content).includes('Stale final answer')),
+    ).toBe(false);
     expect(
       send.mock.calls.some(([msg]) => String(msg.content).includes('Steered final answer')),
     ).toBe(true);
@@ -631,9 +637,7 @@ describe('agent session persistence checkpoints', () => {
 
     expect(mocks.complete).toHaveBeenCalledTimes(MAX_STEERING_RESTARTS + 1);
     expect(
-      send.mock.calls.some(([msg]) =>
-        String(msg.content).includes('too many steering updates'),
-      ),
+      send.mock.calls.some(([msg]) => String(msg.content).includes('too many steering updates')),
     ).toBe(true);
     expect(
       send.mock.calls.some(([msg]) => String(msg.content).includes('Would otherwise finish.')),
@@ -1112,6 +1116,74 @@ describe('agent session persistence checkpoints', () => {
           history.some((msg) => msg.content.startsWith('IMPORTANT: The web search tool failed')),
         ),
     ).toBe(true);
+  });
+
+  it('directs failed web retrieval to JavaScript Events when configured', async () => {
+    const webToolCall = {
+      id: 'call-web',
+      name: 'web_fetch',
+      arguments: { url: 'https://github.com/example/private/pull/42' },
+    };
+    const send = vi.fn();
+
+    mocks.getAgentSettings.mockResolvedValue({
+      id: 'default',
+      terminalAccess: 'full',
+      webSearchEnabled: true,
+      usageRecordingEnabled: true,
+      browserAccessEnabled: true,
+      browserAccessMethod: 'javascript-events',
+      browserJavascriptEventBrowsers: ['Chrome'],
+      openaiModel: 'test-model',
+      anthropicModel: 'test-model',
+      geminiModel: 'test-model',
+      nemotronModel: 'test-model',
+    });
+    mocks.executeTool.mockResolvedValue('Error fetching URL: Request failed with status code 404');
+    mocks.complete
+      .mockResolvedValueOnce({
+        assistantMessage: { role: 'assistant', content: '', tool_calls: [webToolCall] },
+        content: '',
+        finish_reason: 'tool_calls',
+        model: 'test-model',
+        tool_calls: [webToolCall],
+      })
+      .mockResolvedValueOnce({
+        assistantMessage: {
+          role: 'assistant',
+          content: '<final_answer>Fallback instruction captured.</final_answer>',
+        },
+        content: '<final_answer>Fallback instruction captured.</final_answer>',
+        finish_reason: 'stop',
+        model: 'test-model',
+      });
+
+    await runAgentTurn(
+      'session-1',
+      { id: 'subscription-1' } as any,
+      {
+        session_id: 'session-1',
+        sender: 'client',
+        content: 'Read the private pull request.',
+        platform: 'macos',
+      },
+      send,
+      mocks.log as any,
+      { skipGrouping: true },
+    );
+
+    const recoveryPrompt = historyUpdateCalls()
+      .map(parsedHistoryFromCall)
+      .flat()
+      .find(
+        (message) =>
+          message.role === 'user' &&
+          message.content.startsWith('IMPORTANT: The web search tool failed'),
+      )?.content;
+
+    expect(recoveryPrompt).toContain('JavaScript Events on macOS');
+    expect(recoveryPrompt).toContain('osascript -l JavaScript');
+    expect(recoveryPrompt).toContain('Do NOT retry the URL with curl');
   });
 
   it('stops recursive web fallback if the model keeps requesting unavailable web tools', async () => {

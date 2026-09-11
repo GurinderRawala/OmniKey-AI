@@ -8,7 +8,6 @@ import { authMiddleware } from './authMiddleware';
 import { logger } from './logger';
 import {
   getAgentSettings,
-  readBrowserDebugConfig,
   readLocalConfigFile,
   updateAgentSettings,
   writeLocalConfigFile,
@@ -20,12 +19,9 @@ import {
  * Runtime toggles live in the `agent_settings` DB row so they take effect on
  * the next agent turn without bouncing the daemon.
  *
- * Browser access is special — enabling it spawns the interactive
- * `omnikey grant-browser-access` command in a new Terminal window so the
- * existing inquirer prompts (browser selection, profile naming, etc.) work
- * unchanged. Disabling it removes the saved BROWSER_DEBUG_* keys and the
- * macOS LaunchAgent that auto-launches the debug profile, mirroring the
- * "Remove" path inside the CLI.
+ * Desktop apps collect browser choices natively and run the parameterized CLI
+ * in the signed-in user's background shell. This endpoint remains responsible
+ * for disabling access and cleaning up the macOS LaunchAgent.
  */
 
 type TerminalAccessMode = 'full' | 'limited';
@@ -47,53 +43,8 @@ const MACOS_LAUNCH_AGENT_PATH = path.join(
 );
 
 /**
- * Spawns `omnikey grant-browser-access` inside a new Terminal.app window so
- * the interactive inquirer prompts (browser selection, profile naming, etc.)
- * remain reachable. The macOS app cannot host inquirer directly without
- * reimplementing every prompt, so we delegate to the existing CLI flow —
- * the same one a user would run manually.
- */
-function launchGrantBrowserAccessInteractive(): { launched: boolean; error?: string } {
-  if (process.platform !== 'darwin') {
-    return {
-      launched: false,
-      error: 'Interactive browser-access setup is only wired for macOS in the Settings UI.',
-    };
-  }
-
-  const omnikeyCli = path.resolve(__dirname, '../dist/index.js');
-  const node = process.execPath;
-  if (!fs.existsSync(omnikeyCli)) {
-    return { launched: false, error: `omnikey CLI not found at ${omnikeyCli}` };
-  }
-
-  // Escape for embedding inside the AppleScript string literal.
-  const escapeForAppleScript = (s: string): string => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-
-  const command = `clear; "${escapeForAppleScript(node)}" "${escapeForAppleScript(omnikeyCli)}" grant-browser-access; echo; echo "[Press Enter to close]"; read`;
-  const appleScript = `tell application "Terminal"
-    activate
-    do script "${command.replace(/"/g, '\\"')}"
-end tell`;
-
-  try {
-    const child = spawn('/usr/bin/osascript', ['-e', appleScript], {
-      detached: true,
-      stdio: 'ignore',
-    });
-    child.unref();
-    return { launched: true };
-  } catch (err) {
-    return {
-      launched: false,
-      error: err instanceof Error ? err.message : String(err),
-    };
-  }
-}
-
-/**
  * Tears down a previously-configured browser debug profile: clears the
- * BROWSER_DEBUG_* keys from config.json, sets BROWSER_ACCESS_ENABLED=false,
+ * legacy BROWSER_* keys from config.json,
  * and unloads + deletes the macOS LaunchAgent the CLI created. The actual
  * debug profile directory under ~/.omnikey/browser-debug-profiles is kept
  * so re-enabling is fast and the user does not lose any signed-in state.
@@ -103,7 +54,9 @@ function disableBrowserAccess(cfg: Record<string, any>): void {
   delete cfg.BROWSER_DEBUG_BROWSER_NAME;
   delete cfg.BROWSER_DEBUG_EXECUTABLE;
   delete cfg.BROWSER_DEBUG_USER_DATA_DIR;
-  cfg.BROWSER_ACCESS_ENABLED = false;
+  delete cfg.BROWSER_ACCESS_ENABLED;
+  delete cfg.BROWSER_ACCESS_METHOD;
+  delete cfg.BROWSER_JAVASCRIPT_EVENT_BROWSERS;
   writeLocalConfigFile(cfg);
 
   if (process.platform !== 'darwin') return;
@@ -126,19 +79,22 @@ export function appSettingsRouter(): express.Router {
     const { logger: reqLogger } = res.locals;
     try {
       const settings = await getAgentSettings();
-      const debug = readBrowserDebugConfig();
       res.json({
         terminalAccess: settings.terminalAccess,
         webSearchEnabled: settings.webSearchEnabled,
-        browserAccessEnabled: settings.browserAccessEnabled || debug.browserAccessConfigured,
+        browserAccessEnabled: settings.browserAccessEnabled,
         usageRecordingEnabled: settings.usageRecordingEnabled,
-        browserDebugBrowserName: debug.browserDebugBrowserName ?? null,
-        browserDebugPort: debug.browserDebugPort ?? null,
+        browserAccessMethod: settings.browserAccessMethod,
+        browserDebugBrowserName: settings.browserDebugBrowserName,
+        browserDebugPort: settings.browserDebugPort,
+        browserDebugUserDataDir: settings.browserDebugUserDataDir,
+        browserJavascriptEventBrowsers: settings.browserJavascriptEventBrowsers,
         runtime: {
           terminalAccess: settings.terminalAccess,
           webSearchEnabled: settings.webSearchEnabled,
           usageRecordingEnabled: settings.usageRecordingEnabled,
-          browserAccessEnabled: settings.browserAccessEnabled || debug.browserAccessConfigured,
+          browserAccessEnabled: settings.browserAccessEnabled,
+          browserAccessMethod: settings.browserAccessMethod,
         },
         source: 'database',
       });
@@ -180,12 +136,10 @@ export function appSettingsRouter(): express.Router {
         patch.usageRecordingEnabled = parsed.usageRecordingEnabled;
       }
       const settings = await updateAgentSettings(patch);
-      const debug = readBrowserDebugConfig();
-
       res.json({
         terminalAccess: settings.terminalAccess,
         webSearchEnabled: settings.webSearchEnabled,
-        browserAccessEnabled: settings.browserAccessEnabled || debug.browserAccessConfigured,
+        browserAccessEnabled: settings.browserAccessEnabled,
         usageRecordingEnabled: settings.usageRecordingEnabled,
         restartScheduled: false,
         message: 'Settings updated.',
@@ -201,9 +155,8 @@ export function appSettingsRouter(): express.Router {
 
   /**
    * POST /api/app-settings/browser-access — toggle authenticated browser
-   * session reading. Enabling spawns the interactive CLI in a new Terminal
-   * window (the user finishes the setup there); disabling clears the saved
-   * debug profile config and unloads the LaunchAgent.
+   * session reading. Enabling requires the platform app's native setup form;
+   * disabling clears the saved config and unloads the LaunchAgent.
    *
    * Body: { enabled: boolean }
    */
@@ -215,31 +168,21 @@ export function appSettingsRouter(): express.Router {
       const cfg = readLocalConfigFile();
 
       if (enabled) {
-        // Mark intent in DB so the GET endpoint reflects "enabling" even
-        // before the user finishes the Terminal prompts. The CLI writes the
-        // debug profile fields to config.json on completion; the backend reads
-        // those dynamically, so no daemon restart is needed.
-        await updateAgentSettings({ browserAccessEnabled: true });
-
-        const launch = launchGrantBrowserAccessInteractive();
-        if (!launch.launched) {
-          await updateAgentSettings({ browserAccessEnabled: false });
-          return res.status(500).json({
-            error: launch.error || 'Failed to launch the interactive browser-access setup.',
-          });
-        }
-
-        res.json({
-          browserAccessEnabled: true,
-          launched: true,
-          message:
-            'Follow the prompts in the Terminal window to finish setting up authenticated browser access.',
-          restartScheduled: false,
+        return res.status(400).json({
+          error:
+            'Choose the browser access method, browser, and profile in the desktop app or run the parameterized CLI.',
         });
-        return;
       }
 
-      await updateAgentSettings({ browserAccessEnabled: false });
+      await updateAgentSettings({
+        browserAccessEnabled: false,
+        browserAccessMethod: null,
+        browserDebugPort: null,
+        browserDebugBrowserName: null,
+        browserDebugExecutable: null,
+        browserDebugUserDataDir: null,
+        browserJavascriptEventBrowsers: [],
+      });
       disableBrowserAccess(cfg);
       res.json({
         browserAccessEnabled: false,

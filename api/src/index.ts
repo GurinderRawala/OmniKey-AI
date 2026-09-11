@@ -113,8 +113,8 @@ app.get('/macos/appcast', (req, res) => {
 
   // These should match the values embedded into the macOS app
   // Info.plist in macOS/build_release_dmg.sh.
-  const bundleVersion = '56';
-  const shortVersion = '1.5.2';
+  const bundleVersion = '57';
+  const shortVersion = '1.6.0';
 
   const xml = `<?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0"
@@ -145,7 +145,7 @@ app.get('/macos/appcast', (req, res) => {
 // ── Windows distribution endpoints ───────────────────────────────────────────
 // These should match the values in windows/OmniKey.Windows.csproj
 // <Version> and windows/build_release_zip.ps1 $APP_VERSION.
-const WIN_VERSION = '1.20.1';
+const WIN_VERSION = '1.21.0';
 const WIN_ZIP_FILENAME = 'OmniKeyAI-windows-win-x64.zip';
 const WIN_ZIP_PATH = path.join(process.cwd(), 'windows', WIN_ZIP_FILENAME);
 

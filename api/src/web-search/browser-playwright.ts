@@ -1,14 +1,32 @@
 import axios from 'axios';
 import * as crypto from 'crypto';
-import { execSync } from 'child_process';
+import { execFileSync, execSync } from 'child_process';
 import { Browser, Page } from 'playwright-core';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import pw from 'playwright-core';
 import type { Logger } from 'winston';
-import { readBrowserDebugConfig } from '../agentSettingsStore';
+import type { AgentSettingsSnapshot } from '../agentSettingsStore';
 import { config } from '../config';
+
+type BrowserFetchSettings = Pick<
+  AgentSettingsSnapshot,
+  'browserAccessMethod' | 'browserDebugPort' | 'browserJavascriptEventBrowsers'
+>;
+
+/** Match the requested resource exactly while treating URL fragments as client-only state. */
+export function browserTabUrlMatches(requestedUrl: string, openTabUrl: string): boolean {
+  try {
+    const requested = new URL(requestedUrl);
+    const openTab = new URL(openTabUrl);
+    requested.hash = '';
+    openTab.hash = '';
+    return requested.href === openTab.href;
+  } catch {
+    return false;
+  }
+}
 
 // ─── Browser catalogue ────────────────────────────────────────────────────────
 
@@ -220,8 +238,6 @@ async function fetchWithCDP(
   workingPorts: number[],
   log: Logger,
 ): Promise<{ content: string; finalUrl: string } | null> {
-  const targetBase = url.split('?')[0]; // strip query for prefix match
-
   for (const port of workingPorts) {
     log.info('browser-playwright: CDP — debug endpoint found, connecting', { port });
 
@@ -234,7 +250,7 @@ async function fetchWithCDP(
       let matchedPage: Page | null = null;
       for (const context of cdpBrowser.contexts()) {
         for (const page of context.pages()) {
-          if (page.url().startsWith(targetBase)) {
+          if (browserTabUrlMatches(url, page.url())) {
             matchedPage = page;
             break;
           }
@@ -289,7 +305,11 @@ async function fetchWithCDP(
   return null;
 }
 
-async function getWorkingCdpPorts(browsersWithUrl: Set<string>, log: Logger): Promise<number[]> {
+async function getWorkingCdpPorts(
+  browsersWithUrl: Set<string>,
+  log: Logger,
+  configuredPort?: number | null,
+): Promise<number[]> {
   // Collect candidate ports:
   //   1. DevToolsActivePort file (written when Chrome was started with --remote-debugging-port)
   //   2. Well-known default ports developers commonly use
@@ -355,7 +375,6 @@ async function getWorkingCdpPorts(browsersWithUrl: Set<string>, log: Logger): Pr
     if (!candidatePorts.includes(p)) candidatePorts.push(p);
   }
 
-  const configuredPort = readBrowserDebugConfig().browserDebugPort;
   // User-configured port (set via `omnikey grant-browser-access`) gets tried first.
   if (configuredPort && !candidatePorts.includes(configuredPort)) {
     candidatePorts.unshift(configuredPort);
@@ -425,7 +444,7 @@ const BROWSER_APPLESCRIPT: Record<string, BrowserAppleScript> = {
  * Only browsers where AppleScript succeeds AND the hostname is found are included.
  * Browsers where AppleScript fails are silently skipped (not assumed to have it open).
  */
-function getBrowsersWithUrlOpen(url: string, log: Logger): Set<string> {
+function getBrowsersWithUrlOpen(url: string, log: Logger, allowedBrowsers?: string[]): Set<string> {
   const confirmed = new Set<string>();
 
   let targetHostname: string;
@@ -439,27 +458,37 @@ function getBrowsersWithUrlOpen(url: string, log: Logger): Set<string> {
   if (runningBrowsers.size === 0) return confirmed;
 
   for (const browserName of runningBrowsers) {
+    if (allowedBrowsers?.length && !allowedBrowsers.includes(browserName)) continue;
     const info = BROWSER_APPLESCRIPT[browserName];
     if (!info) continue;
 
     try {
-      const script = `tell application "${info.appName}" to get URL of every tab of every window`;
-      const output = execSync(`osascript -e '${script}'`, {
+      // Classic AppleScript can see only the active tab when multiple Chrome
+      // instances/profiles are running. JXA enumerates the complete collection,
+      // which is also the path used by the agent's JavaScript Events fallback.
+      const script = [
+        `const browser = Application(${JSON.stringify(info.appName)});`,
+        'JSON.stringify(browser.windows().flatMap(window =>',
+        '  window.tabs().map(tab => tab.url())',
+        '));',
+      ].join('\n');
+      const output = execFileSync('osascript', ['-l', 'JavaScript', '-e', script], {
         encoding: 'utf8',
         timeout: 5_000,
         stdio: ['pipe', 'pipe', 'pipe'],
       });
 
-      const found = output
-        .split(/[,\n]/)
-        .map((u) => u.trim())
-        .some((u) => {
-          try {
-            return new URL(u).hostname === targetHostname;
-          } catch {
-            return false;
-          }
-        });
+      const urls: unknown = JSON.parse(output);
+      const found = Array.isArray(urls)
+        ? urls.some((value) => {
+            if (typeof value !== 'string') return false;
+            try {
+              return new URL(value).hostname === targetHostname;
+            } catch {
+              return false;
+            }
+          })
+        : false;
 
       log.info('browser-playwright: tab check', { browser: browserName, targetHostname, found });
       if (found) confirmed.add(browserName);
@@ -478,14 +507,25 @@ function getBrowsersWithUrlOpen(url: string, log: Logger): Set<string> {
  * browser tab. On macOS this uses AppleScript; on Windows it queries the CDP
  * debug endpoint's /json tab list (requires --remote-debugging-port).
  */
-export async function isBrowserOpenWithUrl(url: string, log: Logger): Promise<boolean> {
-  if (process.platform === 'win32') {
-    return isBrowserOpenWithUrlWindows(url, log);
+export async function isBrowserOpenWithUrl(
+  url: string,
+  log: Logger,
+  settings: BrowserFetchSettings,
+): Promise<boolean> {
+  if (settings.browserAccessMethod === 'debug-profile') {
+    return isBrowserOpenWithUrlViaCdp(url, log, settings.browserDebugPort);
   }
-  return getBrowsersWithUrlOpen(url, log).size > 0;
+  if (settings.browserAccessMethod === 'javascript-events' && process.platform === 'darwin') {
+    return getBrowsersWithUrlOpen(url, log, settings.browserJavascriptEventBrowsers).size > 0;
+  }
+  return false;
 }
 
-async function isBrowserOpenWithUrlWindows(url: string, log: Logger): Promise<boolean> {
+async function isBrowserOpenWithUrlViaCdp(
+  url: string,
+  log: Logger,
+  configuredPort?: number | null,
+): Promise<boolean> {
   let targetHostname: string;
   try {
     targetHostname = new URL(url).hostname;
@@ -497,7 +537,6 @@ async function isBrowserOpenWithUrlWindows(url: string, log: Logger): Promise<bo
   if (getRunningBrowserNames().size === 0) return false;
 
   const candidatePorts: number[] = [];
-  const configuredPort = readBrowserDebugConfig().browserDebugPort;
   if (configuredPort) candidatePorts.push(configuredPort);
   for (const p of [9222, 9229, 9333]) {
     if (!candidatePorts.includes(p)) candidatePorts.push(p);
@@ -603,6 +642,67 @@ function findTabLocation(appName: string, url: string): { winIdx: number; tabIdx
   }
 }
 
+type JxaTabExtractionResult = {
+  found: boolean;
+  content: string;
+  windowIndex: number | null;
+  tabIndex: number | null;
+};
+
+/**
+ * Finds and reads a Chromium-family tab entirely through JXA. Keeping discovery
+ * and extraction on the same automation API matters when multiple Chrome
+ * instances or profiles are running: classic AppleScript may expose only one
+ * tab even though JXA exposes the complete set.
+ */
+function extractChromiumTabWithJxa(appName: string, url: string): JxaTabExtractionResult {
+  const targetUrl = url.split('#')[0];
+  const expression =
+    "String(document.body?.innerText || document.body?.textContent || '').slice(0, 500000)";
+  const script = [
+    `const browser = Application(${JSON.stringify(appName)});`,
+    `const targetUrl = ${JSON.stringify(targetUrl)};`,
+    `const expression = ${JSON.stringify(expression)};`,
+    'let result = { found: false, content: "", windowIndex: null, tabIndex: null };',
+    'outer: for (let windowIndex = 0; windowIndex < browser.windows().length; windowIndex++) {',
+    '  const browserWindow = browser.windows()[windowIndex];',
+    '  const tabs = browserWindow.tabs();',
+    '  for (let tabIndex = 0; tabIndex < tabs.length; tabIndex++) {',
+    '    const tab = tabs[tabIndex];',
+    '    if (String(tab.url() || "").split("#")[0] !== targetUrl) continue;',
+    '    const previousActiveTab = Number(browserWindow.activeTabIndex());',
+    '    try {',
+    '      browserWindow.activeTabIndex = tabIndex + 1;',
+    '      const content = tab.execute({ javascript: expression });',
+    '      result = { found: true, content: String(content || ""), windowIndex: windowIndex + 1, tabIndex: tabIndex + 1 };',
+    '    } finally {',
+    '      if (previousActiveTab > 0) browserWindow.activeTabIndex = previousActiveTab;',
+    '    }',
+    '    break outer;',
+    '  }',
+    '}',
+    'JSON.stringify(result);',
+  ].join('\n');
+
+  const output = execFileSync('osascript', ['-l', 'JavaScript', '-e', script], {
+    encoding: 'utf8',
+    timeout: 10_000,
+    maxBuffer: 5 * 1024 * 1024,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  const parsed: unknown = JSON.parse(output);
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error('JavaScript Events returned an invalid tab extraction result.');
+  }
+  const value = parsed as Partial<JxaTabExtractionResult>;
+  return {
+    found: value.found === true,
+    content: typeof value.content === 'string' ? value.content : '',
+    windowIndex: typeof value.windowIndex === 'number' ? value.windowIndex : null,
+    tabIndex: typeof value.tabIndex === 'number' ? value.tabIndex : null,
+  };
+}
+
 /**
  * Attempts to extract the rendered text of `url` directly from an open browser
  * tab using AppleScript JS execution. Only tries browsers confirmed to have the
@@ -619,6 +719,45 @@ async function fetchFromRunningBrowserTab(
     const info = BROWSER_APPLESCRIPT[browserName];
     if (!info) continue;
 
+    if (browserName !== 'Safari') {
+      try {
+        const result = extractChromiumTabWithJxa(info.appName, url);
+        if (!result.found) {
+          log.debug('browser-playwright: JXA tab location not found', {
+            browser: browserName,
+            url,
+          });
+          continue;
+        }
+
+        const content = result.content.trim();
+        log.info('browser-playwright: extracting content from live tab via JXA', {
+          browser: browserName,
+          windowIndex: result.windowIndex,
+          tabIndex: result.tabIndex,
+          url,
+          contentLength: content.length,
+        });
+        if (content.length > 100) return content;
+
+        log.warn('browser-playwright: JXA live-tab content was too short', {
+          browser: browserName,
+          url,
+          contentLength: content.length,
+        });
+      } catch (err) {
+        const lines = (err instanceof Error ? err.message : String(err)).split('\n');
+        const detail = lines.find((line) => line.trim()) ?? lines[0];
+        log.warn('browser-playwright: JXA live-tab extraction failed', {
+          browser: browserName,
+          url,
+          reason: detail.trim(),
+        });
+      }
+      continue;
+    }
+
+    // Safari retains its native AppleScript `do JavaScript` implementation.
     const location = findTabLocation(info.appName, url);
     if (!location) {
       log.debug('browser-playwright: tab location not found', { browser: browserName, url });
@@ -642,21 +781,11 @@ async function fetchFromRunningBrowserTab(
     // with "Allow JavaScript from Apple Events" enabled. We must set the active
     // tab index first, then use the `tell tab` block form (not the `in tab` form)
     // which is more reliably dispatched by Chrome's Apple Event handler.
-    const extractJsScript =
-      browserName === 'Safari'
-        ? [
-            `tell application "${info.appName}"`,
-            `  ${info.jsVerb} "document.body.innerText || document.body.textContent || ''" in tab ${tabIdx} of window ${winIdx}`,
-            `end tell`,
-          ].join('\n')
-        : [
-            `tell application "${info.appName}"`,
-            `  set active tab index of window ${winIdx} to ${tabIdx}`,
-            `  tell tab ${tabIdx} of window ${winIdx}`,
-            `    execute javascript "document.body.innerText || document.body.textContent || ''"`,
-            `  end tell`,
-            `end tell`,
-          ].join('\n');
+    const extractJsScript = [
+      `tell application "${info.appName}"`,
+      `  ${info.jsVerb} "document.body.innerText || document.body.textContent || ''" in tab ${tabIdx} of window ${winIdx}`,
+      `end tell`,
+    ].join('\n');
 
     try {
       const content = runAppleScript(extractJsScript, 10_000).trim();
@@ -689,22 +818,8 @@ async function fetchFromRunningBrowserTab(
     }
 
     // ── Attempt B: get source of tab (Safari only) ───────────────────────────
-    // Chrome-family does NOT expose a `source` property on tab objects via
-    // AppleScript — the only content-extraction path is `execute javascript`
-    // (Attempt A), which requires "Allow JavaScript from Apple Events".
     // Safari exposes `source` on `document` objects (not `tab`), so we compute
     // the global document index by counting tabs across all windows in order.
-    if (browserName !== 'Safari') {
-      log.info(
-        'browser-playwright: live tab JS execution failed — ensure "Allow JavaScript from Apple Events" is enabled (Chrome: View → Developer → Allow JavaScript from Apple Events) and restart Chrome after enabling it',
-        {
-          browser: browserName,
-          url,
-        },
-      );
-      continue;
-    }
-
     const getSourceScript = [
       `tell application "${info.appName}"`,
       `  set docIdx to 0`,
@@ -762,29 +877,39 @@ async function fetchFromRunningBrowserTab(
 /**
  * Fetches a URL using the user's browser session.
  *
- * Strategies:
- *  -1. CDP via --remote-debugging-port — macOS + Windows; requires Chrome to be
- *      started with --remote-debugging-port=9222.
- *   0. Live-tab AppleScript extraction — macOS only.
+ * Uses exactly the strategy selected in the DB-backed Agent Access settings:
+ * CDP for a debug profile, or JavaScript Events for a live macOS tab.
  */
-export async function fetchWithPlaywright(url: string, log: Logger): Promise<string | null> {
-  const browsersWithUrl = getBrowsersWithUrlOpen(url, log);
+export async function fetchWithPlaywright(
+  url: string,
+  log: Logger,
+  settings: BrowserFetchSettings,
+): Promise<string | null> {
+  if (settings.browserAccessMethod === 'debug-profile') {
+    const cdpResult = await fetchWithCDP(
+      url,
+      await getWorkingCdpPorts(new Set(), log, settings.browserDebugPort),
+      log,
+    );
+    if (cdpResult) return cdpResult.content;
+    log.warn('browser-playwright: configured debug-profile fetch failed', { url });
+    return null;
+  }
+
+  if (settings.browserAccessMethod !== 'javascript-events' || process.platform !== 'darwin') {
+    return null;
+  }
+
+  const browsersWithUrl = getBrowsersWithUrlOpen(url, log, settings.browserJavascriptEventBrowsers);
 
   log.info('browser-playwright: browsers with URL open', {
     url,
     browsers: [...browsersWithUrl],
   });
 
-  const workingPorts = await getWorkingCdpPorts(browsersWithUrl, log);
-  const cdpResult = await fetchWithCDP(url, workingPorts, log);
-  if (cdpResult) return cdpResult.content;
-
   const liveContent = await fetchFromRunningBrowserTab(url, browsersWithUrl, log);
   if (liveContent) return liveContent;
 
-  log.warn(
-    'browser-playwright: all strategies exhausted — on Windows, launch Chrome with --remote-debugging-port=9222',
-    { url },
-  );
+  log.warn('browser-playwright: JavaScript Events live-tab extraction failed', { url });
   return null;
 }

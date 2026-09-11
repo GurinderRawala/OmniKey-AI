@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { config } from '../config';
 import { logger } from '../logger';
-import { fetchWithPlaywright, isBrowserOpenWithUrl } from './browser-playwright';
+import { fetchWithPlaywright } from './browser-playwright';
 import { isPageAuthenticated } from './llm-auth-check';
 import type { AITool } from '../ai-client';
 import { getAgentSettings } from '../agentSettingsStore';
@@ -187,6 +187,7 @@ async function fetchPlainHttp(
   url: string,
   log: typeof logger,
   browserSessionEnabled: boolean,
+  settings: Awaited<ReturnType<typeof getAgentSettings>>,
 ): Promise<{ html: string | null; authBlocked: boolean; finalUrl: string }> {
   try {
     const response = await axios.get<string>(url, {
@@ -205,11 +206,11 @@ async function fetchPlainHttp(
       status,
     });
 
-    // If a browser is running, any failure could be auth-related —
-    // sites use redirects, 302s, custom error pages, or soft-blocks
-    // rather than a clean 401/403, so checking status codes alone is
-    // unreliable. Fall through to the browser-session path instead.
-    if (browserSessionEnabled && (await isBrowserOpenWithUrl(url, log))) {
+    // Any failed plain request may be an authentication disguise (private
+    // GitHub resources commonly return 404). If authenticated browser access
+    // is configured, always let the selected DB-backed browser strategy try
+    // the URL. That strategy performs its own live-tab/CDP validation.
+    if (browserSessionEnabled) {
       return { html: null, authBlocked: true, finalUrl: url };
     }
     if (status === 401 || status === 403) {
@@ -233,19 +234,29 @@ async function checkPlainResponseAuth(
   return authenticated;
 }
 
-// ── Step 3: active-tab extraction (self-hosted macOS only) ───────────────────
-async function fetchFromActiveTab(url: string, log: typeof logger): Promise<string | null> {
+// ── Step 3: DB-selected authenticated live-tab extraction ───────────────────
+async function fetchFromActiveTab(
+  url: string,
+  log: typeof logger,
+  settings: Awaited<ReturnType<typeof getAgentSettings>>,
+): Promise<string | null> {
   log.info('web_fetch: falling back to active-tab extraction', { url });
-  return fetchWithPlaywright(url, log);
+  return fetchWithPlaywright(url, log, settings);
 }
 
 async function executeWebFetch(url: string, log: typeof logger): Promise<string> {
   log.info('Executing web_fetch tool', { url });
   const settings = await getAgentSettings();
-  const browserSessionEnabled = config.isSelfHosted && settings.browserAccessEnabled;
+  const browserSessionEnabled =
+    config.isSelfHosted && settings.browserAccessEnabled && settings.browserAccessMethod !== null;
 
   // ── Step 1: plain HTTP request ────────────────────────────────────────────
-  const { html, authBlocked, finalUrl } = await fetchPlainHttp(url, log, browserSessionEnabled);
+  const { html, authBlocked, finalUrl } = await fetchPlainHttp(
+    url,
+    log,
+    browserSessionEnabled,
+    settings,
+  );
 
   const plainText = html ? stripHtml(html) : '';
 
@@ -277,7 +288,7 @@ async function executeWebFetch(url: string, log: typeof logger): Promise<string>
       'web_fetch: evidence of authentication requirement, attempting active-tab extraction',
       { url },
     );
-    const activeTabText = await fetchFromActiveTab(url, log);
+    const activeTabText = await fetchFromActiveTab(url, log, settings);
     if (activeTabText) {
       return activeTabText.slice(0, MAX_TOOL_CONTENT_CHARS);
     }
@@ -297,6 +308,9 @@ async function executeWebFetch(url: string, log: typeof logger): Promise<string>
           'OmniKey will then read the authenticated tab directly.',
       );
     }
+  }
+  if (needsAuth) {
+    return 'Error fetching URL: authenticated browser access returned no content';
   }
   return plainText.slice(0, MAX_TOOL_CONTENT_CHARS) || 'No content retrieved';
 }

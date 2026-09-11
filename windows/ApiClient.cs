@@ -102,6 +102,9 @@ namespace OmniKey.Windows
 
         public string? BrowserDebugBrowserName { get; set; }
         public int? BrowserDebugPort { get; set; }
+        public string? BrowserDebugUserDataDir { get; set; }
+        public string? BrowserAccessMethod { get; set; }
+        public List<string> BrowserJavascriptEventBrowsers { get; set; } = new();
 
         /// <summary>Where the daemon read these values from. The backend now
         /// reports "database"; older builds reported the config file. Surfaced

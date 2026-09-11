@@ -555,38 +555,71 @@
                         Padding="18,16"
                         Background="{StaticResource Nord.PanelBackgroundBrush}"
                         CornerRadius="14">
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <StackPanel Grid.Column="0" Margin="0,0,12,0">
-                                <TextBlock
-                                    FontFamily="{StaticResource OK.FontFamily}"
-                                    FontSize="{StaticResource OK.Font.Headline}"
-                                    FontWeight="SemiBold"
-                                    Foreground="{StaticResource Nord.PrimaryTextBrush}"
-                                    Text="Authenticated browser access" />
-                                <TextBlock
-                                    Margin="0,4,0,0"
-                                    FontFamily="{StaticResource OK.FontFamily}"
-                                    FontSize="{StaticResource OK.Font.Caption}"
-                                    Foreground="{StaticResource Nord.SecondaryTextBrush}"
-                                    Text="Let the agent read pages from a signed-in browser session."
-                                    TextWrapping="Wrap" />
-                                <TextBlock
-                                    Margin="0,6,0,0"
-                                    FontFamily="{StaticResource OK.FontFamily}"
-                                    FontSize="{StaticResource OK.Font.CaptionSmall}"
-                                    Foreground="{StaticResource Nord.AccentBlueBrush}"
-                                    Text="{Binding BrowserAccessSummary}"
-                                    TextWrapping="Wrap" />
-                            </StackPanel>
-                            <ui:ToggleSwitch
-                                Grid.Column="1"
-                                VerticalAlignment="Center"
-                                IsChecked="{Binding PendingBrowserAccessEnabled, Mode=TwoWay}" />
-                        </Grid>
+                        <StackPanel>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                                    <TextBlock
+                                        FontFamily="{StaticResource OK.FontFamily}"
+                                        FontSize="{StaticResource OK.Font.Headline}"
+                                        FontWeight="SemiBold"
+                                        Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                                        Text="Authenticated browser access" />
+                                    <TextBlock
+                                        Margin="0,4,0,0"
+                                        FontFamily="{StaticResource OK.FontFamily}"
+                                        FontSize="{StaticResource OK.Font.Caption}"
+                                        Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                                        Text="Let the agent read pages from a signed-in browser session."
+                                        TextWrapping="Wrap" />
+                                    <TextBlock
+                                        Margin="0,6,0,0"
+                                        FontFamily="{StaticResource OK.FontFamily}"
+                                        FontSize="{StaticResource OK.Font.CaptionSmall}"
+                                        Foreground="{StaticResource Nord.AccentBlueBrush}"
+                                        Text="{Binding BrowserAccessSummary}"
+                                        TextWrapping="Wrap" />
+                                </StackPanel>
+                                <ui:ToggleSwitch
+                                    Grid.Column="1"
+                                    VerticalAlignment="Center"
+                                    IsChecked="{Binding PendingBrowserAccessEnabled, Mode=TwoWay}" />
+                            </Grid>
+                            <Grid Margin="0,14,0,0" IsEnabled="{Binding PendingBrowserAccessEnabled}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="12" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="12" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0">
+                                    <TextBlock Margin="0,0,0,5" Text="Access method" />
+                                    <ComboBox
+                                        ItemsSource="{Binding BrowserAccessMethodOptions}"
+                                        SelectedItem="{Binding SelectedBrowserAccessMethod, Mode=TwoWay}" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="2">
+                                    <TextBlock Margin="0,0,0,5" Text="Browser" />
+                                    <ComboBox
+                                        ItemsSource="{Binding InstalledBrowserOptions}"
+                                        SelectedItem="{Binding SelectedBrowserName, Mode=TwoWay}" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="4">
+                                    <TextBlock Margin="0,0,0,5" Text="Debug profile name" />
+                                    <TextBox Text="{Binding BrowserProfileName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                </StackPanel>
+                            </Grid>
+                            <TextBlock
+                                Margin="0,10,0,0"
+                                FontSize="{StaticResource OK.Font.CaptionSmall}"
+                                Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                                Text="Windows uses a Chromium debug profile. The selected browser closes and reopens while setup runs hidden in your signed-in user profile; the daemon is not restarted."
+                                TextWrapping="Wrap" />
+                        </StackPanel>
                     </Border>
 
                     <ui:Button

@@ -26,7 +26,7 @@ const program = new Command();
 program
   .name('omnikey')
   .description('Omnikey CLI for onboarding and configuration')
-  .version('1.6.25', '-v, --version', 'output the current version');
+  .version('1.6.26', '-v, --version', 'output the current version');
 
 program
   .command('onboard')
@@ -116,8 +116,30 @@ program
       'Detects installed browsers, selects a profile, and configures a remote debugging port (CDP). ' +
       'On macOS you can also choose AppleScript mode instead.',
   )
-  .action(async () => {
-    await grantBrowserAccess();
+  .option('--method <method>', 'Access method: debug-profile or javascript-events')
+  .option('--browser <browser>', 'Browser for debug-profile mode')
+  .option('--profile <profile>', 'OmniKey debug profile name', 'default')
+  .option('--browsers <browsers>', 'Comma-separated browsers for JavaScript Events mode')
+  .option('--non-interactive', 'Require all setup choices as command options')
+  .action(async (options) => {
+    try {
+      await grantBrowserAccess({
+        method: options.method,
+        browser: options.browser,
+        profile: options.profile,
+        browsers:
+          typeof options.browsers === 'string'
+            ? options.browsers
+                .split(',')
+                .map((value: string) => value.trim())
+                .filter(Boolean)
+            : undefined,
+        nonInteractive: Boolean(options.nonInteractive),
+      });
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exitCode = 1;
+    }
   });
 
 program

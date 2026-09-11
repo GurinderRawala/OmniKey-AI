@@ -1,6 +1,7 @@
 using System;
 using System.Collections.ObjectModel;
 using System.Linq;
+using System.IO;
 using System.Threading.Tasks;
 using System.Windows.Media;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -147,7 +148,7 @@ namespace OmniKey.Windows.ViewModels
         [ObservableProperty] private string openAiModelInput = string.Empty;
 
         // Agent-access state ---------------------------------------------------
-        // The loaded values reflect what's currently persisted in config.json.
+        // The loaded values reflect what's currently persisted in SQLite.
         // The Pending* mirrors are what the user has tweaked in the UI but not
         // yet saved. We compare the two to decide whether Save is enabled and
         // which sub-API calls to make.
@@ -161,6 +162,16 @@ namespace OmniKey.Windows.ViewModels
         [ObservableProperty] private bool pendingWebSearchEnabled;
         [ObservableProperty] private bool pendingBrowserAccessEnabled;
         [ObservableProperty] private bool pendingUsageRecordingEnabled;
+        [ObservableProperty] private string selectedBrowserAccessMethod = "Debug profile";
+        [ObservableProperty] private string selectedBrowserName = BrowserAccessSetup.InstalledBrowsers.FirstOrDefault() ?? "";
+        [ObservableProperty] private string browserProfileName = "default";
+        private string loadedBrowserName = string.Empty;
+        private string loadedBrowserProfileName = "default";
+
+        public System.Collections.Generic.IReadOnlyList<string> BrowserAccessMethodOptions { get; } =
+            new[] { "Debug profile" };
+        public System.Collections.Generic.IReadOnlyList<string> InstalledBrowserOptions =>
+            BrowserAccessSetup.InstalledBrowsers;
 
         /// <summary>Where the daemon loaded these settings from. The backend
         /// now serves them out of the <c>agent_settings</c> table instead of
@@ -208,6 +219,9 @@ namespace OmniKey.Windows.ViewModels
             PendingTerminalAccess != TerminalAccess
             || PendingWebSearchEnabled != WebSearchEnabled
             || PendingBrowserAccessEnabled != BrowserAccessEnabled
+            || (PendingBrowserAccessEnabled
+                && (!string.Equals(SelectedBrowserName, loadedBrowserName, StringComparison.OrdinalIgnoreCase)
+                    || !string.Equals(BrowserProfileName.Trim(), loadedBrowserProfileName, StringComparison.Ordinal)))
             || PendingUsageRecordingEnabled != UsageRecordingEnabled;
 
         public bool CanSaveAgentAccess => !IsBusy && AgentAccessDirty;
@@ -289,6 +303,8 @@ namespace OmniKey.Windows.ViewModels
         partial void OnPendingWebSearchEnabledChanged(bool value) => RefreshAgentAccessDirty();
         partial void OnPendingBrowserAccessEnabledChanged(bool value) => RefreshAgentAccessDirty();
         partial void OnPendingUsageRecordingEnabledChanged(bool value) => RefreshAgentAccessDirty();
+        partial void OnSelectedBrowserNameChanged(string value) => RefreshAgentAccessDirty();
+        partial void OnBrowserProfileNameChanged(string value) => RefreshAgentAccessDirty();
 
         private void RefreshAgentAccessDirty()
         {
@@ -348,13 +364,26 @@ namespace OmniKey.Windows.ViewModels
                 PendingWebSearchEnabled = WebSearchEnabled;
                 PendingBrowserAccessEnabled = BrowserAccessEnabled;
                 PendingUsageRecordingEnabled = UsageRecordingEnabled;
+                if (!string.IsNullOrWhiteSpace(settings.BrowserDebugBrowserName)
+                    && InstalledBrowserOptions.Contains(settings.BrowserDebugBrowserName, StringComparer.OrdinalIgnoreCase))
+                {
+                    SelectedBrowserName = settings.BrowserDebugBrowserName;
+                }
+                BrowserProfileName = BrowserProfileLabel(settings.BrowserDebugUserDataDir, SelectedBrowserName);
+                loadedBrowserName = SelectedBrowserName;
+                loadedBrowserProfileName = BrowserProfileName;
+                RefreshAgentAccessDirty();
                 // The backend reports "database" now that agent_settings backs
                 // these values; older daemons omit the field entirely.
                 SettingsSourceSummary = string.Equals(settings.Source, "database", StringComparison.OrdinalIgnoreCase)
                     ? "Stored in the agent database — changes apply on the next agent turn, no restart needed."
                     : "Stored by the agent daemon — update the daemon to get database-backed settings.";
                 BrowserAccessSummary = settings.BrowserAccessEnabled
-                    ? $"Configured: {settings.BrowserDebugBrowserName ?? "browser"}" + (settings.BrowserDebugPort is int port ? $" • port {port}" : string.Empty)
+                    ? settings.BrowserAccessMethod == "javascript-events"
+                        ? "JavaScript Events: " + (settings.BrowserJavascriptEventBrowsers.Count > 0
+                            ? string.Join(", ", settings.BrowserJavascriptEventBrowsers)
+                            : "configured browser")
+                        : $"Debug profile: {settings.BrowserDebugBrowserName ?? "browser"}" + (settings.BrowserDebugPort is int port ? $" • port {port}" : string.Empty)
                     : "Disabled";
                 SetStatus("Settings loaded.", StatusKind.Positive);
             }, "Failed to load settings");
@@ -439,23 +468,16 @@ namespace OmniKey.Windows.ViewModels
                     SetStatus(result.Message ?? "Agent access updated.", StatusKind.Positive);
                 }
 
-                bool launchingBrowserWizard = false;
-                if (PendingBrowserAccessEnabled != BrowserAccessEnabled)
+                bool browserConfigurationChanged = PendingBrowserAccessEnabled
+                    && (!string.Equals(SelectedBrowserName, loadedBrowserName, StringComparison.OrdinalIgnoreCase)
+                        || !string.Equals(BrowserProfileName.Trim(), loadedBrowserProfileName, StringComparison.Ordinal));
+                if (PendingBrowserAccessEnabled != BrowserAccessEnabled || browserConfigurationChanged)
                 {
                     if (PendingBrowserAccessEnabled)
                     {
-                        // Enable: the Windows daemon runs as a session-0 service
-                        // and can't surface the interactive wizard, so the app
-                        // launches `omnikey grant-browser-access` in a console in
-                        // the user's session. The CLI writes the browser config
-                        // and restarts the daemon when the user finishes, so we
-                        // don't call the backend here.
-                        BrowserAccessSetup.LaunchInteractiveSetup();
-                        launchingBrowserWizard = true;
-                        SetStatus(
-                            "Follow the prompts in the terminal window to finish browser setup. " +
-                            "It applies automatically when you're done.",
-                            StatusKind.Positive);
+                        SetStatus("Configuring browser access in the background…", StatusKind.Neutral);
+                        await BrowserAccessSetup.RunInBackgroundAsync(SelectedBrowserName, BrowserProfileName);
+                        SetStatus("Authenticated browser access enabled.", StatusKind.Positive);
                     }
                     else
                     {
@@ -465,18 +487,19 @@ namespace OmniKey.Windows.ViewModels
                 }
 
                 await LoadAsync();
-
-                // The wizard runs out-of-process and hasn't written its config
-                // yet, so the reload above would have reset the toggle to off.
-                // Keep it visually on (and non-dirty) until the user finishes;
-                // a later reload reflects the real state once setup completes.
-                if (launchingBrowserWizard)
-                {
-                    BrowserAccessEnabled = true;
-                    PendingBrowserAccessEnabled = true;
-                    BrowserAccessSummary = "Setup in progress — finish the prompts in the terminal window.";
-                }
             }, "Failed to save agent access");
+        }
+
+        private static string BrowserProfileLabel(string? userDataDir, string browserName)
+        {
+            if (string.IsNullOrWhiteSpace(userDataDir)) return "default";
+            string directoryName = Path.GetFileName(userDataDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            string prefix = new string(browserName.ToLowerInvariant()
+                .Select(character => char.IsLetterOrDigit(character) ? character : '-')
+                .ToArray()).Trim('-') + "-";
+            return directoryName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+                ? directoryName.Substring(prefix.Length)
+                : directoryName;
         }
 
         private async Task RunAsync(Func<Task> action, string errorPrefix)
