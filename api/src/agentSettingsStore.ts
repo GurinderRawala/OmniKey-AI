@@ -52,6 +52,7 @@ export type AgentModelField = 'openaiModel' | 'anthropicModel' | 'geminiModel' |
 export const AGENT_MODEL_OPTIONS: Record<AIProvider, AgentModelOption[]> = {
   openai: [
     { id: 'gpt-5.6', label: 'GPT 5.6' },
+    { id: 'gpt-6-astra', label: 'GPT 6 Astra' },
     { id: 'gpt-5.5', label: 'GPT 5.5' },
     { id: 'gpt-5.1', label: 'GPT 5.1' },
     { id: 'gpt-4.1', label: 'GPT 4.1' },

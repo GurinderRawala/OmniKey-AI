@@ -30,7 +30,9 @@ describe('modelSupportsTemperature', () => {
       ['gpt-5.5', false],
       ['gpt-5.6', false],
       ['GPT-5.5', false], // case-insensitive
-    ])('rejects temperature for GPT-5 family member %s', (model, expected) => {
+      ['gpt-6-astra', false],
+      ['GPT-6-ASTRA', false], // case-insensitive
+    ])('rejects temperature for OpenAI reasoning model %s', (model, expected) => {
       expect(modelSupportsTemperature(model)).toBe(expected);
     });
 
@@ -53,6 +55,16 @@ describe('modelSupportsTemperature', () => {
       ['gemini-3.5-flash', true],
     ])('allows temperature for %s', (model, expected) => {
       expect(modelSupportsTemperature(model)).toBe(expected);
+    });
+  });
+
+  describe('Nemotron', () => {
+    it.each([
+      'nvidia/nemotron-3-nano-30b-a3b',
+      'nvidia/nemotron-3-super-120b-a12b',
+      'nvidia/nemotron-3-ultra-550b-a55b',
+    ])('allows temperature for %s', (model) => {
+      expect(modelSupportsTemperature(model)).toBe(true);
     });
   });
 
@@ -80,6 +92,15 @@ describe('modelSupportsTemperature', () => {
     ])('rejects temperature for adaptive-thinking Claude variant %s', (model, expected) => {
       expect(modelSupportsTemperature(model)).toBe(expected);
     });
+  });
+
+  it.each([
+    'unknown-model',
+    'gpt-7-future',
+    'gemini-future-pro',
+    'claude-future-model',
+  ])('defaults unknown model %s to no temperature support', (model) => {
+    expect(modelSupportsTemperature(model)).toBe(false);
   });
 });
 
@@ -137,6 +158,7 @@ describe('getContextWindowSize', () => {
     // The window is resolved from each provider's active smart-tier model.
     expect(getContextWindowSize('openai', 'gpt-5.5')).toBe(1_000_000);
     expect(getContextWindowSize('openai', 'gpt-5.6')).toBe(1_000_000);
+    expect(getContextWindowSize('openai', 'gpt-6-astra')).toBe(1_050_000);
     expect(getContextWindowSize('anthropic', 'claude-opus-4-5')).toBe(1_000_000);
     expect(getContextWindowSize('anthropic', 'claude-opus-4-7')).toBe(1_000_000);
     expect(getContextWindowSize('anthropic', 'claude-opus-5')).toBe(1_000_000);
@@ -172,7 +194,7 @@ describe('getContextWindowSize', () => {
 });
 
 describe('modelUsesOpenAIResponsesApi', () => {
-  it('routes GPT-5 family models through Responses API', () => {
+  it('routes supported and future OpenAI models through Responses API', () => {
     expect(modelUsesOpenAIResponsesApi('gpt-5')).toBe(true);
     expect(modelUsesOpenAIResponsesApi('gpt-5-mini')).toBe(true);
     expect(modelUsesOpenAIResponsesApi('gpt-5.1')).toBe(true);
@@ -180,13 +202,23 @@ describe('modelUsesOpenAIResponsesApi', () => {
     expect(modelUsesOpenAIResponsesApi('gpt-5.5')).toBe(true);
     expect(modelUsesOpenAIResponsesApi('gpt-5.6')).toBe(true);
     expect(modelUsesOpenAIResponsesApi('GPT-5.7')).toBe(true);
+    expect(modelUsesOpenAIResponsesApi('gpt-6-astra')).toBe(true);
+    expect(modelUsesOpenAIResponsesApi('GPT-6-ASTRA')).toBe(true);
+    expect(modelUsesOpenAIResponsesApi('gpt-4o-mini')).toBe(true);
+    expect(modelUsesOpenAIResponsesApi('gpt-4.1')).toBe(true);
+    expect(modelUsesOpenAIResponsesApi('o3-mini')).toBe(true);
+    expect(modelUsesOpenAIResponsesApi('gpt-7-future')).toBe(true);
+    expect(modelUsesOpenAIResponsesApi('future-openai-model')).toBe(true);
   });
 
-  it('keeps legacy and non-GPT models on the chat-completions path', () => {
-    expect(modelUsesOpenAIResponsesApi('gpt-4o-mini')).toBe(false);
-    expect(modelUsesOpenAIResponsesApi('gpt-4.1')).toBe(false);
+  it('keeps only known Responses-incompatible GPT models on Chat Completions', () => {
     expect(modelUsesOpenAIResponsesApi('gpt-3.5-turbo')).toBe(false);
-    expect(modelUsesOpenAIResponsesApi('o3-mini')).toBe(false);
+    expect(modelUsesOpenAIResponsesApi('gpt-4')).toBe(false);
+    expect(modelUsesOpenAIResponsesApi('gpt-4-0613')).toBe(false);
+    expect(modelUsesOpenAIResponsesApi('gpt-4-32k')).toBe(false);
+    expect(modelUsesOpenAIResponsesApi('gpt-4-turbo')).toBe(false);
+    expect(modelUsesOpenAIResponsesApi('gpt-4-turbo-2024-04-09')).toBe(false);
+    expect(modelUsesOpenAIResponsesApi('gpt-4-vision-preview')).toBe(false);
   });
 });
 

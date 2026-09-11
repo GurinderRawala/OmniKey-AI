@@ -128,33 +128,34 @@ export function getFixedHelperModel(provider: AIProvider): string {
 }
 
 /**
- * Returns whether a given model accepts the `temperature` parameter.
+ * Returns whether a given model is known to accept the `temperature` parameter.
  *
- * Provider-specific rules (validated against published API docs and SDKs as
- * of late 2025 / early 2026):
- *  - OpenAI GPT-5 family (`gpt-5`, `gpt-5-mini`, `gpt-5.1`, …): NOT supported.
- *    The API only accepts the default value (1) and returns
- *    `unsupported_value: 'temperature'` for anything else.
- *  - OpenAI o-series reasoning models (`o1`, `o3`, `o4-mini`, …): NOT
- *    supported for the same reason.
- *  - OpenAI GPT-4 / GPT-4o / GPT-3.5: supported.
- *  - Google Gemini (2.x and 3.x families): supported via `generationConfig`.
- *  - Anthropic Claude: older Sonnet/Haiku/Opus 4.x models generally support
- *    temperature, while Claude 5 models and newer adaptive-thinking models
- *    reject non-default sampling parameters.
+ * This is intentionally an allowlist. Unknown and future models return false so
+ * callers do not send an optional sampling parameter that the API may reject.
  */
 export function modelSupportsTemperature(model: string): boolean {
-  // OpenAI GPT-5 family (gpt-5, gpt-5-mini, gpt-5.1, gpt-5.5, …) only
-  // accepts the default temperature (1) — anything else is rejected with
-  // `unsupported_value: 'temperature'`.
-  if (/^gpt-5(\b|[.\-])/i.test(model)) return false;
-  // OpenAI o-series reasoning models (o1, o3, o4-mini, …) likewise drop the
-  // `temperature` knob.
-  if (/^o[134](\b|[-_])/i.test(model)) return false;
-  if (/^claude-(opus|fable|sonnet)-5(\b|[-_])/i.test(model)) return false;
-  if (/^claude-opus-4-[78](\b|[-_])/i.test(model)) return false;
-  if (/^claude-sonnet-4-6(\b|[-_])/i.test(model)) return false;
-  return true;
+  // OpenAI non-reasoning chat models.
+  if (/^gpt-(?:3\.5|4o|4\.1)(?:$|[._-])/i.test(model)) return true;
+  if (
+    /^gpt-4(?:$|-(?:turbo|32k|0314|0613|1106-preview|0125-preview|vision-preview)(?:$|[._-]))/i.test(
+      model,
+    )
+  ) {
+    return true;
+  }
+
+  // Gemini generations currently used or selectable by this application.
+  if (/^gemini-(?:1\.5|2(?:\.\d+)?|3(?:\.\d+)?)(?:$|[-_])/i.test(model)) return true;
+
+  // NVIDIA Nemotron models exposed through the OpenAI-compatible provider.
+  if (/^(?:nvidia\/)?nemotron(?:$|[\/_-])/i.test(model)) return true;
+
+  // Anthropic models without adaptive thinking enabled.
+  if (/^claude-3(?:$|[-_])/i.test(model)) return true;
+  if (/^claude-(?:haiku|sonnet)-4-5(?:$|[-_])/i.test(model)) return true;
+  if (/^claude-opus-4-[56](?:$|[-_])/i.test(model)) return true;
+
+  return false;
 }
 
 /**
@@ -166,6 +167,7 @@ export function modelSupportsTemperature(model: string): boolean {
  * the length-based trimming never fires and the provider rejects the turn with
  * a context-length error instead. Numbers verified against provider docs
  * (July 2026):
+ *   - GPT-6 Astra:                1,050,000 tok
  *   - GPT-5.6 / GPT-5.5 / GPT-5.4: ~1,000,000 tok API window (400K in Codex)
  *   - GPT-5 / 5.1 (base):         400,000 tok (272K input cap historically)
  *   - GPT-4.1:                    1,000,000 tok
@@ -183,6 +185,7 @@ function contextWindowForModel(model: string, provider: AIProvider): number {
   const m = model.toLowerCase();
 
   // OpenAI
+  if (/^gpt-6-astra(?:$|[._-])/.test(m)) return 1_050_000;
   if (/^gpt-5\.[456]/.test(m)) return 1_000_000;
   if (/^gpt-5(\b|[.\-])/.test(m)) return 400_000;
   if (/^gpt-4\.1/.test(m)) return 1_000_000;
@@ -610,13 +613,18 @@ class AnthropicAdapter {
 // ---------------------------------------------------------------------------
 
 /**
- * Current GPT-5 family models should be routed through OpenAI's Responses API
- * rather than Chat Completions so they can use the newer reasoning/tool-calling
- * semantics. Keeping GPT-5.1 on the older chat path can leave the agent stuck
- * producing reasoning text without a final answer/tool call.
+ * Responses is the default for OpenAI models so newly released models inherit
+ * the current API path without requiring another allowlist update. Only legacy
+ * GPT families that are known to require Chat Completions stay on that adapter.
  */
 export function modelUsesOpenAIResponsesApi(model: string): boolean {
-  return /^gpt-5(?:$|[._-])/i.test(model);
+  const requiresChatCompletions =
+    /^gpt-3\.5(?:$|[._-])/i.test(model) ||
+    /^gpt-4(?:$|-(?:turbo|32k|0314|0613|1106-preview|0125-preview|vision-preview)(?:$|[._-]))/i.test(
+      model,
+    );
+
+  return !requiresChatCompletions;
 }
 
 /**
