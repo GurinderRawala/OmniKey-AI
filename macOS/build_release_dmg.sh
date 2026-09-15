@@ -29,7 +29,6 @@ err()  { echo "[ERROR] $*" >&2; }
 
 # Derived paths
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BUILD_DIR="${SCRIPT_DIR}/.build/release"
 APP_BUNDLE="${SCRIPT_DIR}/${APP_NAME}.app"
 DMG_PATH="${SCRIPT_DIR}/${APP_NAME}.dmg"
 APP_ZIP="${SCRIPT_DIR}/${APP_NAME}.zip"
@@ -63,16 +62,29 @@ fi
 
 info "Using asset catalog at: ${ASSET_CATALOG}"
 
-# 1. Build release binary with SwiftPM
-info "Building release binary with SwiftPM..."
+# 1. Build a universal release binary with SwiftPM. Both the app executable
+# and binary dependencies (including Sparkle) must contain these slices so the
+# bundle runs natively on Apple Silicon and Intel Macs.
+SWIFT_BUILD_ARGS=(-c release --arch arm64 --arch x86_64)
+info "Building universal release binary with SwiftPM (arm64 + x86_64)..."
 cd "${SCRIPT_DIR}"
-swift build -c release
+# Resolve the output path before building so we do not start a second SwiftPM
+# process immediately after the release build completes.
+BUILD_DIR="$(swift build "${SWIFT_BUILD_ARGS[@]}" --show-bin-path)"
+swift build "${SWIFT_BUILD_ARGS[@]}"
 
 BINARY_PATH="${BUILD_DIR}/${APP_NAME}"
 if [[ ! -f "${BINARY_PATH}" ]]; then
   err "Expected binary not found at ${BINARY_PATH}"
   exit 1
 fi
+if ! lipo "${BINARY_PATH}" -verify_arch arm64 ||
+   ! lipo "${BINARY_PATH}" -verify_arch x86_64; then
+  err "Release binary is not universal (expected arm64 and x86_64): ${BINARY_PATH}"
+  file "${BINARY_PATH}" >&2 || true
+  exit 1
+fi
+info "Verified universal release binary: $(lipo -archs "${BINARY_PATH}")"
 
 # 2. Create .app bundle structure
 info "Preparing .app bundle..."
@@ -127,9 +139,9 @@ cat > "${INFO_PLIST}" <<EOF
     <key>CFBundleIdentifier</key>
     <string>${BUNDLE_ID}</string>
     <key>CFBundleVersion</key>
-    <string>57</string>
+    <string>58</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.6.0</string>
+    <string>1.7.0</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>LSMinimumSystemVersion</key>

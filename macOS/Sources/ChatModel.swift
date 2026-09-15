@@ -531,7 +531,7 @@ final class ChatModel: ObservableObject {
     /// Start a brand-new chat. The currently running turn (if any) is **not**
     /// cancelled — it keeps streaming into its own `ChatSessionState` in the
     /// background. The user can switch back to it by tapping its session row.
-    func startNewChat() {
+    func startNewChat(in group: AgentGroupInfo? = nil) {
         savePublishedToActiveState()
 
         activeSessionId = nil
@@ -545,6 +545,9 @@ final class ChatModel: ObservableObject {
         states[pendingNewChatKey] = fresh
         loadState(fresh)
 
+        // A chat started from a sidebar group should inherit that project
+        // immediately, before its first message creates the backend session.
+        selectedGroup = group
         defaultTaskTemplate = nil
         activeSessionTaskInstructionTitle = nil
         fetchDefaultTaskTemplate()

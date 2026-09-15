@@ -16,6 +16,9 @@ let package = Package(
         // cross-block text selection. Used to render the assistant's
         // final answer inside the chat page.
         .package(url: "https://github.com/gonzalezreal/textual", from: "0.5.0"),
+        // Native WYSIWYG-style Markdown editing for the chat composer,
+        // including rendered GFM tables and fenced code blocks.
+        .package(path: "Vendor/MarkdownEngine"),
     ],
     targets: [
         .executableTarget(
@@ -23,6 +26,8 @@ let package = Package(
             dependencies: [
                 .product(name: "Sparkle", package: "Sparkle"),
                 .product(name: "Textual", package: "textual"),
+                .product(name: "MarkdownEngine", package: "MarkdownEngine"),
+                .product(name: "MarkdownEngineCodeBlocks", package: "MarkdownEngine"),
             ],
             path: "Sources",
             linkerSettings: [

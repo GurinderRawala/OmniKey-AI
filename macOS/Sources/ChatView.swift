@@ -1,4 +1,7 @@
 import AppKit
+import Combine
+import MarkdownEngine
+import MarkdownEngineCodeBlocks
 import SwiftUI
 import Textual
 
@@ -305,6 +308,19 @@ struct ChatSidebarView: View {
                         let grouped: [(String, [AgentSessionInfo])] = {
                             var order: [String] = []
                             var map: [String: [AgentSessionInfo]] = [:]
+
+                            // Keep projects with no sessions visible so their
+                            // Add New control can create the first chat. During
+                            // search, only groups containing matches are shown.
+                            if !model.isSessionSearchActive {
+                                for group in model.availableGroups {
+                                    let name = group.groupName.trimmingCharacters(in: .whitespacesAndNewlines)
+                                    guard !name.isEmpty, map[name] == nil else { continue }
+                                    order.append(name)
+                                    map[name] = []
+                                }
+                            }
+
                             let pinnedId = pinnedRunningSession?.id
                             for s in visibleSessions where s.id != pinnedId {
                                 let key = s.groupName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
@@ -344,6 +360,12 @@ struct ChatSidebarView: View {
                                 runningCount: sessions.filter { model.runningSessionIds.contains($0.id) }.count,
                                 isCollapsed: isCollapsed,
                                 containsActiveSession: sessions.contains { $0.id == model.activeSessionId },
+                                onAddNew: {
+                                    let group = model.availableGroups.first { $0.groupName == name }
+                                    model.startNewChat(in: group)
+                                    seenGroups.insert(name)
+                                    collapsedGroups.remove(name)
+                                },
                                 onToggle: {
                                     // While searching, every group is force-expanded
                                     // above, so `isCollapsed` no longer reflects
@@ -511,77 +533,84 @@ private struct ChatSidebarGroupHeader: View {
     let runningCount: Int
     let isCollapsed: Bool
     let containsActiveSession: Bool
+    let onAddNew: () -> Void
     let onToggle: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
     @State private var hovered = false
 
     var body: some View {
-        Button(action: onToggle) {
-            HStack(spacing: 5) {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 9, weight: .bold))
-                    .rotationEffect(.degrees(isCollapsed ? 0 : 90))
+        HStack(spacing: 5) {
+            Button(action: onToggle) {
+                HStack(spacing: 5) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .bold))
+                        .rotationEffect(.degrees(isCollapsed ? 0 : 90))
 
-                Text(name)
-                    .font(.system(size: 11, weight: .semibold))
-                    .tracking(0.1)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                    Text(name)
+                        .font(.system(size: 11, weight: .semibold))
+                        .tracking(0.1)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
 
-                // Marks the group holding the open chat while collapsed, so
-                // the user can still see where they are.
-                if containsActiveSession, isCollapsed {
-                    Circle()
-                        .fill(NordTheme.accent(colorScheme))
-                        .frame(width: 4, height: 4)
-                }
-
-                Spacer(minLength: 4)
-
-                if runningCount > 0 {
-                    HStack(spacing: 3) {
+                    if containsActiveSession, isCollapsed {
                         Circle()
-                            .fill(NordTheme.accentGreen(colorScheme))
+                            .fill(NordTheme.accent(colorScheme))
                             .frame(width: 4, height: 4)
-                        Text("\(runningCount)")
-                            .font(.system(size: 9.5, weight: .semibold))
-                            .monospacedDigit()
                     }
-                    .foregroundColor(NordTheme.accentGreen(colorScheme))
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 1.5)
-                    .background(
-                        Capsule().fill(NordTheme.accentGreen(colorScheme).opacity(0.14))
-                    )
-                    .help("\(runningCount) chat\(runningCount == 1 ? "" : "s") running")
-                }
 
-                Text("\(count)")
-                    .font(.system(size: 10, weight: .medium))
-                    .monospacedDigit()
+                    Spacer(minLength: 4)
+                }
+                .contentShape(Rectangle())
             }
-            .foregroundColor(
-                NordTheme.secondaryText(colorScheme).opacity(hovered ? 0.75 : 0.45)
-            )
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .fill(hovered ? NordTheme.badgeFill(colorScheme).opacity(0.7) : Color.clear)
-            )
-            .padding(.horizontal, 6)
-            .padding(.top, 12)
-            .padding(.bottom, 3)
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .help(isCollapsed ? "Expand \(name)" : "Collapse \(name)")
+            .accessibilityLabel(accessibilityLabelText)
+
+            Button(action: onAddNew) {
+                Image(systemName: "plus")
+                    .font(.system(size: 9, weight: .bold))
+                    .frame(width: 18, height: 18)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Add New in \(name)")
+            .accessibilityLabel("Add New chat in \(name)")
+
+            if runningCount > 0 {
+                HStack(spacing: 3) {
+                    Circle()
+                        .fill(NordTheme.accentGreen(colorScheme))
+                        .frame(width: 4, height: 4)
+                    Text("\(runningCount)")
+                        .font(.system(size: 9.5, weight: .semibold))
+                        .monospacedDigit()
+                }
+                .foregroundColor(NordTheme.accentGreen(colorScheme))
+                .padding(.horizontal, 5)
+                .padding(.vertical, 1.5)
+                .background(Capsule().fill(NordTheme.accentGreen(colorScheme).opacity(0.14)))
+                .help("\(runningCount) chat\(runningCount == 1 ? "" : "s") running")
+            }
+
+            Text("\(count)")
+                .font(.system(size: 10, weight: .medium))
+                .monospacedDigit()
         }
-        .buttonStyle(.plain)
+        .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(hovered ? 0.75 : 0.45))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .fill(hovered ? NordTheme.badgeFill(colorScheme).opacity(0.7) : Color.clear)
+        )
+        .padding(.horizontal, 6)
+        .padding(.top, 12)
+        .padding(.bottom, 3)
         .onHover { hovered = $0 }
         .animation(.easeInOut(duration: 0.12), value: hovered)
         .animation(.easeInOut(duration: 0.18), value: isCollapsed)
-        .help(isCollapsed ? "Expand \(name)" : "Collapse \(name)")
-        .accessibilityLabel(accessibilityLabelText)
     }
 
     /// Spoken description of the header. The running badge and the chevron
@@ -901,7 +930,7 @@ struct ChatSidebarRailView: View {
             .padding(.top, 16)
 
             // New chat button
-            Button(action: model.startNewChat) {
+            Button(action: { model.startNewChat() }) {
                 Image(systemName: "square.and.pencil")
                     .font(.system(size: 14, weight: .medium))
                     .foregroundColor(NordTheme.accent(colorScheme))
@@ -1875,7 +1904,7 @@ private struct LandingInputComposer: View {
                         .padding(.vertical, 12)
                         .allowsHitTesting(false)
                 }
-                ChatNSTextInput(
+                ChatMarkdownInput(
                     text: $model.inputText,
                     isFocused: $isFocused,
                     colorScheme: colorScheme,
@@ -4243,183 +4272,294 @@ private struct ChatErrorBanner: View {
     }
 }
 
-// MARK: - NSTextView wrapper (Return-to-send, Shift-Return-for-newline)
+// MARK: - Markdown composer input
 
-/// Wraps `NSTextView` so that Return sends the current message and
-/// Shift+Return inserts a newline — the standard behaviour for AI chat inputs.
-struct ChatNSTextInput: NSViewRepresentable {
+/// AppKit colors matching the SwiftUI NordTheme values used by sent and
+/// received Markdown. Dynamic colors keep the editor in sync with appearance
+/// changes without replacing its configuration or text view.
+private enum ComposerMarkdownPalette {
+    static let primaryText = dynamic(
+        light: NSColor(red: 15 / 255, green: 21 / 255, blue: 53 / 255, alpha: 1),
+        dark: NSColor(red: 220 / 255, green: 220 / 255, blue: 224 / 255, alpha: 1)
+    )
+    static let secondaryText = dynamic(
+        light: NSColor(red: 74 / 255, green: 85 / 255, blue: 120 / 255, alpha: 0.85),
+        dark: NSColor(red: 152 / 255, green: 152 / 255, blue: 157 / 255, alpha: 0.85)
+    )
+    static let accentBlue = dynamic(
+        light: NSColor(red: 47 / 255, green: 110 / 255, blue: 220 / 255, alpha: 1),
+        dark: NSColor(red: 108 / 255, green: 168 / 255, blue: 255 / 255, alpha: 1)
+    )
+    static let codeBackgroundLight = NSColor(red: 246 / 255, green: 248 / 255, blue: 252 / 255, alpha: 1)
+    static let codeBackgroundDark = NSColor(red: 10 / 255, green: 12 / 255, blue: 22 / 255, alpha: 1)
+    static let panelBackground = dynamic(
+        light: NSColor.white.withAlphaComponent(0.98),
+        dark: NSColor(red: 44 / 255, green: 44 / 255, blue: 46 / 255, alpha: 0.97)
+    )
+    static let border = dynamic(
+        light: NSColor(red: 15 / 255, green: 21 / 255, blue: 53 / 255, alpha: 0.09),
+        dark: NSColor.white.withAlphaComponent(0.08)
+    )
+
+    private static func dynamic(light: NSColor, dark: NSColor) -> NSColor {
+        NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
+        }
+    }
+}
+
+/// In-place Markdown editor. MarkdownEngine hides source markers outside the
+/// active construct and renders tables, headings, lists, links, and fenced code
+/// blocks directly in the editable surface.
+private struct ChatMarkdownInput: View {
     @Binding var text: String
     @Binding var isFocused: Bool
     var colorScheme: ColorScheme
     var onSend: () -> Void
-    /// Called when the user presses the Up Arrow while the input is empty.
-    /// Should populate `text` with a prior message (or return `false` to
-    /// fall through to default cursor behaviour). Optional — defaults to
-    /// a no-op so existing call sites don't have to opt in.
-    var onRecallHistory: () -> Bool = { false }
+    var onRecallHistory: () -> Bool
 
-    func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSScrollView()
-        scrollView.drawsBackground = false
-        scrollView.borderType = .noBorder
-        scrollView.hasVerticalScroller = true
-        scrollView.autohidesScrollers = true
+    @State private var textView: NSTextView?
+    @State private var monitoredTextViewId: ObjectIdentifier?
+    @State private var keyMonitor: Any?
+    @StateObject private var renderedBlockStyler = ComposerRenderedBlockStyler()
 
-        let tv = ChatTextView()
-        tv.delegate = context.coordinator
-        tv.isEditable = true
-        tv.isSelectable = true
-        tv.isRichText = false
-        tv.allowsUndo = true
-        tv.importsGraphics = false
-        tv.isAutomaticQuoteSubstitutionEnabled = false
-        tv.isAutomaticTextReplacementEnabled = false
-        tv.isAutomaticSpellingCorrectionEnabled = false
-        tv.textContainerInset = NSSize(width: 10, height: 10)
-        tv.textContainer?.lineFragmentPadding = 0
-        tv.textContainer?.widthTracksTextView = true
-        tv.textContainer?.containerSize = NSSize(
-            width: scrollView.contentSize.width,
-            height: CGFloat.greatestFiniteMagnitude
+    // HighlighterSwiftBridge owns a JavaScriptCore highlighter, caches, and an
+    // appearance observer. Constructing it from `body` recreated all of those
+    // resources on every binding update (every keystroke), forcing the editor
+    // to repeatedly refresh layout and causing the visible flicker.
+    private static let configuration: MarkdownEditorConfiguration = {
+        var configuration = MarkdownEditorConfiguration.default
+        configuration.theme = MarkdownEditorTheme(
+            bodyText: ComposerMarkdownPalette.primaryText,
+            mutedText: ComposerMarkdownPalette.secondaryText,
+            disabledText: ComposerMarkdownPalette.secondaryText.withAlphaComponent(0.55),
+            headingMarker: ComposerMarkdownPalette.secondaryText,
+            link: ComposerMarkdownPalette.accentBlue,
+            incompleteLink: ComposerMarkdownPalette.accentBlue.withAlphaComponent(0.75),
+            strikethroughColor: ComposerMarkdownPalette.primaryText
         )
-        tv.minSize = NSSize(width: 0, height: scrollView.contentSize.height)
-        tv.maxSize = NSSize(
-            width: CGFloat.greatestFiniteMagnitude,
-            height: CGFloat.greatestFiniteMagnitude
+        configuration.services = MarkdownEditorServices(
+            syntaxHighlighter: HighlighterSwiftBridge(
+                lightBackground: ComposerMarkdownPalette.codeBackgroundLight,
+                darkBackground: ComposerMarkdownPalette.codeBackgroundDark
+            )
         )
-        tv.isVerticallyResizable = true
-        tv.isHorizontallyResizable = false
-        tv.autoresizingMask = [.width]
-        tv.backgroundColor = .clear
-        tv.drawsBackground = false
-        tv.insertionPointColor = colorScheme == .dark ? .white : .black
-        setStyle(tv, colorScheme: colorScheme)
+        configuration.codeBlock = CodeBlockStyle(
+            fontSizeScale: 0.98,
+            paragraphSpacing: 6,
+            horizontalIndent: 12
+        )
+        configuration.inlineCode = InlineCodeStyle(fontSizeScale: 0.95)
+        configuration.spellChecking = SpellCheckingPolicy(
+            continuousSpellChecking: false,
+            grammarChecking: false,
+            automaticSpellingCorrection: false
+        )
+        // Configure padding through MarkdownEngine itself. Setting the
+        // NSTextView inset imperatively is overwritten by updateNSView, whose
+        // default TextInsets are zero, leaving text flush against the card.
+        configuration.textInsets = TextInsets(horizontal: 12, vertical: 10)
+        return configuration
+    }()
 
-        scrollView.documentView = tv
-        context.coordinator.textView = tv
-        return scrollView
-    }
-
-    func updateNSView(_ scrollView: NSScrollView, context: Context) {
-        // Keep the coordinator's parent reference current so its onSend closure
-        // sees the latest model state after every SwiftUI update cycle.
-        context.coordinator.parent = self
-
-        guard let tv = context.coordinator.textView ?? scrollView.documentView as? NSTextView else {
-            return
-        }
-
-        if tv.string != text {
-            let saved = tv.selectedRange()
-            tv.string = text
-            // Reapply attributes — setting .string clears the NSTextStorage.
-            setStorageStyle(tv, colorScheme: colorScheme)
-            let safeLocation = min(saved.location, (text as NSString).length)
-            let safeLength = min(saved.length, max(0, (text as NSString).length - safeLocation))
-            tv.setSelectedRange(NSRange(location: safeLocation, length: safeLength))
-        }
-        // Always refresh typing attributes so new characters match the theme.
-        tv.insertionPointColor = colorScheme == .dark ? .white : .black
-        setTypingAttributes(tv, colorScheme: colorScheme)
-
-        if isFocused, tv.window?.firstResponder !== tv {
+    var body: some View {
+        NativeTextViewWrapper(
+            text: $text,
+            configuration: Self.configuration,
+            fontSize: 13,
+            documentId: "chat-composer",
+            isEditable: true
+        )
+        .background(
+            MarkdownEditorIntrospector { resolvedTextView in
+                guard textView !== resolvedTextView else { return }
+                configure(resolvedTextView)
+                renderedBlockStyler.attach(to: resolvedTextView)
+                textView = resolvedTextView
+                installKeyMonitor(for: resolvedTextView)
+            }
+        )
+        .onChange(of: isFocused) { _, focused in
+            guard focused, let textView else { return }
             DispatchQueue.main.async {
-                tv.window?.makeFirstResponder(tv)
+                textView.window?.makeFirstResponder(textView)
             }
         }
-    }
-
-    func makeCoordinator() -> Coordinator { Coordinator(self) }
-
-    // MARK: - Styling helpers
-
-    private func setStyle(_ tv: NSTextView, colorScheme: ColorScheme) {
-        setStorageStyle(tv, colorScheme: colorScheme)
-        setTypingAttributes(tv, colorScheme: colorScheme)
-    }
-
-    private func setStorageStyle(_ tv: NSTextView, colorScheme: ColorScheme) {
-        guard let storage = tv.textStorage, storage.length > 0 else { return }
-        let attrs = baseAttributes(colorScheme: colorScheme)
-        storage.beginEditing()
-        storage.setAttributes(attrs, range: NSRange(location: 0, length: storage.length))
-        storage.endEditing()
-    }
-
-    private func setTypingAttributes(_ tv: NSTextView, colorScheme: ColorScheme) {
-        tv.typingAttributes = baseAttributes(colorScheme: colorScheme)
-    }
-
-    private func baseAttributes(colorScheme: ColorScheme) -> [NSAttributedString.Key: Any] {
-        let color: NSColor = colorScheme == .dark
-            ? NSColor(red: 226 / 255, green: 232 / 255, blue: 240 / 255, alpha: 1)
-            : NSColor(red: 15 / 255, green: 21 / 255, blue: 53 / 255, alpha: 1)
-        return [
-            .font: NSFont.systemFont(ofSize: 13),
-            .foregroundColor: color,
-        ]
-    }
-
-    // MARK: Coordinator
-
-    final class ChatTextView: NSTextView {
-        override var acceptsFirstResponder: Bool { true }
-
-        override func mouseDown(with event: NSEvent) {
-            window?.makeFirstResponder(self)
-            super.mouseDown(with: event)
+        .onChange(of: colorScheme) { _, _ in
+            if let textView { configure(textView) }
         }
+        .onDisappear { removeKeyMonitor() }
     }
 
-    final class Coordinator: NSObject, NSTextViewDelegate {
-        var parent: ChatNSTextInput
-        weak var textView: NSTextView?
+    private func configure(_ textView: NSTextView) {
+        textView.backgroundColor = .clear
+        textView.drawsBackground = false
+        textView.insertionPointColor = colorScheme == .dark ? .white : .black
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticTextReplacementEnabled = false
+        textView.isAutomaticSpellingCorrectionEnabled = false
+    }
 
-        init(_ p: ChatNSTextInput) { parent = p }
+    private func installKeyMonitor(for textView: NSTextView) {
+        let textViewId = ObjectIdentifier(textView)
+        guard monitoredTextViewId != textViewId else { return }
+        removeKeyMonitor()
+        monitoredTextViewId = textViewId
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard event.window === textView.window,
+                  textView.window?.firstResponder === textView else { return event }
+            isFocused = true
 
-        func textDidChange(_ n: Notification) {
-            guard let tv = n.object as? NSTextView else { return }
-            parent.text = tv.string
-        }
-
-        func textDidBeginEditing(_: Notification) {
-            parent.isFocused = true
-        }
-
-        func textDidEndEditing(_: Notification) {
-            parent.isFocused = false
-        }
-
-        // Intercept Return (send / newline) and Up Arrow (recall last message).
-        func textView(_ textView: NSTextView, doCommandBy sel: Selector) -> Bool {
-            // Plain Return → send; Shift+Return → newline.
-            if sel == #selector(NSResponder.insertNewline(_:)) {
-                let mods = NSApp.currentEvent?.modifierFlags ?? []
-                if mods.contains(.shift) { return false }
-                DispatchQueue.main.async { self.parent.onSend() }
-                return true
+            if event.keyCode == 36 || event.keyCode == 76 {
+                if event.modifierFlags.contains(.shift) { return event }
+                DispatchQueue.main.async { onSend() }
+                return nil
             }
 
-            // Up Arrow on an empty input → pull the last user message
-            // into the field for quick editing/resending. When the input
-            // already has content we fall through so the caret can move
-            // through multi-line text normally.
-            if sel == #selector(NSResponder.moveUp(_:)) {
-                guard textView.string.isEmpty else { return false }
-                let handled = parent.onRecallHistory()
-                if handled {
-                    // Place the caret at the end of the freshly inserted
-                    // text so the user can immediately keep typing.
-                    DispatchQueue.main.async {
-                        let length = (textView.string as NSString).length
-                        textView.setSelectedRange(NSRange(location: length, length: 0))
-                    }
+            if event.keyCode == 126, textView.string.isEmpty, onRecallHistory() {
+                DispatchQueue.main.async {
+                    textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
                 }
-                return handled
+                return nil
             }
-
-            return false
+            return event
         }
+    }
+
+    private func removeKeyMonitor() {
+        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+        keyMonitor = nil
+        monitoredTextViewId = nil
+    }
+}
+
+
+/// MarkdownEngine rasterizes inactive tables into attributed-string images.
+/// Its table renderer currently draws square outer corners, so finish those
+/// images with the same 8-point continuous corner treatment as
+/// `MarkdownTableView` in sent and received messages.
+@MainActor
+private final class ComposerRenderedBlockStyler: ObservableObject {
+    private static let renderedImageKey = NSAttributedString.Key("LatexRenderedImage")
+    private weak var storage: NSTextStorage?
+    private nonisolated(unsafe) var observer: NSObjectProtocol?
+    private var isApplyingStyle = false
+    private let cache = NSCache<NSImage, NSImage>()
+    private var styledImageIds: Set<ObjectIdentifier> = []
+
+    func attach(to textView: NSTextView) {
+        guard storage !== textView.textStorage, let textStorage = textView.textStorage else { return }
+        detach()
+        storage = textStorage
+        observer = NotificationCenter.default.addObserver(
+            forName: NSTextStorage.didProcessEditingNotification,
+            object: textStorage,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.roundRenderedTables() }
+        }
+        roundRenderedTables()
+    }
+
+    deinit {
+        if let observer { NotificationCenter.default.removeObserver(observer) }
+    }
+
+    private func detach() {
+        if let observer { NotificationCenter.default.removeObserver(observer) }
+        observer = nil
+        storage = nil
+    }
+
+    private func roundRenderedTables() {
+        guard !isApplyingStyle, let storage, storage.length > 0 else { return }
+        let fullRange = NSRange(location: 0, length: storage.length)
+        var replacements: [(NSRange, NSImage)] = []
+
+        storage.enumerateAttribute(Self.renderedImageKey, in: fullRange) { value, range, _ in
+            guard let image = value as? NSImage,
+                  !self.styledImageIds.contains(ObjectIdentifier(image)),
+                  self.isMarkdownTable(around: range, in: storage.string) else { return }
+            if let cached = self.cache.object(forKey: image) {
+                replacements.append((range, cached))
+            } else if let rounded = self.roundedImage(image) {
+                self.cache.setObject(rounded, forKey: image)
+                self.styledImageIds.insert(ObjectIdentifier(rounded))
+                replacements.append((range, rounded))
+            }
+        }
+
+        guard !replacements.isEmpty else { return }
+        isApplyingStyle = true
+        storage.beginEditing()
+        for (range, image) in replacements {
+            storage.addAttribute(Self.renderedImageKey, value: image, range: range)
+        }
+        storage.endEditing()
+        isApplyingStyle = false
+    }
+
+    private func isMarkdownTable(around range: NSRange, in text: String) -> Bool {
+        let nsText = text as NSString
+        let lineRange = nsText.lineRange(for: range)
+        let sample = nsText.substring(with: lineRange)
+        return sample.contains("|")
+    }
+
+    private func roundedImage(_ image: NSImage) -> NSImage? {
+        guard image.size.width > 0, image.size.height > 0 else { return nil }
+        let size = image.size
+        return NSImage(size: size, flipped: false) { rect in
+            NSGraphicsContext.current?.imageInterpolation = .high
+            let shape = NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5), xRadius: 8, yRadius: 8)
+            ComposerMarkdownPalette.panelBackground.setFill()
+            shape.fill()
+
+            NSGraphicsContext.saveGraphicsState()
+            shape.addClip()
+            image.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
+            NSGraphicsContext.restoreGraphicsState()
+
+            ComposerMarkdownPalette.border.setStroke()
+            shape.lineWidth = 1
+            shape.stroke()
+            return true
+        }
+    }
+}
+
+/// Locates MarkdownEngine's internal NSTextView without depending on its
+/// private implementation types.
+private struct MarkdownEditorIntrospector: NSViewRepresentable {
+    let onResolve: (NSTextView) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async { resolve(from: view) }
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        DispatchQueue.main.async { resolve(from: view) }
+    }
+
+    private func resolve(from view: NSView) {
+        var ancestor = view.superview
+        while let current = ancestor {
+            if let textView = findTextView(in: current) {
+                onResolve(textView)
+                return
+            }
+            ancestor = current.superview
+        }
+    }
+
+    private func findTextView(in view: NSView) -> NSTextView? {
+        if let textView = view as? NSTextView { return textView }
+        for child in view.subviews {
+            if let textView = findTextView(in: child) { return textView }
+        }
+        return nil
     }
 }
 
