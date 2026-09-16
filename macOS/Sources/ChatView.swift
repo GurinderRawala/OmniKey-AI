@@ -71,6 +71,10 @@ struct ChatSidebarView: View {
     @State private var collapsedGroups: Set<String> = []
     @State private var seenGroups: Set<String> = []
     @State private var isRefreshing: Bool = false
+    /// Number of rows currently revealed per group. Groups begin with ten and
+    /// advance in ten-row pages so large histories do not overwhelm the sidebar.
+    @State private var visibleSessionCounts: [String: Int] = [:]
+    fileprivate static let sessionPageSize = 10
     /// Drives the "Update available" button that appears above the sidebar
     /// header when a newer app version is on the Sparkle appcast. The
     /// button hides itself when there is nothing to update to.
@@ -274,7 +278,7 @@ struct ChatSidebarView: View {
                             let hasGroup = candidate.groupName?
                                 .trimmingCharacters(in: .whitespacesAndNewlines)
                                 .nilIfEmpty != nil
-                            return hasGroup ? nil : candidate
+                            return hasGroup || candidate.isPinned ? nil : candidate
                         }()
 
                         if let pinned = pinnedRunningSession {
@@ -284,6 +288,8 @@ struct ChatSidebarView: View {
                                 isRunning: model.runningSessionIds.contains(pinned.id),
                                 searchQuery: model.sessionSearchQuery,
                                 onTap: { model.openSession(pinned) },
+                                onRename: { model.renameSession(pinned, to: $0) },
+                                onTogglePin: { model.setSessionPinned(pinned, isPinned: !pinned.isPinned) },
                                 onDelete: { model.deleteSession(pinned) }
                             )
                             // Distinct identity from the grouped rows below.
@@ -294,6 +300,21 @@ struct ChatSidebarView: View {
                             // running — carrying the stale "active" highlight
                             // onto the previously-selected session.
                             .id("pinned-\(pinned.id)")
+                        }
+
+                        let pinnedSessions = visibleSessions.filter(\.isPinned)
+                        ForEach(pinnedSessions.map { ChatSessionRowItem(session: $0, activeSessionId: model.activeSessionId) }) { item in
+                            ChatSessionRowView(
+                                session: item.session,
+                                isActive: item.isActive,
+                                isRunning: model.runningSessionIds.contains(item.session.id),
+                                searchQuery: model.sessionSearchQuery,
+                                onTap: { model.openSession(item.session) },
+                                onRename: { model.renameSession(item.session, to: $0) },
+                                onTogglePin: { model.setSessionPinned(item.session, isPinned: false) },
+                                onDelete: { model.deleteSession(item.session) }
+                            )
+                            .id("user-pinned-\(item.id)")
                         }
 
                         // Build ordered groups from visible sessions.
@@ -322,7 +343,7 @@ struct ChatSidebarView: View {
                             }
 
                             let pinnedId = pinnedRunningSession?.id
-                            for s in visibleSessions where s.id != pinnedId {
+                            for s in visibleSessions where s.id != pinnedId && !s.isPinned {
                                 let key = s.groupName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
                                     ?? Self.ungroupedName
                                 if map[key] == nil { order.append(key); map[key] = [] }
@@ -386,13 +407,19 @@ struct ChatSidebarView: View {
                             )
 
                             if !isCollapsed {
-                                ForEach(sessions.map { ChatSessionRowItem(session: $0, activeSessionId: model.activeSessionId) }) { item in
+                                let visibleCount = min(
+                                    visibleSessionCounts[name, default: Self.sessionPageSize],
+                                    sessions.count
+                                )
+                                ForEach(sessions.prefix(visibleCount).map { ChatSessionRowItem(session: $0, activeSessionId: model.activeSessionId) }) { item in
                                     ChatSessionRowView(
                                         session: item.session,
                                         isActive: item.isActive,
                                         isRunning: model.runningSessionIds.contains(item.session.id),
                                         searchQuery: model.sessionSearchQuery,
                                         onTap: { model.openSession(item.session) },
+                                        onRename: { model.renameSession(item.session, to: $0) },
+                                        onTogglePin: { model.setSessionPinned(item.session, isPinned: !item.session.isPinned) },
                                         onDelete: { model.deleteSession(item.session) }
                                     )
                                     // Include the active flag in the identity so
@@ -400,6 +427,17 @@ struct ChatSidebarView: View {
                                     // lost selection instead of reusing a stale
                                     // button/background drawing from a prior row.
                                     .id("row-\(item.id)")
+                                }
+
+                                if visibleCount < sessions.count {
+                                    ChatSidebarShowMoreButton(
+                                        remainingCount: sessions.count - visibleCount,
+                                        onShowMore: {
+                                            withAnimation(.easeInOut(duration: 0.16)) {
+                                                visibleSessionCounts[name] = visibleCount + Self.sessionPageSize
+                                            }
+                                        }
+                                    )
                                 }
                             }
                         }
@@ -1053,6 +1091,37 @@ struct ChatSidebarRailView: View {
     }
 }
 
+/// Reveals one additional ten-thread page for a single sidebar group.
+private struct ChatSidebarShowMoreButton: View {
+    let remainingCount: Int
+    let onShowMore: () -> Void
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var nextPageCount: Int {
+        min(remainingCount, ChatSidebarView.sessionPageSize)
+    }
+
+    var body: some View {
+        Button(action: onShowMore) {
+            HStack(spacing: 5) {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8.5, weight: .semibold))
+                Text("Show \(nextPageCount) more")
+                    .font(.system(size: 10.5, weight: .medium))
+            }
+            .foregroundColor(NordTheme.accentBlue(colorScheme))
+            .frame(maxWidth: .infinity)
+            .frame(height: 28)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 15)
+        .help("Show the next \(nextPageCount) chats")
+        .accessibilityLabel("Show \(nextPageCount) more chats")
+    }
+}
+
 // MARK: - Session Row
 
 /// Relative "last active" formatting for sidebar rows. Kept terse
@@ -1137,12 +1206,16 @@ struct ChatSessionRowView: View {
     /// row matched.
     var searchQuery: String = ""
     let onTap: () -> Void
+    let onRename: (String) -> Void
+    let onTogglePin: () -> Void
     let onDelete: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
     @State private var isHovered = false
     @State private var runPulse = false
-    @State private var confirmingDelete = false
+    @State private var isRenaming = false
+    @State private var renameText = ""
+    @FocusState private var renameFocused: Bool
 
     private var timestampLabel: String? {
         ChatSidebarRelativeDate.shortLabel(for: session.lastActiveAt)
@@ -1178,16 +1251,30 @@ struct ChatSessionRowView: View {
                                 .accessibilityLabel("Running")
                         }
 
-                        highlightedTitle
-                            .font(.system(size: 13, weight: isActive ? .medium : .regular))
-                            .lineLimit(1)
-                            .truncationMode(.tail)
+                        if isRenaming {
+                            TextField("Chat name", text: $renameText)
+                                .textFieldStyle(.plain)
+                                .font(.system(size: 13, weight: .medium))
+                                .focused($renameFocused)
+                                .onSubmit { commitRename() }
+                                .onExitCommand { cancelRename() }
+                                .accessibilityLabel("Rename chat")
+                        } else {
+                            clippedTitle
+                        }
+
+                        if session.isPinned && !isRenaming {
+                            Image(systemName: "pin.fill")
+                                .font(.system(size: 8.5, weight: .medium))
+                                .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.55))
+                                .accessibilityLabel("Pinned")
+                        }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
 
                     // Secondary metadata line. Hidden while the delete
                     // confirmation is showing so the row does not grow.
-                    if let subtitle = subtitleText, !confirmingDelete {
+                    if let subtitle = subtitleText {
                         Text(subtitle)
                             .font(.system(size: 10))
                             .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.5))
@@ -1214,12 +1301,10 @@ struct ChatSessionRowView: View {
         }
         .buttonStyle(.plain)
         .animation(.easeInOut(duration: 0.1), value: isHovered)
-        .animation(.easeInOut(duration: 0.12), value: confirmingDelete)
         .onHover { hovering in
             isHovered = hovering
             // Reset an unconfirmed delete when the pointer leaves, so the
             // row never stays armed after the user moves on.
-            if !hovering { confirmingDelete = false }
         }
         .onAppear { if isRunning { startRunPulse() } }
         .onChange(of: isRunning) { _, running in
@@ -1236,6 +1321,10 @@ struct ChatSessionRowView: View {
         .help(tooltip)
         .contextMenu {
             Button("Open") { onTap() }
+            Button("Rename…") { beginRename() }
+                .accessibilityLabel("Rename \(session.title)")
+            Button(session.isPinned ? "Unpin" : "Pin") { onTogglePin() }
+                .accessibilityLabel(session.isPinned ? "Unpin \(session.title)" : "Pin \(session.title)")
             Button("Copy Title") {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(session.title, forType: .string)
@@ -1244,6 +1333,41 @@ struct ChatSessionRowView: View {
             Button("Delete Chat", role: .destructive) { onDelete() }
         }
         .accessibilityLabel(tooltip)
+    }
+
+    private func beginRename() {
+        renameText = session.title
+        isRenaming = true
+        DispatchQueue.main.async { renameFocused = true }
+    }
+
+    private func commitRename() {
+        let title = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else {
+            renameFocused = true
+            return
+        }
+        onRename(title)
+        isRenaming = false
+    }
+
+    private func cancelRename() {
+        renameText = session.title
+        isRenaming = false
+    }
+
+    /// Clips long generated titles at the row boundary instead of adding a
+    /// typographic ellipsis that can be mistaken for the adjacent actions menu.
+    private var clippedTitle: some View {
+        GeometryReader { geometry in
+            highlightedTitle
+                .font(.system(size: 13, weight: isActive ? .medium : .regular))
+                .fixedSize(horizontal: true, vertical: false)
+                .frame(width: geometry.size.width, alignment: .leading)
+                .clipped()
+        }
+        .frame(height: 17)
+        .accessibilityLabel(session.title)
     }
 
     /// Title with the search match highlighted. Falls back to plain text when
@@ -1285,41 +1409,57 @@ struct ChatSessionRowView: View {
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
-    /// Hover reveals a two-step delete affordance; otherwise the gutter stays
-    /// empty so the title has the full row width.
+    /// Native action menu for discoverable thread management. It remains visible
+    /// for the selected row and appears on hover for other rows.
     @ViewBuilder
     private var trailingAccessory: some View {
-        if isHovered {
-            Button {
-                if confirmingDelete {
+        if isActive || isHovered {
+            Menu {
+                Button {
+                    beginRename()
+                } label: {
+                    Label("Rename Chat…", systemImage: "pencil")
+                }
+
+                Button {
+                    onTogglePin()
+                } label: {
+                    Label(
+                        session.isPinned ? "Unpin Chat" : "Pin Chat",
+                        systemImage: session.isPinned ? "pin.slash" : "pin"
+                    )
+                }
+
+                Divider()
+
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(session.title, forType: .string)
+                } label: {
+                    Label("Copy Title", systemImage: "doc.on.doc")
+                }
+
+                Divider()
+
+                Button(role: .destructive) {
                     onDelete()
-                } else {
-                    confirmingDelete = true
+                } label: {
+                    Label("Delete Chat", systemImage: "trash")
                 }
             } label: {
-                Group {
-                    if confirmingDelete {
-                        Text("Delete?")
-                            .font(.system(size: 9.5, weight: .semibold))
-                            .foregroundColor(NordTheme.accentAmber(colorScheme))
-                            .padding(.horizontal, 6)
-                            .frame(height: 17)
-                            .background(
-                                Capsule().fill(NordTheme.accentAmber(colorScheme).opacity(0.14))
-                            )
-                    } else {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 8.5, weight: .semibold))
-                            .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.55))
-                            .frame(width: 17, height: 17)
-                            .background(Circle().fill(NordTheme.badgeFill(colorScheme)))
-                    }
-                }
-                .contentShape(Rectangle())
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(NordTheme.accentBlue(colorScheme))
+                    .frame(width: 22, height: 22)
+                    .background(Circle().fill(NordTheme.accentBlue(colorScheme).opacity(0.12)))
+                    .contentShape(Circle())
             }
-            .buttonStyle(.plain)
-            .help(confirmingDelete ? "Click again to delete" : "Delete chat")
-            .transition(.opacity.combined(with: .scale(scale: 0.85)))
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Chat actions")
+            .accessibilityLabel("Actions for \(session.title)")
+            .transition(.opacity.combined(with: .scale(scale: 0.9)))
             .padding(.trailing, 7)
             .padding(.leading, 6)
         }

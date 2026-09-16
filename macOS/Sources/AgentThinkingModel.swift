@@ -37,6 +37,7 @@ struct SessionHistoryBlock: Decodable, Identifiable {
 struct AgentSessionInfo: Identifiable, Decodable, Equatable {
     let id: String
     let title: String
+    let isPinned: Bool
     let platform: String?
     let turns: Int
     let totalTokensUsed: Int
@@ -54,7 +55,7 @@ struct AgentSessionInfo: Identifiable, Decodable, Equatable {
     let lastActiveAt: String
 
     enum CodingKeys: String, CodingKey {
-        case id, title, platform, turns
+        case id, title, isPinned, platform, turns
         case totalTokensUsed
         case remainingContextTokens
         case contextBudget
@@ -63,6 +64,71 @@ struct AgentSessionInfo: Identifiable, Decodable, Equatable {
         case taskInstructionId
         case taskInstructionHeading
         case lastActiveAt
+    }
+
+    init(
+        id: String,
+        title: String,
+        isPinned: Bool,
+        platform: String?,
+        turns: Int,
+        totalTokensUsed: Int,
+        remainingContextTokens: Int,
+        contextBudget: Int,
+        groupName: String?,
+        groupDescription: String?,
+        taskInstructionId: String?,
+        taskInstructionHeading: String?,
+        lastActiveAt: String
+    ) {
+        self.id = id
+        self.title = title
+        self.isPinned = isPinned
+        self.platform = platform
+        self.turns = turns
+        self.totalTokensUsed = totalTokensUsed
+        self.remainingContextTokens = remainingContextTokens
+        self.contextBudget = contextBudget
+        self.groupName = groupName
+        self.groupDescription = groupDescription
+        self.taskInstructionId = taskInstructionId
+        self.taskInstructionHeading = taskInstructionHeading
+        self.lastActiveAt = lastActiveAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        title = try values.decode(String.self, forKey: .title)
+        isPinned = try values.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
+        platform = try values.decodeIfPresent(String.self, forKey: .platform)
+        turns = try values.decode(Int.self, forKey: .turns)
+        totalTokensUsed = try values.decode(Int.self, forKey: .totalTokensUsed)
+        remainingContextTokens = try values.decode(Int.self, forKey: .remainingContextTokens)
+        contextBudget = try values.decode(Int.self, forKey: .contextBudget)
+        groupName = try values.decodeIfPresent(String.self, forKey: .groupName)
+        groupDescription = try values.decodeIfPresent(String.self, forKey: .groupDescription)
+        taskInstructionId = try values.decodeIfPresent(String.self, forKey: .taskInstructionId)
+        taskInstructionHeading = try values.decodeIfPresent(String.self, forKey: .taskInstructionHeading)
+        lastActiveAt = try values.decode(String.self, forKey: .lastActiveAt)
+    }
+
+    func updating(title: String? = nil, isPinned: Bool? = nil) -> AgentSessionInfo {
+        AgentSessionInfo(
+            id: id,
+            title: title ?? self.title,
+            isPinned: isPinned ?? self.isPinned,
+            platform: platform,
+            turns: turns,
+            totalTokensUsed: totalTokensUsed,
+            remainingContextTokens: remainingContextTokens,
+            contextBudget: contextBudget,
+            groupName: groupName,
+            groupDescription: groupDescription,
+            taskInstructionId: taskInstructionId,
+            taskInstructionHeading: taskInstructionHeading,
+            lastActiveAt: lastActiveAt
+        )
     }
 }
 
