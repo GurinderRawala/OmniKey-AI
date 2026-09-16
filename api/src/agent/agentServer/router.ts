@@ -65,6 +65,7 @@ export function createAgentRouter(): express.Router {
           attributes: [
             'id',
             'title',
+            'isPinned',
             'platform',
             'turns',
             'totalTokensUsed',
@@ -86,6 +87,7 @@ export function createAgentRouter(): express.Router {
         sessions.map((s) => ({
           id: s.id,
           title: s.title,
+          isPinned: s.isPinned,
           platform: s.platform,
           turns: s.turns,
           totalTokensUsed: Number(s.totalTokensUsed),
@@ -104,6 +106,57 @@ export function createAgentRouter(): express.Router {
       );
     } catch (err) {
       log.error('Failed to list agent sessions', { error: err });
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  // PATCH /api/agent/sessions/:sessionId
+  // Updates user-managed sidebar metadata without changing thread identity.
+  router.patch('/sessions/:sessionId', async (req, res: Response<any, AuthLocals>) => {
+    const { subscription, logger: log } = res.locals;
+    const { sessionId } = req.params;
+    if (!sessionId || typeof sessionId !== 'string' || sessionId.length > 128) {
+      res.status(400).json({ error: 'Invalid session ID' });
+      return;
+    }
+
+    const updates: { title?: string; isPinned?: boolean } = {};
+    if (Object.prototype.hasOwnProperty.call(req.body, 'title')) {
+      if (typeof req.body.title !== 'string') {
+        res.status(400).json({ error: 'Title must be a string' });
+        return;
+      }
+      const title = req.body.title.trim();
+      if (!title || title.length > 255) {
+        res.status(400).json({ error: 'Title must be between 1 and 255 characters' });
+        return;
+      }
+      updates.title = title;
+    }
+    if (Object.prototype.hasOwnProperty.call(req.body, 'isPinned')) {
+      if (typeof req.body.isPinned !== 'boolean') {
+        res.status(400).json({ error: 'isPinned must be a boolean' });
+        return;
+      }
+      updates.isPinned = req.body.isPinned;
+    }
+    if (Object.keys(updates).length === 0) {
+      res.status(400).json({ error: 'No supported fields provided' });
+      return;
+    }
+
+    try {
+      const session = await AgentSession.findOne({
+        where: { id: sessionId, subscriptionId: subscription.id },
+      });
+      if (!session) {
+        res.status(404).json({ error: 'Session not found' });
+        return;
+      }
+      await session.update(updates);
+      res.json({ id: session.id, title: session.title, isPinned: session.isPinned });
+    } catch (err) {
+      log.error('Failed to update agent session', { sessionId, error: err });
       res.status(500).json({ error: 'Internal server error' });
     }
   });

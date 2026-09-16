@@ -7,6 +7,7 @@ export interface AgentSessionAttributes {
   id: string;
   subscriptionId: string;
   title: string;
+  isPinned: boolean;
   platform?: string | null;
   historyJson: string;
   turns: number;
@@ -43,6 +44,7 @@ interface AgentSessionCreationAttributes extends Optional<
   AgentSessionAttributes,
   | 'id'
   | 'title'
+  | 'isPinned'
   | 'platform'
   | 'historyJson'
   | 'turns'
@@ -72,6 +74,7 @@ export class AgentSession
   public id!: string;
   public subscriptionId!: string;
   public title!: string;
+  public isPinned!: boolean;
   public platform?: string | null;
   public historyJson!: string;
   public turns!: number;
@@ -117,6 +120,12 @@ AgentSession.init(
       type: DataTypes.STRING,
       allowNull: false,
       defaultValue: 'New Session',
+    },
+    isPinned: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+      field: 'is_pinned',
     },
     platform: {
       type: DataTypes.STRING,

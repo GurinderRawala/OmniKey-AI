@@ -83,6 +83,11 @@ const COLUMN_MIGRATIONS: ColumnMigration[] = [
     definition: 'INTEGER NOT NULL DEFAULT 0',
   },
   // Added: project grouping
+  {
+    table: 'agent_sessions',
+    column: 'is_pinned',
+    definition: 'TINYINT(1) NOT NULL DEFAULT 0',
+  },
   { table: 'agent_sessions', column: 'group_name', definition: 'VARCHAR(255)' },
   { table: 'agent_sessions', column: 'group_description', definition: 'TEXT' },
   // Added: tracks when the cron last rewrote a group's description, so the

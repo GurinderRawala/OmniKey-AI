@@ -827,6 +827,61 @@ final class ChatModel: ObservableObject {
             : existing + "\n" + folded
     }
 
+
+    /// Applies user-managed sidebar metadata optimistically, then persists it.
+    /// The session ID and active state are deliberately untouched.
+    func renameSession(_ session: AgentSessionInfo, to proposedTitle: String) {
+        let title = proposedTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty, title.count <= 255, title != session.title else { return }
+        updateSessionMetadata(session, title: title, isPinned: nil)
+    }
+
+    func setSessionPinned(_ session: AgentSessionInfo, isPinned: Bool) {
+        guard session.isPinned != isPinned else { return }
+        updateSessionMetadata(session, title: nil, isPinned: isPinned)
+    }
+
+    private func updateSessionMetadata(
+        _ session: AgentSessionInfo,
+        title: String?,
+        isPinned: Bool?
+    ) {
+        guard let index = sessions.firstIndex(where: { $0.id == session.id }) else { return }
+        let original = sessions[index]
+        let updated = original.updating(title: title, isPinned: isPinned)
+        sessions[index] = updated
+        if activeSessionId == session.id, let title { activeSessionTitle = title }
+
+        guard let token = SubscriptionManager.shared.jwtToken, !token.isEmpty else {
+            sessions[index] = original
+            if activeSessionId == session.id { activeSessionTitle = original.title }
+            return
+        }
+        let url = APIClient.baseURL.appendingPathComponent("api/agent/sessions")
+            .appendingPathComponent(session.id)
+        var request = URLRequest(url: url)
+        request.httpMethod = "PATCH"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        var body: [String: Any] = [:]
+        if let title { body["title"] = title }
+        if let isPinned { body["isPinned"] = isPinned }
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        URLSession.shared.dataTask(with: request) { [weak self] _, response, _ in
+            let success = (response as? HTTPURLResponse).map { 200..<300 ~= $0.statusCode } ?? false
+            guard !success else { return }
+            DispatchQueue.main.async {
+                guard let self,
+                      let currentIndex = self.sessions.firstIndex(where: { $0.id == session.id }),
+                      self.sessions[currentIndex] == updated else { return }
+                self.sessions[currentIndex] = original
+                if self.activeSessionId == session.id { self.activeSessionTitle = original.title }
+                self.lastErrorMessage = "Could not update this chat. Please try again."
+            }
+        }.resume()
+    }
+
     func deleteSession(_ session: AgentSessionInfo) {
         sessionUserMessageHaystacks.removeValue(forKey: session.id)
         // Optimistically cancel all running turns for this session.
@@ -928,6 +983,7 @@ final class ChatModel: ObservableObject {
             let placeholder = AgentSessionInfo(
                 id: sessionId,
                 title: placeholderTitle.isEmpty ? "New Chat" : placeholderTitle,
+                isPinned: false,
                 platform: "macos",
                 turns: 0,
                 totalTokensUsed: 0,
