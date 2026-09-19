@@ -1,4 +1,9 @@
 User-agent: *
 Allow: /
+Disallow: /api/
+Disallow: /health
+Disallow: /downloads/stats
+Disallow: /macos/appcast
+Disallow: /windows/update
 
-Sitemap: https://omnikeyai.com/sitemap.xml
+Sitemap: https://omnikeyai.ca/sitemap.xml

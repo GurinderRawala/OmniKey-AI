@@ -1,0 +1,13 @@
+{
+  "name": "OmniKey AI",
+  "short_name": "OmniKey",
+  "description": "AI text enhancement and agent workflows for macOS and Windows.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#111318",
+  "theme_color": "#111318",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
