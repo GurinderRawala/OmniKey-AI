@@ -96,6 +96,97 @@ final class AgentTimelinePresentationTests: XCTestCase {
         )
     }
 
+    func testAggregateStatusOnlyReflectsTheMostRecentToolCall() {
+        let failed = AgentCommandActivity(
+            id: "failed",
+            blocks: [
+                ChatBlock(
+                    kind: .toolCall,
+                    text: "Error: initial tool failed",
+                    activityId: "failed",
+                    activityPhase: .failed
+                )
+            ],
+            status: .failed
+        )
+        let recovered = AgentCommandActivity(
+            id: "recovered",
+            blocks: [
+                ChatBlock(
+                    kind: .toolCall,
+                    text: "Recovery tool completed",
+                    activityId: "recovered",
+                    activityPhase: .completed
+                )
+            ],
+            status: .completed
+        )
+
+        XCTAssertEqual(
+            AgentTimelinePresentation.aggregateStatus(for: [failed, recovered]),
+            .completed
+        )
+        XCTAssertEqual(
+            AgentTimelinePresentation.aggregateStatus(for: [recovered, failed]),
+            .failed
+        )
+    }
+
+    func testCompletionDisclosureClearsEarlierFailureAfterLatestToolSucceeds() {
+        let presentation = AgentTimelinePresentation.build(
+            from: [
+                ChatBlock(
+                    kind: .toolCall,
+                    text: "Error: first attempt failed",
+                    activityId: "first",
+                    activityPhase: .failed
+                ),
+                ChatBlock(
+                    kind: .agentReasoning,
+                    text: "The first approach failed, so I am trying a fallback."
+                ),
+                ChatBlock(
+                    kind: .toolCall,
+                    text: "Fallback completed",
+                    activityId: "fallback",
+                    activityPhase: .completed
+                ),
+                ChatBlock(
+                    kind: .agentReasoning,
+                    text: "The fallback completed successfully."
+                ),
+            ],
+            isStreaming: false
+        )
+
+        let recap = presentation.completionRecap(durationLabel: "Worked for 5s")
+        XCTAssertEqual(recap.outcome, .succeeded)
+        XCTAssertEqual(recap.title, "Worked for 5s")
+        XCTAssertEqual(recap.systemImage, "checkmark.circle.fill")
+    }
+
+    func testCompletionDisclosurePreservesWarningFromTheLatestCompletedTool() {
+        let presentation = AgentTimelinePresentation.build(
+            from: [
+                ChatBlock(
+                    kind: .webCall,
+                    text: "Search completed",
+                    activityId: "search",
+                    activityPhase: .completed
+                ),
+                ChatBlock(
+                    kind: .agentReasoning,
+                    text: "The search completed but found no results."
+                ),
+            ],
+            isStreaming: false
+        )
+
+        let recap = presentation.completionRecap(durationLabel: "Worked for 3s")
+        XCTAssertEqual(recap.outcome, .warning)
+        XCTAssertTrue(recap.title.contains("Completed with warnings"))
+    }
+
     func testConcurrentActivitiesPairByStableIdentityInsteadOfArrivalOrder() {
         let blocks = [
             ChatBlock(
@@ -555,8 +646,8 @@ final class AgentTimelinePresentationTests: XCTestCase {
             ChatBlock(kind: .webCall, text: "Result", activityId: "b", activityPhase: .completed),
             ChatBlock(kind: .agentReasoning, text: "The fallback succeeded and the work completed successfully."),
         ])
-        XCTAssertEqual(recovered.outcome, .recovered)
-        XCTAssertTrue(recovered.title.contains("Completed with recovery"))
+        XCTAssertEqual(recovered.outcome, .succeeded)
+        XCTAssertEqual(recovered.title, "Worked for 12s")
 
         let warning = recap([
             ChatBlock(kind: .agentReasoning, text: "One unresolved warning remains."),

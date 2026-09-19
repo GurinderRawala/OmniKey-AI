@@ -118,14 +118,33 @@ struct AgentTimelinePresentation {
     }
 
     func runOutcome(finalAnswer: String?) -> AgentRunOutcome {
-        if steps.contains(where: { $0.semanticOutcome == .actionRequired }) { return .actionRequired }
         let normalizedFinal = finalAnswer?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-        if steps.contains(where: { $0.semanticOutcome == .failed })
-            || normalizedFinal.hasPrefix("**error:**") || normalizedFinal.hasPrefix("error:")
-        {
+        if normalizedFinal.hasPrefix("**error:**") || normalizedFinal.hasPrefix("error:") {
             return .failed
         }
-        if steps.flatMap(\.activities).contains(where: { $0.status == .cancelled }) { return .cancelled }
+
+        // The disclosure summarizes the newest tool call, not the worst status
+        // seen anywhere in the timeline. Agents commonly recover from a failed
+        // attempt with a later command, so an older failure must not leave the
+        // collapsed button stuck in a "Needs attention" state.
+        if let latestStep = steps.last(where: { !$0.activities.isEmpty }),
+           let latestActivity = latestStep.activities.last
+        {
+            switch latestActivity.status {
+            case .failed:
+                return latestStep.semanticOutcome == .actionRequired ? .actionRequired : .failed
+            case .cancelled:
+                return .cancelled
+            case .running, .pending:
+                return .warning
+            case .completed:
+                return latestStep.semanticOutcome == .warning
+                    || latestStep.semanticOutcome == .noResult ? .warning : .succeeded
+            }
+        }
+
+        if steps.contains(where: { $0.semanticOutcome == .actionRequired }) { return .actionRequired }
+        if steps.contains(where: { $0.semanticOutcome == .failed }) { return .failed }
         if steps.contains(where: { $0.semanticOutcome == .warning || $0.semanticOutcome == .noResult }) {
             return .warning
         }
@@ -562,11 +581,7 @@ struct AgentTimelinePresentation {
     }
 
     static func aggregateStatus(for activities: [AgentCommandActivity]) -> AgentActivityStatus {
-        if activities.contains(where: { $0.status == .running }) { return .running }
-        if activities.contains(where: { $0.status == .failed }) { return .failed }
-        if activities.contains(where: { $0.status == .cancelled }) { return .cancelled }
-        if activities.contains(where: { $0.status == .pending }) { return .pending }
-        return .completed
+        activities.last?.status ?? .completed
     }
 }
 
