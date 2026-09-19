@@ -4,7 +4,7 @@
     "access": "public",
     "registry": "https://registry.npmjs.org/"
   },
-  "version": "1.8.0",
+  "version": "1.8.1",
   "description": "CLI for onboarding users to Omnikey AI and configuring OPENAI_API_KEY. Use Yarn for install/build.",
   "engines": {
     "node": ">=14.0.0",
@@ -38,6 +38,7 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "axios": "^1.13.5",
     "commander": "^11.0.0",
+    "compression": "^1.8.2",
     "cors": "^2.8.5",
     "cron-parser": "^4.9.0",
     "cuid": "^3.0.0",
