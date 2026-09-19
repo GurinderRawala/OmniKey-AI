@@ -29,6 +29,7 @@ export interface QueuedMessage {
 }
 
 export interface PendingSteeringMessage {
+  steeringId: string;
   content: string;
   receivedAt: string;
   platform?: string;

@@ -22,6 +22,12 @@ export interface SteeringRestartBudget {
   max: number;
 }
 
+function steeringId(message: AgentMessage): string {
+  return (
+    message.steering_id?.trim() || `legacy-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  );
+}
+
 function normalizeSteeringContent(content: string): string {
   return content.trim();
 }
@@ -36,10 +42,7 @@ function isFreshSteeringMessage(message: PendingSteeringMessage, now = Date.now(
   return now - receivedAt <= STEERING_MESSAGE_TTL_MS;
 }
 
-function freshPendingSteeringMessages(
-  sessionId: string,
-  log: Logger,
-): PendingSteeringMessage[] {
+function freshPendingSteeringMessages(sessionId: string, log: Logger): PendingSteeringMessage[] {
   const pending = sessionSteeringMessages.get(sessionId) ?? [];
   const fresh = pending.filter((message) => isFreshSteeringMessage(message));
   const discarded = pending.length - fresh.length;
@@ -97,10 +100,6 @@ function formatSteeringContent(messages: Array<{ content: string; receivedAt: st
   ].join('\n');
 }
 
-export function formatSteeringMessagesForQueuedTurn(messages: PendingSteeringMessage[]): string {
-  return formatSteeringBody(messages).trim();
-}
-
 export function enqueueSteeringMessage(
   sessionId: string,
   message: AgentMessage,
@@ -138,6 +137,7 @@ export function enqueueSteeringMessage(
   }
 
   pending.push({
+    steeringId: steeringId(message),
     content,
     platform: message.platform,
     groupName: message.group_name,
@@ -159,16 +159,17 @@ export function drainSteeringMessagesIntoHistory(
   session: SessionState,
   hasStoredPrompt: boolean,
   log: Logger,
-): number {
+): PendingSteeringMessage[] {
   const existingPendingCount = sessionSteeringMessages.get(sessionId)?.length ?? 0;
   const pending = freshPendingSteeringMessages(sessionId, log);
   if (!pending?.length) {
     if (existingPendingCount > 0) sessionSteeringMessages.delete(sessionId);
-    return 0;
+    return [];
   }
 
   const cleaned = pending
     .map((message) => ({
+      steeringId: message.steeringId,
       content: createUserContent(message.content, hasStoredPrompt).trim(),
       receivedAt: message.receivedAt,
     }))
@@ -176,7 +177,7 @@ export function drainSteeringMessagesIntoHistory(
 
   if (!cleaned.length) {
     sessionSteeringMessages.delete(sessionId);
-    return 0;
+    return [];
   }
 
   const steeringContent = formatSteeringContent(cleaned);
@@ -209,7 +210,8 @@ export function drainSteeringMessagesIntoHistory(
     steeringMessageCount: cleaned.length,
   });
 
-  return cleaned.length;
+  const appliedIDs = new Set(cleaned.map((message) => message.steeringId));
+  return pending.filter((message) => appliedIDs.has(message.steeringId));
 }
 
 export function getPendingSteeringMessageCount(sessionId: string): number {
@@ -243,16 +245,18 @@ export function clearSteeringMessages(sessionId: string): number {
 export function sendSteeringAppliedNotice(
   send: AgentSendFn,
   sessionId: string,
-  steeringMessageCount: number,
+  steeringMessages: PendingSteeringMessage[],
 ): void {
-  send({
-    session_id: sessionId,
-    sender: 'agent',
-    content: `Applied ${steeringMessageCount} steering update${
-      steeringMessageCount === 1 ? '' : 's'
-    } to the current task.`,
-    is_terminal_output: false,
-    is_error: false,
-    is_steering: true,
-  });
+  for (const message of steeringMessages) {
+    send({
+      session_id: sessionId,
+      sender: 'agent',
+      content: 'Applied steering update to the current task.',
+      is_terminal_output: false,
+      is_error: false,
+      is_steering: true,
+      steering_id: message.steeringId,
+      steering_status: 'applied',
+    });
+  }
 }

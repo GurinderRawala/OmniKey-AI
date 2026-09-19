@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import compression from 'compression';
 import path from 'path';
 import fs from 'fs';
 import zlib from 'zlib';
@@ -20,6 +21,7 @@ import { attachAgentWebSocketServer, createAgentRouter } from './agent/agentServ
 import { AppDownload } from './models/appDownload';
 // Importing models ensures they are registered with Sequelize before initDatabase().
 import './models/agentSession';
+import './models/agentTranscriptMessage';
 import './models/scheduledJob';
 import './models/mcpServer';
 import './models/subscriptionTaskTemplate';
@@ -32,6 +34,7 @@ const PORT = Number(config.port);
 
 app.set('trust proxy', 1);
 app.use(cors());
+app.use(compression({ threshold: 1_024 }) as unknown as express.RequestHandler);
 app.use(express.json());
 
 // Static website pages
@@ -113,8 +116,8 @@ app.get('/macos/appcast', (req, res) => {
 
   // These should match the values embedded into the macOS app
   // Info.plist in macOS/build_release_dmg.sh.
-  const bundleVersion = '59';
-  const shortVersion = '1.8.0';
+  const bundleVersion = '60';
+  const shortVersion = '1.9.0';
 
   const xml = `<?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0"

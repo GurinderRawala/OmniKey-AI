@@ -58,5 +58,10 @@ let package = Package(
                 ]),
             ]
         ),
+        .testTarget(
+            name: "OmniKeyAITests",
+            dependencies: ["OmniKeyAI"],
+            path: "Tests/OmniKeyAITests"
+        ),
     ]
 )

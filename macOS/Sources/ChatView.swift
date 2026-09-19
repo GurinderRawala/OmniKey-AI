@@ -7,6 +7,11 @@ import Textual
 
 // MARK: - Root
 
+enum ChatLayoutMetrics {
+    static let sidebarExpandedWidth: CGFloat = 264
+    static let sidebarCollapsedWidth: CGFloat = 52
+}
+
 struct ChatView: View {
     @ObservedObject var model: ChatModel
     @Environment(\.colorScheme) private var colorScheme
@@ -16,11 +21,13 @@ struct ChatView: View {
     /// gets more room without losing one-click access to chat history.
     @AppStorage("chatSidebarCollapsed") private var sidebarCollapsed: Bool = false
 
-    private static let sidebarExpandedWidth: CGFloat = 240
-    private static let sidebarCollapsedWidth: CGFloat = 52
-
+    // Give project names and session titles a little more breathing room.
+    // 264 pt is exactly 10% wider than the previous 240 pt sidebar while
+    // remaining compact enough for the minimum supported chat window.
     private var sidebarWidth: CGFloat {
-        sidebarCollapsed ? Self.sidebarCollapsedWidth : Self.sidebarExpandedWidth
+        sidebarCollapsed
+            ? ChatLayoutMetrics.sidebarCollapsedWidth
+            : ChatLayoutMetrics.sidebarExpandedWidth
     }
 
     private func toggleSidebar() {
@@ -92,7 +99,8 @@ struct ChatSidebarView: View {
                     title: "Update desktop app",
                     subtitle: updateChecker.latestShortVersion.map { "Version \($0)" },
                     systemImage: "arrow.down.circle.fill",
-                    help: updateChecker.latestShortVersion.map { "Install OmniKey \($0)" } ?? "Install the latest OmniKey update",
+                    help: updateChecker.latestShortVersion.map { "Install OmniKey \($0)" }
+                        ?? "Install the latest OmniKey update",
                     onUpdate: { AppDelegate.shared?.checkForUpdates() }
                 )
                 .padding(.horizontal, 10)
@@ -105,7 +113,8 @@ struct ChatSidebarView: View {
                     title: cliUpdateChecker.isUpdating ? "Updating omnikey-cli" : "Update omnikey-cli",
                     subtitle: cliUpdateChecker.isUpdating
                         ? (cliUpdateChecker.statusMessage ?? "Updating...")
-                        : (cliUpdateChecker.statusMessage ?? cliUpdateChecker.latestVersion.map { "Version \($0)" }),
+                        : (cliUpdateChecker.statusMessage
+                            ?? cliUpdateChecker.latestVersion.map { "Version \($0)" }),
                     systemImage: "terminal.fill",
                     isWorking: cliUpdateChecker.isUpdating,
                     help: "Update omnikey-cli and restart the local daemon",
@@ -240,7 +249,7 @@ struct ChatSidebarView: View {
                     if model.hasPendingNewChat && !model.isSessionSearchActive {
                         ChatPendingSessionRowView(
                             isActive: model.activeSessionId == nil,
-                            onTap: { /* already on the pending new chat */ }
+                            onTap: { /* already on the pending new chat */  }
                         )
                         .id("pending-new-chat")
                         .padding(.top, 6)
@@ -272,10 +281,11 @@ struct ChatSidebarView: View {
                         // automatically.
                         let pinnedRunningSession: AgentSessionInfo? = {
                             guard model.isRunning,
-                                  let activeId = model.activeSessionId,
-                                  let candidate = visibleSessions.first(where: { $0.id == activeId })
+                                let activeId = model.activeSessionId,
+                                let candidate = visibleSessions.first(where: { $0.id == activeId })
                             else { return nil }
-                            let hasGroup = candidate.groupName?
+                            let hasGroup =
+                                candidate.groupName?
                                 .trimmingCharacters(in: .whitespacesAndNewlines)
                                 .nilIfEmpty != nil
                             return hasGroup || candidate.isPinned ? nil : candidate
@@ -303,7 +313,11 @@ struct ChatSidebarView: View {
                         }
 
                         let pinnedSessions = visibleSessions.filter(\.isPinned)
-                        ForEach(pinnedSessions.map { ChatSessionRowItem(session: $0, activeSessionId: model.activeSessionId) }) { item in
+                        ForEach(
+                            pinnedSessions.map {
+                                ChatSessionRowItem(session: $0, activeSessionId: model.activeSessionId)
+                            }
+                        ) { item in
                             ChatSessionRowView(
                                 session: item.session,
                                 isActive: item.isActive,
@@ -344,9 +358,13 @@ struct ChatSidebarView: View {
 
                             let pinnedId = pinnedRunningSession?.id
                             for s in visibleSessions where s.id != pinnedId && !s.isPinned {
-                                let key = s.groupName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+                                let key =
+                                    s.groupName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
                                     ?? Self.ungroupedName
-                                if map[key] == nil { order.append(key); map[key] = [] }
+                                if map[key] == nil {
+                                    order.append(key)
+                                    map[key] = []
+                                }
                                 map[key]!.append(s)
                             }
                             let other = Self.ungroupedName
@@ -371,7 +389,8 @@ struct ChatSidebarView: View {
                             // start collapsed by default, so otherwise a match
                             // inside a collapsed group would be invisible and
                             // the search would look broken.
-                            let isCollapsed = model.isSessionSearchActive
+                            let isCollapsed =
+                                model.isSessionSearchActive
                                 ? false
                                 : collapsedGroups.contains(name)
 
@@ -411,7 +430,11 @@ struct ChatSidebarView: View {
                                     visibleSessionCounts[name, default: Self.sessionPageSize],
                                     sessions.count
                                 )
-                                ForEach(sessions.prefix(visibleCount).map { ChatSessionRowItem(session: $0, activeSessionId: model.activeSessionId) }) { item in
+                                ForEach(
+                                    sessions.prefix(visibleCount).map {
+                                        ChatSessionRowItem(session: $0, activeSessionId: model.activeSessionId)
+                                    }
+                                ) { item in
                                     ChatSessionRowView(
                                         session: item.session,
                                         isActive: item.isActive,
@@ -419,7 +442,9 @@ struct ChatSidebarView: View {
                                         searchQuery: model.sessionSearchQuery,
                                         onTap: { model.openSession(item.session) },
                                         onRename: { model.renameSession(item.session, to: $0) },
-                                        onTogglePin: { model.setSessionPinned(item.session, isPinned: !item.session.isPinned) },
+                                        onTogglePin: {
+                                            model.setSessionPinned(item.session, isPinned: !item.session.isPinned)
+                                        },
                                         onDelete: { model.deleteSession(item.session) }
                                     )
                                     // Include the active flag in the identity so
@@ -458,7 +483,8 @@ struct ChatSidebarView: View {
                             // captured from the previous render before the refresh that
                             // assigned the group completed).
                             let resolved = model.sessions.first(where: { $0.id == sessionId })
-                            let groupName = resolved?.groupName?
+                            let groupName =
+                                resolved?.groupName?
                                 .trimmingCharacters(in: .whitespacesAndNewlines)
                                 .nilIfEmpty
                                 ?? Self.ungroupedName
@@ -505,7 +531,6 @@ struct ChatSidebarView: View {
         }
     }
 }
-
 
 // MARK: - Sidebar Empty State
 
@@ -780,7 +805,8 @@ private struct ChatSidebarSearchField: View {
                     }
                 }
                 .accessibilityLabel("Search chats")
-                .accessibilityHint("Filter the sidebar by chat title, project, or any user message in the chat")
+                .accessibilityHint(
+                    "Filter the sidebar by chat title, project, or any user message in the chat")
 
             if !query.isEmpty {
                 Button(action: { query = "" }) {
@@ -1026,7 +1052,11 @@ struct ChatSidebarRailView: View {
                         .help("New chat (unsaved)")
                     }
 
-                    ForEach(model.sessions.prefix(12).map { ChatSessionRowItem(session: $0, activeSessionId: model.activeSessionId) }) { item in
+                    ForEach(
+                        model.sessions.prefix(12).map {
+                            ChatSessionRowItem(session: $0, activeSessionId: model.activeSessionId)
+                        }
+                    ) { item in
                         let session = item.session
                         let isRunning = model.runningSessionIds.contains(session.id)
                         Button(action: { model.openSession(session) }) {
@@ -1313,8 +1343,7 @@ struct ChatSessionRowView: View {
             } else {
                 // Ease the dot out instead of snapping it, and wrap the reset
                 // in an explicit transaction so the repeating animation is
-                // replaced rather than left mid-cycle. Mirrors the halo stop
-                // in `ThinkingTimelineRow`.
+                // replaced rather than left mid-cycle.
                 withAnimation(.easeOut(duration: 0.3)) { runPulse = false }
             }
         }
@@ -1375,16 +1404,17 @@ struct ChatSessionRowView: View {
     /// have matched the transcript instead).
     private var highlightedTitle: Text {
         let base = NordTheme.secondaryText(colorScheme)
-        let color: Color = isActive
+        let color: Color =
+            isActive
             ? NordTheme.primaryText(colorScheme)
             : isHovered ? NordTheme.primaryText(colorScheme).opacity(0.8) : base
 
         let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty,
-              let range = session.title.range(
+            let range = session.title.range(
                 of: query,
                 options: [.caseInsensitive, .diacriticInsensitive]
-              )
+            )
         else {
             return Text(session.title).foregroundColor(color)
         }
@@ -1392,10 +1422,10 @@ struct ChatSessionRowView: View {
         return Text(String(session.title[session.title.startIndex..<range.lowerBound]))
             .foregroundColor(color)
             + Text(String(session.title[range]))
-                .foregroundColor(NordTheme.accent(colorScheme))
-                .fontWeight(.semibold)
+            .foregroundColor(NordTheme.accent(colorScheme))
+            .fontWeight(.semibold)
             + Text(String(session.title[range.upperBound...]))
-                .foregroundColor(color)
+            .foregroundColor(color)
     }
 
     /// "12 turns · 3h". Omitted entirely when the backend has not reported
@@ -1473,7 +1503,6 @@ struct ChatSessionRowView: View {
     }
 }
 
-
 // MARK: - Pending New Chat Row
 
 /// Synthetic sidebar row representing a "New Chat" that the user has
@@ -1543,6 +1572,8 @@ struct ChatConversationView: View {
     @ObservedObject var model: ChatModel
     var onToggleSidebar: () -> Void
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isNearConversationBottom = true
 
     /// The "landing" layout — Codex-style centered composer with
     /// quick-access tiles — is shown for a brand-new chat (no active
@@ -1600,9 +1631,9 @@ struct ChatConversationView: View {
 
     @ViewBuilder
     private var conversationContent: some View {
-        // Switching from `LazyVStack` to `VStack` here is intentional.
-        // The transcript is already capped at `ChatModel.maxVisibleMessages`
-        // (currently 30), so eager rendering is cheap, and it fixes two
+        // Switching from `LazyVStack` to `VStack` here is intentional. History
+        // arrives in bounded pages, so eager rendering remains predictable and
+        // fixes two
         // bugs in the previous implementation:
         //   1. With the lazy stack nested in a centred 980-pt frame inside
         //      a ScrollView, SwiftUI sometimes failed to materialize rows
@@ -1622,8 +1653,15 @@ struct ChatConversationView: View {
                     if model.messages.isEmpty, !model.isLoadingSessionHistory {
                         ChatEmptyStateView()
                     }
-                    if model.trimmedOlderMessageCount > 0, !model.messages.isEmpty {
-                        ChatTrimmedHistoryNotice(trimmedCount: model.trimmedOlderMessageCount)
+                    if (model.hasMoreHistory || model.isLoadingOlderHistory || model.olderHistoryError != nil),
+                       !model.messages.isEmpty
+                    {
+                        ChatHistoryTopLoader(
+                            visibleCount: model.messages.count,
+                            isLoading: model.isLoadingOlderHistory,
+                            error: model.olderHistoryError,
+                            action: model.loadOlderMessages
+                        )
                             .padding(.vertical, 8)
                     }
                     ForEach(Array(model.messages.enumerated()), id: \.element.id) { index, message in
@@ -1637,6 +1675,7 @@ struct ChatConversationView: View {
                         // and re-laying out historical rows on every token
                         // streamed into the current turn.
                         .equatable()
+                        .id(message.id)
                         .padding(.top, index == 0 ? 8 : 18)
                         .padding(.bottom, index == model.messages.count - 1 ? 8 : 0)
                     }
@@ -1648,7 +1687,34 @@ struct ChatConversationView: View {
                 .frame(maxWidth: 820, alignment: .leading)
                 .frame(maxWidth: .infinity, alignment: .center)
             }
+            .background(
+                ConversationScrollPositionObserver { nearBottom, nearTop in
+                    isNearConversationBottom = nearBottom
+                    if nearTop { model.loadOlderMessages() }
+                }
+            )
             .defaultScrollAnchor(.bottom)
+            .onChange(of: model.activeSessionId) { previousSessionID, sessionID in
+                guard
+                    ChatSessionScrollPolicy.shouldResetForSessionChange(
+                        previousSessionID: previousSessionID,
+                        sessionID: sessionID
+                    )
+                else { return }
+                isNearConversationBottom = true
+                scrollToConversationBottom(proxy)
+            }
+            .onChange(of: model.isLoadingSessionHistory) { wasLoading, isLoading in
+                guard
+                    ChatSessionScrollPolicy.shouldResetAfterHydration(
+                        wasLoading: wasLoading,
+                        isLoading: isLoading,
+                        sessionID: model.activeSessionId
+                    )
+                else { return }
+                isNearConversationBottom = true
+                scrollToConversationBottom(proxy)
+            }
             // Only animate scroll-to-bottom for *live* turn activity. New
             // assistant blocks and the user's own sends should glide into
             // view, but opening an existing chat (where messages.count
@@ -1657,21 +1723,147 @@ struct ChatConversationView: View {
             // `isRunning` guard keeps the animation scoped to the
             // active turn.
             .onChange(of: model.messages.last?.blocks.count ?? 0) { _, _ in
-                guard model.isRunning else { return }
-                withAnimation(.easeOut(duration: 0.2)) {
-                    proxy.scrollTo("bottom", anchor: .bottom)
-                }
+                guard
+                    ChatAutoScrollPolicy.shouldFollow(
+                        wasNearBottom: isNearConversationBottom,
+                        isLiveUpdate: model.isRunning
+                    )
+                else { return }
+                followLiveScroll(proxy)
             }
             .onChange(of: model.messages.count) { oldCount, newCount in
                 // Animate when the user adds a turn (count increments by
                 // 1 or 2 during an active run). Skip the initial hydration
                 // jump from 0 → N, which is handled by
                 // `defaultScrollAnchor(.bottom)`.
-                guard model.isRunning, newCount > oldCount, oldCount > 0 else { return }
-                withAnimation(.easeOut(duration: 0.2)) {
-                    proxy.scrollTo("bottom", anchor: .bottom)
+                guard newCount > oldCount,
+                    oldCount > 0,
+                    model.historyPrependAnchorID == nil,
+                    ChatAutoScrollPolicy.shouldFollow(
+                        wasNearBottom: isNearConversationBottom,
+                        isLiveUpdate: model.isRunning
+                    )
+                else { return }
+                followLiveScroll(proxy)
+            }
+            .onChange(of: model.historyPrependAnchorID) { _, anchor in
+                guard let anchor else { return }
+                DispatchQueue.main.async {
+                    var transaction = Transaction()
+                    transaction.animation = nil
+                    withTransaction(transaction) {
+                        proxy.scrollTo(anchor, anchor: .top)
+                    }
+                    model.clearHistoryPrependAnchor()
                 }
             }
+        }
+    }
+
+    private func scrollToConversationBottom(_ proxy: ScrollViewProxy) {
+        // Wait one main-loop turn so cached, hydrated, and background-running
+        // transcripts have installed their rows. Suppressing animation prevents
+        // the previous session's retained offset from visibly sweeping downward.
+        DispatchQueue.main.async {
+            var transaction = Transaction()
+            transaction.animation = nil
+            withTransaction(transaction) {
+                proxy.scrollTo("bottom", anchor: .bottom)
+            }
+        }
+    }
+
+    private func followLiveScroll(_ proxy: ScrollViewProxy) {
+        if ChatAutoScrollPolicy.shouldAnimate(reduceMotion: reduceMotion) {
+            withAnimation(.easeOut(duration: 0.2)) {
+                proxy.scrollTo("bottom", anchor: .bottom)
+            }
+        } else {
+            proxy.scrollTo("bottom", anchor: .bottom)
+        }
+    }
+}
+
+/// Reports whether the user is currently close enough to the end of the
+/// transcript to follow streaming updates. It observes user scrolling only;
+/// content growth therefore cannot flip the flag to false before the update's
+/// `scrollTo` decision is made.
+@MainActor
+private struct ConversationScrollPositionObserver: NSViewRepresentable {
+    let onChange: (Bool, Bool) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(onChange: onChange) }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        DispatchQueue.main.async { context.coordinator.attach(from: view) }
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        context.coordinator.onChange = onChange
+        DispatchQueue.main.async { context.coordinator.attach(from: view) }
+    }
+
+    @MainActor
+    final class Coordinator: NSObject {
+        var onChange: (Bool, Bool) -> Void
+        private weak var scrollView: NSScrollView?
+
+        init(onChange: @escaping (Bool, Bool) -> Void) {
+            self.onChange = onChange
+            super.init()
+        }
+
+        deinit {
+            NotificationCenter.default.removeObserver(self)
+        }
+
+        func attach(from view: NSView) {
+            guard let candidate = enclosingScrollView(from: view) else { return }
+            if candidate === scrollView {
+                publishPosition()
+                return
+            }
+            NotificationCenter.default.removeObserver(self)
+            scrollView = candidate
+            candidate.contentView.postsBoundsChangedNotifications = true
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(scrollBoundsDidChange),
+                name: NSView.boundsDidChangeNotification,
+                object: candidate.contentView
+            )
+            publishPosition()
+        }
+
+        @objc private func scrollBoundsDidChange(_ notification: Notification) {
+            publishPosition()
+        }
+
+        private func enclosingScrollView(from view: NSView) -> NSScrollView? {
+            var ancestor: NSView? = view
+            while let current = ancestor {
+                if let scrollView = current as? NSScrollView { return scrollView }
+                if let enclosing = current.enclosingScrollView { return enclosing }
+                ancestor = current.superview
+            }
+            return nil
+        }
+
+        private func publishPosition() {
+            guard let scrollView, let documentView = scrollView.documentView else { return }
+            let visibleBottom = scrollView.contentView.bounds.maxY
+            let contentBottom = documentView.bounds.maxY
+            onChange(
+                ConversationScrollGeometry.isNearBottom(
+                    visibleBottom: visibleBottom,
+                    contentBottom: contentBottom
+                ),
+                ConversationScrollGeometry.isNearTop(
+                    visibleTop: scrollView.contentView.bounds.minY
+                )
+            )
         }
     }
 }
@@ -1682,7 +1874,6 @@ struct ChatHeaderBar: View {
     @ObservedObject var model: ChatModel
     var onToggleSidebar: () -> Void
     @Environment(\.colorScheme) private var colorScheme
-    @State private var pulse = false
 
     var body: some View {
         HStack(spacing: 8) {
@@ -1701,70 +1892,89 @@ struct ChatHeaderBar: View {
                 .foregroundColor(NordTheme.primaryText(colorScheme))
                 .lineLimit(1)
                 .truncationMode(.tail)
+                .layoutPriority(1)
 
             Spacer()
 
-            if model.isRunning {
-                // Pulsing dot + label
-                HStack(spacing: 5) {
-                    Circle()
-                        .fill(NordTheme.accentGreen(colorScheme))
-                        .frame(width: 6, height: 6)
-                        .scaleEffect(pulse ? 1.4 : 1.0)
-                        .opacity(pulse ? 0.5 : 1.0)
-                        .animation(
-                            .easeInOut(duration: 0.9).repeatForever(autoreverses: true),
-                            value: pulse
-                        )
-                        .onAppear { pulse = true }
-                        .onDisappear { pulse = false }
-                    Text("Running")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(NordTheme.accentGreen(colorScheme))
-                }
-                .padding(.horizontal, 9)
-                .padding(.vertical, 4)
-                .background(
-                    Capsule()
-                        .fill(NordTheme.accentGreen(colorScheme).opacity(
-                            colorScheme == .dark ? 0.10 : 0.08
-                        ))
+            if let session = model.activeSession {
+                ChatSessionInfoCard(
+                    session: session,
+                    visibleTurnCount: model.messages.filter { $0.role == .user }.count,
+                    projectName: model.displayedProjectName
                 )
-                .overlay(
-                    Capsule().strokeBorder(
-                        NordTheme.accentGreen(colorScheme).opacity(0.25),
-                        lineWidth: 1
-                    )
-                )
-                .transition(.opacity.combined(with: .scale(scale: 0.92)))
-
-                // Stop button
-                Button(action: model.cancelCurrentTurn) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "stop.fill")
-                            .font(.system(size: 9, weight: .bold))
-                        Text("Stop")
-                            .font(.system(size: 11, weight: .medium))
-                    }
-                    .foregroundColor(.red.opacity(0.85))
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 4)
-                    .background(
-                        Capsule()
-                            .fill(Color.red.opacity(colorScheme == .dark ? 0.10 : 0.07))
-                    )
-                    .overlay(
-                        Capsule().strokeBorder(Color.red.opacity(0.22), lineWidth: 1)
-                    )
-                }
-                .buttonStyle(.plain)
-                .transition(.opacity.combined(with: .scale(scale: 0.92)))
+                .transition(.opacity.combined(with: .scale(scale: 0.97)))
             }
+
         }
-        .animation(.easeInOut(duration: 0.18), value: model.isRunning)
+        .animation(.easeInOut(duration: 0.18), value: model.activeSessionId)
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
         .frame(minHeight: 52)
+    }
+}
+
+struct ChatSessionInfoPresentation: Equatable {
+    let project: String
+    let turns: String
+
+    init(session: AgentSessionInfo, visibleTurnCount: Int, projectName: String) {
+        project = projectName == "Select project" ? "No project" : projectName
+        let count = max(session.turns, visibleTurnCount)
+        turns = "\(count) \(count == 1 ? "turn" : "turns")"
+    }
+}
+
+private struct ChatSessionInfoCard: View {
+    let presentation: ChatSessionInfoPresentation
+    @Environment(\.colorScheme) private var colorScheme
+
+    init(session: AgentSessionInfo, visibleTurnCount: Int, projectName: String) {
+        presentation = ChatSessionInfoPresentation(
+            session: session,
+            visibleTurnCount: visibleTurnCount,
+            projectName: projectName
+        )
+    }
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 10) {
+                infoItem(icon: "folder", text: presentation.project)
+                divider
+                infoItem(icon: "bubble.left", text: presentation.turns)
+            }
+            .fixedSize(horizontal: true, vertical: false)
+
+            infoItem(icon: "bubble.left", text: presentation.turns)
+                .fixedSize(horizontal: true, vertical: false)
+        }
+        .font(OKFont.captionSmall)
+        .foregroundColor(NordTheme.secondaryText(colorScheme))
+        .padding(.horizontal, 10)
+        .frame(height: 30)
+        .background(
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(NordTheme.badgeFill(colorScheme).opacity(0.72))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .strokeBorder(NordTheme.border(colorScheme), lineWidth: 1)
+        )
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            [presentation.project, presentation.turns].joined(separator: ", ")
+        )
+    }
+
+    private func infoItem(icon: String, text: String) -> some View {
+        Label(text, systemImage: icon)
+            .lineLimit(1)
+    }
+
+    private var divider: some View {
+        Rectangle()
+            .fill(NordTheme.border(colorScheme))
+            .frame(width: 1, height: 13)
     }
 }
 
@@ -1794,29 +2004,53 @@ struct ChatEmptyStateView: View {
     }
 }
 
-/// Small banner shown at the top of a long conversation when older
-/// messages have been trimmed from the visible window to keep the UI
-/// responsive. Tells the user how many earlier messages are not being
-/// rendered (they remain persisted on the backend and will return when
-/// the session is re-opened).
-private struct ChatTrimmedHistoryNotice: View {
-    let trimmedCount: Int
+/// Accessible top sentinel for cursor-paged history. It auto-loads when it
+/// enters the viewport and remains clickable for retry or keyboard users.
+enum ChatHistoryTopLoadPolicy {
+    static func shouldLoad(isLoading: Bool, error: String?) -> Bool {
+        !isLoading && error == nil
+    }
+}
+
+private struct ChatHistoryTopLoader: View {
+    let visibleCount: Int
+    let isLoading: Bool
+    let error: String?
+    let action: () -> Void
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "clock.arrow.circlepath")
-                .font(OKFont.eyebrow)
-                .foregroundColor(NordTheme.secondaryText(colorScheme))
-            Text("Showing the latest \(ChatModel.maxVisibleMessages) of \(ChatModel.maxVisibleMessages + trimmedCount) messages")
-                .font(OKFont.captionSmall)
-                .foregroundColor(NordTheme.secondaryText(colorScheme))
+        Button(action: action) {
+            HStack(spacing: 7) {
+                if isLoading {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: error == nil ? "clock.arrow.circlepath" : "arrow.clockwise")
+                        .font(OKFont.eyebrow)
+                }
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(isLoading ? "Loading earlier messages…" : (error == nil ? "Load earlier messages" : "Retry earlier messages"))
+                        .font(OKFont.captionSmall)
+                    Text(error ?? "Showing \(visibleCount) newest messages")
+                        .font(OKFont.captionSmall)
+                        .opacity(0.72)
+                }
+            }
+            .foregroundColor(error == nil ? NordTheme.secondaryText(colorScheme) : .red)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Capsule().fill(NordTheme.badgeFill(colorScheme)))
+            .overlay(Capsule().strokeBorder(NordTheme.border(colorScheme), lineWidth: 1))
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
-        .background(Capsule().fill(NordTheme.badgeFill(colorScheme)))
-        .overlay(Capsule().strokeBorder(NordTheme.border(colorScheme), lineWidth: 1))
+        .buttonStyle(.plain)
+        .disabled(isLoading)
+        .accessibilityLabel(error == nil ? "Load earlier messages" : "Retry loading earlier messages")
         .frame(maxWidth: .infinity, alignment: .center)
+        .onAppear {
+            if ChatHistoryTopLoadPolicy.shouldLoad(isLoading: isLoading, error: error) {
+                action()
+            }
+        }
     }
 }
 
@@ -2004,7 +2238,7 @@ private struct LandingInputComposer: View {
     @ObservedObject var model: ChatModel
     @Environment(\.colorScheme) private var colorScheme
     @State private var isFocused = false
-    @State private var inputHeight: CGFloat = 88
+    @State private var inputHeight: CGFloat = ChatComposerMetrics.minimumHeight
     @State private var isSendHovered = false
 
     private var inputIsEmpty: Bool {
@@ -2038,10 +2272,10 @@ private struct LandingInputComposer: View {
             ZStack(alignment: .topLeading) {
                 if model.inputText.isEmpty {
                     Text(model.isRunning ? "Steer the current task…" : "Ask OmniAgent anything…")
-                        .font(.system(size: 13))
+                        .font(.system(size: ChatComposerMetrics.fontSize))
                         .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.45))
                         .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
+                        .padding(.vertical, 10)
                         .allowsHitTesting(false)
                 }
                 ChatMarkdownInput(
@@ -2057,8 +2291,7 @@ private struct LandingInputComposer: View {
                 .frame(height: inputHeight)
                 .padding(.horizontal, 4)
                 .onChange(of: model.inputText) { _, newValue in
-                    let lineCount = max(1, newValue.components(separatedBy: "\n").count)
-                    inputHeight = max(88, min(CGFloat(lineCount) * 20 + 40, 220))
+                    inputHeight = ChatComposerMetrics.height(for: newValue)
                 }
             }
             .padding(.top, 4)
@@ -2115,7 +2348,9 @@ private struct LandingInputComposer: View {
                     .menuStyle(.borderlessButton)
                     .fixedSize()
                     .disabled(model.isUpdatingDefaultTaskTemplate || !model.canChangeSessionSetup)
-                    .help(model.canChangeSessionSetup ? "Choose task instructions" : "Task instructions are locked after a session starts")
+                    .help(
+                        model.canChangeSessionSetup
+                            ? "Choose task instructions" : "Task instructions are locked after a session starts")
                 } else {
                     Button {
                         AppDelegate.shared?.showTaskInstructionsWindow()
@@ -2131,7 +2366,9 @@ private struct LandingInputComposer: View {
                     }
                     .buttonStyle(.plain)
                     .disabled(!model.canChangeSessionSetup)
-                    .help(model.canChangeSessionSetup ? "Add instruction" : "Task instructions are locked after a session starts")
+                    .help(
+                        model.canChangeSessionSetup
+                            ? "Add instruction" : "Task instructions are locked after a session starts")
                 }
 
                 // Project path / group dropdown
@@ -2179,7 +2416,9 @@ private struct LandingInputComposer: View {
                 .menuStyle(.borderlessButton)
                 .fixedSize()
                 .disabled(!model.canChangeSessionSetup)
-                .help(model.canChangeSessionSetup ? "Choose project" : "Project is locked after a session starts")
+                .help(
+                    model.canChangeSessionSetup
+                        ? "Choose project" : "Project is locked after a session starts")
 
                 Spacer()
 
@@ -2219,8 +2458,11 @@ private struct LandingInputComposer: View {
                 // • No text + running → stop button
                 // • No text + idle → disabled send button
                 Button {
-                    if !inputIsEmpty { model.sendCurrentInput() }
-                    else if model.isRunning { model.cancelCurrentTurn() }
+                    if !inputIsEmpty {
+                        model.sendCurrentInput()
+                    } else if model.isRunning {
+                        model.cancelCurrentTurn()
+                    }
                 } label: {
                     ZStack {
                         Circle()
@@ -2325,7 +2567,8 @@ private struct AgentModelMenu: View {
     private var menuOptions: [APIClient.AgentModelOptionDTO] {
         var options = model.activeAgentModelOptions
         if !model.activeAgentModel.isEmpty,
-           !options.contains(where: { $0.id == model.activeAgentModel }) {
+            !options.contains(where: { $0.id == model.activeAgentModel })
+        {
             options.insert(
                 APIClient.AgentModelOptionDTO(
                     id: model.activeAgentModel,
@@ -2674,7 +2917,11 @@ struct ChatMessageView: View, @MainActor Equatable {
     var body: some View {
         switch message.role {
         case .user:
-            UserBubbleView(text: message.text, sentAt: message.sentAt, isSteering: message.isSteering)
+            UserBubbleView(
+                text: message.text,
+                sentAt: message.sentAt,
+                steeringState: message.steeringState
+            )
         case .assistant:
             AssistantMessageView(message: message, isStreaming: isStreaming)
         case .system:
@@ -2760,7 +3007,7 @@ struct UserBubbleView: View {
     /// When the user sent the message. `nil` for messages hydrated from
     /// server history, where no send time is available.
     var sentAt: Date? = nil
-    var isSteering: Bool = false
+    var steeringState: SteeringDeliveryState? = nil
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -2795,15 +3042,16 @@ struct UserBubbleView: View {
                 // Sharing one row keeps the bubble's vertical rhythm
                 // unchanged from before the timestamp was added.
                 HStack(spacing: 8) {
-                    if isSteering {
+                    if let steeringState {
                         HStack(spacing: 4) {
-                            Image(systemName: "arrow.up.right.circle.fill")
+                            Image(systemName: steeringIcon(for: steeringState))
                                 .font(.system(size: 10, weight: .semibold))
-                            Text("Steered current task")
+                            Text(steeringLabel(for: steeringState))
                                 .font(.system(size: 10, weight: .medium))
+                                .lineLimit(2)
                         }
-                        .foregroundColor(NordTheme.accentGreen(colorScheme).opacity(0.78))
-                        .help("Sent to the running task instead of queued as a new turn")
+                        .foregroundColor(steeringColor(for: steeringState).opacity(0.82))
+                        .help(steeringHelp(for: steeringState))
                     }
                     if let sentAt {
                         Text(ChatMessageTimestamp.label(for: sentAt))
@@ -2848,7 +3096,9 @@ struct UserBubbleView: View {
         if trimmed.contains("\n") { return true }
         if trimmed.contains("```") { return true }
         if trimmed.contains("`") { return true }
-        let structuralPrefixes = ["# ", "## ", "### ", "#### ", "##### ", "###### ", "- ", "* ", "+ ", "• ", "> "]
+        let structuralPrefixes = [
+            "# ", "## ", "### ", "#### ", "##### ", "###### ", "- ", "* ", "+ ", "• ", "> ",
+        ]
         for prefix in structuralPrefixes where trimmed.hasPrefix(prefix) { return true }
         if trimmed.range(of: #"^\d+[\.\)]\s+"#, options: .regularExpression) != nil { return true }
         if trimmed.contains("**") || trimmed.contains("__") { return true }
@@ -2865,8 +3115,8 @@ struct UserBubbleView: View {
     // the conversation visually quiet so the assistant prose — which is
     // where the actual answer lives — remains the focal point.
     private var bubbleFillColor: Color {
-        if isSteering {
-            return NordTheme.accentGreen(colorScheme).opacity(colorScheme == .dark ? 0.16 : 0.09)
+        if let steeringState {
+            return steeringColor(for: steeringState).opacity(colorScheme == .dark ? 0.16 : 0.09)
         }
         switch colorScheme {
         case .dark:
@@ -2881,14 +3131,51 @@ struct UserBubbleView: View {
     }
 
     private var bubbleBorderColor: Color {
-        if isSteering {
-            return NordTheme.accentGreen(colorScheme).opacity(colorScheme == .dark ? 0.30 : 0.24)
+        if let steeringState {
+            return steeringColor(for: steeringState).opacity(colorScheme == .dark ? 0.30 : 0.24)
         }
         switch colorScheme {
         case .dark:
             return NordTheme.accent(colorScheme).opacity(0.32)
         default:
             return NordTheme.accent(colorScheme).opacity(0.22)
+        }
+    }
+
+    private func steeringLabel(for state: SteeringDeliveryState) -> String {
+        switch state {
+        case .pending: return "Sending update…"
+        case let .received(pendingCount):
+            guard let pendingCount, pendingCount > 1 else { return "Update queued for current task" }
+            return "Update queued · \(pendingCount) pending"
+        case .applied: return "Applied to current task"
+        case let .failed(reason): return "Update not applied · \(reason)"
+        }
+    }
+
+    private func steeringIcon(for state: SteeringDeliveryState) -> String {
+        switch state {
+        case .pending: return "clock"
+        case .received: return "tray.and.arrow.down.fill"
+        case .applied: return "checkmark.circle.fill"
+        case .failed: return "exclamationmark.triangle.fill"
+        }
+    }
+
+    private func steeringColor(for state: SteeringDeliveryState) -> Color {
+        switch state {
+        case .pending, .received: return NordTheme.accentBlue(colorScheme)
+        case .applied: return NordTheme.accentGreen(colorScheme)
+        case .failed: return Color(red: 0.92, green: 0.33, blue: 0.35)
+        }
+    }
+
+    private func steeringHelp(for state: SteeringDeliveryState) -> String {
+        switch state {
+        case .pending: return "Waiting for the server to acknowledge this update"
+        case .received: return "The server queued this update for the running task"
+        case .applied: return "The running task received this update"
+        case let .failed(reason): return reason
         }
     }
 }
@@ -2983,472 +3270,39 @@ struct AssistantMessageView: View {
                     .padding(.vertical, 6)
             } else {
                 if !thinkingBlocks.isEmpty {
-                    ThinkingSectionView(blocks: thinkingBlocks, isStreaming: isStreaming)
+                    AgentExecutionHistoryView(
+                        blocks: thinkingBlocks,
+                        isStreaming: isStreaming && finalBlock == nil,
+                        completionDate: finalBlock?.createdAt,
+                        finalAnswer: finalBlock?.text
+                    )
                 }
                 if let final = finalBlock {
-                    FinalAnswerView(text: final.text)
+                    FinalAnswerView(block: final)
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
-
-// MARK: - Timeline timing helpers
-
-/// Formatting + derivation helpers for the Codex-style thinking timeline.
-/// Kept separate from the views so the timing rules are testable and the
-/// view bodies stay declarative.
-enum AgentTimelineTiming {
-    /// Below this threshold we assume the blocks were hydrated from history
-    /// (all stamped at load time) rather than streamed, and suppress timings.
-    static let minimumMeaningfulSpan: TimeInterval = 0.75
-
-    static func span(of blocks: [ChatBlock], now: Date) -> TimeInterval {
-        guard let first = blocks.first else { return 0 }
-        let end = max(blocks.last?.createdAt ?? first.createdAt, now)
-        return max(0, end.timeIntervalSince(first.createdAt))
-    }
-
-    /// Duration attributable to `blocks[index]` — the gap until the next
-    /// block, or until `now` for the block still in flight.
-    static func duration(of blocks: [ChatBlock], at index: Int, now: Date) -> TimeInterval {
-        guard index >= 0, index < blocks.count else { return 0 }
-        let start = blocks[index].createdAt
-        let end = (index + 1 < blocks.count) ? blocks[index + 1].createdAt : now
-        return max(0, end.timeIntervalSince(start))
-    }
-
-    /// "8s", "1m 04s", "1h 02m". Sub-second values round up to "1s" so a
-    /// step never renders as "0s".
-    static func format(_ interval: TimeInterval) -> String {
-        let total = Int(interval.rounded())
-        if total < 60 { return "\(max(1, total))s" }
-        let minutes = total / 60
-        let seconds = total % 60
-        if minutes < 60 { return String(format: "%dm %02ds", minutes, seconds) }
-        return String(format: "%dh %02dm", minutes / 60, minutes % 60)
-    }
-}
-
-// MARK: - Thinking Section (Timeline)
-
-private struct ThinkingSectionView: View {
-    let blocks: [ChatBlock]
-    var isStreaming: Bool = false
-    @Environment(\.colorScheme) private var colorScheme
-
-    /// `nil` means "follow the stream" — auto-expanded while the turn runs and
-    /// auto-collapsed once it finishes, matching the Codex transcript. As soon
-    /// as the user toggles the header the explicit choice wins for this turn.
-    @State private var userExpanded: Bool? = nil
-    @State private var expandedSteps: Set<Int> = []
-    @State private var now = Date()
-    @State private var headlinePhase = false
-
-    /// 1 Hz tick drives the live "Thinking… 12s" counter and the in-flight
-    /// step duration. Only consumed while `isStreaming`.
-    private let ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
-
-    private var expanded: Bool { userExpanded ?? isStreaming }
-
-    private var latestBlock: ChatBlock? { blocks.last }
-
-    /// Headline of the step currently in flight — surfaced next to the header
-    /// so the reasoning is visible without expanding the timeline.
-    private var liveHeadline: String? {
-        guard isStreaming, let block = latestBlock else { return nil }
-        let kind = AgentTimelineSummarizer.classify(kind: block.kind, text: block.text)
-        let headline = AgentTimelineSummarizer.stepHeadline(kind: kind, text: block.text)
-        return headline.isEmpty ? nil : headline
-    }
-
-    private var showsTimings: Bool {
-        AgentTimelineTiming.span(of: blocks, now: isStreaming ? now : (blocks.last?.createdAt ?? now))
-            >= AgentTimelineTiming.minimumMeaningfulSpan
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            headerPill
-            if isStreaming, !expanded, let headline = liveHeadline {
-                liveActivityLine(headline)
-            }
-            if expanded {
-                timelineBody
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .onAppear { if isStreaming { startHeadlinePulse() } }
-        .onReceive(ticker) { tick in
-            guard isStreaming else { return }
-            now = tick
-        }
-        .onChange(of: isStreaming) { _, streaming in
-            if streaming {
-                now = Date()
-                startHeadlinePulse()
-            } else {
-                // Freeze the clock at the last block so the finished header
-                // reports the real turn duration instead of drifting.
-                now = blocks.last?.createdAt ?? now
-                headlinePulse(false)
-                // Auto-collapse back to the summary pill, but only when the
-                // user never expressed a preference for this turn.
-                if userExpanded == nil {
-                    withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
-                        expandedSteps.removeAll()
-                    }
-                }
-            }
-        }
-    }
-
-    private var headerPill: some View {
-        Button {
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
-                userExpanded = !expanded
-            }
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: isStreaming ? "sparkles" : "brain")
-                    .font(.system(size: 11.9, weight: .semibold))
-                    .foregroundColor(
-                        isStreaming
-                            ? NordTheme.accentPurple(colorScheme)
-                            : NordTheme.secondaryText(colorScheme).opacity(0.85)
-                    )
-                // Sized locally rather than via `OKFont.captionSmall` (11pt):
-                // this is the turn's primary status line, so it needs more
-                // presence than the badge-sized token, which is shared with
-                // other chips and should not grow with it.
-                Text(thinkingHeaderTitle)
-                    .font(.system(size: 11.9, weight: .semibold))
-                    .foregroundColor(NordTheme.secondaryText(colorScheme))
-                Image(systemName: expanded ? "chevron.up" : "chevron.down")
-                    .font(.system(size: 9.5, weight: .semibold))
-                    .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.55))
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 0)
-            .padding(.vertical, 2)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help(expanded ? "Collapse thinking" : "Expand thinking")
-    }
-
-    /// Collapsed-state live line: the current reasoning headline, gently
-    /// pulsing, so the user sees *what* the agent is doing without opening
-    /// the timeline — the core of the Codex "live reasoning" feel.
-    private func liveActivityLine(_ headline: String) -> some View {
-        HStack(alignment: .top, spacing: 6) {
-            Circle()
-                .fill(NordTheme.accentPurple(colorScheme))
-                .frame(width: 5, height: 5)
-                .padding(.top, 4)
-                .opacity(headlinePhase ? 1.0 : 0.35)
-                .animation(.easeInOut(duration: 0.85).repeatForever(autoreverses: true), value: headlinePhase)
-
-            Text(headline)
-                .font(.system(size: 11.5))
-                .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(headlinePhase ? 0.92 : 0.62))
-                .animation(.easeInOut(duration: 0.85).repeatForever(autoreverses: true), value: headlinePhase)
-                .lineLimit(2)
-                .multilineTextAlignment(.leading)
-                .fixedSize(horizontal: false, vertical: true)
-                .id(headline)
-                .transition(.opacity)
-        }
-        .padding(.leading, 2)
-        .animation(.easeInOut(duration: 0.2), value: headline)
-    }
-
-    /// Codex shows "Thinking… 12s" while the turn runs and
-    /// "Worked for 2m 37s · 9 steps" once it lands. Timings are omitted for
-    /// transcripts hydrated from history, where no real timing exists.
-    private var thinkingHeaderTitle: String {
-        let steps = blocks.count
-        let stepText = "\(steps) step\(steps == 1 ? "" : "s")"
-
-        if isStreaming {
-            guard showsTimings else { return "Thinking…" }
-            let elapsed = AgentTimelineTiming.span(of: blocks, now: now)
-            return "Thinking… \(AgentTimelineTiming.format(elapsed))"
-        }
-
-        guard steps > 0 else { return "Thought" }
-        guard showsTimings else { return "Thought for \(stepText)" }
-        let total = AgentTimelineTiming.span(of: blocks, now: blocks.last?.createdAt ?? now)
-        return "Worked for \(AgentTimelineTiming.format(total)) · \(stepText)"
-    }
-
-    private var timelineBody: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(blocks.indices, id: \.self) { i in
-                ThinkingTimelineRow(
-                    block: blocks[i],
-                    isLast: i == blocks.count - 1,
-                    isActive: isStreaming && i == blocks.count - 1,
-                    isExpanded: expandedSteps.contains(i),
-                    duration: showsTimings
-                        ? AgentTimelineTiming.duration(of: blocks, at: i, now: isStreaming ? now : (blocks.last?.createdAt ?? now))
-                        : nil,
-                    onToggle: {
-                        withAnimation(.easeInOut(duration: 0.18)) {
-                            if expandedSteps.contains(i) { expandedSteps.remove(i) }
-                            else { expandedSteps.insert(i) }
-                        }
-                    }
-                )
-            }
-        }
-        .padding(.leading, 2)
-        .padding(.top, 2)
-    }
-
-    private func startHeadlinePulse() {
-        headlinePulse(true)
-    }
-
-    private func headlinePulse(_ on: Bool) {
-        headlinePhase = on
-    }
-}
-
-// MARK: - Timeline Row
-
-private struct ThinkingTimelineRow: View {
-    let block: ChatBlock
-    let isLast: Bool
-    let isActive: Bool
-    let isExpanded: Bool
-    /// Wall-clock time spent on this step. `nil` hides the badge (history).
-    var duration: TimeInterval? = nil
-    let onToggle: () -> Void
-
-    @Environment(\.colorScheme) private var colorScheme
-    @State private var hovered = false
-    @State private var haloPulse = false
-
-    // Per-kind visual metadata
-    /// The block's *effective* kind. Persisted history mislabels unrecognised
-    /// tool results as `agentReasoning`, so recover the real kind before
-    /// choosing an icon, label, or detail renderer.
-    private var kind: ChatBlockKind {
-        AgentTimelineSummarizer.classify(kind: block.kind, text: block.text)
-    }
-
-    private var meta: (icon: String, label: String, accent: Color) {
-        switch kind {
-        case .agentReasoning:  return ("brain",             "Reasoning",  NordTheme.accentPurple(colorScheme))
-        case .shellCommand:    return ("terminal.fill",     "Command",    NordTheme.accent(colorScheme))
-        case .terminalOutput:  return ("terminal",          "Output",     NordTheme.secondaryText(colorScheme))
-        case .webCall:         return ("globe",             "Web Search", NordTheme.accentBlue(colorScheme))
-        case .mcpCall:         return ("server.rack",       "MCP Call",   NordTheme.accentAmber(colorScheme))
-        case .imageRendering:  return ("photo",             "Image",      NordTheme.accentGreen(colorScheme))
-        case .toolCall:        return ("wrench.and.screwdriver", toolLabel, NordTheme.accentBlue(colorScheme))
-        case .finalAnswer:     return ("checkmark.circle.fill", "Answer", NordTheme.accentGreen(colorScheme))
-        }
-    }
-
-    /// Names the specific tool in the row label ("Tool · web search") so the
-    /// step says what actually ran instead of a generic placeholder.
-    private var toolLabel: String {
-        guard let raw = AgentTimelineSummarizer.toolName(in: block.text) else { return "Tool" }
-        return "Tool · \(AgentTimelineSummarizer.friendlyToolName(raw))"
-    }
-
-    /// Terse title for the step, shown in place of the raw prose so the
-    /// collapsed timeline reads as a list of actions.
-    private var headline: String {
-        AgentTimelineSummarizer.stepHeadline(kind: kind, text: block.text)
-    }
-
-    private var durationLabel: String? {
-        guard let duration, duration >= 1 else { return nil }
-        return AgentTimelineTiming.format(duration)
-    }
-
-    /// Reasoning text minus the headline, so the expanded prose does not
-    /// repeat the title rendered directly above it.
-    private var reasoningBody: String {
-        // Use the sanitized prose, not the raw block: persisted reasoning
-        // often carries `Tool: ...` headers and bare shell lines that add no
-        // meaning and duplicate the adjacent Command row.
-        let prose = AgentTimelineSummarizer.reasoningProse(block.text)
-        guard !prose.isEmpty, prose != headline else { return "" }
-        if prose.hasPrefix(headline) {
-            return String(prose.dropFirst(headline.count))
-                .trimmingCharacters(in: CharacterSet(charactersIn: " \n\t:.-*#"))
-        }
-        return prose
-    }
-
-    var body: some View {
-        let (icon, label, accent) = meta
-        HStack(alignment: .top, spacing: 0) {
-
-            // ── Left: dot + vertical connector ──────────────────────
-            VStack(spacing: 0) {
-                ZStack {
-                    if isActive {
-                        Circle()
-                            .fill(accent.opacity(haloPulse ? 0.42 : 0.10))
-                            .frame(width: 14, height: 14)
-                            .scaleEffect(haloPulse ? 1.0 : 0.82)
-                    }
-                    Circle()
-                        .fill(isActive ? accent : NordTheme.secondaryText(colorScheme).opacity(0.22))
-                        .frame(width: isActive ? 7 : 5, height: isActive ? 7 : 5)
-                }
-                // Square frame ensures the halo circle is round and centred.
-                .frame(width: 20, height: 20)
-
-                if !isLast {
-                    Rectangle()
-                        .fill(NordTheme.border(colorScheme))
-                        .frame(width: 1)
-                        .frame(maxHeight: .infinity)
-                }
-            }
-            .frame(width: 20)
-            .onAppear {
-                if isActive { startHaloPulse() }
-            }
-            .onChange(of: isActive) { _, active in
-                if active {
-                    startHaloPulse()
-                } else {
-                    withAnimation(.easeOut(duration: 0.3)) { haloPulse = false }
-                }
-            }
-
-            // ── Right: label row + optional expanded detail ──────────
-            VStack(alignment: .leading, spacing: 0) {
-                // Label row — always visible, tap to expand
-                Button(action: onToggle) {
-                    HStack(spacing: 5) {
-                        Image(systemName: icon)
-                            .font(.system(size: 9.5, weight: .semibold))
-                            .foregroundColor(accent)
-                            .frame(width: 13, alignment: .center)
-
-                        Text(label)
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundColor(NordTheme.primaryText(colorScheme).opacity(0.82))
-
-                        if !headline.isEmpty {
-                            Text("·")
-                                .font(.system(size: 11))
-                                .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.3))
-                            Text(headline)
-                                .font(.system(size: 11))
-                                .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.58))
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                        }
-
-                        Spacer(minLength: 4)
-
-                        if let durationLabel {
-                            Text(durationLabel)
-                                .font(.system(size: 9.5, weight: .medium).monospacedDigit())
-                                .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(isActive ? 0.7 : 0.4))
-                        }
-
-                        // Chevron is always visible now that expanding is the
-                        // only way to reach a step's detail — hiding it until
-                        // hover left the disclosure undiscoverable.
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 8, weight: .medium))
-                            .rotationEffect(.degrees(isExpanded ? 180 : 0))
-                            .foregroundColor(
-                                NordTheme.secondaryText(colorScheme)
-                                    .opacity(hovered ? 0.6 : 0.3)
-                            )
-                    }
-                    .padding(.vertical, 5)
-                    .padding(.trailing, 6)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .onHover { hovered = $0 }
-
-                // Detail is disclosure-only — nothing is rendered until the
-                // step is opened, so the collapsed timeline stays a scannable
-                // list of one-line steps.
-
-                // Expanded full content
-                if isExpanded {
-                    expandedDetail
-                        .padding(.top, 4)
-                        .padding(.bottom, 10)
-                        .transition(.opacity.combined(with: .move(edge: .top)))
-                }
-            }
-            .padding(.leading, 8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        // Bottom gap between rows (the connector fills this space)
-        .padding(.bottom, isLast ? 4 : 0)
-    }
-
-    private func startHaloPulse() {
-        withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
-            haloPulse = true
-        }
-    }
-
-    @ViewBuilder
-    private var expandedDetail: some View {
-        let trimmed = block.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        switch kind {
-        case .shellCommand, .terminalOutput, .webCall, .mcpCall, .toolCall, .imageRendering:
-            ChatMarkdownView(
-                text: AgentTimelineSummarizer.expandedSummary(kind: kind, text: trimmed),
-                baseFontSize: 11.5
-            )
-            .opacity(0.88)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(
-                        colorScheme == .dark
-                            ? Color(red: 16 / 255, green: 18 / 255, blue: 26 / 255)
-                            : Color(red: 248 / 255, green: 249 / 255, blue: 253 / 255)
-                    )
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .strokeBorder(NordTheme.border(colorScheme), lineWidth: 1)
-            )
-            .padding(.trailing, 6)
-
-        default:
-            // Reasoning expands to the cleaned prose. Falling back to the raw
-            // text would reintroduce exactly the command noise the collapsed
-            // row filtered out.
-            let prose = AgentTimelineSummarizer.reasoningProse(trimmed)
-            ChatMarkdownView(
-                text: prose.isEmpty ? "_No additional detail._" : prose,
-                baseFontSize: 11.5
-            )
-            .opacity(0.85)
-            .padding(.trailing, 6)
-        }
-    }
-}
-
 
 // MARK: - Final Answer
 
 struct FinalAnswerView: View {
-    let text: String
+    let block: ChatBlock
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @ObservedObject private var model = ChatModel.shared
+    @State private var showFullContent = false
+
+    private var displayedText: String {
+        ProgressiveBlockContent.displayedText(for: block, showFullContent: showFullContent)
+    }
+
+    private var hasProgressiveContent: Bool { block.previewText != nil }
+    private var isLoading: Bool {
+        block.fullContentID.map { model.fullContentLoadingIDs.contains($0) } ?? false
+    }
 
     var body: some View {
         // Soft "paper" surface: a low-contrast lift on top of the
@@ -3477,14 +3331,35 @@ struct FinalAnswerView: View {
             // surrounding chrome. `.font(...)` sets the body size;
             // headings scale off it proportionally through Textual's
             // font-scale system.
-            StructuredText(markdown: text)
+            StructuredText(markdown: displayedText)
                 .textual.structuredTextStyle(.gitHub)
                 .textual.inlineStyle(nordInlineStyle)
                 .textual.textSelection(.enabled)
                 .font(.system(size: 14.5))
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            ChatCopyButton(text: text, title: "Copy answer")
+            HStack(spacing: 10) {
+                if hasProgressiveContent {
+                    Button(action: toggleFullContent) {
+                        HStack(spacing: 5) {
+                            if isLoading { ProgressView().controlSize(.small) }
+                            Text(fullContentButtonLabel)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(NordTheme.accentBlue(colorScheme))
+                    .disabled(isLoading)
+                }
+                Spacer()
+                ChatCopyButton(
+                    text: block.text,
+                    title: hasProgressiveContent ? "Copy complete answer" : "Copy answer",
+                    copyProvider: block.isContentTruncated ? { completion in
+                        model.loadFullBlockContent(block, completion: completion)
+                    } : nil
+                )
+            }
         }
         .padding(.horizontal, 16)
         .padding(.top, 14)
@@ -3498,6 +3373,29 @@ struct FinalAnswerView: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(NordTheme.border(colorScheme), lineWidth: 1)
         )
+    }
+
+    private var fullContentButtonLabel: String {
+        if isLoading { return "Loading complete answer…" }
+        if showFullContent { return "Collapse long answer" }
+        return "Show complete answer · \(ProgressiveBlockContent.sizeLabel(for: block))"
+    }
+
+    private func toggleFullContent() {
+        if block.isContentTruncated {
+            model.loadFullBlockContent(block) { text in
+                guard text != nil else { return }
+                withAnimation(
+                    AgentTimelineMotionPolicy.shouldAnimate(reduceMotion: reduceMotion)
+                        ? .easeInOut(duration: 0.18) : nil
+                ) { showFullContent = true }
+            }
+        } else {
+            withAnimation(
+                AgentTimelineMotionPolicy.shouldAnimate(reduceMotion: reduceMotion)
+                    ? .easeInOut(duration: 0.18) : nil
+            ) { showFullContent.toggle() }
+        }
     }
 
     /// Inline styling shared across the final answer. Applied on top
@@ -3544,9 +3442,10 @@ struct FinalAnswerView: View {
 
 // MARK: - Copy Button
 
-private struct ChatCopyButton: View {
+struct ChatCopyButton: View {
     let text: String
     var title: String = "Copy"
+    var copyProvider: ((@escaping (String?) -> Void) -> Void)? = nil
     /// When true (the default), the button renders as a compact
     /// icon-only square — used for the persistent affordances on the
     /// final answer and user bubble. Set to false to get the original
@@ -3555,17 +3454,18 @@ private struct ChatCopyButton: View {
     @Environment(\.colorScheme) private var colorScheme
     @State private var copied = false
     @State private var hovered = false
+    @State private var isLoading = false
 
     var body: some View {
         Button(action: copy) {
             Group {
                 if iconOnly {
-                    Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                    Image(systemName: copied ? "checkmark" : (isLoading ? "hourglass" : "doc.on.doc"))
                         .font(.system(size: 11, weight: .semibold))
                         .frame(width: 22, height: 22)
                 } else {
                     HStack(spacing: 4) {
-                        Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                        Image(systemName: copied ? "checkmark" : (isLoading ? "hourglass" : "doc.on.doc"))
                             .font(.system(size: 10, weight: .semibold))
                         Text(copied ? "Copied" : "Copy")
                             .font(.system(size: 10, weight: .medium))
@@ -3599,14 +3499,30 @@ private struct ChatCopyButton: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .disabled(isLoading)
         .onHover { hovered = $0 }
         .animation(.easeInOut(duration: 0.12), value: hovered)
         .help(copied ? "Copied" : title)
     }
 
     private func copy() {
+        if let copyProvider {
+            isLoading = true
+            copyProvider { value in
+                DispatchQueue.main.async {
+                    isLoading = false
+                    guard let value else { return }
+                    writeToPasteboard(value)
+                }
+            }
+            return
+        }
+        writeToPasteboard(text)
+    }
+
+    private func writeToPasteboard(_ value: String) {
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
+        NSPasteboard.general.setString(value, forType: .string)
         withAnimation { copied = true }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
             withAnimation { copied = false }
@@ -3637,17 +3553,17 @@ struct ChatMarkdownView: View, @MainActor Equatable {
         VStack(alignment: .leading, spacing: 10) {
             ForEach(Array(parsed.enumerated()), id: \.offset) { _, block in
                 switch block {
-                case let .code(language, code):
+                case .code(let language, let code):
                     ChatCodeBlockView(language: language, code: code, baseFontSize: baseFontSize)
-                case let .heading(level, content):
+                case .heading(let level, let content):
                     markdownText(content, size: headingSize(level), weight: .semibold)
                         .padding(.top, level == 1 ? 5 : 2)
                         .padding(.bottom, level <= 2 ? 1 : 0)
-                case let .paragraph(content):
+                case .paragraph(let content):
                     markdownText(content)
-                case let .list(items):
+                case .list(let items):
                     listView(items: items)
-                case let .quote(content):
+                case .quote(let content):
                     HStack(alignment: .top, spacing: 9) {
                         RoundedRectangle(cornerRadius: 1)
                             .fill(NordTheme.accent(colorScheme).opacity(0.35))
@@ -3662,7 +3578,7 @@ struct ChatMarkdownView: View, @MainActor Equatable {
                         .fill(NordTheme.border(colorScheme))
                         .frame(height: 1)
                         .padding(.vertical, 4)
-                case let .table(header, rows):
+                case .table(let header, let rows):
                     MarkdownTableView(header: header, rows: rows, baseFontSize: baseFontSize)
                 }
             }
@@ -3714,7 +3630,9 @@ struct ChatMarkdownView: View, @MainActor Equatable {
         if let checked = item.checked {
             Image(systemName: checked ? "checkmark.square.fill" : "square")
                 .font(.system(size: max(baseFontSize - 0.5, 10), weight: .medium))
-                .foregroundColor(checked ? NordTheme.accentGreen(colorScheme) : NordTheme.secondaryText(colorScheme))
+                .foregroundColor(
+                    checked ? NordTheme.accentGreen(colorScheme) : NordTheme.secondaryText(colorScheme)
+                )
                 .frame(width: 17, alignment: .trailing)
                 .padding(.top, 1)
         } else {
@@ -3769,10 +3687,12 @@ struct ChatMarkdownView: View, @MainActor Equatable {
 
     fileprivate static func parseBlocks(from text: String) -> [MarkdownBlock] {
         var result: [MarkdownBlock] = []
-        let normalizedText = text
+        let normalizedText =
+            text
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
-        let lines = normalizedText.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let lines = normalizedText.split(separator: "\n", omittingEmptySubsequences: false).map(
+            String.init)
         var i = 0
 
         while i < lines.count {
@@ -3788,7 +3708,9 @@ struct ChatMarkdownView: View, @MainActor Equatable {
                 let lang = fence.info.trimmingCharacters(in: .whitespaces)
                 var codeLines: [String] = []
                 i += 1
-                while i < lines.count && !isFenceEnd(lines[i].trimmingCharacters(in: .whitespaces), marker: fence.marker) {
+                while i < lines.count
+                    && !isFenceEnd(lines[i].trimmingCharacters(in: .whitespaces), marker: fence.marker)
+                {
                     codeLines.append(lines[i])
                     i += 1
                 }
@@ -3847,13 +3769,10 @@ struct ChatMarkdownView: View, @MainActor Equatable {
             while i < lines.count {
                 let current = lines[i]
                 let currentTrimmed = current.trimmingCharacters(in: .whitespaces)
-                if currentTrimmed.isEmpty ||
-                    parseFenceStart(currentTrimmed) != nil ||
-                    parseHeading(currentTrimmed) != nil ||
-                    isDivider(currentTrimmed) ||
-                    isTableStart(at: i, lines: lines) ||
-                    parseListLine(current) != nil ||
-                    currentTrimmed.hasPrefix(">")
+                if currentTrimmed.isEmpty || parseFenceStart(currentTrimmed) != nil
+                    || parseHeading(currentTrimmed) != nil || isDivider(currentTrimmed)
+                    || isTableStart(at: i, lines: lines) || parseListLine(current) != nil
+                    || currentTrimmed.hasPrefix(">")
                 {
                     break
                 }
@@ -3921,11 +3840,9 @@ struct ChatMarkdownView: View, @MainActor Equatable {
 
     fileprivate static func isDivider(_ line: String) -> Bool {
         let compact = line.replacingOccurrences(of: " ", with: "")
-        return compact.count >= 3 && (
-            compact.allSatisfy { $0 == "-" } ||
-            compact.allSatisfy { $0 == "*" } ||
-            compact.allSatisfy { $0 == "_" }
-        )
+        return compact.count >= 3
+            && (compact.allSatisfy { $0 == "-" } || compact.allSatisfy { $0 == "*" }
+                || compact.allSatisfy { $0 == "_" })
     }
 
     fileprivate static func parseList(
@@ -3947,12 +3864,13 @@ struct ChatMarkdownView: View, @MainActor Equatable {
         func flushCurrent() {
             guard let item = current else { return }
             let rendered = paragraphText(from: item.text.components(separatedBy: "\n"))
-            items.append(MarkdownListItem(
-                level: item.level,
-                marker: item.marker,
-                checked: item.checked,
-                text: rendered
-            ))
+            items.append(
+                MarkdownListItem(
+                    level: item.level,
+                    marker: item.marker,
+                    checked: item.checked,
+                    text: rendered
+                ))
             current = nil
         }
 
@@ -3978,12 +3896,12 @@ struct ChatMarkdownView: View, @MainActor Equatable {
             }
 
             if let existing = current,
-               leadingWhitespaceColumn(line) > existing.indent,
-               parseFenceStart(trimmed) == nil,
-               parseHeading(trimmed) == nil,
-               !isDivider(trimmed),
-               !isTableStart(at: i, lines: lines),
-               !trimmed.hasPrefix(">")
+                leadingWhitespaceColumn(line) > existing.indent,
+                parseFenceStart(trimmed) == nil,
+                parseHeading(trimmed) == nil,
+                !isDivider(trimmed),
+                !isTableStart(at: i, lines: lines),
+                !trimmed.hasPrefix(">")
             {
                 var updated = existing
                 updated.text += "\n" + trimmed
@@ -4008,8 +3926,8 @@ struct ChatMarkdownView: View, @MainActor Equatable {
 
         let markerAndText: (marker: String?, body: String)?
         if let first = trimmed.first,
-           Set<Character>(["-", "*", "+", "•"]).contains(first),
-           trimmed.dropFirst().first == " "
+            Set<Character>(["-", "*", "+", "•"]).contains(first),
+            trimmed.dropFirst().first == " "
         {
             markerAndText = ("•", String(trimmed.dropFirst(2)))
         } else if let ordered = orderedListMarkerAndText(trimmed) {
@@ -4029,8 +3947,12 @@ struct ChatMarkdownView: View, @MainActor Equatable {
         )
     }
 
-    fileprivate static func orderedListMarkerAndText(_ line: String) -> (marker: String?, body: String)? {
-        guard let delimiterIndex = line.firstIndex(where: { $0 == "." || $0 == ")" }) else { return nil }
+    fileprivate static func orderedListMarkerAndText(_ line: String) -> (
+        marker: String?, body: String
+    )? {
+        guard let delimiterIndex = line.firstIndex(where: { $0 == "." || $0 == ")" }) else {
+            return nil
+        }
         let prefix = line[..<delimiterIndex]
         guard !prefix.isEmpty, prefix.allSatisfy(\.isNumber) else { return nil }
         let after = line.index(after: delimiterIndex)
@@ -4202,7 +4124,7 @@ private struct MarkdownTableView: View {
     private func tableRow(_ cells: [String], isHeader: Bool, isLastRow: Bool) -> some View {
         let lastColumnIndex = layout.columnCount - 1
         return HStack(spacing: 0) {
-            ForEach(0 ..< layout.columnCount, id: \.self) { index in
+            ForEach(0..<layout.columnCount, id: \.self) { index in
                 tableCellText(index < cells.count ? cells[index] : "", isHeader: isHeader)
                     .foregroundColor(
                         isHeader ? NordTheme.primaryText(colorScheme) : NordTheme.secondaryText(colorScheme)
@@ -4265,7 +4187,7 @@ private struct MarkdownTableView: View {
             let allRows = [header] + rows
             var widths: [CGFloat] = []
             widths.reserveCapacity(count)
-            for index in 0 ..< count {
+            for index in 0..<count {
                 var longest = 8
                 for row in allRows where index < row.count {
                     if row[index].count > longest { longest = row[index].count }
@@ -4319,7 +4241,9 @@ struct ChatCodeBlockView: View {
 
             ScrollView(.horizontal, showsIndicators: true) {
                 Text(code)
-                    .font(.system(size: max(baseFontSize - 0.25, 10.5), weight: .regular, design: .monospaced))
+                    .font(
+                        .system(size: max(baseFontSize - 0.25, 10.5), weight: .regular, design: .monospaced)
+                    )
                     .foregroundColor(NordTheme.primaryText(colorScheme))
                     .lineSpacing(2)
                     .textSelection(.enabled)
@@ -4430,7 +4354,8 @@ private enum ComposerMarkdownPalette {
         light: NSColor(red: 47 / 255, green: 110 / 255, blue: 220 / 255, alpha: 1),
         dark: NSColor(red: 108 / 255, green: 168 / 255, blue: 255 / 255, alpha: 1)
     )
-    static let codeBackgroundLight = NSColor(red: 246 / 255, green: 248 / 255, blue: 252 / 255, alpha: 1)
+    static let codeBackgroundLight = NSColor(
+        red: 246 / 255, green: 248 / 255, blue: 252 / 255, alpha: 1)
     static let codeBackgroundDark = NSColor(red: 10 / 255, green: 12 / 255, blue: 22 / 255, alpha: 1)
     static let panelBackground = dynamic(
         light: NSColor.white.withAlphaComponent(0.98),
@@ -4490,6 +4415,10 @@ private struct ChatMarkdownInput: View {
             horizontalIndent: 12
         )
         configuration.inlineCode = InlineCodeStyle(fontSizeScale: 0.95)
+        configuration.paragraph = ParagraphStyle(
+            spacingFactor: 0.22,
+            lineHeightExtraSpacing: 4
+        )
         configuration.spellChecking = SpellCheckingPolicy(
             continuousSpellChecking: false,
             grammarChecking: false,
@@ -4506,7 +4435,7 @@ private struct ChatMarkdownInput: View {
         NativeTextViewWrapper(
             text: $text,
             configuration: Self.configuration,
-            fontSize: 13,
+            fontSize: ChatComposerMetrics.fontSize,
             documentId: "chat-composer",
             isEditable: true
         )
@@ -4529,6 +4458,8 @@ private struct ChatMarkdownInput: View {
             if let textView { configure(textView) }
         }
         .onDisappear { removeKeyMonitor() }
+        .accessibilityLabel("Message")
+        .accessibilityHint("Type a message. Press Return to send or Shift-Return for a new line.")
     }
 
     private func configure(_ textView: NSTextView) {
@@ -4547,7 +4478,8 @@ private struct ChatMarkdownInput: View {
         monitoredTextViewId = textViewId
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             guard event.window === textView.window,
-                  textView.window?.firstResponder === textView else { return event }
+                textView.window?.firstResponder === textView
+            else { return event }
             isFocused = true
 
             if event.keyCode == 36 || event.keyCode == 76 {
@@ -4558,7 +4490,8 @@ private struct ChatMarkdownInput: View {
 
             if event.keyCode == 126, textView.string.isEmpty, onRecallHistory() {
                 DispatchQueue.main.async {
-                    textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
+                    textView.setSelectedRange(
+                        NSRange(location: (textView.string as NSString).length, length: 0))
                 }
                 return nil
             }
@@ -4572,7 +4505,6 @@ private struct ChatMarkdownInput: View {
         monitoredTextViewId = nil
     }
 }
-
 
 /// MarkdownEngine rasterizes inactive tables into attributed-string images.
 /// Its table renderer currently draws square outer corners, so finish those
@@ -4618,8 +4550,9 @@ private final class ComposerRenderedBlockStyler: ObservableObject {
 
         storage.enumerateAttribute(Self.renderedImageKey, in: fullRange) { value, range, _ in
             guard let image = value as? NSImage,
-                  !self.styledImageIds.contains(ObjectIdentifier(image)),
-                  self.isMarkdownTable(around: range, in: storage.string) else { return }
+                !self.styledImageIds.contains(ObjectIdentifier(image)),
+                self.isMarkdownTable(around: range, in: storage.string)
+            else { return }
             if let cached = self.cache.object(forKey: image) {
                 replacements.append((range, cached))
             } else if let rounded = self.roundedImage(image) {
@@ -4703,13 +4636,12 @@ private struct MarkdownEditorIntrospector: NSViewRepresentable {
     }
 }
 
-
 // MARK: - String helpers
 
-private extension String {
+extension String {
     /// Returns `nil` when the string is empty so callers can use the
     /// nil-coalescing operator to fall through to a default value.
-    var nilIfEmpty: String? { isEmpty ? nil : self }
+    fileprivate var nilIfEmpty: String? { isEmpty ? nil : self }
 }
 
 // MARK: - Markdown Parse Cache
@@ -4735,12 +4667,14 @@ private final class ChatMarkdownCache {
     private let blockCache: NSCache<NSString, BlockBox> = {
         let c = NSCache<NSString, BlockBox>()
         c.countLimit = 256
+        c.totalCostLimit = 24 * 1_024 * 1_024
         return c
     }()
 
     private let attrCache: NSCache<NSString, AttrBox> = {
         let c = NSCache<NSString, AttrBox>()
         c.countLimit = 1024
+        c.totalCostLimit = 24 * 1_024 * 1_024
         return c
     }()
 
@@ -4750,7 +4684,7 @@ private final class ChatMarkdownCache {
             return hit.value
         }
         let parsed = ChatMarkdownView.parseBlocks(from: text)
-        blockCache.setObject(BlockBox(parsed), forKey: key)
+        blockCache.setObject(BlockBox(parsed), forKey: key, cost: text.utf8.count)
         return parsed
     }
 
@@ -4759,7 +4693,8 @@ private final class ChatMarkdownCache {
         baseFontSize: CGFloat,
         colorScheme: ColorScheme
     ) -> AttributedString {
-        let styleKey = "\(colorScheme == .dark ? "dark" : "light")|\(Int((baseFontSize * 10).rounded()))|"
+        let styleKey =
+            "\(colorScheme == .dark ? "dark" : "light")|\(Int((baseFontSize * 10).rounded()))|"
         let key = (styleKey + prose) as NSString
         if let hit = attrCache.object(forKey: key) {
             return hit.value
@@ -4769,7 +4704,8 @@ private final class ChatMarkdownCache {
             interpretedSyntax: .inlineOnlyPreservingWhitespace,
             failurePolicy: .returnPartiallyParsedIfPossible
         )
-        var attributed = (try? AttributedString(markdown: prose, options: opts)) ?? AttributedString(prose)
+        var attributed =
+            (try? AttributedString(markdown: prose, options: opts)) ?? AttributedString(prose)
         let codeFill = NordTheme.badgeFill(colorScheme)
         let codeText = NordTheme.primaryText(colorScheme)
         let linkColor = NordTheme.accentBlue(colorScheme)
@@ -4791,7 +4727,11 @@ private final class ChatMarkdownCache {
             }
         }
 
-        attrCache.setObject(AttrBox(attributed), forKey: key)
+        attrCache.setObject(
+            AttrBox(attributed),
+            forKey: key,
+            cost: max(prose.utf8.count, attributed.characters.count * 2)
+        )
         return attributed
     }
 }

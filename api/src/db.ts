@@ -82,6 +82,16 @@ const COLUMN_MIGRATIONS: ColumnMigration[] = [
     column: 'last_prompt_tokens',
     definition: 'INTEGER NOT NULL DEFAULT 0',
   },
+  {
+    table: 'agent_sessions',
+    column: 'transcript_revision',
+    definition: 'VARCHAR(64)',
+  },
+  {
+    table: 'agent_transcript_messages',
+    column: 'source_revision',
+    definition: 'VARCHAR(64)',
+  },
   // Added: project grouping
   {
     table: 'agent_sessions',

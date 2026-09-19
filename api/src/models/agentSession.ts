@@ -10,6 +10,7 @@ export interface AgentSessionAttributes {
   isPinned: boolean;
   platform?: string | null;
   historyJson: string;
+  transcriptRevision?: string | null;
   turns: number;
   promptTokensUsed: number;
   completionTokensUsed: number;
@@ -47,6 +48,7 @@ interface AgentSessionCreationAttributes extends Optional<
   | 'isPinned'
   | 'platform'
   | 'historyJson'
+  | 'transcriptRevision'
   | 'turns'
   | 'promptTokensUsed'
   | 'completionTokensUsed'
@@ -77,6 +79,7 @@ export class AgentSession
   public isPinned!: boolean;
   public platform?: string | null;
   public historyJson!: string;
+  public transcriptRevision?: string | null;
   public turns!: number;
   public promptTokensUsed!: number;
   public completionTokensUsed!: number;
@@ -136,6 +139,11 @@ AgentSession.init(
       allowNull: false,
       defaultValue: '[]',
       field: 'history_json',
+    },
+    transcriptRevision: {
+      type: DataTypes.STRING(64),
+      allowNull: true,
+      field: 'transcript_revision',
     },
     turns: {
       type: DataTypes.INTEGER,

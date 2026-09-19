@@ -70,15 +70,24 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
         // SwiftUI tree just fills whatever it's given.
         hostingController.sizingOptions = []
 
-        // ~20% larger than original 1100×740
+        // Target ~20% larger than the original 1100×740 window, then cap
+        // against the current display so the first presentation is usable on
+        // a MacBook as well as a large external monitor.
+        let screen = NSScreen.main
+        let initialSize = ChatWindowSizing.initialContentSize(
+            visibleSize: screen?.visibleFrame.size
+        )
         let window = ChatWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1320, height: 888),
+            contentRect: NSRect(origin: .zero, size: initialSize),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
         window.title = "OmniKey AI · Chat"
-        window.minSize = NSSize(width: 960, height: 660)
+        window.minSize = NSSize(
+            width: min(960, initialSize.width),
+            height: min(660, initialSize.height)
+        )
         window.collectionBehavior.insert(.fullScreenPrimary)
         window.center()
         window.isReleasedWhenClosed = false
@@ -153,13 +162,14 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
         let visible = screen.visibleFrame
         var frame = window.frame
 
-        // Honour the window's minSize while clamping; if the screen is
-        // narrower than minSize we still respect the screen edge so the
-        // titlebar stays reachable.
-        let maxWidth = max(window.minSize.width, visible.width)
-        let maxHeight = max(window.minSize.height, visible.height)
-        frame.size.width = min(frame.size.width, maxWidth)
-        frame.size.height = min(frame.size.height, maxHeight)
+        // Adapt the minimum as displays change so AppKit never has to choose
+        // between our minimum and keeping the title bar reachable.
+        window.minSize = NSSize(
+            width: min(960, visible.width),
+            height: min(660, visible.height)
+        )
+        frame.size.width = min(frame.size.width, visible.width)
+        frame.size.height = min(frame.size.height, visible.height)
 
         if frame.maxX > visible.maxX { frame.origin.x = visible.maxX - frame.size.width }
         if frame.minX < visible.minX { frame.origin.x = visible.minX }
@@ -174,5 +184,20 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
     private func refreshChatData() {
         model.refreshSessions()
         model.fetchGroups()
+    }
+}
+
+enum ChatWindowSizing {
+    static let preferredContentSize = NSSize(width: 1320, height: 888)
+
+    static func initialContentSize(visibleSize: NSSize?) -> NSSize {
+        guard let visibleSize else { return preferredContentSize }
+        // Leave room around the window for the menu bar, Dock, and resizing
+        // affordances. The minimum bounds keep the layout useful on unusually
+        // small displays without forcing it beyond the available screen.
+        return NSSize(
+            width: max(760, min(preferredContentSize.width, visibleSize.width * 0.94)),
+            height: max(560, min(preferredContentSize.height, visibleSize.height * 0.92))
+        )
     }
 }

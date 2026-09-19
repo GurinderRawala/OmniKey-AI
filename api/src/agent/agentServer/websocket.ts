@@ -4,52 +4,42 @@ import cuid from 'cuid';
 import { logger } from '../../logger';
 import { createLazyAuthContext } from '../agentAuth';
 import type { AgentMessage, AgentSendFn } from '../types';
-import type { Subscription } from '../../models/subscription';
 import type { Logger } from 'winston';
 import { activeSessions, pendingShellScripts, sessionQueues } from './runtimeState';
 import {
   clearSteeringMessages,
   enqueueSteeringMessage,
-  formatSteeringMessagesForQueuedTurn,
   getPendingSteeringMessageCount,
   takePendingSteeringMessages,
 } from './steering';
 import { buildShellToolResult } from './terminalOutput';
 import { runAgentTurn } from './turnRunner';
 
-export function queuePendingSteeringAsFollowUp(
+export function rejectPendingSteeringAtTurnEnd(
   sessionId: string,
-  subscription: Subscription,
   send: AgentSendFn,
   log: Logger,
 ): number {
   const pending = takePendingSteeringMessages(sessionId, log);
   if (!pending.length) return 0;
 
-  const content = formatSteeringMessagesForQueuedTurn(pending);
-  if (!content) return 0;
-  const platform = pending.find((message) => message.platform)?.platform;
-  const groupName = pending.find((message) => message.groupName)?.groupName;
-
-  const queue = sessionQueues.get(sessionId) ?? [];
-  queue.push({
-    message: {
+  for (const message of pending) {
+    send({
       session_id: sessionId,
-      sender: 'client',
-      content,
-      platform,
-      group_name: groupName,
-    },
-    send,
-    subscription,
-    log,
-  });
-  sessionQueues.set(sessionId, queue);
+      sender: 'agent',
+      content:
+        'The current task finished before this update was applied. Send it again as a follow-up.',
+      is_terminal_output: false,
+      is_error: true,
+      is_steering: true,
+      steering_id: message.steeringId,
+      steering_status: 'rejected',
+    });
+  }
 
-  log.info('Queued stranded steering as follow-up turn', {
+  log.info('Rejected steering that arrived too late for the active turn', {
     sessionId,
     steeringMessageCount: pending.length,
-    queueLength: queue.length,
   });
 
   return pending.length;
@@ -68,7 +58,7 @@ async function processNextInQueue(sessionId: string): Promise<void> {
   } catch (err) {
     next.log.error('Queued agent turn failed', { sessionId, error: err });
   } finally {
-    queuePendingSteeringAsFollowUp(sessionId, next.subscription, next.send, next.log);
+    rejectPendingSteeringAtTurnEnd(sessionId, next.send, next.log);
     activeSessions.delete(sessionId);
     void processNextInQueue(sessionId);
   }
@@ -147,12 +137,23 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
         const isInternalCall = Boolean(message.is_web_call);
         const isSteeringMessage = Boolean(message.is_steering);
 
-        if (
-          isSteeringMessage &&
-          !isTerminalFeedback &&
-          !isInternalCall &&
-          activeSessions.has(sessionId)
-        ) {
+        if (isSteeringMessage && !isTerminalFeedback && !isInternalCall) {
+          if (!activeSessions.has(sessionId)) {
+            send({
+              session_id: sessionId,
+              sender: 'agent',
+              content:
+                'The current task finished before this update could be queued. Send it again as a follow-up.',
+              is_terminal_output: false,
+              is_error: true,
+              is_steering: true,
+              steering_id: message.steering_id,
+              steering_status: 'rejected',
+              steering_pending_count: 0,
+            });
+            return;
+          }
+
           const steeringResult = enqueueSteeringMessage(sessionId, message, log);
           if (!steeringResult.accepted) {
             send({
@@ -162,6 +163,9 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
               is_terminal_output: false,
               is_error: true,
               is_steering: true,
+              steering_id: message.steering_id,
+              steering_status: 'rejected',
+              steering_pending_count: steeringResult.pendingCount,
             });
             log.info('Ignored steering message for active session', {
               sessionId,
@@ -178,6 +182,9 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
             is_terminal_output: false,
             is_error: false,
             is_steering: true,
+            steering_id: message.steering_id,
+            steering_status: 'received',
+            steering_pending_count: steeringResult.pendingCount,
           });
           log.info('Accepted steering message for active session', {
             sessionId,
@@ -225,7 +232,7 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
         } catch (err) {
           log.error('Agent turn failed', { sessionId, error: err });
         } finally {
-          queuePendingSteeringAsFollowUp(sessionId, subscription, send, log);
+          rejectPendingSteeringAtTurnEnd(sessionId, send, log);
           activeSessions.delete(sessionId);
           void processNextInQueue(sessionId);
         }

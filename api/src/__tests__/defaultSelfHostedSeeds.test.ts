@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   subscriptionFindAll: vi.fn(),
   taskTemplateFindAll: vi.fn(),
   taskTemplateCreate: vi.fn(),
+  taskTemplateUpdate: vi.fn(),
   mcpServerFindAll: vi.fn(),
   mcpServerCreate: vi.fn(),
 }));
@@ -20,6 +21,7 @@ vi.mock('../models/subscriptionTaskTemplate', () => ({
   SubscriptionTaskTemplate: {
     findAll: mocks.taskTemplateFindAll,
     create: mocks.taskTemplateCreate,
+    update: mocks.taskTemplateUpdate,
   },
 }));
 
@@ -32,6 +34,7 @@ vi.mock('../models/mcpServer', () => ({
 
 import {
   DEFAULT_CODING_AGENT_HEADING,
+  DEFAULT_CODING_AGENT_INSTRUCTIONS_UPDATED_AT,
   resetDefaultSelfHostedSeedStateForTests,
   seedDefaultSelfHostedAgentAssets,
   seedDefaultSelfHostedAgentAssetsForSubscription,
@@ -48,6 +51,7 @@ beforeEach(() => {
   mocks.subscriptionFindAll.mockReset();
   mocks.taskTemplateFindAll.mockReset();
   mocks.taskTemplateCreate.mockReset();
+  mocks.taskTemplateUpdate.mockReset();
   mocks.mcpServerFindAll.mockReset();
   mocks.mcpServerCreate.mockReset();
   resetDefaultSelfHostedSeedStateForTests();
@@ -75,6 +79,16 @@ describe('seedDefaultSelfHostedAgentAssets', () => {
     );
     expect(createdInstructions).toContain('You are a senior coding agent.');
     expect(createdInstructions).toContain('Stop when the task is done.');
+    expect(createdInstructions).toContain('AGENTS.override.md');
+    expect(createdInstructions).toContain('AGENTS.md');
+    expect(createdInstructions).toContain('project_doc_fallback_filenames');
+    expect(createdInstructions).toContain('CLAUDE.md');
+    expect(createdInstructions).toContain('.claude/CLAUDE.md');
+    expect(createdInstructions).toContain('CLAUDE.local.md');
+    expect(createdInstructions).toContain('.claude/rules/');
+    expect(createdInstructions).toContain('.agents/skills/**/SKILL.md');
+    expect(createdInstructions).toContain('.codex/skills/**/SKILL.md');
+    expect(createdInstructions).toContain('.claude/skills/**/SKILL.md');
 
     expect(mocks.mcpServerCreate).toHaveBeenCalledTimes(3);
     expect(mocks.mcpServerCreate).toHaveBeenCalledWith(
@@ -109,7 +123,9 @@ describe('seedDefaultSelfHostedAgentAssets', () => {
   it('continues seeding later subscriptions after one subscription fails', async () => {
     const logger = makeLogger();
     mocks.subscriptionFindAll.mockResolvedValue([{ id: 'sub-fail' }, { id: 'sub-ok' }]);
-    mocks.taskTemplateFindAll.mockRejectedValueOnce(new Error('database busy')).mockResolvedValueOnce([]);
+    mocks.taskTemplateFindAll
+      .mockRejectedValueOnce(new Error('database busy'))
+      .mockResolvedValueOnce([]);
     mocks.mcpServerFindAll.mockResolvedValueOnce([]);
 
     await seedDefaultSelfHostedAgentAssets(logger);
@@ -128,18 +144,61 @@ describe('seedDefaultSelfHostedAgentAssets', () => {
 describe('seedDefaultSelfHostedAgentAssetsForSubscription', () => {
   it('does not overwrite existing templates or MCP server configs', async () => {
     const logger = makeLogger();
-    mocks.taskTemplateFindAll.mockResolvedValue([{ heading: ' coding agent ' }]);
+    mocks.taskTemplateFindAll.mockResolvedValue([
+      {
+        id: 'current-template',
+        heading: ' coding agent ',
+        updatedAt: new Date(DEFAULT_CODING_AGENT_INSTRUCTIONS_UPDATED_AT.getTime() + 1_000),
+      },
+    ]);
     mocks.mcpServerFindAll.mockResolvedValue([{ name: 'Filesystem' }, { name: 'GIT' }]);
 
     await seedDefaultSelfHostedAgentAssetsForSubscription('sub-2', logger);
 
     expect(mocks.taskTemplateCreate).not.toHaveBeenCalled();
+    expect(mocks.taskTemplateUpdate).not.toHaveBeenCalled();
     expect(mocks.mcpServerCreate).toHaveBeenCalledTimes(1);
     expect(mocks.mcpServerCreate).toHaveBeenCalledWith(
       expect.objectContaining({
         subscriptionId: 'sub-2',
         name: 'playwright',
       }),
+    );
+  });
+
+  it('re-seeds coding-agent instructions whose last update predates this seed revision', async () => {
+    const logger = makeLogger();
+    const oldUpdatedAt = new Date(DEFAULT_CODING_AGENT_INSTRUCTIONS_UPDATED_AT.getTime() - 1_000);
+    mocks.taskTemplateFindAll.mockResolvedValue([
+      { id: 'old-template', heading: 'Coding Agent', updatedAt: oldUpdatedAt },
+    ]);
+    mocks.taskTemplateUpdate.mockResolvedValue([1]);
+    mocks.mcpServerFindAll.mockResolvedValue([
+      { name: 'filesystem' },
+      { name: 'playwright' },
+      { name: 'git' },
+    ]);
+
+    await seedDefaultSelfHostedAgentAssetsForSubscription('sub-old', logger);
+
+    expect(mocks.taskTemplateCreate).not.toHaveBeenCalled();
+    expect(mocks.taskTemplateUpdate).toHaveBeenCalledWith(
+      { instructions: expect.stringMatching(/^gz1:/) },
+      {
+        where: {
+          id: 'old-template',
+          subscriptionId: 'sub-old',
+          updatedAt: oldUpdatedAt,
+        },
+      },
+    );
+    const updatedInstructions = decompressString(
+      mocks.taskTemplateUpdate.mock.calls[0][0].instructions,
+    );
+    expect(updatedInstructions).toContain('Repository instructions and skills');
+    expect(logger.info).toHaveBeenCalledWith(
+      'Seeded default self-hosted agent assets.',
+      expect.objectContaining({ taskTemplateCreated: false, taskTemplateUpdated: true }),
     );
   });
 

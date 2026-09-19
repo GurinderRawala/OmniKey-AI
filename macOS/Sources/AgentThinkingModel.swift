@@ -30,6 +30,22 @@ struct SessionHistoryBlock: Decodable, Identifiable {
     let id: String
     let kind: String
     let text: String
+    let activityId: String?
+    let activityPhase: ChatActivityPhase?
+    let contentLength: Int?
+    let isContentTruncated: Bool?
+    let contentId: String?
+}
+
+struct SessionHistoryPageInfo: Decodable {
+    let hasMoreBefore: Bool
+    let startCursor: String
+    let endCursor: String
+}
+
+struct SessionHistoryResponse: Decodable {
+    let messages: [SessionHistoryEntry]
+    let pageInfo: SessionHistoryPageInfo?
 }
 
 // MARK: - Session metadata returned by GET /api/agent/sessions

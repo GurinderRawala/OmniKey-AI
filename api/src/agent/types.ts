@@ -38,7 +38,12 @@ export interface AgentMessage {
   is_web_call?: boolean;
   is_image_rendering?: boolean;
   is_mcp_call?: boolean;
+  activity_id?: string;
+  activity_phase?: 'pending' | 'started' | 'completed' | 'failed' | 'cancelled';
   is_steering?: boolean;
+  steering_id?: string;
+  steering_status?: 'received' | 'applied' | 'rejected';
+  steering_pending_count?: number;
   platform?: string;
   group_name?: string;
 }

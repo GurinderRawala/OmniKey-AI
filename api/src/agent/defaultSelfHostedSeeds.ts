@@ -6,6 +6,7 @@ import { Subscription } from '../models/subscription';
 import { SubscriptionTaskTemplate } from '../models/subscriptionTaskTemplate';
 
 export const DEFAULT_CODING_AGENT_HEADING = 'Coding Agent';
+export const DEFAULT_CODING_AGENT_INSTRUCTIONS_UPDATED_AT = new Date('2026-09-19T05:30:00.000Z');
 const DEFAULT_TELEGRAM_PORT = process.env.OMNIKEY_TELEGRAM_PORT || '6666';
 const SELF_HOSTED_SEED_FAILURE_COOLDOWN_MS = 60_000;
 const seededSubscriptionIds = new Set<string>();
@@ -13,6 +14,14 @@ const pendingSeedPromisesBySubscriptionId = new Map<string, Promise<void>>();
 const failedSeedRetryAtBySubscriptionId = new Map<string, number>();
 
 const DEFAULT_CODING_AGENT_INSTRUCTIONS = `You are a senior coding agent. Your job is to modify, debug, and verify code in the user's repository end-to-end. Work directly in the repo, follow existing conventions, and leave the codebase in a better, working state.
+
+Repository instructions and skills (required before starting work):
+1. Before planning, editing, or running project commands, locate the repository root and current working directory, then discover the instruction documents that apply to the target files.
+2. For Codex-style guidance, check each directory from the repository root through the working directory for \`AGENTS.override.md\` and \`AGENTS.md\`. An override takes precedence in its directory, and instructions closer to the target file take precedence over broader ones. If a repository \`.codex/config.toml\` or applicable Codex config defines \`project_doc_fallback_filenames\`, inspect those configured fallback files too; names such as \`TEAM_GUIDE.md\` and \`.agents.md\` are examples, not an exhaustive hard-coded list.
+3. For Claude-style guidance, check applicable parent and project locations for \`CLAUDE.md\`, \`.claude/CLAUDE.md\`, and \`CLAUDE.local.md\`. Also inspect applicable Markdown rules under \`.claude/rules/\`, including nested rules, and follow any file imports referenced by those documents.
+4. Discover repository skills in \`.agents/skills/**/SKILL.md\`, \`.codex/skills/**/SKILL.md\`, and \`.claude/skills/**/SKILL.md\`. First inventory the available skills, then fully read and follow each skill whose description or trigger matches the task. Resolve relative references from the skill's directory and reuse its scripts, templates, and assets when instructed.
+5. Treat instruction scope and precedence carefully: higher-level system and user requirements remain authoritative; within the repository, more specific instructions for the file being changed override broader guidance. Do not silently ignore an applicable instruction or skill. If instructions conflict materially or cannot be followed, explain the conflict before proceeding.
+6. Also read relevant project guidance such as \`README.md\`, \`CONTRIBUTING.md\`, development docs, package manifests, and test configuration when they affect the requested work. Do not assume conventions from another repository.
 
 Core behavior:
 1. Inspect before deciding. Start by understanding the current repository state, relevant files, package/build setup, and any existing patterns that solve a similar problem.
@@ -171,10 +180,7 @@ export async function seedDefaultSelfHostedAgentAssetsForSubscription(
     return;
   }
 
-  const seedPromise = seedMissingDefaultSelfHostedAgentAssetsForSubscription(
-    subscriptionId,
-    logger,
-  )
+  const seedPromise = seedMissingDefaultSelfHostedAgentAssetsForSubscription(subscriptionId, logger)
     .then(() => {
       seededSubscriptionIds.add(subscriptionId);
       failedSeedRetryAtBySubscriptionId.delete(subscriptionId);
@@ -200,14 +206,15 @@ async function seedMissingDefaultSelfHostedAgentAssetsForSubscription(
 ): Promise<void> {
   const existingTemplates = await SubscriptionTaskTemplate.findAll({
     where: { subscriptionId },
-    attributes: ['heading'],
+    attributes: ['id', 'heading', 'updatedAt'],
   });
-  const hasCodingAgentTemplate = existingTemplates.some(
+  const codingAgentTemplate = existingTemplates.find(
     (template) => normalizeName(template.heading) === normalizeName(DEFAULT_CODING_AGENT_HEADING),
   );
 
   let taskTemplateCreated = false;
-  if (!hasCodingAgentTemplate) {
+  let taskTemplateUpdated = false;
+  if (!codingAgentTemplate) {
     try {
       await SubscriptionTaskTemplate.create({
         id: defaultCodingAgentTemplateId(subscriptionId),
@@ -220,6 +227,23 @@ async function seedMissingDefaultSelfHostedAgentAssetsForSubscription(
     } catch (err) {
       if (!isUniqueConstraintError(err)) throw err;
     }
+  } else if (
+    !codingAgentTemplate.updatedAt ||
+    codingAgentTemplate.updatedAt < DEFAULT_CODING_AGENT_INSTRUCTIONS_UPDATED_AT
+  ) {
+    const [updatedCount] = await SubscriptionTaskTemplate.update(
+      { instructions: compressString(DEFAULT_CODING_AGENT_INSTRUCTIONS) },
+      {
+        where: {
+          id: codingAgentTemplate.id,
+          subscriptionId,
+          // Optimistic concurrency guard: do not overwrite a user edit that
+          // lands after the seed lookup but before this update.
+          updatedAt: codingAgentTemplate.updatedAt,
+        },
+      },
+    );
+    taskTemplateUpdated = updatedCount > 0;
   }
 
   const existingMcpServers = await MCPServer.findAll({
@@ -245,10 +269,11 @@ async function seedMissingDefaultSelfHostedAgentAssetsForSubscription(
     }
   }
 
-  if (taskTemplateCreated || createdMcpServerNames.length > 0) {
+  if (taskTemplateCreated || taskTemplateUpdated || createdMcpServerNames.length > 0) {
     logger.info('Seeded default self-hosted agent assets.', {
       subscriptionId,
       taskTemplateCreated,
+      taskTemplateUpdated,
       mcpServersCreated: createdMcpServerNames,
     });
   }
