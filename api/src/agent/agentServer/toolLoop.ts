@@ -19,6 +19,9 @@ import {
 } from './steering';
 import { buildShellToolResult, collectShellOutputFilterKeywords } from './terminalOutput';
 import { completeWithContextRecovery } from './completionRecovery';
+import { extractProgressSummary } from './progressSummary';
+
+export { extractProgressSummary } from './progressSummary';
 
 const MAX_TOOL_CALLS_PER_ITERATION = 8;
 
@@ -26,8 +29,33 @@ function isWebTool(name: string): boolean {
   return name === 'web_search' || name === 'web_fetch';
 }
 
-function isToolFailureResult(result: string): boolean {
-  return result.trimStart().startsWith('Error');
+export function isToolFailureResult(result: string): boolean {
+  const trimmed = result.trimStart();
+  if (/^(error\b|command error:|command failed:)/i.test(trimmed)) return true;
+
+  try {
+    const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+    return (
+      parsed.ok === false ||
+      parsed.success === false ||
+      (typeof parsed.error === 'string' && parsed.error.trim().length > 0)
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function imageActivityResult(toolResult: string): {
+  content: string;
+  isError: boolean;
+  phase: 'completed' | 'failed';
+} {
+  const isError = isToolFailureResult(toolResult);
+  return {
+    content: isError ? toolResult : `Image saved to: ${toolResult}`,
+    isError,
+    phase: isError ? 'failed' : 'completed',
+  };
 }
 
 function toolLoopLimitResult(model: string, message: string): AICompletionResult {
@@ -76,13 +104,13 @@ export async function runToolLoop(
   while (result.finish_reason === 'tool_calls') {
     toolIterations++;
 
-    const preToolSteeringMessageCount = drainSteeringMessagesIntoHistory(
+    const preToolSteeringMessages = drainSteeringMessagesIntoHistory(
       sessionId,
       session,
       hasStoredPrompt,
       log,
     );
-    if (preToolSteeringMessageCount > 0) {
+    if (preToolSteeringMessages.length > 0) {
       await persistSessionToDB(sessionId, session);
       if (
         !consumeSteeringRestart(
@@ -95,7 +123,7 @@ export async function runToolLoop(
         return toolLoopLimitResult(model, STEERING_RESTART_LIMIT_MESSAGE);
       }
 
-      sendSteeringAppliedNotice(send, sessionId, preToolSteeringMessageCount);
+      sendSteeringAppliedNotice(send, sessionId, preToolSteeringMessages);
       result = await completeWithContextRecovery(
         session,
         sessionId,
@@ -131,6 +159,17 @@ export async function runToolLoop(
       );
     }
 
+    const progressSummary = extractProgressSummary(result.content ?? '');
+    if (progressSummary && !isCronJob) {
+      send({
+        session_id: sessionId,
+        sender: 'agent',
+        content: progressSummary,
+        is_terminal_output: false,
+        is_error: false,
+      });
+    }
+
     pushToSessionHistory(logger, session, result.assistantMessage);
     log.info('Agent executing tool calls', {
       sessionId,
@@ -156,9 +195,11 @@ export async function runToolLoop(
         send({
           session_id: sessionId,
           sender: 'agent',
-          content: `Tool "${tc.name}" is not enabled for this session.`,
+          content: `Tool: ${tc.name}\n\nError: Tool "${tc.name}" is not enabled for this session.`,
           is_terminal_output: false,
           is_error: true,
+          activity_id: tc.id,
+          activity_phase: 'failed',
         });
         return {
           id: tc.id,
@@ -178,12 +219,24 @@ export async function runToolLoop(
           is_error: false,
           is_web_call: false,
           is_mcp_call: true,
+          activity_id: tc.id,
+          activity_phase: 'started',
         });
         const toolResult = await executeMcpTool(tc.name, args, mcpDispatch, log);
         log.info('Tool call completed', {
           sessionId,
           tool: tc.name,
           resultLength: toolResult.length,
+        });
+        send({
+          session_id: sessionId,
+          sender: 'agent',
+          content: `Tool: ${tc.name}\n\n${toolResult}`,
+          is_terminal_output: false,
+          is_error: isToolFailureResult(toolResult),
+          is_mcp_call: true,
+          activity_id: tc.id,
+          activity_phase: isToolFailureResult(toolResult) ? 'failed' : 'completed',
         });
         return { id: tc.id, name: tc.name, result: toolResult };
       }
@@ -218,9 +271,12 @@ export async function runToolLoop(
           is_error: false,
           is_web_call: false,
           is_image_rendering: true,
+          activity_id: tc.id,
+          activity_phase: 'started',
         });
 
         const toolResult = await executeImageGenerationTool(args, log);
+        const imageResult = imageActivityResult(toolResult);
         log.info('Tool call completed', {
           sessionId,
           tool: tc.name,
@@ -230,11 +286,13 @@ export async function runToolLoop(
         send({
           session_id: sessionId,
           sender: 'agent',
-          content: `Image saved to: ${toolResult}`,
+          content: imageResult.content,
           is_terminal_output: false,
-          is_error: false,
+          is_error: imageResult.isError,
           is_web_call: false,
           is_image_rendering: true,
+          activity_id: tc.id,
+          activity_phase: imageResult.phase,
         });
 
         return { id: tc.id, name: tc.name, result: toolResult };
@@ -279,6 +337,8 @@ export async function runToolLoop(
           content: `<shell_script>\n${script}\n</shell_script>`,
           is_terminal_output: false,
           is_error: false,
+          activity_id: tc.id,
+          activity_phase: 'started',
         });
         const terminalOutput = await new Promise<string>((resolve) => {
           pendingShellScripts.set(sessionId, { resolve, filterKeywords });
@@ -298,6 +358,8 @@ export async function runToolLoop(
         is_terminal_output: false,
         is_error: false,
         is_web_call: true,
+        activity_id: tc.id,
+        activity_phase: 'started',
       });
 
       const toolResult = await executeTool(tc.name, args as Record<string, string>, log);
@@ -305,6 +367,16 @@ export async function runToolLoop(
         sessionId,
         tool: tc.name,
         resultLength: toolResult.length,
+      });
+      send({
+        session_id: sessionId,
+        sender: 'agent',
+        content: `Tool: ${tc.name}\n\n${toolResult}`,
+        is_terminal_output: false,
+        is_error: isToolFailureResult(toolResult),
+        is_web_call: true,
+        activity_id: tc.id,
+        activity_phase: isToolFailureResult(toolResult) ? 'failed' : 'completed',
       });
       return { id: tc.id, name: tc.name, result: toolResult };
     };
@@ -346,26 +418,19 @@ export async function runToolLoop(
     // stop can lose all completed work from this turn.
     await persistSessionToDB(sessionId, session);
 
-    const steeringMessageCount = drainSteeringMessagesIntoHistory(
+    const steeringMessages = drainSteeringMessagesIntoHistory(
       sessionId,
       session,
       hasStoredPrompt,
       log,
     );
-    if (steeringMessageCount > 0) {
+    if (steeringMessages.length > 0) {
       await persistSessionToDB(sessionId, session);
-      if (
-        !consumeSteeringRestart(
-          steeringRestartBudget,
-          sessionId,
-          log,
-          'after tool results',
-        )
-      ) {
+      if (!consumeSteeringRestart(steeringRestartBudget, sessionId, log, 'after tool results')) {
         return toolLoopLimitResult(model, STEERING_RESTART_LIMIT_MESSAGE);
       }
 
-      sendSteeringAppliedNotice(send, sessionId, steeringMessageCount);
+      sendSteeringAppliedNotice(send, sessionId, steeringMessages);
     }
 
     if (
@@ -400,13 +465,13 @@ export async function runToolLoop(
     await onUsage(result);
 
     for (;;) {
-      const lateSteeringMessageCount = drainSteeringMessagesIntoHistory(
+      const lateSteeringMessages = drainSteeringMessagesIntoHistory(
         sessionId,
         session,
         hasStoredPrompt,
         log,
       );
-      if (lateSteeringMessageCount === 0) break;
+      if (lateSteeringMessages.length === 0) break;
 
       await persistSessionToDB(sessionId, session);
       if (
@@ -420,7 +485,7 @@ export async function runToolLoop(
         return toolLoopLimitResult(model, STEERING_RESTART_LIMIT_MESSAGE);
       }
 
-      sendSteeringAppliedNotice(send, sessionId, lateSteeringMessageCount);
+      sendSteeringAppliedNotice(send, sessionId, lateSteeringMessages);
       result = await completeWithContextRecovery(
         session,
         sessionId,

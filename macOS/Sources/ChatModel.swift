@@ -1,4 +1,5 @@
 import Combine
+import CryptoKit
 import Foundation
 
 // MARK: - Chat message model
@@ -9,12 +10,25 @@ enum ChatMessageRole: String {
     case system
 }
 
+enum SteeringDeliveryState: Equatable {
+    case pending
+    case received(pendingCount: Int?)
+    case applied
+    case failed(String)
+}
+
+enum SteeringContinuationPolicy {
+    static func shouldCreateContinuation(for status: SteeringServerStatus) -> Bool {
+        status == .received
+    }
+}
+
 /// Kind of an assistant content block. The agent stream can interleave
 /// "thinking" content (agent reasoning, terminal output, web calls, MCP
 /// calls, image rendering) with a single final answer. Each block becomes
 /// one `ChatBlock` so the view can group the thinking blocks into one
 /// collapsible section and render the final block as markdown.
-enum ChatBlockKind {
+enum ChatBlockKind: Equatable {
     case agentReasoning
     case shellCommand
     case terminalOutput
@@ -29,8 +43,43 @@ enum ChatBlockKind {
     case finalAnswer
 }
 
+enum TranscriptContentIntegrity {
+    static func contentID(kind: ChatBlockKind, text: String) -> String {
+        let wireKind: String
+        switch kind {
+        case .agentReasoning, .toolCall: wireKind = "agentReasoning"
+        case .shellCommand: wireKind = "shellCommand"
+        case .terminalOutput: wireKind = "terminalOutput"
+        case .webCall: wireKind = "webCall"
+        case .mcpCall: wireKind = "mcpCall"
+        case .imageRendering: wireKind = "imageRendering"
+        case .finalAnswer: wireKind = "finalAnswer"
+        }
+        let digest = SHA256.hash(
+            data: Data("transcript-content-v1\0\(wireKind)\0\(text)".utf8)
+        )
+        return "content-" + Data(digest).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+
+    static func matches(block: ChatBlock, fullText: String) -> Bool {
+        guard let expected = block.fullContentID else { return false }
+        return contentID(kind: block.kind, text: fullText) == expected
+    }
+}
+
+enum ChatActivityPhase: String, Codable, Equatable {
+    case pending
+    case started
+    case completed
+    case failed
+    case cancelled
+}
+
 struct ChatBlock: Identifiable, Equatable {
-    let id = UUID()
+    let id: String
     let kind: ChatBlockKind
     var text: String
     /// Wall-clock time the block was appended to the transcript. Used by the
@@ -39,14 +88,84 @@ struct ChatBlock: Identifiable, Equatable {
     /// Blocks hydrated from history share the hydration timestamp, so the
     /// view falls back to hiding timings when every block has the same value.
     var createdAt: Date = Date()
+    /// Stable server-provided identity used to pair the start and result of
+    /// concurrent tool calls without relying on arrival order.
+    var activityId: String? = nil
+    var activityPhase: ChatActivityPhase? = nil
+    var contentLength: Int? = nil
+    var isContentTruncated: Bool = false
+    var fullContentID: String? = nil
+    var previewText: String? = nil
+
+    init(
+        id: String = "local:block:\(UUID().uuidString)",
+        kind: ChatBlockKind,
+        text: String,
+        createdAt: Date = Date(),
+        activityId: String? = nil,
+        activityPhase: ChatActivityPhase? = nil,
+        contentLength: Int? = nil,
+        isContentTruncated: Bool = false,
+        fullContentID: String? = nil,
+        previewText: String? = nil
+    ) {
+        self.id = id
+        self.kind = kind
+        self.text = text
+        self.createdAt = createdAt
+        self.activityId = activityId
+        self.activityPhase = activityPhase
+        self.contentLength = contentLength
+        self.isContentTruncated = isContentTruncated
+        self.fullContentID = fullContentID
+        self.previewText = previewText
+    }
 
     static func == (lhs: ChatBlock, rhs: ChatBlock) -> Bool {
-        return lhs.id == rhs.id && lhs.text == rhs.text
+        return lhs.id == rhs.id
+            && lhs.text == rhs.text
+            && lhs.activityId == rhs.activityId
+            && lhs.activityPhase == rhs.activityPhase
+            && lhs.contentLength == rhs.contentLength
+            && lhs.isContentTruncated == rhs.isContentTruncated
+            && lhs.fullContentID == rhs.fullContentID
+            && lhs.previewText == rhs.previewText
+    }
+}
+
+enum ChatCancellationLifecycle {
+    static func block(for blocks: [ChatBlock], at date: Date = Date()) -> ChatBlock {
+        let terminalActivityIDs = Set(blocks.compactMap { block -> String? in
+            guard let id = block.activityId,
+                  block.activityPhase == .completed || block.activityPhase == .failed
+                    || block.activityPhase == .cancelled
+            else { return nil }
+            return id
+        })
+        if let active = blocks.reversed().first(where: {
+            guard let id = $0.activityId, !terminalActivityIDs.contains(id) else { return false }
+            return $0.activityPhase == .started || $0.activityPhase == .pending
+        }) {
+            return ChatBlock(
+                kind: active.kind,
+                text: "Stopped by user",
+                createdAt: date,
+                activityId: active.activityId,
+                activityPhase: .cancelled
+            )
+        }
+        return ChatBlock(
+            kind: .toolCall,
+            text: "Stopped by user",
+            createdAt: date,
+            activityId: "turn-cancelled-\(UUID().uuidString)",
+            activityPhase: .cancelled
+        )
     }
 }
 
 struct ChatMessage: Identifiable, Equatable {
-    let id = UUID()
+    let id: String
     let role: ChatMessageRole
     /// User messages keep their content in `text`. Assistant messages
     /// use `blocks` for streamed agent output. System messages use `text`.
@@ -57,9 +176,11 @@ struct ChatMessage: Identifiable, Equatable {
     /// carries no per-message timestamp — the view hides the label rather
     /// than inventing a time.
     var sentAt: Date?
-    /// True when the user sent this while the agent turn was already running.
-    /// It steers that active turn instead of creating a queued follow-up turn.
-    var isSteering: Bool
+    /// Delivery state for guidance sent while this task was already running.
+    /// `nil` identifies an ordinary user turn.
+    var steeringState: SteeringDeliveryState?
+
+    var isSteering: Bool { steeringState != nil }
 
     static func == (lhs: ChatMessage, rhs: ChatMessage) -> Bool {
         return lhs.id == rhs.id
@@ -67,19 +188,87 @@ struct ChatMessage: Identifiable, Equatable {
             && lhs.text == rhs.text
             && lhs.blocks == rhs.blocks
             && lhs.sentAt == rhs.sentAt
-            && lhs.isSteering == rhs.isSteering
+            && lhs.steeringState == rhs.steeringState
     }
 
-    static func user(_ text: String, sentAt: Date? = Date(), isSteering: Bool = false) -> ChatMessage {
-        ChatMessage(role: .user, text: text, blocks: [], sentAt: sentAt, isSteering: isSteering)
+    static func user(
+        _ text: String,
+        sentAt: Date? = Date(),
+        steeringState: SteeringDeliveryState? = nil,
+        id: String = "local:message:\(UUID().uuidString)"
+    ) -> ChatMessage {
+        ChatMessage(id: id, role: .user, text: text, blocks: [], sentAt: sentAt, steeringState: steeringState)
     }
 
-    static func assistant() -> ChatMessage {
-        ChatMessage(role: .assistant, text: "", blocks: [], sentAt: nil, isSteering: false)
+    static func assistant(id: String = "local:message:\(UUID().uuidString)") -> ChatMessage {
+        ChatMessage(id: id, role: .assistant, text: "", blocks: [], sentAt: nil, steeringState: nil)
     }
 
     static func system(_ text: String) -> ChatMessage {
-        ChatMessage(role: .system, text: text, blocks: [], sentAt: nil, isSteering: false)
+        ChatMessage(
+            id: "local:message:\(UUID().uuidString)",
+            role: .system,
+            text: text,
+            blocks: [],
+            sentAt: nil,
+            steeringState: nil
+        )
+    }
+}
+
+struct PendingSteeringContext {
+    let messageID: String
+    let text: String
+    let redirectKey: String
+    var continuationMessageID: String?
+}
+
+struct SteeringRedirectRecord: Equatable {
+    let redirectKey: String
+    let continuationMessageID: String
+    let sequence: Int
+}
+
+enum SteeringEventResolver {
+    static func targetID(
+        correlatedID: String?,
+        pending: [String: PendingSteeringContext],
+        messageIDsInDisplayOrder: [String]
+    ) -> String? {
+        if let correlatedID { return correlatedID }
+        let positions = Dictionary(
+            uniqueKeysWithValues: messageIDsInDisplayOrder.enumerated().map { ($1, $0) }
+        )
+        return pending.min { lhs, rhs in
+            (positions[lhs.value.messageID] ?? .max) < (positions[rhs.value.messageID] ?? .max)
+        }?.key
+    }
+}
+
+enum SteeringRedirectResolver {
+    static func target(
+        for redirectKey: String,
+        records: [String: SteeringRedirectRecord]
+    ) -> String? {
+        records.values
+            .filter { $0.redirectKey == redirectKey }
+            .max(by: { $0.sequence < $1.sequence })?
+            .continuationMessageID
+    }
+}
+
+enum ChatHistoryMergePolicy {
+    static func prepend(existing: [ChatMessage], older: [ChatMessage]) -> [ChatMessage] {
+        let existingIDs = Set(existing.map(\.id))
+        return older.filter { !existingIDs.contains($0.id) } + existing
+    }
+
+    static func latestVisibleTurn(in messages: [ChatMessage]) -> [ChatMessage] {
+        guard !messages.isEmpty else { return [] }
+        guard let assistantIndex = messages.lastIndex(where: { $0.role == .assistant }) else {
+            return [messages[messages.count - 1]]
+        }
+        return Array(messages[assistantIndex...])
     }
 }
 
@@ -90,21 +279,28 @@ struct ChatMessage: Identifiable, Equatable {
 /// in `ChatModel` does not redirect streamed blocks into the wrong bubble.
 final class ChatSessionState: @unchecked Sendable {
     var messages: [ChatMessage] = []
-    var trimmedOlderMessageCount: Int = 0
+    var oldestCursor: String? = nil
+    var hasMoreBefore: Bool = false
+    var isLoadingOlder: Bool = false
+    var olderLoadError: String? = nil
+    var loadedMessageIDs: Set<String> = []
     /// Number of turns currently in flight (including queued turns waiting for a previous one).
     var runCount: Int = 0
     var isRunning: Bool { runCount > 0 }
     /// All active run handles for this session — kept so "Stop" cancels all of them.
     var runHandles: [ChatSessionRunHandle] = []
-    /// Index of the assistant `ChatMessage` currently receiving streamed blocks.
-    /// Updated each time a new turn starts so the header "Running" indicator
-    /// tracks the latest streaming turn.
-    var streamingAssistantIndex: Int? = nil
+    /// Stable identity of the assistant `ChatMessage` receiving streamed blocks.
+    /// Updated each time a new turn starts so streamed output targets the
+    /// latest assistant turn.
+    var streamingAssistantMessageID: String? = nil
     /// When the user steers an active turn, the continuation should appear after
     /// the steering bubble. Existing WebSocket callbacks still reference the
-    /// assistant index captured at turn start, so this maps that original index
+    /// assistant ID captured at turn start, so this maps that original ID
     /// to the current continuation bubble.
-    var assistantIndexRedirects: [Int: Int] = [:]
+    var assistantRedirects: [String: String] = [:]
+    var pendingSteering: [String: PendingSteeringContext] = [:]
+    var steeringRedirectRecords: [String: SteeringRedirectRecord] = [:]
+    var nextSteeringRedirectSequence: Int = 0
 }
 
 // MARK: - Chat model
@@ -117,29 +313,16 @@ final class ChatModel: ObservableObject {
     /// endpoint as `AgentThinkingModel`).
     @Published var sessions: [AgentSessionInfo] = []
 
-    /// Free-text query used to filter the sidebar session list. The
-    /// query is matched against the session title *and*, when
-    /// available, the full transcript of user messages for the
-    /// session (lazily fetched + cached in
-    /// `sessionUserMessageHaystacks` once a search is active).
-    /// Whitespace-trimmed, case- and diacritic-insensitive matching is
-    /// applied in `filteredSessions`.
+    /// Free-text query used to filter the sidebar. Deep transcript matching is
+    /// performed by the authenticated search endpoint rather than downloading
+    /// every session history into the desktop process.
     @Published var sessionSearchQuery: String = "" {
-        didSet { hydrateUserMessageHaystacksIfNeeded() }
+        didSet { scheduleSessionSearch() }
     }
-
-    /// Cache of normalised user-message text keyed by session id. Used
-    /// to extend the sidebar search beyond session titles so the
-    /// filter finds any prior question the user typed in a session,
-    /// not only the first message that became the title. Hydrated
-    /// lazily on first search; entries are reused across keystrokes
-    /// so each session is fetched at most once per app launch.
-    @Published private var sessionUserMessageHaystacks: [String: String] = [:]
-
-    /// Set of session ids whose user-message transcript is currently
-    /// being fetched. Guards against duplicate in-flight requests when
-    /// the user types quickly into the sidebar search field.
-    private var hydratingUserMessageSessionIds: Set<String> = []
+    @Published private var serverSearchSessionIDs: Set<String>? = nil
+    private var sessionSearchTask: URLSessionDataTask?
+    private var sessionSearchWorkItem: DispatchWorkItem?
+    private var sessionSearchGeneration: Int = 0
 
     /// Monotonically incrementing token per session used to discard
     /// out-of-order `loadSessionHistory` responses. Each call bumps
@@ -151,6 +334,11 @@ final class ChatModel: ObservableObject {
     /// reported as "chat order looks corrupted after reselecting an
     /// older thread".
     private var sessionHistoryLoadGeneration: [String: Int] = [:]
+    private var sessionHistoryTasks: [String: URLSessionDataTask] = [:]
+    private var olderHistoryLoadGeneration: [String: Int] = [:]
+    private var olderHistoryTasks: [String: URLSessionDataTask] = [:]
+    private var fullContentTasks: [String: URLSessionDataTask] = [:]
+    private var fullContentWaiters: [String: [(String?) -> Void]] = [:]
 
     /// The session the user is currently chatting in.
     /// `nil` means a brand-new session that has not been persisted yet —
@@ -178,6 +366,11 @@ final class ChatModel: ObservableObject {
 
     /// True while an existing session transcript is being hydrated.
     @Published var isLoadingSessionHistory: Bool = false
+    @Published private(set) var hasMoreHistory: Bool = false
+    @Published private(set) var isLoadingOlderHistory: Bool = false
+    @Published private(set) var olderHistoryError: String? = nil
+    @Published private(set) var historyPrependAnchorID: String? = nil
+    @Published private(set) var fullContentLoadingIDs: Set<String> = []
 
     /// True while a turn is in flight (WebSocket open, awaiting final answer).
     @Published var isRunning: Bool = false
@@ -323,17 +516,9 @@ final class ChatModel: ObservableObject {
         guard !tokens.isEmpty else { return sessions }
 
         return sessions.filter { session in
-            // Title (the first ~60 chars of the first user message) is
-            // always searched. When we've cached deeper transcript text
-            // for the session, fold it into the same haystack so the
-            // query also matches against later user messages in the
-            // thread.
             var haystack = session.title
                 .lowercased()
                 .folding(options: .diacriticInsensitive, locale: .current)
-            if let extra = sessionUserMessageHaystacks[session.id], !extra.isEmpty {
-                haystack += "\n" + extra
-            }
             // Project group name + description should also be searchable
             // so users can find chats by typing the project name even
             // when the title doesn't reference it directly.
@@ -347,82 +532,60 @@ final class ChatModel: ObservableObject {
                     .lowercased()
                     .folding(options: .diacriticInsensitive, locale: .current)
             }
-            return tokens.allSatisfy { haystack.contains($0) }
+            let metadataMatch = tokens.allSatisfy { haystack.contains($0) }
+            return metadataMatch || (serverSearchSessionIDs?.contains(session.id) == true)
         }
     }
 
-    /// When a search is active, kick off background fetches for any
-    /// session whose user-message text we haven't cached yet so the
-    /// haystack grows beyond the title for the next keystroke. Limits
-    /// concurrent fetches via `hydratingUserMessageSessionIds` and the
-    /// per-session in-progress set so a fast typist doesn't fan out
-    /// dozens of duplicate requests.
-    private func hydrateUserMessageHaystacksIfNeeded() {
-        guard isSessionSearchActive else { return }
-        guard let token = SubscriptionManager.shared.jwtToken, !token.isEmpty else { return }
-
-        // Sessions whose transcript we haven't fetched yet, prioritised
-        // by recency (the same order the sidebar displays). Cap the
-        // fan-out per keystroke so the network stays calm on accounts
-        // with hundreds of sessions.
-        let pending = sessions.lazy.filter { [weak self] s in
-            guard let self else { return false }
-            return self.sessionUserMessageHaystacks[s.id] == nil
-                && !self.hydratingUserMessageSessionIds.contains(s.id)
+    private func scheduleSessionSearch() {
+        sessionSearchWorkItem?.cancel()
+        sessionSearchTask?.cancel()
+        sessionSearchGeneration += 1
+        let generation = sessionSearchGeneration
+        let query = sessionSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else {
+            serverSearchSessionIDs = nil
+            return
         }
-        let batch = Array(pending.prefix(8))
-        for session in batch {
-            fetchUserMessageHaystack(for: session.id, token: token)
+        serverSearchSessionIDs = nil
+        let work = DispatchWorkItem { [weak self] in
+            DispatchQueue.main.async { self?.performSessionSearch(query: query, generation: generation) }
         }
+        sessionSearchWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
     }
 
-    /// Fetch the persisted transcript for `sessionId` and cache the
-    /// concatenated user-message text (folded + lowercased) for use as
-    /// a search haystack. Decode failures and HTTP errors are
-    /// swallowed silently — search falls back to title-only matching
-    /// for that session, which is no worse than the previous behaviour.
-    private func fetchUserMessageHaystack(for sessionId: String, token: String) {
-        hydratingUserMessageSessionIds.insert(sessionId)
-
-        let url = APIClient.baseURL
-            .appendingPathComponent("api/agent/sessions")
-            .appendingPathComponent(sessionId)
-            .appendingPathComponent("messages")
+    private func performSessionSearch(query: String, generation: Int) {
+        guard generation == sessionSearchGeneration,
+              let token = SubscriptionManager.shared.jwtToken, !token.isEmpty
+        else { return }
+        var components = URLComponents(url: APIClient.baseURL
+            .appendingPathComponent("api/agent/sessions/search"), resolvingAgainstBaseURL: false)
+        components?.queryItems = [
+            URLQueryItem(name: "q", value: query),
+            URLQueryItem(name: "limit", value: "50"),
+        ]
+        guard let url = components?.url else { return }
         var request = URLRequest(url: url)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-
-        URLSession.shared.dataTask(with: request) { [weak self] data, _, _ in
-            guard let self else { return }
-            guard let data else {
-                DispatchQueue.main.async {
-                    self.hydratingUserMessageSessionIds.remove(sessionId)
-                }
-                return
-            }
-            struct Response: Decodable { let messages: [SessionHistoryEntry] }
-            let decoded = try? JSONDecoder().decode(Response.self, from: data)
-
-            let folded: String
-            if let entries = decoded?.messages {
-                folded = entries
-                    .filter { $0.role == "user" }
-                    .map(\.text)
-                    .joined(separator: "\n")
-                    .lowercased()
-                    .folding(options: .diacriticInsensitive, locale: .current)
-            } else {
-                folded = ""
-            }
-
+        struct SearchResult: Decodable { let sessionId: String }
+        struct SearchResponse: Decodable { let results: [SearchResult] }
+        sessionSearchTask = URLSession.shared.dataTask(with: request) { [weak self] data, response, _ in
+            guard let data,
+                  let http = response as? HTTPURLResponse,
+                  200..<300 ~= http.statusCode,
+                  let body = try? JSONDecoder().decode(SearchResponse.self, from: data)
+            else { return }
+            let ids = Set(body.results.map(\.sessionId))
             DispatchQueue.main.async {
-                self.hydratingUserMessageSessionIds.remove(sessionId)
-                // Always populate the cache (even with an empty string)
-                // so a failed fetch isn't re-attempted on every
-                // keystroke. The "" sentinel is treated as "no extra
-                // haystack" by the filter.
-                self.sessionUserMessageHaystacks[sessionId] = folded
+                guard let self,
+                      generation == self.sessionSearchGeneration,
+                      query == self.sessionSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+                else { return }
+                self.serverSearchSessionIDs = ids
             }
-        }.resume()
+        }
+        sessionSearchTask?.resume()
     }
 
     /// True when the user has typed something into the sidebar search
@@ -465,39 +628,17 @@ final class ChatModel: ObservableObject {
     private func savePublishedToActiveState() {
         let s = sessionState(for: activeStateKey)
         s.messages = messages
-        s.trimmedOlderMessageCount = trimmedOlderMessageCount
     }
 
     /// Load a session state into the published properties (driving the SwiftUI view).
     private func loadState(_ s: ChatSessionState) {
+        historyPrependAnchorID = nil
         messages = s.messages
-        trimmedOlderMessageCount = s.trimmedOlderMessageCount
         isRunning = s.isRunning
+        hasMoreHistory = s.hasMoreBefore
+        isLoadingOlderHistory = s.isLoadingOlder
+        olderHistoryError = s.olderLoadError
     }
-
-    /// Trim `state.messages` to `maxVisibleMessages`, updating the state's own
-    /// trimmed-count. The caller is responsible for syncing published properties
-    /// afterwards if needed.
-    private func enforceMessageCap(on s: ChatSessionState) {
-        let overflow = s.messages.count - Self.maxVisibleMessages
-        guard overflow > 0 else { return }
-        s.messages.removeFirst(overflow)
-        s.trimmedOlderMessageCount += overflow
-    }
-
-    /// Maximum number of messages kept in `messages` at any time.
-    /// Older messages are trimmed off the front of the array to keep
-    /// the SwiftUI view from rebuilding an arbitrarily large tree on
-    /// every input keystroke or stream block (which was causing input
-    /// lag in long chats). The trimmed history is still persisted on
-    /// the backend and re-hydrated when the user re-opens the session.
-    static let maxVisibleMessages: Int = 30
-
-    /// Number of older messages that have been trimmed from the
-    /// visible window for the current session. Surfaced to the view
-    /// so it can render a "Showing last N messages" hint at the top
-    /// of the feed.
-    @Published var trimmedOlderMessageCount: Int = 0
 
     // MARK: - Session list
 
@@ -533,6 +674,13 @@ final class ChatModel: ObservableObject {
     /// background. The user can switch back to it by tapping its session row.
     func startNewChat(in group: AgentGroupInfo? = nil) {
         savePublishedToActiveState()
+        if let previous = activeSessionId {
+            sessionHistoryTasks.removeValue(forKey: previous)?.cancel()
+            olderHistoryTasks.removeValue(forKey: previous)?.cancel()
+            olderHistoryLoadGeneration[previous, default: 0] += 1
+            cancelFullContentTasks(for: previous)
+            states[previous]?.isLoadingOlder = false
+        }
 
         activeSessionId = nil
         activeSessionTitle = "New Chat"
@@ -557,6 +705,13 @@ final class ChatModel: ObservableObject {
     /// streaming into its own state; switching does **not** cancel it.
     func openSession(_ session: AgentSessionInfo) {
         savePublishedToActiveState()
+        if let previous = activeSessionId, previous != session.id {
+            sessionHistoryTasks.removeValue(forKey: previous)?.cancel()
+            olderHistoryTasks.removeValue(forKey: previous)?.cancel()
+            olderHistoryLoadGeneration[previous, default: 0] += 1
+            cancelFullContentTasks(for: previous)
+            states[previous]?.isLoadingOlder = false
+        }
 
         activeSessionId = session.id
         activeSessionTitle = session.title
@@ -567,7 +722,7 @@ final class ChatModel: ObservableObject {
         // re-hydrated from the backend here. Re-fetching would overwrite
         // the in-flight `messages` array with the persisted (and
         // necessarily older) transcript, orphaning the
-        // `capturedAssistantIndex` the streaming callback writes to. The
+        // stable assistant ID the streaming callback writes to. The
         // turn would keep running (`runCount > 0`) while its thinking
         // blocks land at a stale index and never surface — i.e. "the
         // session stays running but shows no thinking" after switching
@@ -577,16 +732,23 @@ final class ChatModel: ObservableObject {
             loadState(running)
         } else {
             // Idle session: show any cached messages immediately (no
-            // blank flash) and refresh the transcript from the backend.
+            // blank flash), but rematerialize only its latest turn. Older
+            // decoded pages must not rebuild a large SwiftUI tree on reopen.
             let existing = states[session.id] ?? ChatSessionState()
             states[session.id] = existing
+            existing.messages = ChatHistoryMergePolicy.latestVisibleTurn(in: existing.messages)
+            existing.loadedMessageIDs = Set(existing.messages.map(\.id))
+            existing.oldestCursor = nil
+            existing.hasMoreBefore = false
+            existing.isLoadingOlder = false
+            existing.olderLoadError = nil
             isLoadingSessionHistory = true
             loadState(existing)
             loadSessionHistory(sessionId: session.id)
         }
 
         defaultTaskTemplate = nil
-        activeSessionTaskInstructionTitle = nil
+        activeSessionTaskInstructionTitle = session.taskInstructionHeading
         fetchDefaultTaskTemplate()
     }
 
@@ -604,14 +766,25 @@ final class ChatModel: ObservableObject {
         let generation = (sessionHistoryLoadGeneration[sessionId] ?? 0) + 1
         sessionHistoryLoadGeneration[sessionId] = generation
 
-        let url = APIClient.baseURL
+        var components = URLComponents(url: APIClient.baseURL
             .appendingPathComponent("api/agent/sessions")
             .appendingPathComponent(sessionId)
-            .appendingPathComponent("messages")
+            .appendingPathComponent("messages"), resolvingAgainstBaseURL: false)
+        components?.queryItems = [URLQueryItem(name: "view", value: "latest-turn")]
+        guard let url = components?.url else {
+            isLoadingSessionHistory = false
+            lastErrorMessage = "Couldn't load this chat history."
+            return
+        }
         var request = URLRequest(url: url)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
 
-        URLSession.shared.dataTask(with: request) { [weak self] data, _, _ in
+        sessionHistoryTasks[sessionId]?.cancel()
+        olderHistoryTasks.removeValue(forKey: sessionId)?.cancel()
+        olderHistoryLoadGeneration[sessionId, default: 0] += 1
+        states[sessionId]?.isLoadingOlder = false
+        let requestStartedAt = CFAbsoluteTimeGetCurrent()
+        let task = URLSession.shared.dataTask(with: request) { [weak self] data, response, _ in
             guard let self, let data else {
                 DispatchQueue.main.async {
                     guard let self else { return }
@@ -621,8 +794,10 @@ final class ChatModel: ObservableObject {
                 }
                 return
             }
-            struct Response: Decodable { let messages: [SessionHistoryEntry] }
-            guard let body = try? JSONDecoder().decode(Response.self, from: data) else {
+            guard let http = response as? HTTPURLResponse,
+                  200..<300 ~= http.statusCode,
+                  let body = try? JSONDecoder().decode(SessionHistoryResponse.self, from: data)
+            else {
                 DispatchQueue.main.async {
                     guard self.activeSessionId == sessionId,
                           self.sessionHistoryLoadGeneration[sessionId] == generation else { return }
@@ -631,38 +806,265 @@ final class ChatModel: ObservableObject {
                 }
                 return
             }
+            // Decode and transform on URLSession's background callback queue;
+            // the main actor only publishes the already-built page.
+            let hydrationStartedAt = CFAbsoluteTimeGetCurrent()
+            let hydrated = ChatModel.hydrateTranscript(from: body.messages)
+            #if DEBUG
+            let completedAt = CFAbsoluteTimeGetCurrent()
+            print(
+                "[ChatHistoryMetrics] latest-turn bytes=\(data.count) "
+                    + "requestMs=\(Int((completedAt - requestStartedAt) * 1_000)) "
+                    + "hydrateMs=\(Int((completedAt - hydrationStartedAt) * 1_000)) "
+                    + "messages=\(hydrated.count)"
+            )
+            #endif
             DispatchQueue.main.async {
                 // Drop the response if the user has switched to another
                 // session OR if a newer fetch for this same session has
                 // already been fired (e.g. the user reselected the row).
                 guard self.activeSessionId == sessionId,
                       self.sessionHistoryLoadGeneration[sessionId] == generation else { return }
-                let hydrated = ChatModel.hydrateTranscript(from: body.messages)
-                let overflow = max(0, hydrated.count - ChatModel.maxVisibleMessages)
-                let visible = overflow > 0 ? Array(hydrated.suffix(ChatModel.maxVisibleMessages)) : hydrated
-
                 let s = self.sessionState(for: sessionId)
-                s.messages = visible
-                s.trimmedOlderMessageCount = overflow
+                s.messages = hydrated
+                s.loadedMessageIDs = Set(hydrated.map(\.id))
+                s.oldestCursor = body.pageInfo?.startCursor
+                s.hasMoreBefore = body.pageInfo?.hasMoreBefore ?? false
+                s.isLoadingOlder = false
+                s.olderLoadError = nil
 
-                // Refresh the sidebar deep-search cache for this
-                // session from the just-hydrated transcript so any
-                // user messages beyond the title become matchable
-                // straight away without a second round-trip.
-                let userBlob = hydrated
-                    .filter { $0.role == .user }
-                    .map(\.text)
-                    .joined(separator: "\n")
-                    .lowercased()
-                    .folding(options: .diacriticInsensitive, locale: .current)
-                self.sessionUserMessageHaystacks[sessionId] = userBlob
-                self.activeSessionTaskInstructionTitle = ChatModel.lockedInstructionTitle(from: body.messages)
-
-                self.messages = visible
-                self.trimmedOlderMessageCount = overflow
+                self.messages = hydrated
+                self.hasMoreHistory = s.hasMoreBefore
+                self.isLoadingOlderHistory = false
+                self.olderHistoryError = nil
                 self.isLoadingSessionHistory = false
+                self.sessionHistoryTasks.removeValue(forKey: sessionId)
             }
-        }.resume()
+        }
+        sessionHistoryTasks[sessionId] = task
+        task.resume()
+    }
+
+    /// Loads the immediately preceding complete transcript page. Stable server
+    /// message IDs make retries idempotent and keep live-tail callbacks correct
+    /// while older messages are inserted at the front.
+    func loadOlderMessages() {
+        guard let sessionId = activeSessionId,
+              let token = SubscriptionManager.shared.jwtToken, !token.isEmpty
+        else { return }
+        let state = sessionState(for: sessionId)
+        guard state.hasMoreBefore, !state.isLoadingOlder, let cursor = state.oldestCursor else { return }
+        let generation = (olderHistoryLoadGeneration[sessionId] ?? 0) + 1
+        olderHistoryLoadGeneration[sessionId] = generation
+
+        state.isLoadingOlder = true
+        state.olderLoadError = nil
+        isLoadingOlderHistory = true
+        olderHistoryError = nil
+
+        var components = URLComponents(url: APIClient.baseURL
+            .appendingPathComponent("api/agent/sessions")
+            .appendingPathComponent(sessionId)
+            .appendingPathComponent("messages"), resolvingAgainstBaseURL: false)
+        components?.queryItems = [
+            URLQueryItem(name: "turns", value: "8"),
+            URLQueryItem(name: "before", value: cursor),
+        ]
+        guard let url = components?.url else {
+            finishOlderHistoryFailure(
+                sessionId: sessionId,
+                generation: generation,
+                message: "Couldn't load earlier messages."
+            )
+            return
+        }
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let requestStartedAt = CFAbsoluteTimeGetCurrent()
+        let task = URLSession.shared.dataTask(with: request) { [weak self, weak state] data, response, _ in
+            guard let self, let state else { return }
+            guard let data,
+                  let http = response as? HTTPURLResponse,
+                  200..<300 ~= http.statusCode,
+                  let body = try? JSONDecoder().decode(SessionHistoryResponse.self, from: data)
+            else {
+                DispatchQueue.main.async {
+                    self.finishOlderHistoryFailure(
+                        sessionId: sessionId,
+                        generation: generation,
+                        message: "Couldn't load earlier messages."
+                    )
+                }
+                return
+            }
+            let hydrationStartedAt = CFAbsoluteTimeGetCurrent()
+            let hydrated = ChatModel.hydrateTranscript(from: body.messages)
+            #if DEBUG
+            let completedAt = CFAbsoluteTimeGetCurrent()
+            print(
+                "[ChatHistoryMetrics] older-turns bytes=\(data.count) "
+                    + "requestMs=\(Int((completedAt - requestStartedAt) * 1_000)) "
+                    + "hydrateMs=\(Int((completedAt - hydrationStartedAt) * 1_000)) "
+                    + "messages=\(hydrated.count)"
+            )
+            #endif
+            DispatchQueue.main.async {
+                guard self.olderHistoryLoadGeneration[sessionId] == generation,
+                      self.states[sessionId] === state,
+                      state.oldestCursor == cursor else { return }
+                let anchor = state.messages.first?.id
+                let newMessages = hydrated.filter { !state.loadedMessageIDs.contains($0.id) }
+                state.messages = ChatHistoryMergePolicy.prepend(existing: state.messages, older: newMessages)
+                state.loadedMessageIDs.formUnion(newMessages.map(\.id))
+                state.oldestCursor = body.pageInfo?.startCursor
+                state.hasMoreBefore = body.pageInfo?.hasMoreBefore ?? false
+                state.isLoadingOlder = false
+                state.olderLoadError = nil
+                self.olderHistoryTasks.removeValue(forKey: sessionId)
+                guard self.activeSessionId == sessionId else { return }
+                self.messages = state.messages
+                self.hasMoreHistory = state.hasMoreBefore
+                self.isLoadingOlderHistory = false
+                self.olderHistoryError = nil
+                self.historyPrependAnchorID = anchor
+            }
+        }
+        olderHistoryTasks[sessionId] = task
+        task.resume()
+    }
+
+    private func finishOlderHistoryFailure(sessionId: String, generation: Int, message: String) {
+        guard olderHistoryLoadGeneration[sessionId] == generation else { return }
+        guard let state = states[sessionId] else { return }
+        state.isLoadingOlder = false
+        state.olderLoadError = message
+        olderHistoryTasks.removeValue(forKey: sessionId)
+        guard activeSessionId == sessionId else { return }
+        isLoadingOlderHistory = false
+        olderHistoryError = message
+    }
+
+    func clearHistoryPrependAnchor() {
+        historyPrependAnchorID = nil
+    }
+
+    func loadFullBlockContent(
+        _ block: ChatBlock,
+        completion: ((String?) -> Void)? = nil
+    ) {
+        guard block.previewText != nil,
+              let contentID = block.fullContentID,
+              let sessionId = activeSessionId,
+              let token = SubscriptionManager.shared.jwtToken, !token.isEmpty
+        else {
+            completion?(block.text)
+            return
+        }
+        let taskKey = "\(sessionId):\(contentID)"
+        if let completion { fullContentWaiters[taskKey, default: []].append(completion) }
+        guard fullContentTasks[taskKey] == nil else { return }
+        fullContentLoadingIDs.insert(contentID)
+
+        let url = APIClient.baseURL
+            .appendingPathComponent("api/agent/sessions")
+            .appendingPathComponent(sessionId)
+            .appendingPathComponent("message-blocks")
+            .appendingPathComponent(contentID)
+            .appendingPathComponent("content")
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        struct ContentResponse: Decodable { let text: String; let contentLength: Int }
+        let task = URLSession.shared.dataTask(with: request) { [weak self] data, response, _ in
+            guard let self else { return }
+            let statusCode = (response as? HTTPURLResponse)?.statusCode
+            let body: ContentResponse? = {
+                guard let data,
+                      let http = response as? HTTPURLResponse,
+                      200..<300 ~= http.statusCode
+                else { return nil }
+                return try? JSONDecoder().decode(ContentResponse.self, from: data)
+            }()
+            DispatchQueue.main.async {
+                self.fullContentTasks.removeValue(forKey: taskKey)
+                self.fullContentLoadingIDs.remove(contentID)
+                let waiters = self.fullContentWaiters.removeValue(forKey: taskKey) ?? []
+                guard let body else {
+                    if self.activeSessionId == sessionId {
+                        self.lastErrorMessage = statusCode == 404 || statusCode == 409
+                            ? "This content changed while the chat was open. Reopen the chat and try again."
+                            : "Couldn't load the complete content."
+                    }
+                    waiters.forEach { $0(nil) }
+                    return
+                }
+                guard TranscriptContentIntegrity.matches(block: block, fullText: body.text) else {
+                    if self.activeSessionId == sessionId {
+                        self.lastErrorMessage =
+                            "This content changed while the chat was open. Reopen the chat and try again."
+                    }
+                    waiters.forEach { $0(nil) }
+                    return
+                }
+                guard let state = self.states[sessionId] else {
+                    waiters.forEach { $0(body.text) }
+                    return
+                }
+                for messageIndex in state.messages.indices {
+                    for blockIndex in state.messages[messageIndex].blocks.indices
+                    where state.messages[messageIndex].blocks[blockIndex].fullContentID == contentID {
+                        state.messages[messageIndex].blocks[blockIndex].text = body.text
+                        state.messages[messageIndex].blocks[blockIndex].contentLength = body.contentLength
+                        state.messages[messageIndex].blocks[blockIndex].isContentTruncated = false
+                    }
+                }
+                if self.activeSessionId == sessionId { self.messages = state.messages }
+                waiters.forEach { $0(body.text) }
+            }
+        }
+        fullContentTasks[taskKey] = task
+        task.resume()
+    }
+
+    func loadFullBlockContents(
+        _ blocks: [ChatBlock],
+        completion: @escaping ([ChatBlock]) -> Void
+    ) {
+        let pending = blocks.filter { $0.previewText != nil && $0.isContentTruncated }
+        guard !pending.isEmpty else {
+            completion(blocks)
+            return
+        }
+        guard let sessionId = activeSessionId else {
+            completion(blocks)
+            return
+        }
+        let requestedIDs = Set(blocks.map(\.id))
+        var remaining = pending.count
+        var didComplete = false
+        for block in pending {
+            loadFullBlockContent(block) { _ in
+                remaining -= 1
+                guard remaining <= 0, !didComplete else { return }
+                didComplete = true
+                let resolvedByID = Dictionary(
+                    uniqueKeysWithValues: (self.states[sessionId]?.messages ?? [])
+                        .flatMap(\.blocks)
+                        .filter { requestedIDs.contains($0.id) }
+                        .map { ($0.id, $0) }
+                )
+                completion(blocks.map { resolvedByID[$0.id] ?? $0 })
+            }
+        }
+    }
+
+    private func cancelFullContentTasks(for sessionId: String) {
+        let prefix = "\(sessionId):"
+        for key in fullContentTasks.keys.filter({ $0.hasPrefix(prefix) }) {
+            fullContentTasks.removeValue(forKey: key)?.cancel()
+            fullContentLoadingIDs.remove(String(key.dropFirst(prefix.count)))
+            let waiters = fullContentWaiters.removeValue(forKey: key) ?? []
+            waiters.forEach { $0(nil) }
+        }
     }
 
     private static func lockedInstructionTitle(from entries: [SessionHistoryEntry]) -> String? {
@@ -702,7 +1104,7 @@ final class ChatModel: ObservableObject {
     ///     user turn instead of being split apart by a synthetic user
     ///     entry — which is what previously made resumed transcripts
     ///     look out-of-order after a failed web search.
-    private static let injectedUserPromptPrefixes: [String] = [
+    nonisolated private static let injectedUserPromptPrefixes: [String] = [
         "IMPORTANT: The web search tool failed",
         "Web research is complete",
         "Your previous response exceeded the output length limit",
@@ -710,7 +1112,7 @@ final class ChatModel: ObservableObject {
         "Content was truncated",
     ]
 
-    private static func isInjectedUserPrompt(_ text: String) -> Bool {
+    nonisolated private static func isInjectedUserPrompt(_ text: String) -> Bool {
         let head = text.drop(while: { $0.isWhitespace || $0.isNewline })
         for prefix in injectedUserPromptPrefixes {
             if head.hasPrefix(prefix) { return true }
@@ -721,7 +1123,7 @@ final class ChatModel: ObservableObject {
     /// The persisted agent history contains intermediate assistant messages
     /// as well as final answers. For chat resume, render each turn as a clean
     /// user message plus the last useful assistant response.
-    private static func hydrateTranscript(from entries: [SessionHistoryEntry]) -> [ChatMessage] {
+    nonisolated private static func hydrateTranscript(from entries: [SessionHistoryEntry]) -> [ChatMessage] {
         // One shared stamp for every hydrated block. The timeline treats a
         // zero-length span as "no real timing available" and hides the
         // duration badges, so replayed history never shows invented timings.
@@ -733,41 +1135,59 @@ final class ChatModel: ObservableObject {
                     if ChatModel.isInjectedUserPrompt(entry.text) { return nil }
                     // Server history carries no per-message timestamp, so the
                     // send time is unknown rather than "now".
-                    return ChatMessage.user(entry.text, sentAt: nil)
+                    return ChatMessage.user(entry.text, sentAt: nil, id: "server:\(entry.id)")
                 }
 
                 guard entry.role == "assistant" else { return nil }
-                var message = ChatMessage.assistant()
+                var message = ChatMessage.assistant(id: "server:\(entry.id)")
                 message.blocks = (entry.blocks ?? []).compactMap { block in
                     guard let kind = ChatModel.blockKind(from: block.kind) else { return nil }
-                    return ChatBlock(kind: kind, text: block.text, createdAt: hydratedAt)
+                    return ChatBlock(
+                        id: "server:\(block.id)",
+                        kind: kind,
+                        text: block.text,
+                        createdAt: hydratedAt,
+                        activityId: block.activityId,
+                        activityPhase: block.activityPhase,
+                        contentLength: block.contentLength,
+                        isContentTruncated: block.isContentTruncated ?? false,
+                        fullContentID: block.contentId,
+                        previewText: block.isContentTruncated == true ? block.text : nil
+                    )
                 }
                 return message.blocks.isEmpty ? nil : message
             }
         }
 
         var result: [ChatMessage] = []
-        var pendingAssistantTexts: [String] = []
+        var pendingAssistantEntries: [SessionHistoryEntry] = []
 
         func flushAssistant() {
-            guard let text = pendingAssistantTexts.reversed().compactMap(historyAssistantDisplayText).first else {
-                pendingAssistantTexts = []
+            guard let displayEntry = pendingAssistantEntries.reversed().first(where: {
+                historyAssistantDisplayText($0.text) != nil
+            }), let text = historyAssistantDisplayText(displayEntry.text) else {
+                pendingAssistantEntries = []
                 return
             }
 
-            var message = ChatMessage.assistant()
-            message.blocks.append(ChatBlock(kind: .finalAnswer, text: text, createdAt: hydratedAt))
+            var message = ChatMessage.assistant(id: "server:\(displayEntry.id)")
+            message.blocks.append(ChatBlock(
+                id: "server:\(displayEntry.id):final",
+                kind: .finalAnswer,
+                text: text,
+                createdAt: hydratedAt
+            ))
             result.append(message)
-            pendingAssistantTexts = []
+            pendingAssistantEntries = []
         }
 
         for entry in entries {
             if entry.role == "user" {
                 if ChatModel.isInjectedUserPrompt(entry.text) { continue }
                 flushAssistant()
-                result.append(ChatMessage.user(entry.text, sentAt: nil))
+                result.append(ChatMessage.user(entry.text, sentAt: nil, id: "server:\(entry.id)"))
             } else if entry.role == "assistant" {
-                pendingAssistantTexts.append(entry.text)
+                pendingAssistantEntries.append(entry)
             }
         }
 
@@ -775,9 +1195,20 @@ final class ChatModel: ObservableObject {
         return result
     }
 
-    private static func historyAssistantDisplayText(_ raw: String) -> String? {
-        let extracted = AgentRunner.extractFinalAnswer(from: raw)
-        let cleaned = (extracted ?? AgentRunner.cleanedDisplayText(from: raw))
+    nonisolated private static func historyAssistantDisplayText(_ raw: String) -> String? {
+        let extracted: String?
+        if let start = raw.range(of: "<final_answer>"),
+           let end = raw.range(of: "</final_answer>", range: start.upperBound..<raw.endIndex)
+        {
+            extracted = String(raw[start.upperBound..<end.lowerBound])
+        } else {
+            extracted = nil
+        }
+        let cleaned = (extracted ?? raw
+            .replacingOccurrences(of: "<shell_script>", with: "")
+            .replacingOccurrences(of: "</shell_script>", with: "")
+            .replacingOccurrences(of: "<final_answer>", with: "")
+            .replacingOccurrences(of: "</final_answer>", with: ""))
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard !cleaned.isEmpty else { return nil }
@@ -787,7 +1218,7 @@ final class ChatModel: ObservableObject {
         return cleaned
     }
 
-    private static func blockKind(from value: String) -> ChatBlockKind? {
+    nonisolated private static func blockKind(from value: String) -> ChatBlockKind? {
         switch value {
         case "agentReasoning":
             return .agentReasoning
@@ -809,24 +1240,6 @@ final class ChatModel: ObservableObject {
             return nil
         }
     }
-
-    /// Delete a session from the backend. Cancels any in-flight turn for that
-    /// session so its WebSocket closes cleanly.
-    /// Append `text` (folded + lowercased) to the cached search
-    /// haystack for `sessionId`. Used both when the user sends a new
-    /// turn and when streamed history is hydrated, so the sidebar
-    /// deep-search reflects the freshest content.
-    private func appendToUserMessageHaystack(sessionId: String, text: String) {
-        let folded = text
-            .lowercased()
-            .folding(options: .diacriticInsensitive, locale: .current)
-        guard !folded.isEmpty else { return }
-        let existing = sessionUserMessageHaystacks[sessionId] ?? ""
-        sessionUserMessageHaystacks[sessionId] = existing.isEmpty
-            ? folded
-            : existing + "\n" + folded
-    }
-
 
     /// Applies user-managed sidebar metadata optimistically, then persists it.
     /// The session ID and active state are deliberately untouched.
@@ -883,7 +1296,10 @@ final class ChatModel: ObservableObject {
     }
 
     func deleteSession(_ session: AgentSessionInfo) {
-        sessionUserMessageHaystacks.removeValue(forKey: session.id)
+        sessionHistoryTasks.removeValue(forKey: session.id)?.cancel()
+        olderHistoryTasks.removeValue(forKey: session.id)?.cancel()
+        olderHistoryLoadGeneration[session.id, default: 0] += 1
+        cancelFullContentTasks(for: session.id)
         // Optimistically cancel all running turns for this session.
         states[session.id]?.runHandles.forEach { $0.cancel() }
         runningSessionIds.remove(session.id)
@@ -922,12 +1338,13 @@ final class ChatModel: ObservableObject {
         guard !text.isEmpty else { return }
 
         let currentState = sessionState(for: activeStateKey)
-        inputText = ""
         lastErrorMessage = nil
         if currentState.isRunning {
+            inputText = ""
             sendSteeringInput(text, to: currentState)
             return
         }
+        inputText = ""
         if activeSessionId == nil && messages.isEmpty {
             activeSessionTaskInstructionTitle = defaultTaskTemplate?.heading
         }
@@ -950,24 +1367,18 @@ final class ChatModel: ObservableObject {
         // Append the user and (empty) assistant messages into the session state.
         sessionSt.messages.append(ChatMessage.user(text))
         sessionSt.messages.append(ChatMessage.assistant())
-        enforceMessageCap(on: sessionSt)
-
-        // Keep the sidebar deep-search cache in sync with what the
-        // user just sent so it's matchable immediately, without
-        // waiting for the session to be re-fetched.
-        appendToUserMessageHaystack(sessionId: sessionId, text: text)
+        sessionSt.loadedMessageIDs.formUnion(sessionSt.messages.suffix(2).map(\.id))
 
         // Capture the index for *this* turn's assistant bubble so concurrent
         // turns each stream into their own row rather than fighting over one index.
-        let capturedAssistantIndex = sessionSt.messages.count - 1
-        sessionSt.streamingAssistantIndex = capturedAssistantIndex
-        sessionSt.assistantIndexRedirects[capturedAssistantIndex] = nil
+        let capturedAssistantMessageID = sessionSt.messages.last!.id
+        sessionSt.streamingAssistantMessageID = capturedAssistantMessageID
+        sessionSt.assistantRedirects[capturedAssistantMessageID] = nil
         sessionSt.runCount += 1
         runningSessionIds.insert(sessionId)
 
         // Sync published properties so the view reflects the new messages.
         messages = sessionSt.messages
-        trimmedOlderMessageCount = sessionSt.trimmedOlderMessageCount
         isRunning = true
 
         // Optimistically surface the session in the sidebar.
@@ -1008,20 +1419,28 @@ final class ChatModel: ObservableObject {
             groupName: selectedGroup?.groupName,
             onBlock: { [weak self] block in
                 guard let self else { return }
-                self.appendBlock(block, toSession: sessionSt, at: capturedAssistantIndex)
+                self.appendBlock(block, toSession: sessionSt, messageID: capturedAssistantMessageID)
+            },
+            onSteeringEvent: { [weak self] event in
+                self?.handleSteeringEvent(event, in: sessionSt)
             },
             onFinal: { [weak self] finalText in
                 guard let self else { return }
                 self.appendBlock(
                     ChatBlock(kind: .finalAnswer, text: finalText),
                     toSession: sessionSt,
-                    at: capturedAssistantIndex
+                    messageID: capturedAssistantMessageID
+                )
+                self.failUnresolvedSteering(
+                    in: sessionSt,
+                    reason: "The task finished before this update was applied. Send it again as a follow-up."
                 )
                 sessionSt.runCount = max(0, sessionSt.runCount - 1)
                 if sessionSt.runCount == 0 {
                     sessionSt.runHandles = []
-                    sessionSt.streamingAssistantIndex = nil
-                    sessionSt.assistantIndexRedirects.removeAll()
+                    sessionSt.streamingAssistantMessageID = nil
+                    sessionSt.assistantRedirects.removeAll()
+                    sessionSt.steeringRedirectRecords.removeAll()
                     self.runningSessionIds.remove(sessionId)
                     if self.states[self.activeStateKey] === sessionSt {
                         self.isRunning = false
@@ -1039,16 +1458,24 @@ final class ChatModel: ObservableObject {
             },
             onError: { [weak self] error in
                 guard let self else { return }
-                self.appendBlock(
-                    ChatBlock(kind: .finalAnswer, text: "**Error:** \(error.localizedDescription)"),
-                    toSession: sessionSt,
-                    at: capturedAssistantIndex
+                let nsError = error as NSError
+                if !(nsError.domain == "ChatSessionRunner" && nsError.code == -9999) {
+                    self.appendBlock(
+                        ChatBlock(kind: .finalAnswer, text: "**Error:** \(error.localizedDescription)"),
+                        toSession: sessionSt,
+                        messageID: capturedAssistantMessageID
+                    )
+                }
+                self.failUnresolvedSteering(
+                    in: sessionSt,
+                    reason: "The task ended before this update was applied."
                 )
                 sessionSt.runCount = max(0, sessionSt.runCount - 1)
                 if sessionSt.runCount == 0 {
                     sessionSt.runHandles = []
-                    sessionSt.streamingAssistantIndex = nil
-                    sessionSt.assistantIndexRedirects.removeAll()
+                    sessionSt.streamingAssistantMessageID = nil
+                    sessionSt.assistantRedirects.removeAll()
+                    sessionSt.steeringRedirectRecords.removeAll()
                     self.runningSessionIds.remove(sessionId)
                     if self.states[self.activeStateKey] === sessionSt {
                         self.isRunning = false
@@ -1071,80 +1498,187 @@ final class ChatModel: ObservableObject {
 
     private func sendSteeringInput(_ text: String, to sessionSt: ChatSessionState) {
         guard let sessionId = activeSessionId, let handle = sessionSt.runHandles.last else {
+            inputText = text
             lastErrorMessage = "The current task is no longer connected."
             return
         }
 
-        let currentAssistantIndex = sessionSt.streamingAssistantIndex
-            ?? sessionSt.messages.lastIndex(where: { $0.role == .assistant })
-        guard let currentAssistantIndex,
-              currentAssistantIndex >= 0,
-              currentAssistantIndex < sessionSt.messages.count
+        let currentAssistantMessageID = sessionSt.streamingAssistantMessageID
+            ?? sessionSt.messages.last(where: { $0.role == .assistant })?.id
+        guard let currentAssistantMessageID,
+              let currentAssistantIndex = sessionSt.messages.firstIndex(where: {
+                  $0.id == currentAssistantMessageID
+              })
         else {
             lastErrorMessage = "The current task has no active response to steer."
             inputText = text
             return
         }
 
-        let redirectKey = sessionSt.assistantIndexRedirects.first(where: { $0.value == currentAssistantIndex })?.key
-            ?? currentAssistantIndex
-        let previousRedirectTarget = sessionSt.assistantIndexRedirects[redirectKey]
-        let steeringMessage = ChatMessage.user(text, isSteering: true)
-        let continuationMessage = ChatMessage.assistant()
+        let redirectKey = sessionSt.assistantRedirects.first(where: {
+            $0.value == currentAssistantMessageID
+        })?.key ?? currentAssistantMessageID
+        let steeringID = UUID().uuidString
+        let steeringMessage = ChatMessage.user(text, steeringState: .pending)
         let insertIndex = min(currentAssistantIndex + 1, sessionSt.messages.count)
         sessionSt.messages.insert(steeringMessage, at: insertIndex)
-        sessionSt.messages.insert(continuationMessage, at: insertIndex + 1)
-        sessionSt.streamingAssistantIndex = insertIndex + 1
-        sessionSt.assistantIndexRedirects[redirectKey] = insertIndex + 1
+        sessionSt.loadedMessageIDs.insert(steeringMessage.id)
+        sessionSt.pendingSteering[steeringID] = PendingSteeringContext(
+            messageID: steeringMessage.id,
+            text: text,
+            redirectKey: redirectKey,
+            continuationMessageID: nil
+        )
         if states[activeStateKey] === sessionSt {
             messages = sessionSt.messages
-            trimmedOlderMessageCount = sessionSt.trimmedOlderMessageCount
         }
 
         ChatSessionRunner.shared.sendSteeringMessage(
             sessionId: sessionId,
+            steeringID: steeringID,
             text: text,
             handle: handle
-        ) { [weak self] result in
-            guard let self else { return }
+        ) { [weak self, weak sessionSt] result in
+            guard let self, let sessionSt else { return }
             switch result {
             case .success:
-                self.appendToUserMessageHaystack(sessionId: sessionId, text: text)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 12) { [weak self, weak sessionSt] in
+                    guard let self, let sessionSt,
+                          let context = sessionSt.pendingSteering[steeringID],
+                          let messageIndex = sessionSt.messages.firstIndex(where: {
+                              $0.id == context.messageID
+                          }),
+                          sessionSt.messages[messageIndex].steeringState == .pending
+                    else { return }
+                    self.failSteering(
+                        id: steeringID,
+                        in: sessionSt,
+                        reason: "The server did not acknowledge this update. Try again or send it as a follow-up."
+                    )
+                }
 
             case let .failure(error):
-                let continuationHasContent = sessionSt.messages.first {
-                    $0.id == continuationMessage.id
-                }.map { !$0.text.isEmpty || !$0.blocks.isEmpty } ?? false
-
-                if !continuationHasContent {
-                    sessionSt.messages.removeAll {
-                        $0.id == steeringMessage.id || $0.id == continuationMessage.id
-                    }
-                    sessionSt.streamingAssistantIndex = currentAssistantIndex
-                    if let previousRedirectTarget {
-                        sessionSt.assistantIndexRedirects[redirectKey] = previousRedirectTarget
-                    } else {
-                        sessionSt.assistantIndexRedirects.removeValue(forKey: redirectKey)
-                    }
-                    self.inputText = text
-                }
-
-                if self.states[self.activeStateKey] === sessionSt {
-                    self.messages = sessionSt.messages
-                    self.trimmedOlderMessageCount = sessionSt.trimmedOlderMessageCount
-                }
-                self.lastErrorMessage = "Couldn't steer the current task: \(error.localizedDescription)"
+                self.failSteering(
+                    id: steeringID,
+                    in: sessionSt,
+                    reason: "Couldn't send this update: \(error.localizedDescription)"
+                )
             }
         }
+    }
+
+    private func handleSteeringEvent(_ event: SteeringServerEvent, in sessionSt: ChatSessionState) {
+        guard let steeringID = SteeringEventResolver.targetID(
+                  correlatedID: event.id,
+                  pending: sessionSt.pendingSteering,
+                  messageIDsInDisplayOrder: sessionSt.messages.map(\.id)
+              ),
+              var context = sessionSt.pendingSteering[steeringID],
+              let messageIndex = sessionSt.messages.firstIndex(where: { $0.id == context.messageID })
+        else { return }
+
+        switch event.status {
+        case .received:
+            sessionSt.messages[messageIndex].steeringState = .received(pendingCount: event.pendingCount)
+            if SteeringContinuationPolicy.shouldCreateContinuation(for: event.status),
+               context.continuationMessageID == nil
+            {
+                let continuation = ChatMessage.assistant()
+                let continuationIndex = min(messageIndex + 1, sessionSt.messages.count)
+                sessionSt.messages.insert(continuation, at: continuationIndex)
+                sessionSt.loadedMessageIDs.insert(continuation.id)
+                context.continuationMessageID = continuation.id
+                sessionSt.pendingSteering[steeringID] = context
+                sessionSt.nextSteeringRedirectSequence += 1
+                sessionSt.steeringRedirectRecords[steeringID] = SteeringRedirectRecord(
+                    redirectKey: context.redirectKey,
+                    continuationMessageID: continuation.id,
+                    sequence: sessionSt.nextSteeringRedirectSequence
+                )
+                recomputeSteeringRedirect(for: context.redirectKey, in: sessionSt)
+            }
+            if event.isLegacyAcknowledgement {
+                // Legacy servers send no later `applied` event. The receipt is
+                // their terminal acknowledgement, so keep the continuation
+                // redirect but clear the timeout-tracked pending request.
+                sessionSt.messages[messageIndex].steeringState = .applied
+                sessionSt.pendingSteering.removeValue(forKey: steeringID)
+            }
+
+        case .applied:
+            sessionSt.messages[messageIndex].steeringState = .applied
+            sessionSt.pendingSteering.removeValue(forKey: steeringID)
+
+        case .rejected:
+            failSteering(id: steeringID, in: sessionSt, reason: event.message)
+            return
+        }
+
+        publish(sessionSt)
+    }
+
+    private func failSteering(id: String, in sessionSt: ChatSessionState, reason: String) {
+        guard let context = sessionSt.pendingSteering.removeValue(forKey: id) else { return }
+        sessionSt.steeringRedirectRecords.removeValue(forKey: id)
+        if let messageIndex = sessionSt.messages.firstIndex(where: { $0.id == context.messageID }) {
+            sessionSt.messages[messageIndex].steeringState = .failed(reason)
+        }
+
+        if let continuationID = context.continuationMessageID,
+           let continuationIndex = sessionSt.messages.firstIndex(where: { $0.id == continuationID })
+        {
+            let continuation = sessionSt.messages[continuationIndex]
+            if continuation.text.isEmpty && continuation.blocks.isEmpty {
+                sessionSt.messages.remove(at: continuationIndex)
+            }
+        }
+
+        recomputeSteeringRedirect(for: context.redirectKey, in: sessionSt)
+
+        if states[activeStateKey] === sessionSt {
+            if inputText.isEmpty { inputText = context.text }
+            lastErrorMessage = reason
+        }
+        publish(sessionSt)
+    }
+
+    private func recomputeSteeringRedirect(for redirectKey: String, in sessionSt: ChatSessionState) {
+        if let target = SteeringRedirectResolver.target(
+            for: redirectKey,
+            records: sessionSt.steeringRedirectRecords
+        ) {
+            sessionSt.assistantRedirects[redirectKey] = target
+            sessionSt.streamingAssistantMessageID = target
+        } else {
+            sessionSt.assistantRedirects.removeValue(forKey: redirectKey)
+            sessionSt.streamingAssistantMessageID = redirectKey
+        }
+    }
+
+    private func failUnresolvedSteering(in sessionSt: ChatSessionState, reason: String) {
+        for id in Array(sessionSt.pendingSteering.keys) {
+            failSteering(id: id, in: sessionSt, reason: reason)
+        }
+    }
+
+    private func publish(_ sessionSt: ChatSessionState) {
+        guard states[activeStateKey] === sessionSt else { return }
+        messages = sessionSt.messages
     }
 
     /// Append `block` to the assistant message at `index` in `sessionSt`.
     /// Each turn captures its own index at send time so concurrent turns write
     /// to separate bubbles. If `sessionSt` is the active session the published
     /// `messages` array is also updated so the view refreshes.
-    private func appendBlock(_ block: ChatBlock, toSession sessionSt: ChatSessionState, at index: Int) {
-        let targetIndex = sessionSt.assistantIndexRedirects[index] ?? index
-        guard targetIndex >= 0, targetIndex < sessionSt.messages.count else { return }
+    private func appendBlock(
+        _ block: ChatBlock,
+        toSession sessionSt: ChatSessionState,
+        messageID: String
+    ) {
+        let targetID = sessionSt.assistantRedirects[messageID] ?? messageID
+        guard let targetIndex = sessionSt.messages.firstIndex(where: { $0.id == targetID }) else {
+            return
+        }
         var message = sessionSt.messages[targetIndex]
         guard message.role == .assistant else { return }
         message.blocks.append(block)
@@ -1179,11 +1713,26 @@ final class ChatModel: ObservableObject {
     /// Cancel all running turns for the active session.
     func cancelCurrentTurn() {
         let s = states[activeStateKey]
+        if let s {
+            failUnresolvedSteering(in: s, reason: "The task was stopped before this update was applied.")
+        }
+        if let s,
+           let messageID = s.streamingAssistantMessageID
+            ?? s.messages.last(where: { $0.role == .assistant })?.id,
+           s.messages.contains(where: { $0.id == messageID })
+        {
+            let targetID = s.assistantRedirects[messageID] ?? messageID
+            if let targetIndex = s.messages.firstIndex(where: { $0.id == targetID }) {
+                let cancellation = ChatCancellationLifecycle.block(for: s.messages[targetIndex].blocks)
+                appendBlock(cancellation, toSession: s, messageID: messageID)
+            }
+        }
         s?.runHandles.forEach { $0.cancel() }
         s?.runCount = 0
         s?.runHandles = []
-        s?.streamingAssistantIndex = nil
-        s?.assistantIndexRedirects.removeAll()
+        s?.streamingAssistantMessageID = nil
+        s?.assistantRedirects.removeAll()
+        s?.steeringRedirectRecords.removeAll()
         if let id = activeSessionId { runningSessionIds.remove(id) }
         isRunning = false
     }

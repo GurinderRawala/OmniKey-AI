@@ -10,7 +10,20 @@ import {
   selectedAgentModelForProvider,
 } from '../../agentSettingsStore';
 import { GROUPING_SESSION_PREFIX } from '../sessionGrouping';
-import { buildTranscript, RawHistoryMessage } from './transcript';
+import {
+  buildTranscript,
+  InvalidTranscriptCursorError,
+  latestTranscriptTurn,
+  paginateTranscript,
+  paginateTranscriptTurns,
+  previewTranscript,
+  transcriptPageLimit,
+} from './transcript';
+import {
+  readFreshNormalizedTranscript,
+  readNormalizedBlockContent,
+  readOrBackfillNormalizedTranscript,
+} from './transcriptStore';
 
 const CONTEXT_WINDOW_CACHE_TTL_MS = 5_000;
 let contextWindowCache: { value: number; expiresAt: number; settingsVersion: number } | null = null;
@@ -35,6 +48,32 @@ async function getActiveContextWindowSize(): Promise<number> {
     settingsVersion,
   };
   return value;
+}
+
+async function loadNormalizedOrLegacyTranscript(
+  sessionId: string,
+  subscriptionId: string,
+  transcriptRevision?: string | null,
+): Promise<{
+  messages: Awaited<ReturnType<typeof readOrBackfillNormalizedTranscript>>;
+  historyBytes: number;
+}> {
+  const normalized = await readFreshNormalizedTranscript(sessionId, transcriptRevision);
+  if (normalized) return { messages: normalized, historyBytes: 0 };
+
+  const legacy = await AgentSession.findOne({
+    where: { id: sessionId, subscriptionId },
+    attributes: ['id', 'historyJson', 'transcriptRevision'],
+  });
+  if (!legacy) return { messages: [], historyBytes: 0 };
+  return {
+    messages: await readOrBackfillNormalizedTranscript(
+      sessionId,
+      legacy.historyJson,
+      legacy.transcriptRevision,
+    ),
+    historyBytes: Buffer.byteLength(legacy.historyJson || '[]', 'utf8'),
+  };
 }
 
 // Exposes agent session management endpoints that the macOS (and Windows)
@@ -106,6 +145,86 @@ export function createAgentRouter(): express.Router {
       );
     } catch (err) {
       log.error('Failed to list agent sessions', { error: err });
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  // GET /api/agent/sessions/search?q=...&limit=...
+  // Searches persisted user turns server-side so the desktop app does not
+  // download one complete transcript per sidebar row. This is the portable
+  // phase-one implementation for legacy historyJson sessions; normalized
+  // transcript storage can later replace the in-process scan without changing
+  // the client contract.
+  router.get('/sessions/search', async (req, res: Response<any, AuthLocals>) => {
+    const { subscription, logger: log } = res.locals;
+    const query = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+    if (!query || query.length > 500) {
+      res.status(400).json({ error: 'Invalid search query' });
+      return;
+    }
+    const requestedLimit = typeof req.query.limit === 'string' ? Number(req.query.limit) : 30;
+    if (!Number.isInteger(requestedLimit) || requestedLimit <= 0) {
+      res.status(400).json({ error: 'Invalid search limit' });
+      return;
+    }
+    const limit = Math.min(requestedLimit, 50);
+    const tokens = query.toLocaleLowerCase().split(/\s+/).filter(Boolean);
+
+    try {
+      const sessions = await AgentSession.findAll({
+        where: {
+          subscriptionId: subscription.id,
+          id: { [Op.notLike]: `${GROUPING_SESSION_PREFIX}%` },
+        },
+        order: [['last_active_at', 'DESC']],
+        limit: 50,
+        attributes: [
+          'id',
+          'title',
+          'groupName',
+          'groupDescription',
+          'historyJson',
+          'transcriptRevision',
+        ],
+      });
+
+      const results: Array<{ sessionId: string; matchedText: string }> = [];
+      for (const session of sessions) {
+        const metadata = [session.title, session.groupName, session.groupDescription].filter(
+          (value): value is string => typeof value === 'string' && value.length > 0,
+        );
+        const metadataHaystack = metadata.join('\n').toLocaleLowerCase();
+        let userText = '';
+        if (!tokens.every((token) => metadataHaystack.includes(token))) {
+          try {
+            const normalized = await readFreshNormalizedTranscript(
+              session.id,
+              session.transcriptRevision,
+            );
+            const messages = normalized ?? buildTranscript(JSON.parse(session.historyJson || '[]'));
+            userText = messages
+              .filter((message) => message.role === 'user')
+              .map((message) => message.text)
+              .join('\n');
+          } catch {
+            // A malformed legacy history should not make all sidebar search fail.
+          }
+        }
+        const source = [...metadata, userText].filter(Boolean).join('\n');
+        const haystack = source.toLocaleLowerCase();
+        if (!tokens.every((token) => haystack.includes(token))) continue;
+
+        const matchIndex = tokens.length ? haystack.indexOf(tokens[0]) : 0;
+        const snippetStart = Math.max(0, Math.min(source.length, matchIndex) - 60);
+        results.push({
+          sessionId: session.id,
+          matchedText: source.slice(snippetStart, snippetStart + 180).trim(),
+        });
+        if (results.length >= limit) break;
+      }
+      res.json({ results });
+    } catch (err) {
+      log.error('Failed to search agent sessions', { error: err });
       res.status(500).json({ error: 'Internal server error' });
     }
   });
@@ -253,9 +372,14 @@ export function createAgentRouter(): express.Router {
     }
 
     try {
+      const isPaginatedRequest = ['view', 'turns', 'before', 'limit'].some(
+        (key) => req.query[key] !== undefined,
+      );
       const session = await AgentSession.findOne({
         where: { id: sessionId, subscriptionId: subscription.id },
-        attributes: ['id', 'historyJson'],
+        attributes: isPaginatedRequest
+          ? ['id', 'transcriptRevision']
+          : ['id', 'transcriptRevision', 'historyJson'],
       });
 
       if (!session) {
@@ -263,15 +387,137 @@ export function createAgentRouter(): express.Router {
         return;
       }
 
-      const raw: RawHistoryMessage[] = JSON.parse(session.historyJson || '[]');
-      const messages = buildTranscript(raw);
-
-      res.json({ messages });
+      const startedAt = performance.now();
+      if (!isPaginatedRequest) {
+        // Compatibility contract for macOS versions released before cursor
+        // pagination and deferred content. Those clients cannot interpret a
+        // truncated body or fetch older pages, so an unversioned request must
+        // continue to receive the complete, untruncated transcript.
+        const raw = JSON.parse(session.historyJson || '[]');
+        const legacyResponse = { messages: buildTranscript(raw) };
+        log.info?.('Built legacy complete agent transcript', {
+          sessionId,
+          historyBytes: Buffer.byteLength(session.historyJson || '[]', 'utf8'),
+          responseMessages: legacyResponse.messages.length,
+          responseBytes: Buffer.byteLength(JSON.stringify(legacyResponse), 'utf8'),
+          buildDurationMs: Math.round((performance.now() - startedAt) * 10) / 10,
+        });
+        res.json(legacyResponse);
+        return;
+      }
+      const { messages, historyBytes } = await loadNormalizedOrLegacyTranscript(
+        sessionId,
+        subscription.id,
+        session.transcriptRevision,
+      );
+      if (req.query.before !== undefined && typeof req.query.before !== 'string') {
+        throw new InvalidTranscriptCursorError();
+      }
+      const before = typeof req.query.before === 'string' ? req.query.before : undefined;
+      const view = typeof req.query.view === 'string' ? req.query.view : undefined;
+      let page;
+      if (view === 'latest-turn') {
+        if (before) throw new InvalidTranscriptCursorError();
+        page = latestTranscriptTurn(messages, sessionId);
+      } else if (view !== undefined) {
+        res.status(400).json({ error: 'Invalid transcript view' });
+        return;
+      } else if (req.query.turns !== undefined) {
+        const turns = transcriptPageLimit(req.query.turns);
+        if (!before) throw new InvalidTranscriptCursorError();
+        page = paginateTranscriptTurns(messages, sessionId, turns, before);
+      } else {
+        const limit = transcriptPageLimit(req.query.limit);
+        page = paginateTranscript(messages, sessionId, limit, before);
+      }
+      const response = { ...page, messages: previewTranscript(page.messages) };
+      const responseBytes = Buffer.byteLength(JSON.stringify(response), 'utf8');
+      const finalAnswerCharacters = response.messages.reduce((total, message) => {
+        const finalAnswers = (message.blocks ?? []).filter((block) => block.kind === 'finalAnswer');
+        const finalAnswer = finalAnswers[finalAnswers.length - 1];
+        return total + (finalAnswer?.contentLength ?? finalAnswer?.text.length ?? 0);
+      }, 0);
+      const activityPreviewBytes = response.messages.reduce(
+        (total, message) =>
+          total +
+          (message.blocks ?? [])
+            .filter((block) => block.kind !== 'finalAnswer')
+            .reduce((sum, block) => sum + Buffer.byteLength(block.text, 'utf8'), 0),
+        0,
+      );
+      log.info?.('Built paged agent transcript', {
+        sessionId,
+        view: view ?? 'history',
+        historyBytes,
+        transcriptMessages: messages.length,
+        responseMessages: response.messages.length,
+        responseBytes,
+        finalAnswerCharacters,
+        activityPreviewBytes,
+        buildDurationMs: Math.round((performance.now() - startedAt) * 10) / 10,
+      });
+      res.json(response);
     } catch (err) {
-      log.error('Failed to fetch agent session messages', { sessionId, error: err });
+      if (err instanceof InvalidTranscriptCursorError) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      log.error('Failed to fetch agent session messages', {
+        sessionId,
+        error:
+          err instanceof Error
+            ? { name: err.name, message: err.message, stack: err.stack }
+            : String(err),
+      });
       res.status(500).json({ error: 'Internal server error' });
     }
   });
+
+  // GET /api/agent/sessions/:sessionId/message-blocks/:blockId/content
+  // Fetches a complete oversized block only after the user expands or copies
+  // it. Ownership is checked on the session query before any history is read.
+  router.get(
+    '/sessions/:sessionId/message-blocks/:blockId/content',
+    async (req, res: Response<any, AuthLocals>) => {
+      const { subscription, logger: log } = res.locals;
+      const { sessionId, blockId } = req.params;
+      if (
+        !sessionId ||
+        typeof sessionId !== 'string' ||
+        sessionId.length > 128 ||
+        !blockId ||
+        typeof blockId !== 'string' ||
+        blockId.length > 128
+      ) {
+        res.status(400).json({ error: 'Invalid content request' });
+        return;
+      }
+      try {
+        const session = await AgentSession.findOne({
+          where: { id: sessionId, subscriptionId: subscription.id },
+          attributes: ['id', 'transcriptRevision'],
+        });
+        if (!session) {
+          res.status(404).json({ error: 'Session not found' });
+          return;
+        }
+        await loadNormalizedOrLegacyTranscript(
+          sessionId,
+          subscription.id,
+          session.transcriptRevision,
+        );
+        const text = await readNormalizedBlockContent(sessionId, blockId);
+        if (text === null) {
+          res.status(404).json({ error: 'Message block not found' });
+          return;
+        }
+        res.json({ text, contentLength: text.length });
+      } catch (err) {
+        log.error('Failed to fetch agent transcript block', { sessionId, blockId, error: err });
+        res.status(500).json({ error: 'Internal server error' });
+      }
+    },
+  );
 
   // GET /api/agent/groups
   // Returns distinct group names and descriptions for the authenticated

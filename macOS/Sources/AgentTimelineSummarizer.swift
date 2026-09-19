@@ -1,12 +1,52 @@
 import Foundation
 
 enum AgentTimelineSummarizer {
-    static func collapsedSummary(kind: ChatBlockKind, text: String) -> String {
-        summarize(kind: displayKind(for: kind), text: text).collapsed
+    /// Converts a user-visible agent update into one safe, readable paragraph.
+    /// It deliberately removes command-shaped content, redacts common secret
+    /// assignments, and caps the result at 150 words. This is a
+    /// progress summary derived only from streamed text, not hidden reasoning.
+    static func progressSummary(_ text: String, wordLimit: Int = 150) -> String {
+        let prose = reasoningProse(text)
+        guard !prose.isEmpty else { return "" }
+
+        let withoutMarkdown =
+            prose
+            .components(separatedBy: .newlines)
+            .map { raw -> String in
+                var line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                while line.hasPrefix("#") { line.removeFirst() }
+                for marker in ["- ", "* ", "> "] where line.hasPrefix(marker) {
+                    line.removeFirst(marker.count)
+                }
+                return line.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+
+        let redacted = redactSensitiveValues(in: withoutMarkdown)
+        let words = redacted.split(whereSeparator: { $0.isWhitespace })
+        guard words.count > wordLimit else { return words.joined(separator: " ") }
+        return words.prefix(wordLimit).joined(separator: " ") + "…"
     }
 
-    static func expandedSummary(kind: ChatBlockKind, text: String) -> String {
-        summarize(kind: displayKind(for: kind), text: text).expanded
+    static func terminalOutputFailed(_ text: String) -> Bool {
+        let first = text.components(separatedBy: .newlines).first?.lowercased() ?? ""
+        return first.contains("error") || first.contains("failed") || first.contains("exit code")
+    }
+
+    private static func redactSensitiveValues(in text: String) -> String {
+        let patterns = [
+            #"(?i)\b(api[_-]?key|access[_-]?token|auth[_-]?token|password|secret)\s*[:=]\s*([^\s,;]+)"#,
+            #"\b(sk-[A-Za-z0-9_-]{12,})\b"#,
+        ]
+        return patterns.reduce(text) { value, pattern in
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { return value }
+            let range = NSRange(value.startIndex..<value.endIndex, in: value)
+            if pattern.contains("api[_-]?key") {
+                return regex.stringByReplacingMatches(in: value, range: range, withTemplate: "$1=[REDACTED]")
+            }
+            return regex.stringByReplacingMatches(in: value, range: range, withTemplate: "[REDACTED]")
+        }
     }
 
     static func expandedSummary(kind: TimelineEntryKind, text: String) -> String {
@@ -57,7 +97,8 @@ enum AgentTimelineSummarizer {
             name = String(name.dropFirst(prefix.count))
             break
         }
-        return name
+        return
+            name
             .components(separatedBy: "__")
             .map { $0.replacingOccurrences(of: "_", with: " ") }
             .filter { !$0.isEmpty }
@@ -183,83 +224,6 @@ enum AgentTimelineSummarizer {
         }
     }
 
-    /// Short, human-readable headline for one timeline step. Mirrors the
-    /// Codex transcript, where each reasoning step is introduced by a terse
-    /// title ("Inspecting the repo") rather than the raw model prose.
-    ///
-    /// For reasoning blocks we prefer an explicit markdown heading or a
-    /// leading bold run, then fall back to the first sentence. Tool blocks
-    /// reuse the existing collapsed summary so their headline stays
-    /// consistent with the rest of the timeline.
-    static func stepHeadline(kind: ChatBlockKind, text: String) -> String {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return defaultHeadline(for: kind) }
-
-        switch kind {
-        case .agentReasoning, .finalAnswer:
-            // Derive the title from the cleaned prose so a leading `Tool: ...`
-            // or bare command line never becomes the step's headline.
-            let prose = reasoningProse(trimmed)
-            if let headline = reasoningHeadline(prose.isEmpty ? trimmed : prose) {
-                return headline
-            }
-            return defaultHeadline(for: kind)
-        default:
-            let collapsed = collapsedSummary(kind: kind, text: trimmed)
-            return collapsed.isEmpty ? defaultHeadline(for: kind) : truncate(collapsed, max: 90)
-        }
-    }
-
-    private static func defaultHeadline(for kind: ChatBlockKind) -> String {
-        switch kind {
-        case .agentReasoning: return "Thinking"
-        case .shellCommand: return "Running command"
-        case .terminalOutput: return "Reading output"
-        case .webCall: return "Searching the web"
-        case .mcpCall: return "Calling MCP tool"
-        case .imageRendering: return "Working on an image"
-        case .toolCall: return "Calling tool"
-        case .finalAnswer: return "Answer"
-        }
-    }
-
-    private static func reasoningHeadline(_ text: String) -> String? {
-        for rawLine in text.components(separatedBy: .newlines) {
-            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !line.isEmpty else { continue }
-
-            if line.hasPrefix("#") {
-                let stripped = line.drop(while: { $0 == "#" }).trimmingCharacters(in: .whitespacesAndNewlines)
-                if !stripped.isEmpty { return truncate(stripped, max: 90) }
-                continue
-            }
-
-            if let bold = leadingBoldRun(line) { return truncate(bold, max: 90) }
-
-            return truncate(firstSentence(line), max: 90)
-        }
-        return nil
-    }
-
-    /// Extracts `Heading` from a line that starts with `**Heading**`.
-    private static func leadingBoldRun(_ line: String) -> String? {
-        guard line.hasPrefix("**"),
-              let closing = line.range(of: "**", range: line.index(line.startIndex, offsetBy: 2)..<line.endIndex)
-        else { return nil }
-        let inner = String(line[line.index(line.startIndex, offsetBy: 2)..<closing.lowerBound])
-            .trimmingCharacters(in: CharacterSet(charactersIn: " :.-"))
-        return inner.isEmpty ? nil : inner
-    }
-
-    private static func firstSentence(_ line: String) -> String {
-        let normalized = normalizeInlineWhitespace(line)
-        guard let terminator = normalized.firstIndex(where: { $0 == "." || $0 == "!" || $0 == "?" }) else {
-            return normalized
-        }
-        let sentence = String(normalized[..<terminator]).trimmingCharacters(in: .whitespacesAndNewlines)
-        return sentence.count >= 12 ? sentence : normalized
-    }
-
     private enum DisplayKind {
         case agentReasoning
         case shellCommand
@@ -274,19 +238,6 @@ enum AgentTimelineSummarizer {
     private struct Summary {
         let collapsed: String
         let expanded: String
-    }
-
-    private static func displayKind(for kind: ChatBlockKind) -> DisplayKind {
-        switch kind {
-        case .agentReasoning: return .agentReasoning
-        case .shellCommand: return .shellCommand
-        case .terminalOutput: return .terminalOutput
-        case .webCall: return .webCall
-        case .mcpCall: return .mcpCall
-        case .imageRendering: return .imageRendering
-        case .toolCall: return .toolCall
-        case .finalAnswer: return .finalAnswer
-        }
     }
 
     private static func displayKind(for kind: TimelineEntryKind) -> DisplayKind {
@@ -320,7 +271,8 @@ enum AgentTimelineSummarizer {
 
     private static func summarizeShellCommand(_ text: String) -> Summary {
         let lines = meaningfulLines(text)
-        let commandLines = lines
+        let commandLines =
+            lines
             .filter { !isShellBoilerplate($0) }
             .prefix(4)
             .map(commandDescription)
@@ -334,7 +286,9 @@ enum AgentTimelineSummarizer {
 
         let collapsed = truncate(commandLines.first ?? "Running a shell script", max: 160)
         let bullets = commandLines.map { "- \($0)" }.joined(separator: "\n")
-        let suffix = lines.count > commandLines.count ? "\n- Plus \(lines.count - commandLines.count) additional script line(s)." : ""
+        let suffix =
+            lines.count > commandLines.count
+            ? "\n- Plus \(lines.count - commandLines.count) additional script line(s)." : ""
         return Summary(
             collapsed: collapsed,
             expanded: "Running shell script:\n\(bullets)\(suffix)"
@@ -360,7 +314,7 @@ enum AgentTimelineSummarizer {
         let expanded = [
             "\(statusText).",
             "- Output size: \(lines.count) line\(lines.count == 1 ? "" : "s"), \(body.count) characters.",
-            "- Key output: \(preview)"
+            "- Key output: \(preview)",
         ].joined(separator: "\n")
 
         return Summary(collapsed: collapsed, expanded: expanded)
@@ -448,7 +402,8 @@ enum AgentTimelineSummarizer {
         let preview = previewText(from: lines, fallback: trimmed)
         return Summary(
             collapsed: preview,
-            expanded: "- Result size: \(lines.count) line\(lines.count == 1 ? "" : "s"), \(trimmed.count) characters.\n- Preview: \(preview)"
+            expanded:
+                "- Result size: \(lines.count) line\(lines.count == 1 ? "" : "s"), \(trimmed.count) characters.\n- Preview: \(preview)"
         )
     }
 
@@ -459,7 +414,8 @@ enum AgentTimelineSummarizer {
 
         if first.hasPrefix("[terminal ") {
             lines.removeFirst()
-            let status = first
+            let status =
+                first
                 .replacingOccurrences(of: "[terminal ", with: "")
                 .replacingOccurrences(of: "]", with: "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -481,12 +437,14 @@ enum AgentTimelineSummarizer {
     }
 
     private static func extractToolName(from text: String, prefixes: [String]) -> String? {
-        let firstLine = text.components(separatedBy: .newlines)
+        let firstLine =
+            text.components(separatedBy: .newlines)
             .first?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
         for prefix in prefixes where firstLine.hasPrefix(prefix) {
-            let name = firstLine
+            let name =
+                firstLine
                 .dropFirst(prefix.count)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             return name.isEmpty ? nil : String(name)
@@ -506,15 +464,8 @@ enum AgentTimelineSummarizer {
 
     private static func isShellBoilerplate(_ line: String) -> Bool {
         let lower = line.lowercased()
-        return lower == "set -e" ||
-            lower == "set -eu" ||
-            lower == "set -euo pipefail" ||
-            lower == "set -o pipefail" ||
-            lower == "then" ||
-            lower == "do" ||
-            lower == "done" ||
-            lower == "fi" ||
-            lower.hasPrefix("#")
+        return lower == "set -e" || lower == "set -eu" || lower == "set -euo pipefail" || lower == "set -o pipefail"
+            || lower == "then" || lower == "do" || lower == "done" || lower == "fi" || lower.hasPrefix("#")
     }
 
     private static func commandDescription(_ line: String) -> String {
@@ -529,8 +480,12 @@ enum AgentTimelineSummarizer {
         if lower.hasPrefix("sed ") { return "Read a selected range of a file" }
         if lower.hasPrefix("cat ") { return "Read file contents" }
         if lower.hasPrefix("sqlite3 ") { return "Query the local SQLite database" }
-        if lower.hasPrefix("npm ") || lower.hasPrefix("yarn ") || lower.hasPrefix("pnpm ") { return "Run package script: \(truncate(trimmed, max: 120))" }
-        if lower.hasPrefix("swift ") || lower.hasPrefix("xcodebuild ") { return "Run macOS build command: \(truncate(trimmed, max: 120))" }
+        if lower.hasPrefix("npm ") || lower.hasPrefix("yarn ") || lower.hasPrefix("pnpm ") {
+            return "Run package script: \(truncate(trimmed, max: 120))"
+        }
+        if lower.hasPrefix("swift ") || lower.hasPrefix("xcodebuild ") {
+            return "Run macOS build command: \(truncate(trimmed, max: 120))"
+        }
         if lower.hasPrefix("python ") || lower.hasPrefix("python3 ") { return "Run Python helper script" }
         if lower.hasPrefix("node ") { return "Run Node.js helper script" }
 
@@ -539,7 +494,8 @@ enum AgentTimelineSummarizer {
 
     private static func previewText(from lines: [String], fallback: String) -> String {
         let candidates = lines.isEmpty ? meaningfulLines(fallback) : lines
-        let preview = candidates
+        let preview =
+            candidates
             .prefix(3)
             .map { truncate($0, max: 120) }
             .joined(separator: "; ")
@@ -552,7 +508,7 @@ enum AgentTimelineSummarizer {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.hasPrefix("{") || trimmed.hasPrefix("[") else { return nil }
         guard let data = trimmed.data(using: .utf8),
-              let value = try? JSONSerialization.jsonObject(with: data)
+            let value = try? JSONSerialization.jsonObject(with: data)
         else { return nil }
 
         if let dict = value as? [String: Any] {

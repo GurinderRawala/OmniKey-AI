@@ -270,13 +270,13 @@ async function runAgentTurnInternal(
     await recordUsage(current);
 
     for (;;) {
-      const steeringMessageCount = drainSteeringMessagesIntoHistory(
+      const steeringMessages = drainSteeringMessagesIntoHistory(
         sessionId,
         session,
         hasStoredPrompt,
         log,
       );
-      if (steeringMessageCount === 0) return current;
+      if (steeringMessages.length === 0) return current;
 
       await persistSessionToDB(sessionId, session);
       if (
@@ -290,7 +290,7 @@ async function runAgentTurnInternal(
         return steeringRestartLimitResult(agentModel);
       }
 
-      sendSteeringAppliedNotice(send, sessionId, steeringMessageCount);
+      sendSteeringAppliedNotice(send, sessionId, steeringMessages);
 
       current = await completeWithContextRecovery(
         session,
@@ -308,13 +308,13 @@ async function runAgentTurnInternal(
   };
 
   const restartAfterPendingSteering = async (): Promise<boolean> => {
-    const steeringMessageCount = drainSteeringMessagesIntoHistory(
+    const steeringMessages = drainSteeringMessagesIntoHistory(
       sessionId,
       session,
       hasStoredPrompt,
       log,
     );
-    if (steeringMessageCount === 0) return false;
+    if (steeringMessages.length === 0) return false;
 
     await persistSessionToDB(sessionId, session);
     if (
@@ -334,7 +334,7 @@ async function runAgentTurnInternal(
       return true;
     }
 
-    sendSteeringAppliedNotice(send, sessionId, steeringMessageCount);
+    sendSteeringAppliedNotice(send, sessionId, steeringMessages);
 
     await runAgentTurnInternal(
       sessionId,

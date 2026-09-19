@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => {
     complete: vi.fn(),
     executeTool: vi.fn(),
     getAgentSettings: vi.fn(),
+    replaceNormalizedTranscript: vi.fn(),
     runScript: vi.fn(),
   };
 });
@@ -104,6 +105,11 @@ vi.mock('../agent/sessionGrouping', () => ({
   updateSessionGroup: vi.fn(async () => undefined),
 }));
 
+vi.mock('../agent/agentServer/transcriptStore', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../agent/agentServer/transcriptStore')>()),
+  replaceNormalizedTranscript: mocks.replaceNormalizedTranscript,
+}));
+
 vi.mock('../shellRunner', () => ({
   runScript: mocks.runScript,
 }));
@@ -119,19 +125,21 @@ vi.mock('../ai-client', () => ({
 }));
 
 import { runAgentTurn } from '../agent/agentServer';
+import { persistSessionToDB } from '../agent/agentServer/sessionStore';
 import {
   activeSessions,
   pendingShellScripts,
   sessionQueues,
   sessionSteeringMessages,
 } from '../agent/agentServer/runtimeState';
-import { queuePendingSteeringAsFollowUp } from '../agent/agentServer/websocket';
+import { rejectPendingSteeringAtTurnEnd } from '../agent/agentServer/websocket';
 import {
   drainSteeringMessagesIntoHistory,
   enqueueSteeringMessage,
   MAX_PENDING_STEERING_CONTENT_CHARS,
   MAX_PENDING_STEERING_MESSAGES,
   MAX_STEERING_RESTARTS,
+  sendSteeringAppliedNotice,
 } from '../agent/agentServer/steering';
 
 function historyUpdateCalls() {
@@ -283,6 +291,63 @@ describe('agent session persistence checkpoints', () => {
           content: 'tool result',
         }),
       ]),
+    );
+  });
+
+  it('does not republish normalized rows for a new incomplete tool turn', async () => {
+    const state = {
+      history: [
+        { role: 'user', content: '<user_input>Earlier request</user_input>' },
+        { role: 'assistant', content: '<final_answer>Earlier answer</final_answer>' },
+        { role: 'user', content: '<user_input>New request</user_input>' },
+        {
+          role: 'assistant',
+          content: '',
+          tool_calls: [{ id: 'call-new', name: 'web_search', arguments: { query: 'new' } }],
+        },
+        {
+          role: 'tool',
+          tool_call_id: 'call-new',
+          tool_name: 'web_search',
+          content: 'new tool result',
+        },
+      ],
+      turns: 2,
+      activeModel: 'test-model',
+    } as any;
+
+    await persistSessionToDB('session-1', state);
+
+    expect(mocks.agentSession.update).toHaveBeenCalled();
+    expect(mocks.replaceNormalizedTranscript).not.toHaveBeenCalled();
+  });
+
+  it('keeps the new authoritative revision when normalized publication fails', async () => {
+    mocks.replaceNormalizedTranscript.mockRejectedValueOnce(new Error('injected publish failure'));
+    const state = {
+      history: [
+        { role: 'user', content: '<user_input>Question</user_input>' },
+        { role: 'assistant', content: '<final_answer>Current answer</final_answer>' },
+      ],
+      turns: 1,
+      activeModel: 'test-model',
+    } as any;
+
+    await persistSessionToDB('session-1', state);
+
+    const [values] = historyUpdateCalls().at(-1) as [{ transcriptRevision: string }];
+    expect(values.transcriptRevision).toMatch(/^[a-f0-9]{64}$/);
+    expect(mocks.replaceNormalizedTranscript).toHaveBeenCalledWith(
+      'session-1',
+      state.history,
+      values.transcriptRevision,
+    );
+    expect(mocks.log.error).toHaveBeenCalledWith(
+      'Failed to publish normalized agent transcript',
+      expect.objectContaining({
+        sessionId: 'session-1',
+        transcriptRevision: values.transcriptRevision,
+      }),
     );
   });
 
@@ -470,7 +535,7 @@ describe('agent session persistence checkpoints', () => {
     );
   });
 
-  it('queues stranded steering as a normal follow-up turn when an active turn exits', () => {
+  it('rejects stranded steering instead of running it on a closing turn socket', () => {
     const send = vi.fn();
 
     enqueueSteeringMessage(
@@ -480,31 +545,61 @@ describe('agent session persistence checkpoints', () => {
         sender: 'client',
         content: 'Apply this if the current turn already finished.',
         is_steering: true,
+        steering_id: 'steer-follow-up',
         platform: 'macos',
       },
       mocks.log as any,
     );
 
-    const queuedCount = queuePendingSteeringAsFollowUp(
-      'session-1',
-      { id: 'subscription-1' } as any,
-      send,
-      mocks.log as any,
-    );
+    const rejectedCount = rejectPendingSteeringAtTurnEnd('session-1', send, mocks.log as any);
 
-    const queue = sessionQueues.get('session-1');
-    expect(queuedCount).toBe(1);
+    expect(rejectedCount).toBe(1);
     expect(sessionSteeringMessages.get('session-1')).toBeUndefined();
-    expect(queue).toHaveLength(1);
-    expect(queue?.[0].message).toEqual(
+    expect(sessionQueues.get('session-1')).toBeUndefined();
+    expect(send).toHaveBeenCalledWith(
       expect.objectContaining({
-        session_id: 'session-1',
-        sender: 'client',
-        content: 'Apply this if the current turn already finished.',
-        platform: 'macos',
+        is_steering: true,
+        steering_id: 'steer-follow-up',
+        steering_status: 'rejected',
+        is_error: true,
       }),
     );
-    expect(queue?.[0].message.is_steering).toBeUndefined();
+  });
+
+  it('preserves steering ids through acceptance and applied acknowledgment', () => {
+    const send = vi.fn();
+    const accepted = enqueueSteeringMessage(
+      'session-1',
+      {
+        session_id: 'session-1',
+        sender: 'client',
+        content: 'Use the correlated update.',
+        is_steering: true,
+        steering_id: 'steer-correlated',
+      },
+      mocks.log as any,
+    );
+    expect(accepted.accepted).toBe(true);
+
+    const applied = drainSteeringMessagesIntoHistory(
+      'session-1',
+      {
+        history: [{ role: 'user', content: 'Original request' }],
+        activeModel: 'test-model',
+      } as any,
+      false,
+      mocks.log as any,
+    );
+    expect(applied.map((message) => message.steeringId)).toEqual(['steer-correlated']);
+
+    sendSteeringAppliedNotice(send, 'session-1', applied);
+    expect(send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        is_steering: true,
+        steering_id: 'steer-correlated',
+        steering_status: 'applied',
+      }),
+    );
   });
 
   it('rejects steering messages once pending queue limits are reached', () => {
@@ -1455,11 +1550,14 @@ describe('agent session persistence checkpoints', () => {
       { skipGrouping: true },
     );
 
-    expect(
-      send.mock.calls.some(([msg]) =>
-        String(msg.content).includes('Tool "generate_image" is not enabled'),
-      ),
-    ).toBe(true);
+    expect(send.mock.calls.map(([msg]) => msg)).toContainEqual(
+      expect.objectContaining({
+        content: expect.stringContaining('Tool "generate_image" is not enabled'),
+        is_error: true,
+        activity_id: 'call-image',
+        activity_phase: 'failed',
+      }),
+    );
     expect(
       send.mock.calls.some(([msg]) => String(msg.content).includes('Image tool unavailable.')),
     ).toBe(true);

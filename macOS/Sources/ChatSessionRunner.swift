@@ -101,6 +101,34 @@ final class ChatSessionRunHandle: @unchecked Sendable {
     }
 }
 
+enum SteeringServerStatus: String, Codable, Equatable {
+    case received
+    case applied
+    case rejected
+}
+
+struct SteeringServerEvent: Equatable {
+    let id: String?
+    let status: SteeringServerStatus
+    let message: String
+    let pendingCount: Int?
+    let isLegacyAcknowledgement: Bool
+
+    init(
+        id: String?,
+        status: SteeringServerStatus,
+        message: String,
+        pendingCount: Int?,
+        isLegacyAcknowledgement: Bool = false
+    ) {
+        self.id = id
+        self.status = status
+        self.message = message
+        self.pendingCount = pendingCount
+        self.isLegacyAcknowledgement = isLegacyAcknowledgement
+    }
+}
+
 // MARK: - Runner
 
 /// Drives a single chat turn over the OmniAgent WebSocket. Mirrors the
@@ -143,6 +171,7 @@ final class ChatSessionRunner {
         userText: String,
         groupName: String? = nil,
         onBlock: @escaping @MainActor @Sendable (ChatBlock) -> Void,
+        onSteeringEvent: @escaping @MainActor @Sendable (SteeringServerEvent) -> Void,
         onFinal: @escaping @MainActor @Sendable (String) -> Void,
         onError: @escaping @MainActor @Sendable (Error) -> Void
     ) -> ChatSessionRunHandle {
@@ -158,6 +187,7 @@ final class ChatSessionRunner {
                 allowReauth: true,
                 handle: handle,
                 onBlock: onBlock,
+                onSteeringEvent: onSteeringEvent,
                 onFinal: onFinal,
                 onError: onError
             )
@@ -177,6 +207,7 @@ final class ChatSessionRunner {
                         allowReauth: false,
                         handle: handle,
                         onBlock: onBlock,
+                        onSteeringEvent: onSteeringEvent,
                         onFinal: onFinal,
                         onError: onError
                     )
@@ -200,6 +231,7 @@ final class ChatSessionRunner {
 
     func sendSteeringMessage(
         sessionId: String,
+        steeringID: String,
         text: String,
         handle: ChatSessionRunHandle,
         completion: @escaping @MainActor @Sendable (Result<Void, Error>) -> Void
@@ -211,6 +243,7 @@ final class ChatSessionRunner {
             isTerminalOutput: false,
             isError: false,
             isSteering: true,
+            steeringID: steeringID,
             platform: "macos"
         )
 
@@ -248,6 +281,7 @@ final class ChatSessionRunner {
         allowReauth: Bool,
         handle: ChatSessionRunHandle,
         onBlock: @escaping @MainActor @Sendable (ChatBlock) -> Void,
+        onSteeringEvent: @escaping @MainActor @Sendable (SteeringServerEvent) -> Void,
         onFinal: @escaping @MainActor @Sendable (String) -> Void,
         onError: @escaping @MainActor @Sendable (Error) -> Void
     ) {
@@ -272,14 +306,16 @@ final class ChatSessionRunner {
             allowReauth: allowReauth,
             handle: handle,
             onBlock: onBlock,
+            onSteeringEvent: onSteeringEvent,
             onFinal: onFinal,
             onError: onError
         )
     }
 
-    /// Wire-format message — must stay byte-for-byte identical to
-    /// `AgentRunner.AgentMessage` so the backend treats both flows the same way.
-    private struct AgentMessage: Codable {
+    /// Wire-format message shared with `AgentRunner.AgentMessage`, plus the
+    /// optional activity metadata used by the Agent Chat timeline. Older
+    /// servers omit those fields and continue to decode normally.
+    struct AgentMessage: Codable {
         let sessionID: String
         let sender: String
         let content: String
@@ -288,7 +324,12 @@ final class ChatSessionRunner {
         let isWebCall: Bool?
         let isImageRendering: Bool?
         let isMcpCall: Bool?
+        let activityID: String?
+        let activityPhase: ChatActivityPhase?
         let isSteering: Bool?
+        let steeringID: String?
+        let steeringStatus: SteeringServerStatus?
+        let steeringPendingCount: Int?
         let platform: String?
         let groupName: String?
 
@@ -301,7 +342,12 @@ final class ChatSessionRunner {
             isWebCall: Bool? = nil,
             isImageRendering: Bool? = nil,
             isMcpCall: Bool? = nil,
+            activityID: String? = nil,
+            activityPhase: ChatActivityPhase? = nil,
             isSteering: Bool? = nil,
+            steeringID: String? = nil,
+            steeringStatus: SteeringServerStatus? = nil,
+            steeringPendingCount: Int? = nil,
             platform: String? = nil,
             groupName: String? = nil
         ) {
@@ -313,7 +359,12 @@ final class ChatSessionRunner {
             self.isWebCall = isWebCall
             self.isImageRendering = isImageRendering
             self.isMcpCall = isMcpCall
+            self.activityID = activityID
+            self.activityPhase = activityPhase
             self.isSteering = isSteering
+            self.steeringID = steeringID
+            self.steeringStatus = steeringStatus
+            self.steeringPendingCount = steeringPendingCount
             self.platform = platform
             self.groupName = groupName
         }
@@ -327,10 +378,38 @@ final class ChatSessionRunner {
             case isWebCall = "is_web_call"
             case isImageRendering = "is_image_rendering"
             case isMcpCall = "is_mcp_call"
+            case activityID = "activity_id"
+            case activityPhase = "activity_phase"
             case isSteering = "is_steering"
+            case steeringID = "steering_id"
+            case steeringStatus = "steering_status"
+            case steeringPendingCount = "steering_pending_count"
             case platform
             case groupName = "group_name"
         }
+    }
+
+    nonisolated static func steeringEvent(from response: AgentMessage) -> SteeringServerEvent? {
+        guard response.isSteering == true else { return nil }
+        if let id = response.steeringID {
+            return SteeringServerEvent(
+                id: id,
+                status: response.steeringStatus ?? (response.isError == true ? .rejected : .received),
+                message: response.content,
+                pendingCount: response.steeringPendingCount
+            )
+        }
+        // Daemons released before correlated steering only sent
+        // `is_steering`. Treat that notice as an acknowledgement (or a
+        // rejection when it is explicitly an error) for the oldest pending
+        // local update.
+        return SteeringServerEvent(
+            id: nil,
+            status: response.isError == true ? .rejected : .received,
+            message: response.content,
+            pendingCount: nil,
+            isLegacyAcknowledgement: true
+        )
     }
 
     private func startAgentWebSocketSession(
@@ -342,6 +421,7 @@ final class ChatSessionRunner {
         allowReauth: Bool,
         handle: ChatSessionRunHandle,
         onBlock: @escaping @MainActor @Sendable (ChatBlock) -> Void,
+        onSteeringEvent: @escaping @MainActor @Sendable (SteeringServerEvent) -> Void,
         onFinal: @escaping @MainActor @Sendable (String) -> Void,
         onError: @escaping @MainActor @Sendable (Error) -> Void
     ) {
@@ -418,26 +498,55 @@ final class ChatSessionRunner {
                     // as thinking blocks and keep listening.
                     if response.isWebCall == true {
                         DispatchQueue.main.async {
-                            onBlock(ChatBlock(kind: .webCall, text: content))
+                            onBlock(ChatBlock(
+                                kind: .webCall,
+                                text: content,
+                                activityId: response.activityID,
+                                activityPhase: response.activityPhase
+                            ))
                         }
                         receiveNext()
                         return
                     }
                     if response.isImageRendering == true {
                         DispatchQueue.main.async {
-                            onBlock(ChatBlock(kind: .imageRendering, text: content))
+                            onBlock(ChatBlock(
+                                kind: .imageRendering,
+                                text: content,
+                                activityId: response.activityID,
+                                activityPhase: response.activityPhase
+                            ))
                         }
                         receiveNext()
                         return
                     }
                     if response.isMcpCall == true {
                         DispatchQueue.main.async {
-                            onBlock(ChatBlock(kind: .mcpCall, text: content))
+                            onBlock(ChatBlock(
+                                kind: .mcpCall,
+                                text: content,
+                                activityId: response.activityID,
+                                activityPhase: response.activityPhase
+                            ))
                         }
                         receiveNext()
                         return
                     }
                     if response.isSteering == true {
+                        if let event = ChatSessionRunner.steeringEvent(from: response) {
+                            DispatchQueue.main.async { onSteeringEvent(event) }
+                        }
+                        receiveNext()
+                        return
+                    }
+
+                    // Unknown, disabled, or newly-added tool categories can still
+                    // arrive as generic errors. Preserve their failed lifecycle
+                    // instead of presenting them as successful reasoning.
+                    if response.isError == true {
+                        DispatchQueue.main.async {
+                            onBlock(ChatSessionRunner.genericErrorBlock(from: response))
+                        }
                         receiveNext()
                         return
                     }
@@ -459,7 +568,12 @@ final class ChatSessionRunner {
                             }
                         }
                         DispatchQueue.main.async {
-                            onBlock(ChatBlock(kind: .shellCommand, text: script))
+                            onBlock(ChatBlock(
+                                kind: .shellCommand,
+                                text: script,
+                                activityId: response.activityID,
+                                activityPhase: response.activityPhase
+                            ))
                         }
 
                         DispatchQueue.global(qos: .userInitiated).async {
@@ -499,7 +613,12 @@ final class ChatSessionRunner {
                             DispatchQueue.main.async {
                                 let statusLabel = (status == 0) ? "success" : "error (exit code: \(status))"
                                 let display = "[terminal \(statusLabel)]\n\(output)"
-                                onBlock(ChatBlock(kind: .terminalOutput, text: display))
+                                onBlock(ChatBlock(
+                                    kind: .terminalOutput,
+                                    text: display,
+                                    activityId: response.activityID,
+                                    activityPhase: status == 0 ? .completed : .failed
+                                ))
                             }
 
                             let reply = AgentMessage(
@@ -577,6 +696,15 @@ final class ChatSessionRunner {
             }
             receiveNext()
         }
+    }
+
+    static func genericErrorBlock(from response: AgentMessage) -> ChatBlock {
+        ChatBlock(
+            kind: .toolCall,
+            text: response.content,
+            activityId: response.activityID,
+            activityPhase: response.activityPhase ?? .failed
+        )
     }
 
     // MARK: - URL helpers

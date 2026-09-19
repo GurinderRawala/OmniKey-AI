@@ -10,7 +10,12 @@ import { getPromptMcpsForSubscription } from '../mcpPromptCache';
 import { getAgentSettings } from '../../agentSettingsStore';
 import type { SessionState } from '../types';
 import { buildTrimmedHistoryForRequest } from './sessionMemory';
-import { userHistoryHasProjectContext } from './transcript';
+import {
+  buildTranscript,
+  completedTranscriptRevision,
+  userHistoryHasProjectContext,
+} from './transcript';
+import { historyHasCompletedTurn, replaceNormalizedTranscript } from './transcriptStore';
 
 export async function persistSessionToDB(sessionId: string, state: SessionState): Promise<void> {
   try {
@@ -18,9 +23,11 @@ export async function persistSessionToDB(sessionId: string, state: SessionState)
     const estimatedPromptTokens = estimateHistoryTokens(
       buildTrimmedHistoryForRequest(state, state.activeModel, sessionId),
     );
+    const transcriptRevision = completedTranscriptRevision(buildTranscript(state.history));
     await AgentSession.update(
       {
         historyJson,
+        transcriptRevision,
         turns: state.turns,
         sessionMemory: state.sessionMemory ?? null,
         sessionMemoryHistoryLength: state.sessionMemoryHistoryLength ?? 0,
@@ -33,6 +40,25 @@ export async function persistSessionToDB(sessionId: string, state: SessionState)
       },
       { where: { id: sessionId } },
     );
+    // The live client owns in-progress state, so normalized UI rows only need
+    // to be refreshed once a completed answer exists. This avoids rewriting a
+    // full transcript on every streamed tool event while keeping subsequent
+    // latest-turn reads independent of the provider-history blob.
+    if (historyHasCompletedTurn(state.history)) {
+      try {
+        await replaceNormalizedTranscript(
+          sessionId,
+          state.history,
+          transcriptRevision ?? undefined,
+        );
+      } catch (err) {
+        logger.error('Failed to publish normalized agent transcript', {
+          sessionId,
+          transcriptRevision,
+          error: err,
+        });
+      }
+    }
   } catch (err) {
     logger.error('Failed to persist agent session to DB', { sessionId, error: err });
   }
