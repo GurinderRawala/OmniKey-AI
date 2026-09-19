@@ -64,8 +64,7 @@ body::before {
     linear-gradient(90deg, var(--grid-line) 1px, transparent 1px),
     linear-gradient(var(--grid-line) 1px, transparent 1px),
     linear-gradient(135deg, rgba(125, 255, 157, 0.075), transparent 32%),
-    linear-gradient(225deg, rgba(255, 209, 102, 0.06), transparent 28%),
-    var(--bg);
+    linear-gradient(225deg, rgba(255, 209, 102, 0.06), transparent 28%), var(--bg);
   background-size:
     46px 46px,
     46px 46px,
@@ -611,8 +610,7 @@ h3,
   padding: 18px 32px;
   border-bottom: 1px solid var(--border);
   background:
-    linear-gradient(90deg, rgba(125, 255, 157, 0.08), transparent 42%),
-    rgba(16, 18, 23, 0.78);
+    linear-gradient(90deg, rgba(125, 255, 157, 0.08), transparent 42%), rgba(16, 18, 23, 0.78);
   flex-wrap: wrap;
 }
 
@@ -2904,14 +2902,20 @@ footer a:hover {
   background: var(--text);
   border-radius: 2px;
   transition:
-    transform 0.28s cubic-bezier(0.4, 0.0, 0.2, 1),
-    top 0.28s cubic-bezier(0.4, 0.0, 0.2, 1),
+    transform 0.28s cubic-bezier(0.4, 0, 0.2, 1),
+    top 0.28s cubic-bezier(0.4, 0, 0.2, 1),
     opacity 0.18s ease;
 }
 
-.nav-hamburger-bar:nth-child(1) { top: 13px; }
-.nav-hamburger-bar:nth-child(2) { top: 20px; }
-.nav-hamburger-bar:nth-child(3) { top: 27px; }
+.nav-hamburger-bar:nth-child(1) {
+  top: 13px;
+}
+.nav-hamburger-bar:nth-child(2) {
+  top: 20px;
+}
+.nav-hamburger-bar:nth-child(3) {
+  top: 27px;
+}
 
 .nav-hamburger[aria-expanded='true'] .nav-hamburger-bar:nth-child(1) {
   top: 20px;
@@ -3167,7 +3171,8 @@ body.mobile-menu-open {
 }
 
 @keyframes starPulse {
-  0%, 100% {
+  0%,
+  100% {
     transform: scale(1) rotate(0deg);
     box-shadow: 0 0 0 0 rgba(251, 191, 36, 0.35);
   }
@@ -3296,7 +3301,6 @@ body.star-modal-open {
   opacity: 0.85;
 }
 
-
 /* ── Hero install (one-line install command) ── */
 .hero-install {
   max-width: 560px;
@@ -3310,7 +3314,12 @@ body.star-modal-open {
   position: absolute;
   inset: -1px;
   border-radius: 12px;
-  background: linear-gradient(135deg, rgba(167, 139, 250, 0.3), rgba(96, 165, 250, 0.2), rgba(34, 211, 238, 0.15));
+  background: linear-gradient(
+    135deg,
+    rgba(167, 139, 250, 0.3),
+    rgba(96, 165, 250, 0.2),
+    rgba(34, 211, 238, 0.15)
+  );
   z-index: 0;
   filter: blur(0px);
   opacity: 0.6;
@@ -3324,7 +3333,9 @@ body.star-modal-open {
 .hero-install-block {
   margin: 0;
   text-align: left;
-  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255,255,255,0.04);
+  box-shadow:
+    0 8px 40px rgba(0, 0, 0, 0.5),
+    0 0 0 1px rgba(255, 255, 255, 0.04);
 }
 
 .hero-install-block pre {
@@ -3841,4 +3852,78 @@ body.star-modal-open {
   .docs-table-wrap {
     background-image: none;
   }
+}
+
+/* Error page */
+.error-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 2rem;
+}
+
+.error-card {
+  width: min(100%, 42rem);
+  padding: clamp(2rem, 6vw, 4rem);
+  border: 1px solid var(--border);
+  border-radius: 1.5rem;
+  background: var(--bg-card);
+  text-align: center;
+}
+
+.error-card .nav-logo {
+  justify-content: center;
+  margin-bottom: 2rem;
+}
+
+.error-card h1 {
+  margin: 0.75rem 0 1rem;
+  font-family: var(--font-display);
+  font-size: clamp(2rem, 7vw, 4rem);
+  line-height: 1;
+}
+
+.error-card p:not(.section-label) {
+  color: var(--text-muted);
+}
+
+.error-card .buttons {
+  justify-content: center;
+  margin-top: 2rem;
+}
+
+:focus-visible {
+  outline: 3px solid var(--green);
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+.skip-link {
+  position: fixed;
+  top: 0.75rem;
+  left: 0.75rem;
+  z-index: 10000;
+  padding: 0.75rem 1rem;
+  border-radius: 0.5rem;
+  background: var(--green);
+  color: #08110c;
+  font-weight: 800;
+  transform: translateY(-200%);
+}
+
+.skip-link:focus {
+  transform: translateY(0);
 }

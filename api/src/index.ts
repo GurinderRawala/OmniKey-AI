@@ -38,8 +38,17 @@ app.use(compression({ threshold: 1_024 }) as unknown as express.RequestHandler);
 app.use(express.json());
 
 // Static website pages
-app.get(['/docs', '/docs/'], (_req, res) => {
+app.get(['/docs', '/docs/'], (req, res) => {
+  if (req.path.endsWith('/')) {
+    res.redirect(301, '/docs');
+    return;
+  }
+
   res.sendFile(path.join(process.cwd(), 'public', 'docs.html'));
+});
+
+app.get(['/index.html', '/docs.html'], (req, res) => {
+  res.redirect(301, req.path === '/docs.html' ? '/docs' : '/');
 });
 
 app.use(express.static(path.join(process.cwd(), 'public')));
@@ -251,8 +260,13 @@ app.get('/install.ps1', (_req, res) => {
   res.sendFile(scriptPath);
 });
 
-app.get('*', (_req, res) => {
-  res.sendFile(path.join(process.cwd(), 'public', 'index.html'));
+app.get('*', (req, res) => {
+  if (req.accepts('html')) {
+    res.status(404).sendFile(path.join(process.cwd(), 'public', '404.html'));
+    return;
+  }
+
+  res.status(404).json({ error: 'Not found.' });
 });
 
 let server: import('http').Server | null = null;
