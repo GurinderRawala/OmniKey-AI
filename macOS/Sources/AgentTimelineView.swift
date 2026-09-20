@@ -264,6 +264,8 @@ private struct AgentCommandActivityPanel: View {
     let activities: [AgentCommandActivity]
     @Binding var expanded: Bool
 
+    @State private var visibleActivityCount = AgentActivityPagination.pageSize
+
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -280,6 +282,18 @@ private struct AgentCommandActivityPanel: View {
 
     private var activitySummary: String {
         AgentTimelinePresentation.compactActivityTitle(for: activities)
+    }
+
+    private var visibleActivities: [AgentCommandActivity] {
+        let range = AgentActivityPagination.visibleRange(
+            totalCount: activities.count,
+            visibleCount: visibleActivityCount
+        )
+        return Array(activities[range])
+    }
+
+    private var hiddenActivityCount: Int {
+        max(0, activities.count - visibleActivities.count)
     }
 
     var body: some View {
@@ -334,10 +348,37 @@ private struct AgentCommandActivityPanel: View {
             if expanded {
                 Divider().opacity(0.55)
                 LazyVStack(alignment: .leading, spacing: 8) {
-                    ForEach(Array(activities.enumerated()), id: \.element.id) { index, activity in
+                    if AgentActivityPagination.hasMore(
+                        totalCount: activities.count,
+                        visibleCount: visibleActivityCount
+                    ) {
+                        Button(action: showMoreActivities) {
+                            HStack(spacing: 6) {
+                                Image(systemName: "chevron.up")
+                                    .font(.system(size: 8.5, weight: .semibold))
+                                Text("Show more")
+                                    .font(.system(size: 10.5, weight: .semibold))
+                                Spacer()
+                                Text("\(min(AgentActivityPagination.pageSize, hiddenActivityCount)) earlier")
+                                    .font(.system(size: 9.5).monospacedDigit())
+                                    .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.62))
+                            }
+                            .foregroundColor(NordTheme.accentBlue(colorScheme))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 6)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Show more activity")
+                        .accessibilityHint(
+                            "Loads up to \(AgentActivityPagination.pageSize) earlier command activities."
+                        )
+                    }
+
+                    ForEach(Array(visibleActivities.enumerated()), id: \.element.id) { index, activity in
                         AgentCommandTimelineRow(
                             activity: activity,
-                            isLast: index == activities.count - 1
+                            isLast: index == visibleActivities.count - 1
                         )
                     }
                 }
@@ -353,6 +394,25 @@ private struct AgentCommandActivityPanel: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .strokeBorder(statusColor.opacity(status == .running ? 0.30 : 0.16), lineWidth: 1)
         )
+        .onChange(of: expanded) { _, isExpanded in
+            if isExpanded {
+                visibleActivityCount = AgentActivityPagination.initialVisibleCount(
+                    totalCount: activities.count
+                )
+            }
+        }
+    }
+
+    private func showMoreActivities() {
+        withAnimation(
+            AgentTimelineMotionPolicy.shouldAnimate(reduceMotion: reduceMotion)
+                ? .easeInOut(duration: 0.18) : nil
+        ) {
+            visibleActivityCount = AgentActivityPagination.nextVisibleCount(
+                totalCount: activities.count,
+                currentVisibleCount: visibleActivityCount
+            )
+        }
     }
 
     @ViewBuilder

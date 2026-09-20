@@ -596,6 +596,30 @@ enum ChatComposerMetrics {
     }
 }
 
+enum AgentActivityPagination {
+    static let pageSize = 10
+
+    static func initialVisibleCount(totalCount: Int) -> Int {
+        min(max(totalCount, 0), pageSize)
+    }
+
+    static func nextVisibleCount(totalCount: Int, currentVisibleCount: Int) -> Int {
+        let total = max(totalCount, 0)
+        let current = max(initialVisibleCount(totalCount: total), currentVisibleCount)
+        return min(total, current + pageSize)
+    }
+
+    static func visibleRange(totalCount: Int, visibleCount: Int) -> Range<Int> {
+        let total = max(totalCount, 0)
+        let count = min(total, max(initialVisibleCount(totalCount: total), visibleCount))
+        return (total - count)..<total
+    }
+
+    static func hasMore(totalCount: Int, visibleCount: Int) -> Bool {
+        visibleRange(totalCount: totalCount, visibleCount: visibleCount).lowerBound > 0
+    }
+}
+
 enum ChatAutoScrollPolicy {
     static let nearBottomThreshold: CGFloat = 120
 

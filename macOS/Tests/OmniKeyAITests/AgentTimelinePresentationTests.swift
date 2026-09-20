@@ -717,6 +717,50 @@ final class AgentTimelinePresentationTests: XCTestCase {
         )
     }
 
+    func testActivityPaginationStartsWithNewestTenAndLoadsTenEarlierAtATime() {
+        XCTAssertEqual(AgentActivityPagination.pageSize, 10)
+        XCTAssertEqual(AgentActivityPagination.initialVisibleCount(totalCount: 24), 10)
+        XCTAssertEqual(
+            AgentActivityPagination.visibleRange(totalCount: 24, visibleCount: 10),
+            14..<24
+        )
+        XCTAssertTrue(AgentActivityPagination.hasMore(totalCount: 24, visibleCount: 10))
+
+        let secondPage = AgentActivityPagination.nextVisibleCount(
+            totalCount: 24,
+            currentVisibleCount: 10
+        )
+        XCTAssertEqual(secondPage, 20)
+        XCTAssertEqual(
+            AgentActivityPagination.visibleRange(totalCount: 24, visibleCount: secondPage),
+            4..<24
+        )
+
+        let finalPage = AgentActivityPagination.nextVisibleCount(
+            totalCount: 24,
+            currentVisibleCount: secondPage
+        )
+        XCTAssertEqual(finalPage, 24)
+        XCTAssertEqual(
+            AgentActivityPagination.visibleRange(totalCount: 24, visibleCount: finalPage),
+            0..<24
+        )
+        XCTAssertFalse(AgentActivityPagination.hasMore(totalCount: 24, visibleCount: finalPage))
+    }
+
+    func testActivityPaginationHandlesShortAndGrowingTimelines() {
+        XCTAssertEqual(AgentActivityPagination.initialVisibleCount(totalCount: 7), 7)
+        XCTAssertEqual(
+            AgentActivityPagination.visibleRange(totalCount: 7, visibleCount: 10),
+            0..<7
+        )
+        XCTAssertFalse(AgentActivityPagination.hasMore(totalCount: 7, visibleCount: 10))
+        XCTAssertEqual(
+            AgentActivityPagination.visibleRange(totalCount: 11, visibleCount: 10),
+            1..<11
+        )
+    }
+
     func testSessionChangesAndHydrationResetTheConversationToBottom() {
         XCTAssertTrue(
             ChatSessionScrollPolicy.shouldResetForSessionChange(
