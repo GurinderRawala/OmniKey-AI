@@ -160,18 +160,11 @@ private struct AgentTaskStepRow: View {
         if let outcome = step.outcome, !outcome.isEmpty {
             HStack(alignment: .top, spacing: 10) {
                 VStack(spacing: 0) {
-                    ZStack {
-                        if step.status == .running {
-                            Circle()
-                                .fill(NordTheme.accentPurple(colorScheme).opacity(0.13))
-                                .frame(width: 16, height: 16)
-                        }
-                        Image(systemName: statusIcon)
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundColor(statusColor)
-                            .frame(width: 16, height: 16)
-                    }
-                    .frame(width: 18, height: 18)
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(NordTheme.accentBlue(colorScheme))
+                        .frame(width: 16, height: 16)
+                        .frame(width: 18, height: 18)
 
                     if !isLast {
                         Rectangle()
@@ -236,26 +229,6 @@ private struct AgentTaskStepRow: View {
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel("\(step.title): \(outcome)")
             }
-        }
-    }
-
-    private var statusIcon: String {
-        switch step.status {
-        case .pending: return "clock"
-        case .running: return "circle.dotted"
-        case .completed: return "checkmark.circle.fill"
-        case .failed: return "exclamationmark.triangle.fill"
-        case .cancelled: return "stop.circle.fill"
-        }
-    }
-
-    private var statusColor: Color {
-        switch step.semanticOutcome {
-        case .usefulResult: return NordTheme.accentGreen(colorScheme)
-        case .noResult: return NordTheme.secondaryText(colorScheme)
-        case .warning: return NordTheme.accentAmber(colorScheme)
-        case .recovered: return NordTheme.accentBlue(colorScheme)
-        case .failed, .actionRequired: return Color(red: 0.92, green: 0.33, blue: 0.35)
         }
     }
 }
