@@ -17,8 +17,6 @@ export interface SessionState {
   sessionMemory?: string | null;
   sessionMemoryHistoryLength?: number;
   sessionMemoryUpdatedAt?: Date | null;
-  sessionMemoryRetryAfter?: number;
-  sessionCheckpointLoaded?: boolean;
   // Latest provider-reported prompt tokens for this active session. Used only
   // as an in-memory hint so persisted context remaining includes tool schemas
   // after a model call; compacted-history estimate remains the pre-call fallback.

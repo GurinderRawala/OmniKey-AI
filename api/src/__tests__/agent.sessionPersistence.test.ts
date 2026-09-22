@@ -31,11 +31,6 @@ const mocks = vi.hoisted(() => {
 mocks.log.child.mockReturnValue(mocks.log);
 
 vi.mock('../logger', () => ({ logger: mocks.log }));
-vi.mock('../agent/agentServer/sessionCheckpoint', () => ({
-  saveSessionCheckpoint: vi.fn(async () => undefined),
-  restoreSessionCheckpoint: vi.fn(async () => undefined),
-  deleteSessionCheckpoint: vi.fn(async () => undefined),
-}));
 
 vi.mock('../models/agentSession', () => ({
   AgentSession: mocks.agentSession,
@@ -122,8 +117,6 @@ vi.mock('../shellRunner', () => ({
 vi.mock('../ai-client', () => ({
   aiClient: { complete: mocks.complete },
   estimateHistoryTokens: vi.fn((history: unknown[]) => JSON.stringify(history).length),
-  estimateToolTokens: vi.fn(() => 100),
-  getFixedHelperModel: vi.fn(() => 'helper-model'),
   getContextWindowSize: vi.fn(() => 128_000),
   getDefaultModel: vi.fn(() => 'test-model'),
   getInputTokenBudget: vi.fn(() => 100_000),
@@ -132,7 +125,6 @@ vi.mock('../ai-client', () => ({
 }));
 
 import { runAgentTurn } from '../agent/agentServer';
-import { config } from '../config';
 import { persistSessionToDB } from '../agent/agentServer/sessionStore';
 import {
   activeSessions,
@@ -246,60 +238,6 @@ describe('agent session persistence checkpoints', () => {
       ]),
     );
     expect(history.find((msg) => msg.role === 'user')?.content).toContain('<user_input>');
-  });
-
-  it('continues automatically beyond 100 calls and two million cumulative tokens', async () => {
-    let agentCalls = 0;
-    try {
-      const send = vi.fn();
-      mocks.complete.mockImplementation(async (model: string) => {
-        if (model === 'helper-model')
-          return {
-            content: '## Goal\nKeep inspecting.\n## Findings\nPrior checks completed.',
-            finish_reason: 'stop',
-            model,
-          };
-        agentCalls++;
-        if (agentCalls > 105)
-          return { content: '<final_answer>Done</final_answer>', finish_reason: 'stop', model };
-        const call = {
-          id: `lookup-${agentCalls}`,
-          name: 'web_search',
-          arguments: { query: `inspect ${agentCalls}` },
-        };
-        return {
-          content: '',
-          finish_reason: 'tool_calls',
-          model,
-          tool_calls: [call],
-          assistantMessage: { role: 'assistant', content: '', tool_calls: [call] },
-          usage: {
-            prompt_tokens: 30_000,
-            completion_tokens: 100,
-            total_tokens: 30_100,
-            cached_tokens: 29_000,
-          },
-        };
-      });
-      const message = { session_id: 'session-1', sender: 'client', content: 'Inspect this task' };
-      await runAgentTurn(
-        'session-1',
-        { id: 'subscription-1' } as any,
-        message,
-        send,
-        mocks.log as any,
-        { skipGrouping: true },
-      );
-      expect(agentCalls).toBe(106);
-      expect(send.mock.calls.some(([msg]) => msg.content.includes('usage limit'))).toBe(false);
-      const saved = parsedHistoryFromCall(historyUpdateCalls().at(-1)!);
-      expect(saved.at(-1)?.content).toContain('Done');
-      expect(saved.filter((m) => m.role === 'tool')).toHaveLength(105);
-      expect(mocks.complete.mock.calls[0][2].maxTokens).toBe(config.agentMaxOutputTokens);
-      expect(send.mock.calls.at(-1)?.[0].content).toContain('Done');
-    } finally {
-      mocks.complete.mockReset();
-    }
   });
 
   it('persists completed tool-call batches before the follow-up model call', async () => {

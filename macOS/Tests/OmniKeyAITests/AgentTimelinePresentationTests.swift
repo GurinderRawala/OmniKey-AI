@@ -1,8 +1,103 @@
+import SwiftUI
 import XCTest
 
 @testable import OmniKeyAI
 
 final class AgentTimelinePresentationTests: XCTestCase {
+    @MainActor
+    func testExpandedActivityPanelProducesFiniteStableLayoutForLongHistory() {
+        let activities = (0..<10).map { index in
+            AgentCommandActivity(
+                id: "activity-\(index)",
+                blocks: [
+                    ChatBlock(kind: .shellCommand, text: "cat Sources/File\(index).swift"),
+                    ChatBlock(
+                        kind: .terminalOutput,
+                        text: "result \(index)\n" + String(repeating: "long output ", count: 1_000)
+                    ),
+                ],
+                status: .completed
+            )
+        }
+        let hosting = NSHostingView(
+            rootView: AgentCommandActivityPanel(
+                activities: activities,
+                expanded: .constant(true)
+            )
+            .frame(width: 760)
+        )
+
+        let started = CFAbsoluteTimeGetCurrent()
+        let fittingSize = hosting.fittingSize
+        hosting.frame = NSRect(origin: .zero, size: fittingSize)
+        for _ in 0..<20 { hosting.layoutSubtreeIfNeeded() }
+        let elapsed = CFAbsoluteTimeGetCurrent() - started
+
+        XCTAssertTrue(fittingSize.width.isFinite)
+        XCTAssertTrue(fittingSize.height.isFinite)
+        XCTAssertGreaterThan(fittingSize.height, 0)
+        XCTAssertLessThan(fittingSize.height, 4_000)
+        XCTAssertLessThan(elapsed, 3)
+    }
+
+    func testLongTimelineReusesCompletedStepsAndRepeatedReads() {
+        let cache = AgentTimelineCache()
+        var blocks: [ChatBlock] = []
+        for index in 0..<200 {
+            blocks.append(ChatBlock(kind: .shellCommand, text: "cat Sources/File\(index).swift"))
+            blocks.append(ChatBlock(kind: .terminalOutput, text: "output \(index)"))
+            blocks.append(ChatBlock(kind: .agentReasoning, text: "Validated file \(index)."))
+        }
+        let first = cache.presentation(from: blocks, isStreaming: true)
+        XCTAssertEqual(first.steps.count, 200)
+        XCTAssertEqual(cache.rebuiltStepCount, 200)
+        for _ in 0..<200 {
+            XCTAssertEqual(cache.presentation(from: blocks, isStreaming: true).steps, first.steps)
+        }
+        XCTAssertEqual(cache.rebuiltStepCount, 200)
+        blocks.append(ChatBlock(kind: .shellCommand, text: "swift test"))
+        let next = cache.presentation(from: blocks, isStreaming: true)
+        XCTAssertEqual(cache.rebuiltStepCount, 201)
+        XCTAssertEqual(Array(next.steps.prefix(200)), first.steps)
+        XCTAssertEqual(next.steps.last?.status, .running)
+        let completed = cache.presentation(from: blocks, isStreaming: false)
+        XCTAssertEqual(cache.rebuiltStepCount, 202)
+        XCTAssertEqual(completed.steps.last?.status, .cancelled)
+        XCTAssertEqual(
+            completed.steps, AgentTimelinePresentation.build(from: blocks, isStreaming: false).steps
+        )
+    }
+
+    func testTimelineCacheInvalidatesSameIDTextMetadataAndHistoryReplacement() {
+        let cache = AgentTimelineCache()
+        var blocks = [
+            ChatBlock(
+                kind: .shellCommand, text: "cat Sources/Before.swift", activityId: "tool",
+                activityPhase: .started),
+            ChatBlock(
+                kind: .terminalOutput, text: "preview", activityId: "tool",
+                activityPhase: .completed),
+            ChatBlock(kind: .agentReasoning, text: "Inspected the file."),
+        ]
+        _ = cache.presentation(from: blocks, isStreaming: true)
+        blocks[1].text = "Sources/Hydrated.swift"
+        blocks[1].isContentTruncated = false
+        blocks[1].previewText = "preview"
+        XCTAssertEqual(
+            cache.presentation(from: blocks, isStreaming: true).steps,
+            AgentTimelinePresentation.build(from: blocks, isStreaming: true).steps)
+        XCTAssertEqual(cache.rebuiltStepCount, 2)
+        blocks[1].activityPhase = .failed
+        XCTAssertEqual(
+            cache.presentation(from: blocks, isStreaming: true).steps.first?.status, .failed)
+        XCTAssertEqual(cache.rebuiltStepCount, 3)
+        XCTAssertTrue(cache.presentation(from: [], isStreaming: false).steps.isEmpty)
+        XCTAssertEqual(
+            cache.presentation(from: blocks, isStreaming: true).steps,
+            AgentTimelinePresentation.build(from: blocks, isStreaming: true).steps)
+        XCTAssertEqual(cache.rebuiltStepCount, 4)
+    }
+
     func testChatWindowUsesTwentyPercentLargerTargetAndFitsSmallerScreens() {
         XCTAssertEqual(ChatLayoutMetrics.sidebarExpandedWidth, 264)
         XCTAssertEqual(ChatWindowSizing.preferredContentSize.width, 1_320)
@@ -85,7 +180,8 @@ final class AgentTimelinePresentationTests: XCTestCase {
         let failed = AgentTimelinePresentation.build(
             from: [
                 command,
-                ChatBlock(kind: .terminalOutput, text: "[terminal error (exit code: 1)]\nTest failed"),
+                ChatBlock(
+                    kind: .terminalOutput, text: "[terminal error (exit code: 1)]\nTest failed"),
             ],
             isStreaming: false
         )
@@ -270,7 +366,9 @@ final class AgentTimelinePresentationTests: XCTestCase {
 
     func testSummaryOnlyAndActivityOnlyTurnsRemainRepresentable() {
         let summaryOnly = AgentTimelinePresentation.build(
-            from: [ChatBlock(kind: .agentReasoning, text: "Validated the timeline. All checks pass.")],
+            from: [
+                ChatBlock(kind: .agentReasoning, text: "Validated the timeline. All checks pass.")
+            ],
             isStreaming: false
         )
         XCTAssertEqual(summaryOnly.steps.count, 1)
@@ -395,7 +493,8 @@ final class AgentTimelinePresentationTests: XCTestCase {
                 ChatBlock(kind: .shellCommand, text: "sed -n '1,80p' Sources/ChatView.swift"),
                 ChatBlock(
                     kind: .terminalOutput,
-                    text: "Sources/App.swift:20: warning\nnode_modules/pkg/index.js\nhttps://example.com/file.js"
+                    text:
+                        "Sources/App.swift:20: warning\nnode_modules/pkg/index.js\nhttps://example.com/file.js"
                 ),
                 ChatBlock(kind: .agentReasoning, text: "Inspected the relevant source files."),
             ],
@@ -492,7 +591,8 @@ final class AgentTimelinePresentationTests: XCTestCase {
                 ),
                 ChatBlock(
                     kind: .toolCall,
-                    text: "Updated Sources/App.swift. Tests/AppTests.swift still fails. See README.md.",
+                    text:
+                        "Updated Sources/App.swift. Tests/AppTests.swift still fails. See README.md.",
                     activityId: "edit",
                     activityPhase: .completed
                 ),
@@ -501,13 +601,15 @@ final class AgentTimelinePresentationTests: XCTestCase {
         )
 
         XCTAssertEqual(presentation.steps[0].modifiedFiles, ["Sources/App.swift"])
-        XCTAssertEqual(presentation.steps[0].referencedFiles, ["Tests/AppTests.swift", "README.md"])
+        XCTAssertEqual(
+            presentation.steps[0].referencedFiles, ["Tests/AppTests.swift", "README.md"])
     }
 
     @MainActor
     func testGenericWireErrorBecomesFailedToolActivity() throws {
         let data = Data(
-            #"{"session_id":"session","sender":"agent","content":"Tool: missing_tool\n\nError: not enabled","is_error":true,"activity_id":"call-missing","activity_phase":"failed"}"#.utf8
+            #"{"session_id":"session","sender":"agent","content":"Tool: missing_tool\n\nError: not enabled","is_error":true,"activity_id":"call-missing","activity_phase":"failed"}"#
+                .utf8
         )
         let message = try JSONDecoder().decode(ChatSessionRunner.AgentMessage.self, from: data)
         let block = ChatSessionRunner.genericErrorBlock(from: message)
@@ -523,7 +625,8 @@ final class AgentTimelinePresentationTests: XCTestCase {
     @MainActor
     func testFinalWireErrorTerminatesAsDurableErrorAnswer() throws {
         let data = Data(
-            #"{"session_id":"session","sender":"agent","content":"<final_answer>Provider unavailable</final_answer>","is_error":true}"#.utf8
+            #"{"session_id":"session","sender":"agent","content":"<final_answer>Provider unavailable</final_answer>","is_error":true}"#
+                .utf8
         )
         let message = try JSONDecoder().decode(ChatSessionRunner.AgentMessage.self, from: data)
 
@@ -535,13 +638,17 @@ final class AgentTimelinePresentationTests: XCTestCase {
 
     func testSteeringWireEventsPreserveCorrelationAndDoNotCreateRejectedLoaders() throws {
         let receivedData = Data(
-            #"{"session_id":"session","sender":"agent","content":"Queued","is_steering":true,"steering_id":"steer-b","steering_status":"received","steering_pending_count":2}"#.utf8
+            #"{"session_id":"session","sender":"agent","content":"Queued","is_steering":true,"steering_id":"steer-b","steering_status":"received","steering_pending_count":2}"#
+                .utf8
         )
         let rejectedData = Data(
-            #"{"session_id":"session","sender":"agent","content":"Queue full","is_error":true,"is_steering":true,"steering_id":"steer-a","steering_status":"rejected"}"#.utf8
+            #"{"session_id":"session","sender":"agent","content":"Queue full","is_error":true,"is_steering":true,"steering_id":"steer-a","steering_status":"rejected"}"#
+                .utf8
         )
-        let received = try JSONDecoder().decode(ChatSessionRunner.AgentMessage.self, from: receivedData)
-        let rejected = try JSONDecoder().decode(ChatSessionRunner.AgentMessage.self, from: rejectedData)
+        let received = try JSONDecoder().decode(
+            ChatSessionRunner.AgentMessage.self, from: receivedData)
+        let rejected = try JSONDecoder().decode(
+            ChatSessionRunner.AgentMessage.self, from: rejectedData)
 
         XCTAssertEqual(received.steeringID, "steer-b")
         XCTAssertEqual(received.steeringStatus, .received)
@@ -555,10 +662,12 @@ final class AgentTimelinePresentationTests: XCTestCase {
 
     func testLegacySteeringAcknowledgementTargetsTheOldestPendingUpdate() throws {
         let legacyData = Data(
-            #"{"session_id":"session","sender":"agent","content":"Steering queued","is_steering":true}"#.utf8
+            #"{"session_id":"session","sender":"agent","content":"Steering queued","is_steering":true}"#
+                .utf8
         )
         let legacyErrorData = Data(
-            #"{"session_id":"session","sender":"agent","content":"Steering rejected","is_error":true,"is_steering":true}"#.utf8
+            #"{"session_id":"session","sender":"agent","content":"Steering rejected","is_error":true,"is_steering":true}"#
+                .utf8
         )
         let legacyMessage = try JSONDecoder().decode(
             ChatSessionRunner.AgentMessage.self,
@@ -607,7 +716,8 @@ final class AgentTimelinePresentationTests: XCTestCase {
 
     func testSteeringIDWithoutStatusRemainsCorrelated() throws {
         let data = Data(
-            #"{"session_id":"session","sender":"agent","content":"Queued","is_steering":true,"steering_id":"steer-b"}"#.utf8
+            #"{"session_id":"session","sender":"agent","content":"Queued","is_steering":true,"steering_id":"steer-b"}"#
+                .utf8
         )
         let message = try JSONDecoder().decode(ChatSessionRunner.AgentMessage.self, from: data)
         let event = try XCTUnwrap(ChatSessionRunner.steeringEvent(from: message))
@@ -657,32 +767,37 @@ final class AgentTimelinePresentationTests: XCTestCase {
         let recovered = recap([
             ChatBlock(kind: .webCall, text: "Error", activityId: "a", activityPhase: .failed),
             ChatBlock(kind: .webCall, text: "Result", activityId: "b", activityPhase: .completed),
-            ChatBlock(kind: .agentReasoning, text: "The fallback succeeded and the work completed successfully."),
+            ChatBlock(
+                kind: .agentReasoning,
+                text: "The fallback succeeded and the work completed successfully."),
         ])
         XCTAssertEqual(recovered.outcome, .succeeded)
         XCTAssertEqual(recovered.title, "Worked for 12s")
 
         let warning = recap([
-            ChatBlock(kind: .agentReasoning, text: "One unresolved warning remains."),
+            ChatBlock(kind: .agentReasoning, text: "One unresolved warning remains.")
         ])
         XCTAssertEqual(warning.outcome, .warning)
         XCTAssertTrue(warning.title.contains("Completed with warnings"))
 
         let failed = recap([
-            ChatBlock(kind: .toolCall, text: "Error", activityId: "failed", activityPhase: .failed),
+            ChatBlock(kind: .toolCall, text: "Error", activityId: "failed", activityPhase: .failed)
         ])
         XCTAssertEqual(failed.outcome, .failed)
         XCTAssertTrue(failed.title.contains("Needs attention"))
 
         let cancelled = recap([
-            ChatBlock(kind: .toolCall, text: "Stopped", activityId: "cancel", activityPhase: .cancelled),
+            ChatBlock(
+                kind: .toolCall, text: "Stopped", activityId: "cancel", activityPhase: .cancelled)
         ])
         XCTAssertEqual(cancelled.outcome, .cancelled)
         XCTAssertTrue(cancelled.title.contains("Stopped by user"))
 
         let blocked = recap([
             ChatBlock(kind: .mcpCall, text: "Error", activityId: "auth", activityPhase: .failed),
-            ChatBlock(kind: .agentReasoning, text: "Credentials are required and I cannot continue without your input."),
+            ChatBlock(
+                kind: .agentReasoning,
+                text: "Credentials are required and I cannot continue without your input."),
         ])
         XCTAssertEqual(blocked.outcome, .actionRequired)
         XCTAssertEqual(blocked.subtitle, "1 blocked step")
@@ -804,7 +919,8 @@ final class AgentTimelinePresentationTests: XCTestCase {
     }
 
     func testLargeActivityPreviewTruncatesWithoutChangingFullText() {
-        let full = String(repeating: "x", count: AgentActivityDetailContent.previewCharacterLimit + 500)
+        let full = String(
+            repeating: "x", count: AgentActivityDetailContent.previewCharacterLimit + 500)
         let preview = AgentActivityDetailContent.displayedText(full, showFullContent: false)
 
         XCTAssertLessThan(preview.count, full.count)
@@ -815,7 +931,8 @@ final class AgentTimelinePresentationTests: XCTestCase {
     func testComposerUsesReadableFontAndAlignedMultilineMetrics() {
         XCTAssertEqual(ChatComposerMetrics.fontSize, 14)
         XCTAssertGreaterThan(ChatComposerMetrics.lineHeight, ChatComposerMetrics.fontSize)
-        XCTAssertEqual(ChatComposerMetrics.height(for: "one line"), ChatComposerMetrics.minimumHeight)
+        XCTAssertEqual(
+            ChatComposerMetrics.height(for: "one line"), ChatComposerMetrics.minimumHeight)
         XCTAssertGreaterThan(
             ChatComposerMetrics.height(for: "1\n2\n3\n4"), ChatComposerMetrics.minimumHeight)
     }

@@ -46,17 +46,6 @@ describe('isContextLengthError', () => {
 });
 
 describe('pruneHistoryForContextLimit', () => {
-  it('preserves stored instructions, compact memory and current user requirements', () => {
-    const protectedMessages: AIMessage[] = [
-      { role: 'system', content: 'sys' },
-      { role: 'user', content: '<stored_instructions>rules</stored_instructions>' },
-      { role: 'user', content: '<session_memory>previous work</session_memory>' },
-      { role: 'user', content: 'current request'.repeat(2000) },
-    ];
-    const state = makeSession([...protectedMessages]);
-    expect(pruneHistoryForContextLimit(state, noopLog)).toBe(false);
-    expect(state.history).toEqual(protectedMessages);
-  });
   it('compacts the single largest oversized message first', () => {
     const big = 'x'.repeat(50_000);
     const session = makeSession([

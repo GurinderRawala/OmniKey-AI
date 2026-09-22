@@ -82,14 +82,6 @@ function getSqlitePath() {
   return path.isAbsolute(envPath) ? envPath : path.join(homeDir, '.omnikey', envPath);
 }
 
-function getPositiveIntegerEnv(name: string, defaultValue: number): number {
-  const value = getNumberEnv(name, defaultValue);
-  if (!Number.isSafeInteger(value) || value <= 0) {
-    throw new Error(`${name} must be a positive integer`);
-  }
-  return value;
-}
-
 export type AIProvider = 'openai' | 'gemini' | 'anthropic' | 'nemotron';
 
 export type TerminalAccessMode = 'full' | 'limited';
@@ -164,9 +156,6 @@ export const config = {
   // notably a self-hosted NIM serving Nemotron with VLLM_ALLOW_LONG_MAX_MODEL_LEN
   // enabled, where the window can be raised from the 256K native default to 1M.
   aiContextWindowOverride: getNumberEnv('AI_CONTEXT_WINDOW', 0),
-  // Cost controls, independent of the provider's maximum context window.
-  agentMemoryTriggerTokens: getPositiveIntegerEnv('AGENT_MEMORY_TRIGGER_TOKENS', 24_000),
-  agentMaxOutputTokens: getPositiveIntegerEnv('AGENT_MAX_OUTPUT_TOKENS', 8_192),
 
   // Database
   databaseUrl: getEnv('DATABASE_URL', getBooleanEnv('IS_SELF_HOSTED', false) ? false : true),

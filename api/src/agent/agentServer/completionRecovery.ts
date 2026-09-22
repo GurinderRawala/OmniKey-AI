@@ -7,9 +7,6 @@ import {
   AITool,
   AICompletionResult,
   CompletionOptions,
-  estimateHistoryTokens,
-  estimateToolTokens,
-  getInputTokenBudget,
 } from '../../ai-client';
 import { pushToSessionHistory } from '../utils';
 import { isInjectedUserPrompt } from '../injectedUserPrompts';
@@ -98,29 +95,13 @@ export async function completeWithContextRecovery(
   onUsage?: (result: AICompletionResult) => Promise<void>,
 ): Promise<AICompletionResult> {
   await ensureSessionMemory(session, sessionId, model, log, onUsage);
-  const toolTokens = estimateToolTokens(options.tools);
-  let requestHistory = buildTrimmedHistoryForRequest(session, model, sessionId, log, toolTokens);
-  const requestOptions = cacheableOptions(session, model, {
-    ...options,
-    maxTokens: Math.min(
-      options.maxTokens ?? config.agentMaxOutputTokens ?? 8192,
-      config.agentMaxOutputTokens ?? 8192,
-    ),
-  });
+  let requestHistory = buildTrimmedHistoryForRequest(session, model, sessionId, log);
+  const requestOptions = cacheableOptions(session, model, options);
 
   let attempt = 0;
   for (;;) {
     try {
-      if (
-        estimateHistoryTokens(requestHistory) + toolTokens >
-        getInputTokenBudget(config.aiProvider, model)
-      ) {
-        throw new Error(
-          'Agent request exceeds the input budget after trimming. Reduce the request or enabled tools.',
-        );
-      }
-      const result = await aiClient.complete(model, requestHistory, requestOptions);
-      return result;
+      return await aiClient.complete(model, requestHistory, requestOptions);
     } catch (err) {
       if (!isContextLengthError(err) || attempt >= MAX_CONTEXT_RECOVERY_ATTEMPTS) throw err;
       attempt++;
@@ -225,15 +206,10 @@ export async function recoverOutputLengthResult(
 
 export function removeInjectedUserPromptsFromHistory(session: SessionState, log: Logger): number {
   const before = session.history.length;
-  let removedBeforeMemory = 0;
-  session.history = session.history.filter((message, index) => {
+  session.history = session.history.filter((message) => {
     if (message.role !== 'user' || typeof message.content !== 'string') return true;
-    const remove = isInjectedUserPrompt(message.content);
-    if (remove && index < (session.sessionMemoryHistoryLength ?? 0)) removedBeforeMemory++;
-    return !remove;
+    return !isInjectedUserPrompt(message.content);
   });
-  if (session.sessionMemoryHistoryLength != null)
-    session.sessionMemoryHistoryLength -= removedBeforeMemory;
 
   const removed = before - session.history.length;
   if (removed > 0) {

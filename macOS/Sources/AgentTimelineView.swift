@@ -13,19 +13,16 @@ struct AgentExecutionHistoryView: View {
 
     @State private var commandTimelineExpanded = AgentCommandDisclosurePolicy.initiallyExpanded
     @State private var completedTimelineExpanded = AgentCompletedTimelinePolicy.initiallyExpanded
+    @State private var presentationCache = AgentTimelineCache()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
 
     private var presentation: AgentTimelinePresentation {
-        AgentTimelinePresentation.build(from: blocks, isStreaming: isStreaming)
+        presentationCache.presentation(from: blocks, isStreaming: isStreaming)
     }
 
     private var allActivities: [AgentCommandActivity] {
         presentation.steps.flatMap(\.activities)
-    }
-
-    private var milestoneSteps: [AgentTaskStep] {
-        presentation.steps.filter { $0.outcome?.isEmpty == false }
     }
 
     private var timelineExpanded: Bool {
@@ -82,6 +79,9 @@ struct AgentExecutionHistoryView: View {
 
     @ViewBuilder
     private var timelineContent: some View {
+        let snapshot = presentation
+        let allActivities = snapshot.steps.flatMap(\.activities)
+        let milestoneSteps = snapshot.steps.filter { $0.outcome?.isEmpty == false }
         VStack(alignment: .leading, spacing: 14) {
             if !allActivities.isEmpty {
                 AgentCommandActivityPanel(
@@ -97,6 +97,7 @@ struct AgentExecutionHistoryView: View {
                             step: step,
                             isLast: index == milestoneSteps.count - 1
                         )
+                        .equatable()
                     }
                 }
             }
@@ -141,7 +142,8 @@ struct AgentExecutionHistoryView: View {
         .buttonStyle(.plain)
         .help(completedTimelineExpanded ? "Hide completed work" : "Show completed work")
         .accessibilityLabel("\(completionRecap.title), \(completionRecap.subtitle)")
-        .accessibilityHint("Press to \(completedTimelineExpanded ? "collapse" : "expand") the reasoning timeline.")
+        .accessibilityHint(
+            "Press to \(completedTimelineExpanded ? "collapse" : "expand") the reasoning timeline.")
     }
 
     private var completionColor: Color {
@@ -155,30 +157,24 @@ struct AgentExecutionHistoryView: View {
     }
 }
 
-private struct AgentTaskStepRow: View {
+private struct AgentTaskStepRow: View, Equatable {
     let step: AgentTaskStep
     let isLast: Bool
+
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.step == rhs.step && lhs.isLast == rhs.isLast
+    }
 
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         if let outcome = step.outcome, !outcome.isEmpty {
             HStack(alignment: .top, spacing: 10) {
-                VStack(spacing: 0) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundColor(NordTheme.accentBlue(colorScheme))
-                        .frame(width: 16, height: 16)
-                        .frame(width: 18, height: 18)
-
-                    if !isLast {
-                        Rectangle()
-                            .fill(NordTheme.border(colorScheme))
-                            .frame(width: 1)
-                            .frame(maxHeight: .infinity)
-                    }
-                }
-                .frame(width: 18)
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(NordTheme.accentBlue(colorScheme))
+                    .frame(width: 16, height: 16)
+                    .frame(width: 18, height: 18)
 
                 VStack(alignment: .leading, spacing: 5) {
                     Text(step.title)
@@ -234,11 +230,23 @@ private struct AgentTaskStepRow: View {
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel("\(step.title): \(outcome)")
             }
+            .overlay(alignment: .topLeading) {
+                if !isLast {
+                    GeometryReader { geometry in
+                        Rectangle()
+                            .fill(NordTheme.border(colorScheme))
+                            .frame(width: 1, height: max(0, geometry.size.height - 18))
+                            .offset(x: 8.5, y: 18)
+                    }
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+                }
+            }
         }
     }
 }
 
-private struct AgentCommandActivityPanel: View {
+struct AgentCommandActivityPanel: View {
     let activities: [AgentCommandActivity]
     @Binding var expanded: Bool
 
@@ -252,7 +260,8 @@ private struct AgentCommandActivityPanel: View {
     }
 
     private var displayTitle: String {
-        if let current = activities.last(where: { $0.status == .running || $0.status == .pending }) {
+        if let current = activities.last(where: { $0.status == .running || $0.status == .pending })
+        {
             return "Using \(current.title)"
         }
         return "Command activity"
@@ -277,10 +286,10 @@ private struct AgentCommandActivityPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
-                withAnimation(
-                    AgentTimelineMotionPolicy.shouldAnimate(reduceMotion: reduceMotion)
-                        ? .easeInOut(duration: 0.18) : nil
-                ) { expanded.toggle() }
+                // Expanding installs several AppKit-backed text views. Animating
+                // that geometry can keep the outer SwiftUI scroll view in a
+                // layout cycle on long transcripts, so change it atomically.
+                expanded.toggle()
             } label: {
                 HStack(spacing: 7) {
                     ZStack {
@@ -321,7 +330,8 @@ private struct AgentCommandActivityPanel: View {
             .help(expanded ? "Hide command details" : "Show command details")
             .accessibilityLabel("\(displayTitle), \(statusLabel)")
             .accessibilityHint(
-                "Press to \(expanded ? "hide" : "show") command inputs, outputs, logs, and metadata.")
+                "Press to \(expanded ? "hide" : "show") command inputs, outputs, logs, and metadata."
+            )
 
             if expanded {
                 Divider().opacity(0.55)
@@ -337,9 +347,11 @@ private struct AgentCommandActivityPanel: View {
                                 Text("Show more")
                                     .font(.system(size: 10.5, weight: .semibold))
                                 Spacer()
-                                Text("\(min(AgentActivityPagination.pageSize, hiddenActivityCount)) earlier")
-                                    .font(.system(size: 9.5).monospacedDigit())
-                                    .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.62))
+                                Text(
+                                    "\(min(AgentActivityPagination.pageSize, hiddenActivityCount)) earlier"
+                                )
+                                .font(.system(size: 9.5).monospacedDigit())
+                                .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.62))
                             }
                             .foregroundColor(NordTheme.accentBlue(colorScheme))
                             .padding(.horizontal, 8)
@@ -353,7 +365,8 @@ private struct AgentCommandActivityPanel: View {
                         )
                     }
 
-                    ForEach(Array(visibleActivities.enumerated()), id: \.element.id) { index, activity in
+                    ForEach(Array(visibleActivities.enumerated()), id: \.element.id) {
+                        index, activity in
                         AgentCommandTimelineRow(
                             activity: activity,
                             isLast: index == visibleActivities.count - 1
@@ -382,15 +395,10 @@ private struct AgentCommandActivityPanel: View {
     }
 
     private func showMoreActivities() {
-        withAnimation(
-            AgentTimelineMotionPolicy.shouldAnimate(reduceMotion: reduceMotion)
-                ? .easeInOut(duration: 0.18) : nil
-        ) {
-            visibleActivityCount = AgentActivityPagination.nextVisibleCount(
-                totalCount: activities.count,
-                currentVisibleCount: visibleActivityCount
-            )
-        }
+        visibleActivityCount = AgentActivityPagination.nextVisibleCount(
+            totalCount: activities.count,
+            currentVisibleCount: visibleActivityCount
+        )
     }
 
     @ViewBuilder
@@ -453,22 +461,25 @@ private struct AgentCommandTimelineRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
-            VStack(spacing: 0) {
-                Circle()
-                    .fill(markerColor)
-                    .frame(width: 6, height: 6)
-                    .frame(width: 14, height: 18)
-                if !isLast {
-                    Rectangle()
-                        .fill(NordTheme.border(colorScheme))
-                        .frame(width: 1)
-                        .frame(maxHeight: .infinity)
-                }
-            }
-            .frame(width: 14)
+            Circle()
+                .fill(markerColor)
+                .frame(width: 6, height: 6)
+                .frame(width: 14, height: 18)
 
             AgentCommandActivityDetail(activity: activity)
                 .padding(.bottom, isLast ? 0 : 8)
+        }
+        .overlay(alignment: .topLeading) {
+            if !isLast {
+                GeometryReader { geometry in
+                    Rectangle()
+                        .fill(NordTheme.border(colorScheme))
+                        .frame(width: 1, height: max(0, geometry.size.height - 18))
+                        .offset(x: 6.5, y: 18)
+                }
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            }
         }
     }
 
@@ -534,11 +545,12 @@ private struct AgentCommandActivityDetail: View {
                 ChatCopyButton(
                     text: activity.fullText,
                     title: "Copy full activity details",
-                    copyProvider: hasUnloadedContent ? { completion in
-                        model.loadFullBlockContents(activity.blocks) { blocks in
-                            completion(blocks.map(\.text).joined(separator: "\n\n"))
-                        }
-                    } : nil
+                    copyProvider: hasUnloadedContent
+                        ? { completion in
+                            model.loadFullBlockContents(activity.blocks) { blocks in
+                                completion(blocks.map(\.text).joined(separator: "\n\n"))
+                            }
+                        } : nil
                 )
             }
 
@@ -546,12 +558,16 @@ private struct AgentCommandActivityDetail: View {
                 .frame(height: showFullContent ? 240 : 148)
                 .background(
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(colorScheme == .dark ? Color.black.opacity(0.24) : Color.white.opacity(0.62))
+                        .fill(
+                            colorScheme == .dark
+                                ? Color.black.opacity(0.24) : Color.white.opacity(0.62))
                 )
 
             if isTruncated {
                 Button(
-                    isLoadingContent ? "Loading full details…" : (showFullContent ? "Show less" : "Show full details"),
+                    isLoadingContent
+                        ? "Loading full details…"
+                        : (showFullContent ? "Show less" : "Show full details"),
                     action: toggleFullContent
                 )
                 .buttonStyle(.plain)
@@ -573,7 +589,8 @@ private struct AgentCommandActivityDetail: View {
     }
 
     private func toggleFullContent() {
-        let animation = AgentTimelineMotionPolicy.shouldAnimate(reduceMotion: reduceMotion)
+        let animation =
+            AgentTimelineMotionPolicy.shouldAnimate(reduceMotion: reduceMotion)
             ? Animation.easeInOut(duration: 0.18) : nil
         if hasUnloadedContent {
             model.loadFullBlockContents(activity.blocks) { _ in
