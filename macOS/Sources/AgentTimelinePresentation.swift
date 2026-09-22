@@ -675,12 +675,24 @@ enum AgentTimelineMotionPolicy {
 enum AgentCompletedTimelinePolicy {
     static let initiallyExpanded = false
 
-    static func isExpanded(isStreaming: Bool, completedExpanded: Bool) -> Bool {
-        isStreaming || completedExpanded
+    static func shouldShowDisclosure(isStreaming: Bool, hasFinalAnswer: Bool) -> Bool {
+        !isStreaming && hasFinalAnswer
     }
 
-    static func expansionAfterStreamingChange(isStreaming: Bool, current: Bool) -> Bool {
-        isStreaming ? current : false
+    static func isExpanded(
+        isStreaming: Bool,
+        hasFinalAnswer: Bool,
+        completedExpanded: Bool
+    ) -> Bool {
+        isStreaming || !hasFinalAnswer || completedExpanded
+    }
+
+    static func expansionAfterStreamingChange(
+        isStreaming: Bool,
+        hasFinalAnswer: Bool,
+        current: Bool
+    ) -> Bool {
+        isStreaming || !hasFinalAnswer ? current : false
     }
 }
 

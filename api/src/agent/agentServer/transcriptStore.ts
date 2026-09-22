@@ -2,7 +2,6 @@ import { Transaction } from 'sequelize';
 import { sequelize } from '../../db';
 import { AgentSession } from '../../models/agentSession';
 import { AgentTranscriptMessage } from '../../models/agentTranscriptMessage';
-import type { SessionState } from '../types';
 import {
   buildTranscript,
   completedTranscriptSnapshot,
@@ -46,17 +45,6 @@ function normalizedTranscriptInsertBatches<T>(rows: T[]): T[][] {
   }
   if (batch.length > 0) batches.push(batch);
   return batches;
-}
-
-export function historyHasCompletedTurn(history: SessionState['history']): boolean {
-  for (let index = history.length - 1; index >= 0; index -= 1) {
-    const entry = history[index];
-    if (entry.role === 'system') continue;
-    if (entry.role !== 'assistant') return false;
-    const content = typeof entry.content === 'string' ? entry.content : '';
-    return /<final_answer>[\s\S]*<\/final_answer>/i.test(content);
-  }
-  return false;
 }
 
 export async function replaceNormalizedTranscript(
@@ -136,8 +124,6 @@ export async function readOrBackfillNormalizedTranscript(
   const raw = JSON.parse(historyJson || '[]') as RawHistoryMessage[];
   const messages = completedTranscriptSnapshot(buildTranscript(raw));
   const revision = completedTranscriptRevision(messages);
-  // Never publish an unfinished first turn. It remains available from the
-  // authoritative history blob and will be normalized after its first final.
   if (!revision) return previewTranscript(messages);
   const previews = await replaceNormalizedTranscript(sessionId, raw, revision);
   // If this update fails, rows and session disagree and the next read safely

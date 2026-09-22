@@ -412,6 +412,14 @@ final class ChatSessionRunner {
         )
     }
 
+    static func finalAnswerDisplayText(from response: AgentMessage) -> String? {
+        guard let final = AgentRunner.extractFinalAnswer(from: response.content) else { return nil }
+        if response.isError == true && !final.hasPrefix("**Error:**") {
+            return "**Error:** \(final)"
+        }
+        return final
+    }
+
     private func startAgentWebSocketSession(
         url: URL,
         sessionID: String,
@@ -540,6 +548,17 @@ final class ChatSessionRunner {
                         return
                     }
 
+                    // Detect a final-answer block before the generic-error path.
+                    // Server-generated failures are final answers with
+                    // `is_error=true`; treating them as a tool event would leave
+                    // the turn running and make its durable failure differ from
+                    // what the live chat displayed.
+                    if let final = ChatSessionRunner.finalAnswerDisplayText(from: response) {
+                        print("[ChatSessionRunner] Final answer received (length: \(final.count))")
+                        finishWithFinal(final)
+                        return
+                    }
+
                     // Unknown, disabled, or newly-added tool categories can still
                     // arrive as generic errors. Preserve their failed lifecycle
                     // instead of presenting them as successful reasoning.
@@ -548,13 +567,6 @@ final class ChatSessionRunner {
                             onBlock(ChatSessionRunner.genericErrorBlock(from: response))
                         }
                         receiveNext()
-                        return
-                    }
-
-                    // Detect a final-answer block — terminates the turn.
-                    if let final = AgentRunner.extractFinalAnswer(from: content) {
-                        print("[ChatSessionRunner] Final answer received (length: \(final.count))")
-                        finishWithFinal(final)
                         return
                     }
 

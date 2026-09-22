@@ -520,6 +520,19 @@ final class AgentTimelinePresentationTests: XCTestCase {
         XCTAssertEqual(presentation.runOutcome, .failed)
     }
 
+    @MainActor
+    func testFinalWireErrorTerminatesAsDurableErrorAnswer() throws {
+        let data = Data(
+            #"{"session_id":"session","sender":"agent","content":"<final_answer>Provider unavailable</final_answer>","is_error":true}"#.utf8
+        )
+        let message = try JSONDecoder().decode(ChatSessionRunner.AgentMessage.self, from: data)
+
+        XCTAssertEqual(
+            ChatSessionRunner.finalAnswerDisplayText(from: message),
+            "**Error:** Provider unavailable"
+        )
+    }
+
     func testSteeringWireEventsPreserveCorrelationAndDoNotCreateRejectedLoaders() throws {
         let receivedData = Data(
             #"{"session_id":"session","sender":"agent","content":"Queued","is_steering":true,"steering_id":"steer-b","steering_status":"received","steering_pending_count":2}"#.utf8
@@ -830,12 +843,47 @@ final class AgentTimelinePresentationTests: XCTestCase {
         XCTAssertTrue(
             AgentCompletedTimelinePolicy.isExpanded(
                 isStreaming: true,
+                hasFinalAnswer: false,
+                completedExpanded: false
+            )
+        )
+        XCTAssertTrue(
+            AgentCompletedTimelinePolicy.isExpanded(
+                isStreaming: false,
+                hasFinalAnswer: false,
+                completedExpanded: false
+            )
+        )
+        XCTAssertFalse(
+            AgentCompletedTimelinePolicy.shouldShowDisclosure(
+                isStreaming: false,
+                hasFinalAnswer: false
+            )
+        )
+        XCTAssertTrue(
+            AgentCompletedTimelinePolicy.shouldShowDisclosure(
+                isStreaming: false,
+                hasFinalAnswer: true
+            )
+        )
+        XCTAssertFalse(
+            AgentCompletedTimelinePolicy.isExpanded(
+                isStreaming: false,
+                hasFinalAnswer: true,
                 completedExpanded: false
             )
         )
         XCTAssertFalse(
             AgentCompletedTimelinePolicy.expansionAfterStreamingChange(
                 isStreaming: false,
+                hasFinalAnswer: true,
+                current: true
+            )
+        )
+        XCTAssertTrue(
+            AgentCompletedTimelinePolicy.expansionAfterStreamingChange(
+                isStreaming: false,
+                hasFinalAnswer: false,
                 current: true
             )
         )
@@ -900,7 +948,7 @@ final class AgentTimelinePresentationTests: XCTestCase {
         XCTAssertNil(SteeringRedirectResolver.target(for: original, records: [:]))
     }
 
-    func testCachedHistoryRematerializesOnlyTheLatestAssistantTurn() {
+    func testCachedHistoryRematerializesTheLatestUserTurnWithoutAStaleSuccess() {
         let messages = [
             ChatMessage.user("old", sentAt: nil, id: "server:user-old"),
             ChatMessage.assistant(id: "server:assistant-old"),
@@ -911,7 +959,13 @@ final class AgentTimelinePresentationTests: XCTestCase {
 
         XCTAssertEqual(
             ChatHistoryMergePolicy.latestVisibleTurn(in: messages).map(\.id),
-            ["server:assistant-latest", "server:user-trailing"]
+            ["server:user-trailing"]
+        )
+        XCTAssertEqual(
+            ChatHistoryMergePolicy.latestVisibleTurn(
+                in: Array(messages.dropLast())
+            ).map(\.id),
+            ["server:user-latest", "server:assistant-latest"]
         )
         XCTAssertEqual(
             ChatHistoryMergePolicy.latestVisibleTurn(

@@ -31,6 +31,7 @@ struct AgentExecutionHistoryView: View {
     private var timelineExpanded: Bool {
         AgentCompletedTimelinePolicy.isExpanded(
             isStreaming: isStreaming,
+            hasFinalAnswer: finalAnswer != nil,
             completedExpanded: completedTimelineExpanded
         )
     }
@@ -47,7 +48,10 @@ struct AgentExecutionHistoryView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            if !isStreaming {
+            if AgentCompletedTimelinePolicy.shouldShowDisclosure(
+                isStreaming: isStreaming,
+                hasFinalAnswer: finalAnswer != nil
+            ) {
                 completedDisclosure
             }
 
@@ -60,6 +64,7 @@ struct AgentExecutionHistoryView: View {
         .onChange(of: isStreaming) { _, streaming in
             completedTimelineExpanded = AgentCompletedTimelinePolicy.expansionAfterStreamingChange(
                 isStreaming: streaming,
+                hasFinalAnswer: finalAnswer != nil,
                 current: completedTimelineExpanded
             )
             if !streaming { commandTimelineExpanded = false }

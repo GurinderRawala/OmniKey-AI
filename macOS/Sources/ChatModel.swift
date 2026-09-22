@@ -265,10 +265,13 @@ enum ChatHistoryMergePolicy {
 
     static func latestVisibleTurn(in messages: [ChatMessage]) -> [ChatMessage] {
         guard !messages.isEmpty else { return [] }
-        guard let assistantIndex = messages.lastIndex(where: { $0.role == .assistant }) else {
-            return [messages[messages.count - 1]]
-        }
-        return Array(messages[assistantIndex...])
+        // A visible turn begins with its user request. Starting from the last
+        // assistant would temporarily foreground the previous successful
+        // answer when a newer request was stopped before producing output.
+        let start = messages.lastIndex(where: { $0.role == .user })
+            ?? messages.lastIndex(where: { $0.role == .assistant })
+            ?? messages.index(before: messages.endIndex)
+        return Array(messages[start...])
     }
 }
 

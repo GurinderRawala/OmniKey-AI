@@ -194,25 +194,18 @@ export function latestTranscriptTurn(
       },
     };
   }
-  let lastAssistant = -1;
-  let lastCompletedAssistant = -1;
+  let lastUser = -1;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if (messages[index].role === 'assistant') {
-      if (lastAssistant < 0) lastAssistant = index;
-      if ((messages[index].blocks ?? []).some((block) => block.kind === 'finalAnswer')) {
-        lastCompletedAssistant = index;
-        break;
-      }
+    if (messages[index].role === 'user') {
+      lastUser = index;
+      break;
     }
   }
-  const hasNewerIncompleteAssistant =
-    lastCompletedAssistant >= 0 && lastAssistant > lastCompletedAssistant;
-  const start = hasNewerIncompleteAssistant
-    ? lastCompletedAssistant
-    : lastAssistant >= 0
-      ? lastAssistant
-      : messages.length - 1;
-  const end = hasNewerIncompleteAssistant ? lastCompletedAssistant + 1 : messages.length;
+  // A turn starts with its user request. In particular, preserve a trailing
+  // request when cancellation happens before the provider emits any assistant
+  // or tool content instead of falling back to the previous successful answer.
+  const start = lastUser >= 0 ? lastUser : messages.length - 1;
+  const end = messages.length;
   return {
     messages: messages.slice(start, end),
     pageInfo: {
@@ -224,39 +217,26 @@ export function latestTranscriptTurn(
 }
 
 /**
- * Normalized rows are a presentation snapshot, not a recovery checkpoint.
- * Keep everything through the newest completed assistant turn, but do not
- * publish a later unfinished tool sequence. A session with no completed turn
- * still keeps its interrupted first turn so it remains recoverable in the UI.
+ * Normalized rows are the recoverable presentation transcript. Keep the
+ * incomplete tail as well as completed answers: an interrupted or failed turn
+ * is user-visible history and must not disappear when the chat is reopened.
+ *
+ * The historical function name is retained to avoid a storage migration, but
+ * the snapshot now deliberately includes every visible transcript message.
  */
 export function completedTranscriptSnapshot(messages: TranscriptMessage[]): TranscriptMessage[] {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (
-      message.role === 'assistant' &&
-      (message.blocks ?? []).some((block) => block.kind === 'finalAnswer')
-    ) {
-      return messages.slice(0, index + 1);
-    }
-  }
   return messages;
 }
 
 /**
- * Identifies the exact completed transcript snapshot represented by normalized
- * rows. The digest intentionally excludes positional UI IDs: provider-history
+ * Identifies the exact recoverable transcript represented by normalized rows.
+ * The digest intentionally excludes positional UI IDs: provider-history
  * compaction can renumber those IDs without changing the visible transcript.
+ * The historical function name is retained to avoid a storage migration.
  */
 export function completedTranscriptRevision(messages: TranscriptMessage[]): string | null {
   const snapshot = completedTranscriptSnapshot(messages);
-  const lastMessage = snapshot[snapshot.length - 1];
-  if (
-    !lastMessage ||
-    lastMessage.role !== 'assistant' ||
-    !(lastMessage.blocks ?? []).some((block) => block.kind === 'finalAnswer')
-  ) {
-    return null;
-  }
+  if (!snapshot.length) return null;
 
   const canonical = snapshot.map((message) => ({
     role: message.role,
@@ -269,7 +249,7 @@ export function completedTranscriptRevision(messages: TranscriptMessage[]): stri
     })),
   }));
   return createHash('sha256')
-    .update('completed-transcript-v1\0')
+    .update('recoverable-transcript-v2\0')
     .update(JSON.stringify(canonical))
     .digest('hex');
 }

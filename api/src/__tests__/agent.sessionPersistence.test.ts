@@ -223,6 +223,10 @@ describe('agent session persistence checkpoints', () => {
     expect(mocks.agentSession.update.mock.invocationCallOrder[firstHistoryCallIndex]).toBeLessThan(
       mocks.complete.mock.invocationCallOrder[0],
     );
+    expect(mocks.replaceNormalizedTranscript).toHaveBeenCalled();
+    expect(mocks.replaceNormalizedTranscript.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.complete.mock.invocationCallOrder[0],
+    );
 
     const history = parsedHistoryFromCall(calls[firstHistoryCallIndex]);
     expect(history).toEqual(
@@ -294,7 +298,7 @@ describe('agent session persistence checkpoints', () => {
     );
   });
 
-  it('does not republish normalized rows for a new incomplete tool turn', async () => {
+  it('publishes normalized rows for a new incomplete tool turn', async () => {
     const state = {
       history: [
         { role: 'user', content: '<user_input>Earlier request</user_input>' },
@@ -318,8 +322,50 @@ describe('agent session persistence checkpoints', () => {
 
     await persistSessionToDB('session-1', state);
 
-    expect(mocks.agentSession.update).toHaveBeenCalled();
-    expect(mocks.replaceNormalizedTranscript).not.toHaveBeenCalled();
+    const [values] = historyUpdateCalls().at(-1) as [{ transcriptRevision: string }];
+    expect(values.transcriptRevision).toMatch(/^[a-f0-9]{64}$/);
+    expect(mocks.replaceNormalizedTranscript).toHaveBeenCalledWith(
+      'session-1',
+      state.history,
+      values.transcriptRevision,
+    );
+  });
+
+  it('persists a failed model call as the newest visible answer', async () => {
+    const send = vi.fn();
+    mocks.complete.mockRejectedValueOnce(new Error('provider offline'));
+
+    await runAgentTurn(
+      'session-1',
+      { id: 'subscription-1' } as any,
+      {
+        session_id: 'session-1',
+        sender: 'client',
+        content: 'Run the task.',
+        platform: 'macos',
+      },
+      send,
+      mocks.log as any,
+      { skipGrouping: true },
+    );
+
+    const latestHistory = parsedHistoryFromCall(historyUpdateCalls().at(-1) ?? []);
+    expect(latestHistory.at(-1)).toEqual(
+      expect.objectContaining({
+        role: 'assistant',
+        content: expect.stringContaining(
+          '<final_answer>\n**Error:** Agent failed to call language model.',
+        ),
+      }),
+    );
+    expect(send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        is_error: true,
+        content: expect.stringContaining(
+          '<final_answer>\n**Error:** Agent failed to call language model.',
+        ),
+      }),
+    );
   });
 
   it('keeps the new authoritative revision when normalized publication fails', async () => {

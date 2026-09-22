@@ -15,7 +15,7 @@ import {
   completedTranscriptRevision,
   userHistoryHasProjectContext,
 } from './transcript';
-import { historyHasCompletedTurn, replaceNormalizedTranscript } from './transcriptStore';
+import { replaceNormalizedTranscript } from './transcriptStore';
 
 export async function persistSessionToDB(sessionId: string, state: SessionState): Promise<void> {
   try {
@@ -40,11 +40,10 @@ export async function persistSessionToDB(sessionId: string, state: SessionState)
       },
       { where: { id: sessionId } },
     );
-    // The live client owns in-progress state, so normalized UI rows only need
-    // to be refreshed once a completed answer exists. This avoids rewriting a
-    // full transcript on every streamed tool event while keeping subsequent
-    // latest-turn reads independent of the provider-history blob.
-    if (historyHasCompletedTurn(state.history)) {
+    // Persist every visible checkpoint, including an unanswered user message
+    // or incomplete tool turn. Those tails are exactly what a user expects to
+    // see after stopping a task or reopening one that failed.
+    if (transcriptRevision) {
       try {
         await replaceNormalizedTranscript(
           sessionId,
