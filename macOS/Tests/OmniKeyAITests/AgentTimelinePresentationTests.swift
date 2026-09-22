@@ -843,12 +843,47 @@ final class AgentTimelinePresentationTests: XCTestCase {
         XCTAssertTrue(
             AgentCompletedTimelinePolicy.isExpanded(
                 isStreaming: true,
+                hasFinalAnswer: false,
+                completedExpanded: false
+            )
+        )
+        XCTAssertTrue(
+            AgentCompletedTimelinePolicy.isExpanded(
+                isStreaming: false,
+                hasFinalAnswer: false,
+                completedExpanded: false
+            )
+        )
+        XCTAssertFalse(
+            AgentCompletedTimelinePolicy.shouldShowDisclosure(
+                isStreaming: false,
+                hasFinalAnswer: false
+            )
+        )
+        XCTAssertTrue(
+            AgentCompletedTimelinePolicy.shouldShowDisclosure(
+                isStreaming: false,
+                hasFinalAnswer: true
+            )
+        )
+        XCTAssertFalse(
+            AgentCompletedTimelinePolicy.isExpanded(
+                isStreaming: false,
+                hasFinalAnswer: true,
                 completedExpanded: false
             )
         )
         XCTAssertFalse(
             AgentCompletedTimelinePolicy.expansionAfterStreamingChange(
                 isStreaming: false,
+                hasFinalAnswer: true,
+                current: true
+            )
+        )
+        XCTAssertTrue(
+            AgentCompletedTimelinePolicy.expansionAfterStreamingChange(
+                isStreaming: false,
+                hasFinalAnswer: false,
                 current: true
             )
         )
