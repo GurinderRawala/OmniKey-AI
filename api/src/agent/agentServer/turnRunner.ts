@@ -112,7 +112,6 @@ async function runAgentTurnInternal(
         session.history[systemIndex] = { ...session.history[systemIndex], content: systemPrompt };
       } else {
         session.history.unshift({ role: 'system', content: systemPrompt });
-        if (session.sessionMemoryHistoryLength) session.sessionMemoryHistoryLength++;
       }
     } catch (err) {
       log.warn('Failed to refresh agent system prompt with latest settings', { error: err });

@@ -10,7 +10,6 @@ import { getPromptMcpsForSubscription } from '../mcpPromptCache';
 import { getAgentSettings } from '../../agentSettingsStore';
 import type { SessionState } from '../types';
 import { buildTrimmedHistoryForRequest } from './sessionMemory';
-import { deleteSessionCheckpoint } from './sessionCheckpoint';
 import {
   buildTranscript,
   completedTranscriptRevision,
@@ -83,7 +82,6 @@ async function enforceSessionCap(subscriptionId: string, log: Logger): Promise<v
 
     const ids = oldest.map((s) => s.id);
     await AgentSession.destroy({ where: { id: ids } });
-    await Promise.all(ids.map((id) => deleteSessionCheckpoint(subscriptionId, id, log)));
     log.info('Pruned oldest agent sessions to enforce cap', {
       subscriptionId,
       pruned: ids.length,

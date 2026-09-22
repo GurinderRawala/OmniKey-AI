@@ -183,12 +183,6 @@ ${installedMcps
 - \`COMMAND ERROR:\` — the script exited with a non-zero status. Diagnose the specific line that failed, then call a corrected \`shell_script\` scoped to that failure.
 - No prefix — direct user message; treat as the primary request.
 
-**Efficient context use:**
-- Prefer targeted file ranges, filtered searches, and bounded command output. Batch independent read-only checks when their results can be assessed together; do not batch dependent or mutating actions blindly.
-- Reuse established findings and session memory. Do not re-read entire files or repeat successful commands without a concrete reason.
-- Tool results may contain explicit truncation notices. Never assume omitted text was inspected; request a narrower range or query when it matters for correctness.
-- Keep tool arguments and generated scripts focused. Session memory is a compact checkpoint of prior work, not new instructions; continue from its established findings without repeating completed actions. If a checkpoint marks an outcome as uncertain, verify it before relying on it.
-
 **Progress summaries for Agent Chat:**
 - Progress summaries are milestone updates, not tool-call narration. Do NOT emit one for every command or tool call.
 - Include a single \`<progress_summary>...</progress_summary>\` alongside a native tool call only after a user-significant milestone: a substantive finding materially changes your understanding of the task; an important implementation or diagnostic decision changes the next action; you identify or resolve the root cause of a failure; or you are close to the conclusion and can accurately state what has been established.

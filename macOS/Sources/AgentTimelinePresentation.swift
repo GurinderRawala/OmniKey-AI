@@ -102,8 +102,63 @@ struct AgentTaskStep: Identifiable, Equatable {
     let createdAt: Date
 }
 
+/// Owned by one timeline view, never shared across sessions. Equality includes
+/// text and metadata, so hydration, corrections and lifecycle changes invalidate
+/// cached work even if block IDs/counts are unchanged.
+final class AgentTimelineCache {
+    private struct Entry {
+        let blocks: [ChatBlock]
+        let summary: ChatBlock?
+        let streaming: Bool
+        let step: AgentTaskStep
+    }
+    private var entries: [String: Entry] = [:]
+    private var usedKeys: Set<String> = []
+    private var previousBlocks: [ChatBlock]?
+    private var previousStreaming = false
+    private var previousPresentation: AgentTimelinePresentation?
+    private(set) var rebuiltStepCount = 0
+
+    func presentation(from blocks: [ChatBlock], isStreaming: Bool) -> AgentTimelinePresentation {
+        if previousBlocks == blocks, previousStreaming == isStreaming,
+            let previousPresentation
+        {
+            return previousPresentation
+        }
+        usedKeys.removeAll(keepingCapacity: true)
+        let value = AgentTimelinePresentation.build(
+            from: blocks, isStreaming: isStreaming, cache: self)
+        entries = entries.filter { usedKeys.contains($0.key) }
+        previousBlocks = blocks
+        previousStreaming = isStreaming
+        previousPresentation = value
+        return value
+    }
+
+    fileprivate func step(
+        blocks: [ChatBlock], summary: ChatBlock?, streaming: Bool,
+        build: () -> AgentTaskStep
+    ) -> AgentTaskStep {
+        let key = (blocks.first ?? summary!).id
+        usedKeys.insert(key)
+        if let entry = entries[key], entry.blocks == blocks,
+            entry.summary == summary, entry.streaming == streaming
+        {
+            return entry.step
+        }
+        let value = build()
+        rebuiltStepCount += 1
+        entries[key] = Entry(blocks: blocks, summary: summary, streaming: streaming, step: value)
+        return value
+    }
+}
+
 struct AgentTimelinePresentation {
     let steps: [AgentTaskStep]
+    private static let projectFileExpression = try! NSRegularExpression(
+        pattern:
+            #"(?:^|[\s'\"`])((?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:swift|ts|tsx|js|jsx|json|md|py|rb|go|rs|java|kt|c|cc|cpp|h|hpp|m|mm|sh|yml|yaml|toml|xml|html|css|sql))\b"#
+    )
 
     var currentActivity: AgentCommandActivity? {
         steps.flatMap(\.activities).last(where: { $0.status == .running || $0.status == .pending })
@@ -118,7 +173,8 @@ struct AgentTimelinePresentation {
     }
 
     func runOutcome(finalAnswer: String?) -> AgentRunOutcome {
-        let normalizedFinal = finalAnswer?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        let normalizedFinal =
+            finalAnswer?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
         if normalizedFinal.hasPrefix("**error:**") || normalizedFinal.hasPrefix("error:") {
             return .failed
         }
@@ -128,7 +184,7 @@ struct AgentTimelinePresentation {
         // attempt with a later command, so an older failure must not leave the
         // collapsed button stuck in a "Needs attention" state.
         if let latestStep = steps.last(where: { !$0.activities.isEmpty }),
-           let latestActivity = latestStep.activities.last
+            let latestActivity = latestStep.activities.last
         {
             switch latestActivity.status {
             case .failed:
@@ -143,16 +199,21 @@ struct AgentTimelinePresentation {
             }
         }
 
-        if steps.contains(where: { $0.semanticOutcome == .actionRequired }) { return .actionRequired }
+        if steps.contains(where: { $0.semanticOutcome == .actionRequired }) {
+            return .actionRequired
+        }
         if steps.contains(where: { $0.semanticOutcome == .failed }) { return .failed }
-        if steps.contains(where: { $0.semanticOutcome == .warning || $0.semanticOutcome == .noResult }) {
+        if steps.contains(where: {
+            $0.semanticOutcome == .warning || $0.semanticOutcome == .noResult
+        }) {
             return .warning
         }
         if steps.contains(where: { $0.semanticOutcome == .recovered }) { return .recovered }
         return .succeeded
     }
 
-    func completionRecap(durationLabel: String, finalAnswer: String? = nil) -> AgentCompletionRecap {
+    func completionRecap(durationLabel: String, finalAnswer: String? = nil) -> AgentCompletionRecap
+    {
         let activities = steps.flatMap(\.activities)
         let failedCount = activities.filter { $0.status == .failed }.count
         let completedCount = activities.filter { $0.status == .completed }.count
@@ -173,7 +234,8 @@ struct AgentTimelinePresentation {
             image = "exclamationmark.octagon.fill"
         case .failed:
             title = "Needs attention · \(durationLabel)"
-            subtitle = failedCount > 0
+            subtitle =
+                failedCount > 0
                 ? "\(failedCount) failed activit\(failedCount == 1 ? "y" : "ies")"
                 : "Final response reported an error"
             image = "xmark.circle.fill"
@@ -192,54 +254,67 @@ struct AgentTimelinePresentation {
         case .succeeded:
             title = durationLabel
             if modifiedCount > 0 {
-                subtitle = "\(milestoneCount) milestone\(milestoneCount == 1 ? "" : "s") · \(modifiedCount) file\(modifiedCount == 1 ? "" : "s") modified"
+                subtitle =
+                    "\(milestoneCount) milestone\(milestoneCount == 1 ? "" : "s") · \(modifiedCount) file\(modifiedCount == 1 ? "" : "s") modified"
             } else {
-                subtitle = "\(milestoneCount) milestone\(milestoneCount == 1 ? "" : "s") · \(activityCount) activit\(activityCount == 1 ? "y" : "ies")"
+                subtitle =
+                    "\(milestoneCount) milestone\(milestoneCount == 1 ? "" : "s") · \(activityCount) activit\(activityCount == 1 ? "y" : "ies")"
             }
             image = "checkmark.circle.fill"
         }
-        return AgentCompletionRecap(outcome: outcome, title: title, subtitle: subtitle, systemImage: image)
+        return AgentCompletionRecap(
+            outcome: outcome, title: title, subtitle: subtitle, systemImage: image)
     }
 
-    static func build(from blocks: [ChatBlock], isStreaming: Bool) -> AgentTimelinePresentation {
+    static func build(from blocks: [ChatBlock], isStreaming: Bool, cache: AgentTimelineCache? = nil)
+        -> AgentTimelinePresentation
+    {
         var steps: [AgentTaskStep] = []
         var activityBlocks: [ChatBlock] = []
 
         func flush(summaryBlock: ChatBlock? = nil, streaming: Bool = false) {
             guard summaryBlock != nil || !activityBlocks.isEmpty else { return }
-            let activities = makeActivities(from: activityBlocks, isStreaming: streaming)
-            let first = activityBlocks.first ?? summaryBlock!
-            let explicitSummary = summaryBlock.flatMap { block -> String? in
-                let text = AgentTimelineSummarizer.progressSummary(block.text)
-                return text.isEmpty ? nil : text
-            }
-            let status = stepStatus(activities: activities, hasSummary: explicitSummary != nil)
-            let modifiedFiles = modifiedFiles(in: activities)
-            let modifiedSet = Set(modifiedFiles)
-            let referencedFiles = referencedFiles(in: activities).filter { !modifiedSet.contains($0) }
-            steps.append(
-                AgentTaskStep(
-                    id: first.id,
-                    title: taskTitle(summary: explicitSummary, activities: activities),
-                    outcome: explicitSummary,
-                    detail: nil,
-                    status: status,
-                    semanticOutcome: semanticOutcome(
-                        summary: explicitSummary,
+            let buildStep = { () -> AgentTaskStep in
+                let activities = makeActivities(from: activityBlocks, isStreaming: streaming)
+                let first = activityBlocks.first ?? summaryBlock!
+                let explicitSummary = summaryBlock.flatMap { block -> String? in
+                    let text = AgentTimelineSummarizer.progressSummary(block.text)
+                    return text.isEmpty ? nil : text
+                }
+                let status = stepStatus(activities: activities, hasSummary: explicitSummary != nil)
+                let modifiedFiles = modifiedFiles(in: activities)
+                let modifiedSet = Set(modifiedFiles)
+                let referencedFiles = referencedFiles(in: activities).filter {
+                    !modifiedSet.contains($0)
+                }
+                return
+                    AgentTaskStep(
+                        id: first.id,
+                        title: taskTitle(summary: explicitSummary, activities: activities),
+                        outcome: explicitSummary,
+                        detail: nil,
                         status: status,
-                        activities: activities
-                    ),
-                    activities: activities,
-                    evidence: evidence(
-                        for: activities,
-                        referencedFileCount: referencedFiles.count,
-                        modifiedFileCount: modifiedFiles.count
-                    ),
-                    referencedFiles: referencedFiles,
-                    modifiedFiles: modifiedFiles,
-                    createdAt: first.createdAt
-                )
-            )
+                        semanticOutcome: semanticOutcome(
+                            summary: explicitSummary,
+                            status: status,
+                            activities: activities
+                        ),
+                        activities: activities,
+                        evidence: evidence(
+                            for: activities,
+                            referencedFileCount: referencedFiles.count,
+                            modifiedFileCount: modifiedFiles.count
+                        ),
+                        referencedFiles: referencedFiles,
+                        modifiedFiles: modifiedFiles,
+                        createdAt: first.createdAt
+                    )
+            }
+            steps.append(
+                cache?.step(
+                    blocks: activityBlocks, summary: summaryBlock, streaming: streaming,
+                    build: buildStep)
+                    ?? buildStep())
             activityBlocks = []
         }
 
@@ -272,7 +347,9 @@ struct AgentTimelinePresentation {
         activities: [AgentCommandActivity]
     ) -> String {
         guard let summary, !summary.isEmpty else {
-            if let current = activities.last(where: { $0.status == .running || $0.status == .pending }) {
+            if let current = activities.last(where: {
+                $0.status == .running || $0.status == .pending
+            }) {
                 return "Running \(current.title)"
             }
             return activities.contains(where: { $0.status == .failed })
@@ -308,7 +385,8 @@ struct AgentTimelinePresentation {
         let isResolved = containsAny(
             lower,
             [
-                "recovered", "fallback succeeded", "retrieved successfully", "completed successfully",
+                "recovered", "fallback succeeded", "retrieved successfully",
+                "completed successfully",
                 "resolved", "fixed", "succeeded after", "using the fallback", "using the open",
             ]
         )
@@ -337,7 +415,10 @@ struct AgentTimelinePresentation {
         if !resolvedNegation
             && containsAny(
                 lower,
-                ["no result", "no results", "found nothing", "could not find", "was not found", "not found."]
+                [
+                    "no result", "no results", "found nothing", "could not find", "was not found",
+                    "not found.",
+                ]
             )
         {
             return .noResult
@@ -345,7 +426,10 @@ struct AgentTimelinePresentation {
         if !resolvedNegation
             && containsAny(
                 lower,
-                ["unresolved warning", "warning remains", "remaining risk", "risk remains", "remaining issue"]
+                [
+                    "unresolved warning", "warning remains", "remaining risk", "risk remains",
+                    "remaining issue",
+                ]
             )
         {
             return .warning
@@ -388,9 +472,13 @@ struct AgentTimelinePresentation {
         for activity in activities {
             guard activity.status == .completed else { continue }
             guard let input = activity.blocks.first?.text else { continue }
-            let toolName = activity.blocks.first.flatMap { AgentTimelineSummarizer.toolName(in: $0.text) }?
-                .lowercased()
-            if let toolName, ["edit_file", "write_file", "str_replace_based_edit_tool"].contains(toolName) {
+            let toolName = activity.blocks.first.flatMap {
+                AgentTimelineSummarizer.toolName(in: $0.text)
+            }?
+            .lowercased()
+            if let toolName,
+                ["edit_file", "write_file", "str_replace_based_edit_tool"].contains(toolName)
+            {
                 candidates.append(contentsOf: structuredEditPaths(in: input))
             } else if toolName == "apply_patch" {
                 candidates.append(contentsOf: patchPaths(in: input))
@@ -415,37 +503,38 @@ struct AgentTimelinePresentation {
         let pattern = #"\"(?:path|file_path)\"\s*:\s*\"([^\"]+)\""#
         guard let expression = try? NSRegularExpression(pattern: pattern) else { return [] }
         let range = NSRange(input.startIndex..<input.endIndex, in: input)
-        return orderedUnique(expression.matches(in: input, range: range).compactMap { match in
-            guard let swiftRange = Range(match.range(at: 1), in: input) else { return nil }
-            let path = String(input[swiftRange])
-            return isProjectFile(path) ? path : nil
-        })
+        return orderedUnique(
+            expression.matches(in: input, range: range).compactMap { match in
+                guard let swiftRange = Range(match.range(at: 1), in: input) else { return nil }
+                let path = String(input[swiftRange])
+                return isProjectFile(path) ? path : nil
+            })
     }
 
     private static func patchPaths(in input: String) -> [String] {
         let pattern = #"\*\*\* (?:Update|Add) File:\s*([^\r\n]+)"#
         guard let expression = try? NSRegularExpression(pattern: pattern) else { return [] }
         let range = NSRange(input.startIndex..<input.endIndex, in: input)
-        return orderedUnique(expression.matches(in: input, range: range).compactMap { match in
-            guard let swiftRange = Range(match.range(at: 1), in: input) else { return nil }
-            let path = String(input[swiftRange]).trimmingCharacters(in: .whitespacesAndNewlines)
-            return isProjectFile(path) ? path : nil
-        })
+        return orderedUnique(
+            expression.matches(in: input, range: range).compactMap { match in
+                guard let swiftRange = Range(match.range(at: 1), in: input) else { return nil }
+                let path = String(input[swiftRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+                return isProjectFile(path) ? path : nil
+            })
     }
 
     private static func uniqueProjectFiles(in text: String) -> [String] {
-        let pattern =
-            #"(?:^|[\s'\"`])((?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:swift|ts|tsx|js|jsx|json|md|py|rb|go|rs|java|kt|c|cc|cpp|h|hpp|m|mm|sh|yml|yaml|toml|xml|html|css|sql))\b"#
-        guard let expression = try? NSRegularExpression(pattern: pattern) else { return [] }
         var files: [String] = []
+        var seen: Set<String> = []
         let range = NSRange(text.startIndex..<text.endIndex, in: text)
-        for match in expression.matches(in: text, range: range) {
-            guard let swiftRange = Range(match.range(at: 1), in: text) else { continue }
+        projectFileExpression.enumerateMatches(in: text, range: range) { match, _, stop in
+            guard let match, let swiftRange = Range(match.range(at: 1), in: text) else { return }
             let path = String(text[swiftRange])
-            guard isProjectFile(path) else { continue }
+            guard isProjectFile(path), seen.insert(path).inserted else { return }
             files.append(path)
+            if files.count == 5 { stop.pointee = true }
         }
-        return orderedUnique(files).prefix(5).map { $0 }
+        return files
     }
 
     private static func versionControlPaths(in text: String) -> [String] {
@@ -479,6 +568,10 @@ struct AgentTimelinePresentation {
     {
         var result: [AgentCommandActivity] = []
         var consumedActivityIDs: Set<String> = []
+        var blocksByActivityID: [String: [ChatBlock]] = [:]
+        for block in blocks {
+            if let id = block.activityId { blocksByActivityID[id, default: []].append(block) }
+        }
         var index = 0
 
         while index < blocks.count {
@@ -491,7 +584,7 @@ struct AgentTimelinePresentation {
                     continue
                 }
                 consumedActivityIDs.insert(activityID)
-                let grouped = blocks.filter { $0.activityId == activityID }
+                let grouped = blocksByActivityID[activityID] ?? [block]
                 result.append(
                     AgentCommandActivity(
                         id: block.id,
@@ -507,19 +600,22 @@ struct AgentTimelinePresentation {
                 var grouped = [block]
                 if index + 1 < blocks.count {
                     let next = blocks[index + 1]
-                    let nextKind = AgentTimelineSummarizer.classify(kind: next.kind, text: next.text)
+                    let nextKind = AgentTimelineSummarizer.classify(
+                        kind: next.kind, text: next.text)
                     if nextKind == .terminalOutput {
                         grouped.append(next)
                         index += 1
                     }
                 }
                 let output = grouped.dropFirst().first
-                let failed = output.map { AgentTimelineSummarizer.terminalOutputFailed($0.text) } ?? false
+                let failed =
+                    output.map { AgentTimelineSummarizer.terminalOutputFailed($0.text) } ?? false
                 let status: AgentActivityStatus =
                     failed
                     ? .failed
                     : (output != nil
-                        ? .completed : (isStreaming && index == blocks.count - 1 ? .running : .cancelled))
+                        ? .completed
+                        : (isStreaming && index == blocks.count - 1 ? .running : .cancelled))
                 result.append(AgentCommandActivity(id: block.id, blocks: grouped, status: status))
             } else {
                 let isLast = index == blocks.count - 1
@@ -647,7 +743,8 @@ enum ConversationScrollGeometry {
 }
 
 enum ChatSessionScrollPolicy {
-    static func shouldResetForSessionChange(previousSessionID: String?, sessionID: String?) -> Bool {
+    static func shouldResetForSessionChange(previousSessionID: String?, sessionID: String?) -> Bool
+    {
         previousSessionID != sessionID
     }
 
