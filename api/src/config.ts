@@ -165,9 +165,7 @@ export const config = {
   // enabled, where the window can be raised from the 256K native default to 1M.
   aiContextWindowOverride: getNumberEnv('AI_CONTEXT_WINDOW', 0),
   // Cost controls, independent of the provider's maximum context window.
-  agentMemoryTriggerTokens: getPositiveIntegerEnv('AGENT_MEMORY_TRIGGER_TOKENS', 32_000),
-  agentMaxModelCalls: getPositiveIntegerEnv('AGENT_MAX_MODEL_CALLS', 100),
-  agentMaxRunTokens: getPositiveIntegerEnv('AGENT_MAX_RUN_TOKENS', 2_000_000),
+  agentMemoryTriggerTokens: getPositiveIntegerEnv('AGENT_MEMORY_TRIGGER_TOKENS', 24_000),
   agentMaxOutputTokens: getPositiveIntegerEnv('AGENT_MAX_OUTPUT_TOKENS', 8_192),
 
   // Database

@@ -10,6 +10,7 @@ import {
   selectedAgentModelForProvider,
 } from '../../agentSettingsStore';
 import { GROUPING_SESSION_PREFIX } from '../sessionGrouping';
+import { deleteSessionCheckpoint } from './sessionCheckpoint';
 import {
   buildTranscript,
   InvalidTranscriptCursorError,
@@ -301,6 +302,7 @@ export function createAgentRouter(): express.Router {
         return;
       }
 
+      await deleteSessionCheckpoint(subscription.id, sessionId, log);
       res.status(200).json({ deleted: true });
     } catch (err) {
       log.error('Failed to delete agent session', { sessionId, error: err });
