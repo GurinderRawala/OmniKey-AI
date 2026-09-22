@@ -7,10 +7,28 @@ import {
   getMaxHistoryLength,
   getMaxMessageContentLength,
   estimateHistoryTokens,
+  estimateToolTokens,
   getInputTokenBudget,
   modelUsesOpenAIResponsesApi,
 } from '../ai-client';
 import type { AIMessage } from '../ai-client';
+
+describe('tool-schema token estimates', () => {
+  it('charges schemas separately from message history', () => {
+    expect(estimateToolTokens()).toBe(0);
+    const tools = [
+      {
+        name: 'lookup',
+        description: 'Search',
+        parameters: {
+          type: 'object',
+          description: 'x'.repeat(3500),
+        },
+      },
+    ];
+    expect(estimateToolTokens(tools)).toBeGreaterThan(1000);
+  });
+});
 
 describe('modelSupportsTemperature', () => {
   describe('OpenAI', () => {
@@ -94,14 +112,12 @@ describe('modelSupportsTemperature', () => {
     });
   });
 
-  it.each([
-    'unknown-model',
-    'gpt-7-future',
-    'gemini-future-pro',
-    'claude-future-model',
-  ])('defaults unknown model %s to no temperature support', (model) => {
-    expect(modelSupportsTemperature(model)).toBe(false);
-  });
+  it.each(['unknown-model', 'gpt-7-future', 'gemini-future-pro', 'claude-future-model'])(
+    'defaults unknown model %s to no temperature support',
+    (model) => {
+      expect(modelSupportsTemperature(model)).toBe(false);
+    },
+  );
 });
 
 describe('getDefaultModel', () => {
@@ -237,7 +253,9 @@ describe('getMaxHistoryLength / getMaxMessageContentLength', () => {
   });
 
   it('bounds a single non-Anthropic message by the history budget', () => {
-    expect(getMaxMessageContentLength('openai', 'gpt-4o')).toBe(getMaxHistoryLength('openai', 'gpt-4o'));
+    expect(getMaxMessageContentLength('openai', 'gpt-4o')).toBe(
+      getMaxHistoryLength('openai', 'gpt-4o'),
+    );
   });
 });
 

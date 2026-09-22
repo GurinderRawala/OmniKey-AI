@@ -117,6 +117,8 @@ vi.mock('../shellRunner', () => ({
 vi.mock('../ai-client', () => ({
   aiClient: { complete: mocks.complete },
   estimateHistoryTokens: vi.fn((history: unknown[]) => JSON.stringify(history).length),
+  estimateToolTokens: vi.fn(() => 100),
+  getFixedHelperModel: vi.fn(() => 'helper-model'),
   getContextWindowSize: vi.fn(() => 128_000),
   getDefaultModel: vi.fn(() => 'test-model'),
   getInputTokenBudget: vi.fn(() => 100_000),
@@ -125,6 +127,7 @@ vi.mock('../ai-client', () => ({
 }));
 
 import { runAgentTurn } from '../agent/agentServer';
+import { config } from '../config';
 import { persistSessionToDB } from '../agent/agentServer/sessionStore';
 import {
   activeSessions,
@@ -238,6 +241,86 @@ describe('agent session persistence checkpoints', () => {
       ]),
     );
     expect(history.find((msg) => msg.role === 'user')?.content).toContain('<user_input>');
+  });
+
+  it('checkpoints a run at the call limit and resets the budget on a new user follow-up', async () => {
+    const previousLimit = config.agentMaxModelCalls;
+    config.agentMaxModelCalls = 2;
+    try {
+      const send = vi.fn();
+      const call = { id: 'lookup', name: 'web_search', arguments: { query: 'inspect' } };
+      mocks.complete.mockResolvedValue({
+        content: '',
+        finish_reason: 'tool_calls',
+        model: 'test-model',
+        tool_calls: [call],
+        assistantMessage: { role: 'assistant', content: '', tool_calls: [call] },
+      });
+      const message = { session_id: 'session-1', sender: 'client', content: 'Inspect this task' };
+      await runAgentTurn(
+        'session-1',
+        { id: 'subscription-1' } as any,
+        message,
+        send,
+        mocks.log as any,
+        { skipGrouping: true },
+      );
+      expect(mocks.complete).toHaveBeenCalledTimes(2);
+      expect(send.mock.calls.some(([msg]) => msg.content.includes('usage limit'))).toBe(true);
+      const saved = parsedHistoryFromCall(historyUpdateCalls().at(-1)!);
+      expect(saved.at(-1)?.content).toContain('follow-up to continue');
+      expect(saved.filter((m) => m.role === 'tool')).toHaveLength(2);
+      expect(mocks.complete.mock.calls[0][2].maxTokens).toBe(config.agentMaxOutputTokens);
+
+      mocks.complete.mockResolvedValueOnce({
+        content: '<final_answer>Done</final_answer>',
+        finish_reason: 'stop',
+        model: 'test-model',
+      });
+      await runAgentTurn(
+        'session-1',
+        { id: 'subscription-1' } as any,
+        { ...message, content: 'Continue' },
+        send,
+        mocks.log as any,
+        { skipGrouping: true },
+      );
+      expect(mocks.complete).toHaveBeenCalledTimes(3);
+      expect(send.mock.calls.at(-1)?.[0].content).toContain('Done');
+    } finally {
+      config.agentMaxModelCalls = previousLimit;
+      mocks.complete.mockReset();
+    }
+  });
+
+  it('does not reset the call budget during recursive web fallback', async () => {
+    const previousLimit = config.agentMaxModelCalls;
+    config.agentMaxModelCalls = 1;
+    try {
+      const send = vi.fn();
+      const call = { id: 'lookup', name: 'web_search', arguments: { query: 'inspect' } };
+      mocks.complete.mockResolvedValue({
+        content: '',
+        finish_reason: 'tool_calls',
+        model: 'test-model',
+        tool_calls: [call],
+        assistantMessage: { role: 'assistant', content: '', tool_calls: [call] },
+      });
+      mocks.executeTool.mockResolvedValue('Error searching: upstream outage');
+      await runAgentTurn(
+        'session-1',
+        { id: 'subscription-1' } as any,
+        { session_id: 'session-1', sender: 'client', content: 'Inspect this task' },
+        send,
+        mocks.log as any,
+        { skipGrouping: true },
+      );
+      expect(mocks.complete).toHaveBeenCalledTimes(1);
+      expect(send.mock.calls.some(([msg]) => msg.content.includes('usage limit'))).toBe(true);
+    } finally {
+      config.agentMaxModelCalls = previousLimit;
+      mocks.complete.mockReset();
+    }
   });
 
   it('persists completed tool-call batches before the follow-up model call', async () => {

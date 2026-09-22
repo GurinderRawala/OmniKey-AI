@@ -52,11 +52,23 @@ export function pruneHistoryForContextLimit(session: SessionState, log: Logger):
   // Leading system messages are always preserved.
   let systemEnd = 0;
   while (systemEnd < history.length && history[systemEnd].role === 'system') systemEnd++;
+  while (
+    systemEnd < history.length &&
+    history[systemEnd].role === 'user' &&
+    /^<(?:stored_instructions|session_memory)\b/i.test(history[systemEnd].content.trim())
+  )
+    systemEnd++;
 
   // Strategy 1: compact the single largest oversized message.
   let largestIdx = -1;
   let largestLen = 0;
   for (let i = systemEnd; i < history.length; i++) {
+    // Never silently rewrite a user's requirements to fit a cost/context cap.
+    if (
+      history[i].role === 'user' &&
+      !/^(TERMINAL OUTPUT|COMMAND ERROR):/i.test(history[i].content)
+    )
+      continue;
     const c = history[i].content;
     const len = typeof c === 'string' ? c.length : 0;
     if (len > largestLen) {

@@ -12,6 +12,7 @@ import { AgentSession } from '../../models/agentSession';
 import { isInjectedUserPrompt } from '../injectedUserPrompts';
 import type { SessionState } from '../types';
 import { pruneHistoryForContextLimit } from './contextPruning';
+import { accountModelCall, AgentBudgetExceededError, reserveModelCall } from './executionBudget';
 
 const KEEP_RECENT_USER_TURNS = 2;
 const MEMORY_TRIGGER_INPUT_RATIO = 0.5;
@@ -22,12 +23,17 @@ const MAX_MESSAGE_SUMMARY_CHARS = 4_000;
 const MAX_TOOL_RESULT_SUMMARY_CHARS = 2_500;
 const MAX_MEMORY_CHARS = 8_000;
 const MEMORY_MAX_OUTPUT_TOKENS = 1_400;
+const KEEP_RECENT_TOOL_ROUNDS = 4;
+const REQUEST_TOOL_RESULT_CHARS = 16_000;
 const noopPruneLog = { warn: () => undefined } as unknown as Logger;
 
 function memoryTriggerTokens(model: string): number {
   const inputBudget = getInputTokenBudget(config.aiProvider, model);
   if (inputBudget <= 0) return Number.POSITIVE_INFINITY;
-  return Math.floor(inputBudget * MEMORY_TRIGGER_INPUT_RATIO);
+  return Math.min(
+    config.agentMemoryTriggerTokens ?? 32_000,
+    Math.floor(inputBudget * MEMORY_TRIGGER_INPUT_RATIO),
+  );
 }
 
 function resolveMemoryModel(session: SessionState, model?: string): string {
@@ -69,6 +75,45 @@ function recentHistoryStart(history: AIMessage[], staticEnd: number): number {
   return staticEnd;
 }
 
+// Only cut after a complete tool round. Keep the last four rounds verbatim,
+// including all call/result pairs, even when there has been only one user turn.
+function completedToolHistoryStart(history: AIMessage[], staticEnd: number): number {
+  const boundaries: number[] = [];
+  for (let index = staticEnd; index < history.length; index++) {
+    const message = history[index];
+    if (message.role !== 'assistant' || !message.tool_calls?.length) continue;
+    const pending = new Set(message.tool_calls.map((call) => call.id));
+    let end = index + 1;
+    while (end < history.length && history[end].role === 'tool') {
+      pending.delete(history[end].tool_call_id ?? '');
+      end++;
+    }
+    if (!pending.size) boundaries.push(end);
+  }
+  return boundaries.length > KEEP_RECENT_TOOL_ROUNDS
+    ? boundaries[boundaries.length - KEEP_RECENT_TOOL_ROUNDS - 1]
+    : staticEnd;
+}
+
+function recentUserMessages(history: AIMessage[], staticEnd: number): AIMessage[] {
+  return history.slice(staticEnd).filter(isRealUserTurn).slice(-KEEP_RECENT_USER_TURNS);
+}
+
+// Request-only caps apply to every tool, including MCP/custom/web tools. The
+// stored transcript retains raw results for the UI and future investigation.
+function capToolResults(history: AIMessage[]): AIMessage[] {
+  return history.map((message) =>
+    message.role === 'tool' && message.content.length > REQUEST_TOOL_RESULT_CHARS
+      ? {
+          ...message,
+          content:
+            compactText(message.content, REQUEST_TOOL_RESULT_CHARS) +
+            '\n[Tool result shortened for the model. Request a narrower range/query if needed.]',
+        }
+      : message,
+  );
+}
+
 function clampMemoryHistoryLength(session: SessionState, staticEnd: number): number {
   const raw = session.sessionMemoryHistoryLength ?? staticEnd;
   if (!session.sessionMemory) return staticEnd;
@@ -82,7 +127,7 @@ function compactText(text: string, maxChars: number): string {
   const tail = maxChars - head - 120;
   return [
     normalized.slice(0, head),
-    `[... ${normalized.length - head - tail} chars omitted from memory compaction input ...]`,
+    `[... ${normalized.length - head - tail} chars omitted from model context ...]`,
     normalized.slice(normalized.length - tail),
   ].join('\n');
 }
@@ -90,7 +135,6 @@ function compactText(text: string, maxChars: number): string {
 function cleanModelText(text: string): string {
   return text
     .replace(/<stored_instructions>[\s\S]*?<\/stored_instructions>/gi, '')
-    .replace(/<project_context[^>]*>[\s\S]*?<\/project_context>/gi, '')
     .replace(/<user_input>([\s\S]*?)<\/user_input>/gi, '$1')
     .replace(/<final_answer>([\s\S]*?)<\/final_answer>/gi, '$1')
     .trim();
@@ -162,14 +206,20 @@ export function buildCompactedHistoryForRequest(session: SessionState): AIMessag
     });
   }
 
+  // Intra-task compaction must not hide the actual request or latest steering.
+  for (const message of recentUserMessages(history, staticEnd)) {
+    if (history.indexOf(message) < compactedThrough) result.push(message);
+  }
+
   result.push(...history.slice(compactedThrough));
   return result;
 }
 
 export function shouldUseSessionMemory(session: SessionState, model?: string): boolean {
   if (!session.sessionMemory?.trim()) return false;
-  const resolvedModel = resolveMemoryModel(session, model);
-  return estimateHistoryTokens(session.history) >= memoryTriggerTokens(resolvedModel);
+  resolveMemoryModel(session, model);
+  // Once compacted, never replay raw history on a model switch or smaller turn.
+  return true;
 }
 
 export function buildHistoryForRequest(session: SessionState, model?: string): AIMessage[] {
@@ -187,9 +237,12 @@ export function trimHistoryToBudget(
   sessionId: string,
   model: string,
   log?: Logger,
+  toolTokens = 0,
 ): AIMessage[] {
-  const budget = Math.floor(getInputTokenBudget(config.aiProvider, model) * PROACTIVE_TRIM_RATIO);
-  if (budget <= 0) return history;
+  const budget = Math.max(
+    0,
+    Math.floor(getInputTokenBudget(config.aiProvider, model) * PROACTIVE_TRIM_RATIO) - toolTokens,
+  );
 
   const scratchSession = { subscription: {} as any, history, turns: 0 };
   let guard = 0;
@@ -215,13 +268,15 @@ export function buildTrimmedHistoryForRequest(
   model?: string,
   sessionId = 'unknown',
   log?: Logger,
+  toolTokens = 0,
 ): AIMessage[] {
   const resolvedModel = resolveMemoryModel(session, model);
   return trimHistoryToBudget(
-    buildHistoryForRequest(session, resolvedModel),
+    capToolResults(buildHistoryForRequest(session, resolvedModel)),
     sessionId,
     resolvedModel,
     log,
+    toolTokens,
   );
 }
 
@@ -232,17 +287,21 @@ export async function ensureSessionMemory(
   log: Logger,
   onUsage?: (result: AICompletionResult) => Promise<void>,
 ): Promise<void> {
+  if ((session.sessionMemoryRetryAfter ?? 0) > Date.now()) return;
   const history = session.history;
   const staticEnd = staticPrefixEnd(history);
   const compactedThrough = clampMemoryHistoryLength(session, staticEnd);
-  const recentStart = recentHistoryStart(history, staticEnd);
+  const recentStart = Math.max(
+    recentHistoryStart(history, staticEnd),
+    completedToolHistoryStart(history, staticEnd),
+  );
   const summarizeEnd = Math.min(recentStart, history.length);
 
   if (summarizeEnd <= compactedThrough) return;
 
   const pendingMessages = history.slice(compactedThrough, summarizeEnd);
   const pendingTokens = estimateHistoryTokens(pendingMessages);
-  const rawRequestTokens = estimateHistoryTokens(history);
+  const rawRequestTokens = estimateHistoryTokens(buildCompactedHistoryForRequest(session));
   const triggerTokens = memoryTriggerTokens(model);
 
   if (rawRequestTokens < triggerTokens || pendingTokens < MIN_SUMMARIZE_TOKENS) {
@@ -282,18 +341,24 @@ export async function ensureSessionMemory(
   ];
 
   try {
+    reserveModelCall(session, estimateHistoryTokens(messages));
     const result = await aiClient.complete(summaryModel, messages, {
       temperature: 0,
       maxTokens: MEMORY_MAX_OUTPUT_TOKENS,
     });
+    accountModelCall(session, result, estimateHistoryTokens(messages));
     if (onUsage) await onUsage(result);
 
     const memory = stripSummaryResponse(result.content);
-    if (!memory) return;
+    if (!memory) {
+      session.sessionMemoryRetryAfter = Date.now() + 60_000;
+      return;
+    }
 
     session.sessionMemory = memory;
     session.sessionMemoryHistoryLength = summarizeEnd;
     session.sessionMemoryUpdatedAt = new Date();
+    session.sessionMemoryRetryAfter = undefined;
     await updateSessionMemoryInDB(sessionId, session);
 
     log.info('Compacted agent session history into session memory', {
@@ -307,6 +372,8 @@ export async function ensureSessionMemory(
       model: result.model,
     });
   } catch (err) {
+    if (err instanceof AgentBudgetExceededError) throw err;
+    session.sessionMemoryRetryAfter = Date.now() + 60_000;
     log.warn('Failed to compact agent session history; continuing with raw recent history', {
       sessionId,
       error: err instanceof Error ? err.message : String(err),

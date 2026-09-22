@@ -37,11 +37,13 @@ import {
 } from './steering';
 import { buildShellToolResult } from './terminalOutput';
 import { runToolLoop } from './toolLoop';
+import { AgentBudgetExceededError } from './executionBudget';
 
 type InternalAgentTurnOptions = AgentTurnOptions & {
   untaggedDepth?: number;
   webFallbackDepth?: number;
   steeringRestartCount?: number;
+  executionBudget?: { calls: number; tokens: number };
 };
 
 function hasTag(content: string, tag: string): boolean {
@@ -89,6 +91,7 @@ async function runAgentTurnInternal(
   const agentSettings = await getAgentSettings();
   const agentModel = selectedAgentModelForProvider(agentSettings, config.aiProvider);
   session.activeModel = agentModel;
+  session.executionBudget = options?.executionBudget;
 
   log.info('Starting agent turn', {
     sessionId,
@@ -112,6 +115,7 @@ async function runAgentTurnInternal(
         session.history[systemIndex] = { ...session.history[systemIndex], content: systemPrompt };
       } else {
         session.history.unshift({ role: 'system', content: systemPrompt });
+        if (session.sessionMemoryHistoryLength) session.sessionMemoryHistoryLength++;
       }
     } catch (err) {
       log.warn('Failed to refresh agent system prompt with latest settings', { error: err });
@@ -691,7 +695,10 @@ async function runAgentTurnInternal(
         stack: err instanceof Error ? err.stack?.split('\n').slice(0, 5).join('\n') : undefined,
       },
     });
-    const errorMessage = 'Agent failed to call language model. Please try again later.';
+    const errorMessage =
+      err instanceof AgentBudgetExceededError
+        ? err.message
+        : 'Agent failed to call language model. Please try again later.';
     await persistAndSendFailure(errorMessage);
   }
 }
@@ -706,5 +713,8 @@ export async function runAgentTurn(
 ): Promise<void> {
   // untaggedDepth always starts at 0 for external callers; it is only threaded
   // through the internal recursive path.
-  return runAgentTurnInternal(sessionId, subscription, clientMessage, send, log, options);
+  return runAgentTurnInternal(sessionId, subscription, clientMessage, send, log, {
+    ...options,
+    executionBudget: { calls: 0, tokens: 0 },
+  });
 }

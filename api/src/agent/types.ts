@@ -17,6 +17,7 @@ export interface SessionState {
   sessionMemory?: string | null;
   sessionMemoryHistoryLength?: number;
   sessionMemoryUpdatedAt?: Date | null;
+  sessionMemoryRetryAfter?: number;
   // Latest provider-reported prompt tokens for this active session. Used only
   // as an in-memory hint so persisted context remaining includes tool schemas
   // after a model call; compacted-history estimate remains the pre-call fallback.
@@ -24,6 +25,8 @@ export interface SessionState {
   // Model selected from agent_settings for the active turn. Helpers use this
   // to derive hot-reloaded context and per-message budgets.
   activeModel?: string;
+  // Shared by retries/recursive continuations, reset only for a new external run.
+  executionBudget?: { calls: number; tokens: number };
   // True when the user explicitly chose this session's group. Locked sessions
   // are never (re)classified — we only ever attach them to the chosen group.
   groupLocked?: boolean;
