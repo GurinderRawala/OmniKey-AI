@@ -294,6 +294,12 @@ export function estimateHistoryTokens(history: AIMessage[]): number {
   return Math.ceil(chars / ESTIMATE_CHARS_PER_TOKEN);
 }
 
+/** Includes schema payloads and a small per-tool serialization allowance. */
+export function estimateToolTokens(tools: AITool[] = []): number {
+  if (!tools.length) return 0;
+  return Math.ceil(JSON.stringify(tools).length / ESTIMATE_CHARS_PER_TOKEN) + tools.length * 16;
+}
+
 /**
  * Safe input-token budget for a turn: the real context window minus the reserve
  * held back for the model's output. Requests estimated to exceed this should be
@@ -1149,6 +1155,7 @@ class GeminiAdapter {
       config: {
         ...(systemInstruction ? { systemInstruction } : {}),
         ...(tools?.length ? { tools } : {}),
+        ...(options.maxTokens ? { maxOutputTokens: options.maxTokens } : {}),
         ...(modelSupportsTemperature(model) ? { temperature: options.temperature ?? 0.2 } : {}),
       },
     });

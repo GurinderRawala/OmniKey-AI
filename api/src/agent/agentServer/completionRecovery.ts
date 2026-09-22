@@ -7,6 +7,9 @@ import {
   AITool,
   AICompletionResult,
   CompletionOptions,
+  estimateHistoryTokens,
+  estimateToolTokens,
+  getInputTokenBudget,
 } from '../../ai-client';
 import { pushToSessionHistory } from '../utils';
 import { isInjectedUserPrompt } from '../injectedUserPrompts';
@@ -14,6 +17,7 @@ import type { SessionState } from '../types';
 import { persistSessionToDB } from './sessionStore';
 import { isContextLengthError, pruneHistoryForContextLimit } from './contextPruning';
 import { buildTrimmedHistoryForRequest, ensureSessionMemory } from './sessionMemory';
+import { accountModelCall, reserveModelCall } from './executionBudget';
 
 // Upper bound on prune-and-retry cycles per completion. Each cycle removes one
 // unit (or compacts one message), so 12 is plenty to claw back from an overflow
@@ -95,13 +99,31 @@ export async function completeWithContextRecovery(
   onUsage?: (result: AICompletionResult) => Promise<void>,
 ): Promise<AICompletionResult> {
   await ensureSessionMemory(session, sessionId, model, log, onUsage);
-  let requestHistory = buildTrimmedHistoryForRequest(session, model, sessionId, log);
-  const requestOptions = cacheableOptions(session, model, options);
+  const toolTokens = estimateToolTokens(options.tools);
+  let requestHistory = buildTrimmedHistoryForRequest(session, model, sessionId, log, toolTokens);
+  const requestOptions = cacheableOptions(session, model, {
+    ...options,
+    maxTokens: Math.min(
+      options.maxTokens ?? config.agentMaxOutputTokens ?? 8192,
+      config.agentMaxOutputTokens ?? 8192,
+    ),
+  });
 
   let attempt = 0;
   for (;;) {
     try {
-      return await aiClient.complete(model, requestHistory, requestOptions);
+      if (
+        estimateHistoryTokens(requestHistory) + toolTokens >
+        getInputTokenBudget(config.aiProvider, model)
+      ) {
+        throw new Error(
+          'Agent request exceeds the input budget after trimming. Reduce the request or enabled tools.',
+        );
+      }
+      reserveModelCall(session, estimateHistoryTokens(requestHistory) + toolTokens);
+      const result = await aiClient.complete(model, requestHistory, requestOptions);
+      accountModelCall(session, result, estimateHistoryTokens(requestHistory) + toolTokens);
+      return result;
     } catch (err) {
       if (!isContextLengthError(err) || attempt >= MAX_CONTEXT_RECOVERY_ATTEMPTS) throw err;
       attempt++;
@@ -206,10 +228,15 @@ export async function recoverOutputLengthResult(
 
 export function removeInjectedUserPromptsFromHistory(session: SessionState, log: Logger): number {
   const before = session.history.length;
-  session.history = session.history.filter((message) => {
+  let removedBeforeMemory = 0;
+  session.history = session.history.filter((message, index) => {
     if (message.role !== 'user' || typeof message.content !== 'string') return true;
-    return !isInjectedUserPrompt(message.content);
+    const remove = isInjectedUserPrompt(message.content);
+    if (remove && index < (session.sessionMemoryHistoryLength ?? 0)) removedBeforeMemory++;
+    return !remove;
   });
+  if (session.sessionMemoryHistoryLength != null)
+    session.sessionMemoryHistoryLength -= removedBeforeMemory;
 
   const removed = before - session.history.length;
   if (removed > 0) {

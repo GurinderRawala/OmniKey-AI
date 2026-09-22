@@ -397,6 +397,12 @@ describe('AnthropicAdapter temperature handling', () => {
 // ---------------------------------------------------------------------------
 
 describe('GeminiAdapter temperature handling', () => {
+  it('complete: forwards the agent/helper output budget', async () => {
+    mockCompleteResponse();
+    const client = new AIClient('gemini', 'gemini-test-key');
+    await client.complete('gemini-2.5-pro', messages, { maxTokens: 1400 });
+    expect(mocks.geminiGenerate.mock.calls[0][0].config.maxOutputTokens).toBe(1400);
+  });
   function mockCompleteResponse() {
     mocks.geminiGenerate.mockResolvedValueOnce({
       candidates: [
