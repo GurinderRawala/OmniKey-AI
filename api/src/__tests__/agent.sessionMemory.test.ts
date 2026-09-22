@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   getFixedHelperModel: vi.fn(() => 'fast-summary-model'),
   getInputTokenBudget: vi.fn(() => 24_000),
   update: vi.fn(),
+  saveCheckpoint: vi.fn(async () => undefined),
+  restoreCheckpoint: vi.fn(async (_id: string, _state: SessionState): Promise<void> => undefined),
   log: {
     info: vi.fn(),
     warn: vi.fn(),
@@ -27,6 +29,11 @@ vi.mock('../config', () => ({
 
 vi.mock('../models/agentSession', () => ({
   AgentSession: { update: mocks.update },
+}));
+
+vi.mock('../agent/agentServer/sessionCheckpoint', () => ({
+  saveSessionCheckpoint: mocks.saveCheckpoint,
+  restoreSessionCheckpoint: mocks.restoreCheckpoint,
 }));
 
 import {
@@ -94,6 +101,7 @@ describe('agent session memory compaction', () => {
 
     expect(session.sessionMemory).toContain('raw history replay');
     expect(session.sessionMemoryHistoryLength).toBe(3);
+    expect(mocks.saveCheckpoint).toHaveBeenCalledWith('session-1', session, mocks.log);
     expect(mocks.update).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionMemory: expect.stringContaining('raw history replay'),
@@ -127,6 +135,29 @@ describe('agent session memory compaction', () => {
     expect(mocks.complete).not.toHaveBeenCalled();
     expect(mocks.update).not.toHaveBeenCalled();
     expect(buildCompactedHistoryForRequest(session)).toEqual(session.history);
+  });
+
+  it('uses a recovered checkpoint in the next request without requiring a user follow-up', async () => {
+    const session = makeSession([
+      { role: 'system', content: 'system' },
+      { role: 'user', content: 'Old task' },
+      { role: 'assistant', content: 'old bulky results' },
+      { role: 'user', content: 'Next step' },
+      { role: 'assistant', content: 'recent result' },
+      { role: 'user', content: 'Current request' },
+    ]);
+    mocks.restoreCheckpoint.mockImplementationOnce(async (_id, restored) => {
+      restored.sessionMemory = '## Findings\nRecovered prior work.';
+      restored.sessionMemoryHistoryLength = 3;
+    });
+    await ensureSessionMemory(session, 'session-1', 'model', mocks.log as any);
+    expect(mocks.complete).not.toHaveBeenCalled();
+    const contents = buildHistoryForRequest(session, 'model')
+      .map((m) => m.content)
+      .join('\n');
+    expect(contents).toContain('Recovered prior work.');
+    expect(contents).toContain('Current request');
+    expect(contents).not.toContain('old bulky results');
   });
 
   it('backs off failed summaries instead of making a helper call on every tool step', async () => {
@@ -190,13 +221,11 @@ describe('agent session memory compaction', () => {
     const original = JSON.stringify(history);
     const session = makeSession(history);
     await ensureSessionMemory(session, 'session-1', 'test-model', mocks.log as any);
-    expect(session.sessionMemoryHistoryLength).toBe(11);
+    expect(session.sessionMemoryHistoryLength).toBe(15);
     const request = buildHistoryForRequest(session, 'test-model');
     expect(request[1].content).toContain('repo rules');
     expect(request[3].content).toContain('Fix the original bug');
     expect(request.filter((m) => m.role === 'tool').map((m) => m.tool_call_id)).toEqual([
-      'call-4',
-      'call-5',
       'call-6',
       'call-7',
     ]);
@@ -208,7 +237,7 @@ describe('agent session memory compaction', () => {
       { role: 'system', content: 'system' },
       { role: 'user', content: '<user_input>Current task</user_input>' },
     ]);
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 4; i++) {
       session.history.push(
         {
           role: 'assistant',
@@ -220,7 +249,7 @@ describe('agent session memory compaction', () => {
         },
         { role: 'tool', tool_call_id: `a${i}`, content: 'x'.repeat(6000) },
       );
-      if (i < 5) session.history.push({ role: 'tool', tool_call_id: `b${i}`, content: 'ok' });
+      if (i < 3) session.history.push({ role: 'tool', tool_call_id: `b${i}`, content: 'ok' });
     }
     await ensureSessionMemory(session, 'session-1', 'model', mocks.log as any);
     // Only one old complete round is eligible, below the minimum summary batch.

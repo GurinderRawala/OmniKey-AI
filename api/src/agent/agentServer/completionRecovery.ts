@@ -17,7 +17,6 @@ import type { SessionState } from '../types';
 import { persistSessionToDB } from './sessionStore';
 import { isContextLengthError, pruneHistoryForContextLimit } from './contextPruning';
 import { buildTrimmedHistoryForRequest, ensureSessionMemory } from './sessionMemory';
-import { accountModelCall, reserveModelCall } from './executionBudget';
 
 // Upper bound on prune-and-retry cycles per completion. Each cycle removes one
 // unit (or compacts one message), so 12 is plenty to claw back from an overflow
@@ -120,9 +119,7 @@ export async function completeWithContextRecovery(
           'Agent request exceeds the input budget after trimming. Reduce the request or enabled tools.',
         );
       }
-      reserveModelCall(session, estimateHistoryTokens(requestHistory) + toolTokens);
       const result = await aiClient.complete(model, requestHistory, requestOptions);
-      accountModelCall(session, result, estimateHistoryTokens(requestHistory) + toolTokens);
       return result;
     } catch (err) {
       if (!isContextLengthError(err) || attempt >= MAX_CONTEXT_RECOVERY_ATTEMPTS) throw err;

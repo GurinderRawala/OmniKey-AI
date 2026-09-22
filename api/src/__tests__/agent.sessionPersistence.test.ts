@@ -31,6 +31,11 @@ const mocks = vi.hoisted(() => {
 mocks.log.child.mockReturnValue(mocks.log);
 
 vi.mock('../logger', () => ({ logger: mocks.log }));
+vi.mock('../agent/agentServer/sessionCheckpoint', () => ({
+  saveSessionCheckpoint: vi.fn(async () => undefined),
+  restoreSessionCheckpoint: vi.fn(async () => undefined),
+  deleteSessionCheckpoint: vi.fn(async () => undefined),
+}));
 
 vi.mock('../models/agentSession', () => ({
   AgentSession: mocks.agentSession,
@@ -243,18 +248,38 @@ describe('agent session persistence checkpoints', () => {
     expect(history.find((msg) => msg.role === 'user')?.content).toContain('<user_input>');
   });
 
-  it('checkpoints a run at the call limit and resets the budget on a new user follow-up', async () => {
-    const previousLimit = config.agentMaxModelCalls;
-    config.agentMaxModelCalls = 2;
+  it('continues automatically beyond 100 calls and two million cumulative tokens', async () => {
+    let agentCalls = 0;
     try {
       const send = vi.fn();
-      const call = { id: 'lookup', name: 'web_search', arguments: { query: 'inspect' } };
-      mocks.complete.mockResolvedValue({
-        content: '',
-        finish_reason: 'tool_calls',
-        model: 'test-model',
-        tool_calls: [call],
-        assistantMessage: { role: 'assistant', content: '', tool_calls: [call] },
+      mocks.complete.mockImplementation(async (model: string) => {
+        if (model === 'helper-model')
+          return {
+            content: '## Goal\nKeep inspecting.\n## Findings\nPrior checks completed.',
+            finish_reason: 'stop',
+            model,
+          };
+        agentCalls++;
+        if (agentCalls > 105)
+          return { content: '<final_answer>Done</final_answer>', finish_reason: 'stop', model };
+        const call = {
+          id: `lookup-${agentCalls}`,
+          name: 'web_search',
+          arguments: { query: `inspect ${agentCalls}` },
+        };
+        return {
+          content: '',
+          finish_reason: 'tool_calls',
+          model,
+          tool_calls: [call],
+          assistantMessage: { role: 'assistant', content: '', tool_calls: [call] },
+          usage: {
+            prompt_tokens: 30_000,
+            completion_tokens: 100,
+            total_tokens: 30_100,
+            cached_tokens: 29_000,
+          },
+        };
       });
       const message = { session_id: 'session-1', sender: 'client', content: 'Inspect this task' };
       await runAgentTurn(
@@ -265,60 +290,14 @@ describe('agent session persistence checkpoints', () => {
         mocks.log as any,
         { skipGrouping: true },
       );
-      expect(mocks.complete).toHaveBeenCalledTimes(2);
-      expect(send.mock.calls.some(([msg]) => msg.content.includes('usage limit'))).toBe(true);
+      expect(agentCalls).toBe(106);
+      expect(send.mock.calls.some(([msg]) => msg.content.includes('usage limit'))).toBe(false);
       const saved = parsedHistoryFromCall(historyUpdateCalls().at(-1)!);
-      expect(saved.at(-1)?.content).toContain('follow-up to continue');
-      expect(saved.filter((m) => m.role === 'tool')).toHaveLength(2);
+      expect(saved.at(-1)?.content).toContain('Done');
+      expect(saved.filter((m) => m.role === 'tool')).toHaveLength(105);
       expect(mocks.complete.mock.calls[0][2].maxTokens).toBe(config.agentMaxOutputTokens);
-
-      mocks.complete.mockResolvedValueOnce({
-        content: '<final_answer>Done</final_answer>',
-        finish_reason: 'stop',
-        model: 'test-model',
-      });
-      await runAgentTurn(
-        'session-1',
-        { id: 'subscription-1' } as any,
-        { ...message, content: 'Continue' },
-        send,
-        mocks.log as any,
-        { skipGrouping: true },
-      );
-      expect(mocks.complete).toHaveBeenCalledTimes(3);
       expect(send.mock.calls.at(-1)?.[0].content).toContain('Done');
     } finally {
-      config.agentMaxModelCalls = previousLimit;
-      mocks.complete.mockReset();
-    }
-  });
-
-  it('does not reset the call budget during recursive web fallback', async () => {
-    const previousLimit = config.agentMaxModelCalls;
-    config.agentMaxModelCalls = 1;
-    try {
-      const send = vi.fn();
-      const call = { id: 'lookup', name: 'web_search', arguments: { query: 'inspect' } };
-      mocks.complete.mockResolvedValue({
-        content: '',
-        finish_reason: 'tool_calls',
-        model: 'test-model',
-        tool_calls: [call],
-        assistantMessage: { role: 'assistant', content: '', tool_calls: [call] },
-      });
-      mocks.executeTool.mockResolvedValue('Error searching: upstream outage');
-      await runAgentTurn(
-        'session-1',
-        { id: 'subscription-1' } as any,
-        { session_id: 'session-1', sender: 'client', content: 'Inspect this task' },
-        send,
-        mocks.log as any,
-        { skipGrouping: true },
-      );
-      expect(mocks.complete).toHaveBeenCalledTimes(1);
-      expect(send.mock.calls.some(([msg]) => msg.content.includes('usage limit'))).toBe(true);
-    } finally {
-      config.agentMaxModelCalls = previousLimit;
       mocks.complete.mockReset();
     }
   });

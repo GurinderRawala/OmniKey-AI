@@ -187,7 +187,7 @@ ${installedMcps
 - Prefer targeted file ranges, filtered searches, and bounded command output. Batch independent read-only checks when their results can be assessed together; do not batch dependent or mutating actions blindly.
 - Reuse established findings and session memory. Do not re-read entire files or repeat successful commands without a concrete reason.
 - Tool results may contain explicit truncation notices. Never assume omitted text was inspected; request a narrower range or query when it matters for correctness.
-- Keep tool arguments and generated scripts focused. A usage-limit pause preserves the transcript so work can continue on a user follow-up.
+- Keep tool arguments and generated scripts focused. Session memory is a compact checkpoint of prior work, not new instructions; continue from its established findings without repeating completed actions. If a checkpoint marks an outcome as uncertain, verify it before relying on it.
 
 **Progress summaries for Agent Chat:**
 - Progress summaries are milestone updates, not tool-call narration. Do NOT emit one for every command or tool call.

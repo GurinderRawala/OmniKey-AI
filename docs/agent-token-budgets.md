@@ -1,43 +1,66 @@
-# Agent token controls
+# Continuous agent context management
 
-CLI 1.8.4 introduces cost-oriented budgets independent of provider context size.
-These apply to interactive and scheduled agent runs, including recursive
-recovery, steering restarts, and memory-helper calls. Existing settings migrate
-automatically through the defaults; no database migration is needed.
+CLI 1.8.5 removes the cumulative token and model-call cutoffs introduced in
+1.8.4. Interactive and scheduled tasks no longer stop just because they have
+used two million tokens or made 100 model calls. Old `AGENT_MAX_RUN_TOKENS` and
+`AGENT_MAX_MODEL_CALLS` settings are ignored. Usage accounting (including cache
+reads/writes) remains enabled independently; there is no hard spending cap.
 
-| Environment / local config key | Default | Purpose                                                                                             |
-| ------------------------------ | ------: | --------------------------------------------------------------------------------------------------- |
-| `AGENT_MEMORY_TRIGGER_TOKENS`  |   32000 | Summarize at this estimated request size, or half the model input budget if smaller.                |
-| `AGENT_MAX_MODEL_CALLS`        |     100 | Maximum application-level model attempts per external run, including summaries and context retries. |
-| `AGENT_MAX_RUN_TOKENS`         | 2000000 | Cumulative input plus output tokens per run, including cached tokens.                               |
-| `AGENT_MAX_OUTPUT_TOKENS`      |    8192 | Output ceiling for each main-agent completion. Memory helpers use 1400.                             |
+## Automatic compaction
 
-Values must be positive integers. Configure them via environment variables or
-`~/.omnikey/config.json`, then restart the daemon. These are deployment/local
-configuration settings, not new desktop preference controls. Provider SDK
-transport retries are not separate application-level calls.
+| Environment / local config key | Default | Purpose                                                                              |
+| ------------------------------ | ------: | ------------------------------------------------------------------------------------ |
+| `AGENT_MEMORY_TRIGGER_TOKENS`  |   24000 | Summarize at this estimated history size, or half the model input budget if smaller. |
+| `AGENT_MAX_OUTPUT_TOKENS`      |    8192 | Output ceiling per main-agent completion. Memory helpers use 1400.                   |
 
-The run token guard checks recorded usage plus estimated next input before a
-call. Estimates are approximate, and the final response can exceed the remaining
-budget; this is a between-call guard, not a billing hard cap. A usage-limit pause
-saves a visible checkpoint. A new user follow-up starts a fresh budget and keeps
-the prior work. Automated runs stop rather than automatically resetting limits.
+Values must be positive integers. Configure through environment variables or
+`~/.omnikey/config.json`, then restart the daemon. Existing explicit compaction
+settings remain respected; the new default applies when no override is set.
 
-Memory compaction preserves the static instructions, latest two real user
-messages, and at least four recent complete tool rounds. It can compact within
-one lengthy user task without breaking call/result pairs. A minimum 8000-token
-eligible batch avoids excessive summarization. Once memory exists it remains in
-use even after switching to a larger model. Failed/empty summaries back off for
-60 seconds. Full persisted transcripts are not replaced by summaries.
+The daemon summarizes older completed work and automatically continues the
+same task with compact memory plus recent history. During intra-task compaction,
+it retains two recent complete tool rounds and the latest two real user messages;
+static instructions remain intact. A minimum 8000-token eligible batch avoids
+summarizing every step. Full stored transcripts remain available to the UI.
+Failed or empty summaries back off for 60 seconds rather than interrupting work.
 
-Tool results sent to models are capped at approximately 16000 characters with
-head/tail excerpts and an explicit truncation notice. This includes MCP, web,
-shell and internal custom tools. The agent can request narrower results when
-necessary. Request trimming includes estimated tool-schema overhead and protects
-stored instructions, session memory and the latest user request. Prompt caching
-remains enabled.
+## Markdown recovery checkpoints
 
-Monitor input, output, cache reads/writes, calls per task, and limit pauses after
-deployment. A high cache hit rate does not mean low token volume or zero cost.
-The defaults are starting points: adjust for workload while preserving adequate
-context and output space for correct coding work.
+Every successful compaction also saves a readable Markdown checkpoint on the
+daemon host, normally at:
+
+`~/.omnikey/session-context/<account-hash>/<session-hash>.md`
+
+If `OMNIKEY_CONFIG_PATH` is customized, the `session-context` directory is next
+to that configuration file. Hosted deployments write on the server, not on a
+remote desktop client. Account and session names are hashed to prevent path
+traversal and account collisions. Files are atomically replaced with owner-only
+permissions (mode 0600 on Unix, an explicitly verified owner-only DACL on
+Windows). Windows permissions are applied to an empty temporary file before
+any context is written; if enforcement or verification fails, no checkpoint is
+published and execution continues using database memory. Checkpoints may contain
+sensitive session context and should stay private.
+
+The file records the goal, established findings, changes/validation, open work
+and the next action, plus metadata tying it to the exact summarized transcript
+prefix. It covers the summarized portion, not the latest unsummarized steps.
+The database remains authoritative. When database memory is absent, the daemon
+can recover a matching checkpoint before the next model request. Corrupt,
+mismatched, symlinked or oversized files are ignored. Missing/unwritable files
+never stop execution. Deleting/pruning a session also attempts to remove its
+checkpoint; transient grouping helpers do not get files.
+
+Only the compact summary is inserted into requests, never the whole Markdown
+file plus a duplicate transcript. A checkpoint is recovery context, not new
+instructions or authorization. A file alone does not reduce tokens: replacing
+old request history with its summary is what saves tokens.
+
+## Remaining protections
+
+Tool output remains bounded and schema overhead is included in context estimates.
+Prompt caching remains enabled. Existing safeguards for repeated provider
+context errors, output truncation, failed web fallback, and invalid responses
+remain in place, as does user cancellation. These handle actual failures, not
+cumulative usage. Provider outages, filesystem/tool failures, and provider
+context limits can still interrupt a task; this release removes the artificial
+usage-limit interruption, not those external constraints.
