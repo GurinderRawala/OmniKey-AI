@@ -307,6 +307,16 @@ async function runAgentTurnInternal(
     }
   };
 
+  const persistAndSendFailure = async (message: string): Promise<void> => {
+    const displayMessage = message.startsWith('**Error:**') ? message : `**Error:** ${message}`;
+    pushToSessionHistory(logger, session, {
+      role: 'assistant',
+      content: `<final_answer>\n${displayMessage}\n</final_answer>`,
+    });
+    await persistSessionToDB(sessionId, session);
+    sendFinalAnswer(send, sessionId, displayMessage, true);
+  };
+
   const restartAfterPendingSteering = async (): Promise<boolean> => {
     const steeringMessages = drainSteeringMessagesIntoHistory(
       sessionId,
@@ -325,12 +335,7 @@ async function runAgentTurnInternal(
         'before finalizing model response',
       )
     ) {
-      pushToSessionHistory(logger, session, {
-        role: 'assistant',
-        content: `<final_answer>\n${STEERING_RESTART_LIMIT_MESSAGE}\n</final_answer>`,
-      });
-      await persistSessionToDB(sessionId, session);
-      sendFinalAnswer(send, sessionId, STEERING_RESTART_LIMIT_MESSAGE, true);
+      await persistAndSendFailure(STEERING_RESTART_LIMIT_MESSAGE);
       return true;
     }
 
@@ -373,12 +378,7 @@ async function runAgentTurnInternal(
       recordUsage,
     );
     if (!recoveredInitialResult) {
-      pushToSessionHistory(logger, session, {
-        role: 'assistant',
-        content: `<final_answer>\n${OUTPUT_LENGTH_FAILURE_MESSAGE}\n</final_answer>`,
-      });
-      await persistSessionToDB(sessionId, session);
-      sendFinalAnswer(send, sessionId, OUTPUT_LENGTH_FAILURE_MESSAGE, true);
+      await persistAndSendFailure(OUTPUT_LENGTH_FAILURE_MESSAGE);
       return;
     }
     result = recoveredInitialResult;
@@ -392,8 +392,7 @@ async function runAgentTurnInternal(
 
       const errorMessage = 'The agent returned an empty response. Please try again.';
 
-      await persistSessionToDB(sessionId, session);
-      sendFinalAnswer(send, sessionId, errorMessage, true);
+      await persistAndSendFailure(errorMessage);
       return;
     }
 
@@ -432,12 +431,7 @@ async function runAgentTurnInternal(
           recordUsage,
         );
         if (!recoveredToolLoopResult) {
-          pushToSessionHistory(logger, session, {
-            role: 'assistant',
-            content: `<final_answer>\n${OUTPUT_LENGTH_FAILURE_MESSAGE}\n</final_answer>`,
-          });
-          await persistSessionToDB(sessionId, session);
-          sendFinalAnswer(send, sessionId, OUTPUT_LENGTH_FAILURE_MESSAGE, true);
+          await persistAndSendFailure(OUTPUT_LENGTH_FAILURE_MESSAGE);
           return;
         }
 
@@ -495,8 +489,7 @@ async function runAgentTurnInternal(
             webFallbackDepth,
             webToolFailed,
           });
-          await persistSessionToDB(sessionId, session);
-          sendFinalAnswer(send, sessionId, message, true);
+          await persistAndSendFailure(message);
           return;
         }
 
@@ -640,12 +633,8 @@ async function runAgentTurnInternal(
           sessionId,
           untaggedDepth,
         });
-        await persistSessionToDB(sessionId, session);
-        sendFinalAnswer(
-          send,
-          sessionId,
+        await persistAndSendFailure(
           'The agent failed to produce a structured response after multiple attempts. Please try again.',
-          true,
         );
         return;
       }
@@ -690,13 +679,7 @@ async function runAgentTurnInternal(
       log.warn('Agent returned empty content with no recognized tags; sending error', {
         sessionId,
       });
-      await persistSessionToDB(sessionId, session);
-      sendFinalAnswer(
-        send,
-        sessionId,
-        'The agent returned an empty response. Please try again.',
-        true,
-      );
+      await persistAndSendFailure('The agent returned an empty response. Please try again.');
     }
   } catch (err) {
     log.error('Agent LLM call failed', {
@@ -709,8 +692,7 @@ async function runAgentTurnInternal(
       },
     });
     const errorMessage = 'Agent failed to call language model. Please try again later.';
-    await persistSessionToDB(sessionId, session);
-    sendFinalAnswer(send, sessionId, errorMessage, true);
+    await persistAndSendFailure(errorMessage);
   }
 }
 

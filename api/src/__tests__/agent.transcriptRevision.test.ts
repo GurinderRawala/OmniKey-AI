@@ -86,6 +86,98 @@ describe('normalized transcript source revisions', () => {
     );
   });
 
+  it('changes revision and normalized rows when an incomplete turn follows a success', async () => {
+    const completedHistory = [
+      { role: 'user', content: '<user_input>Question A</user_input>' },
+      { role: 'assistant', content: '<final_answer>Answer A</final_answer>' },
+    ];
+    const interruptedHistory = [
+      ...completedHistory,
+      { role: 'user', content: '<user_input>Question B</user_input>' },
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [{ id: 'call-b', name: 'shell_script', arguments: { script: 'swift test' } }],
+      },
+    ];
+    const completedRevision = completedTranscriptRevision(buildTranscript(completedHistory));
+    const interruptedRevision = completedTranscriptRevision(buildTranscript(interruptedHistory));
+
+    expect(interruptedRevision).not.toBe(completedRevision);
+    await replaceNormalizedTranscript(
+      'session-interrupted',
+      interruptedHistory,
+      interruptedRevision ?? undefined,
+    );
+
+    expect(mocks.bulkCreate).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({
+          sessionId: 'session-interrupted',
+          role: 'assistant',
+          sourceRevision: interruptedRevision,
+        }),
+      ]),
+      expect.any(Object),
+    );
+    const rows = mocks.bulkCreate.mock.calls[0][0] as Array<{ previewJson: string }>;
+    const latest = JSON.parse(rows.at(-1)?.previewJson ?? '{}');
+    expect(latest.blocks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'shellCommand',
+          activityId: 'call-b',
+          activityPhase: 'started',
+        }),
+      ]),
+    );
+  });
+
+  it('backfills an interrupted tail instead of serving older completed rows', async () => {
+    const completedHistory = [
+      { role: 'user', content: '<user_input>Question A</user_input>' },
+      { role: 'assistant', content: '<final_answer>Answer A</final_answer>' },
+    ];
+    const interruptedHistory = [
+      ...completedHistory,
+      { role: 'user', content: '<user_input>Question B</user_input>' },
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [{ id: 'call-b', name: 'shell_script', arguments: { script: 'swift test' } }],
+      },
+    ];
+    const completedMessages = buildTranscript(completedHistory);
+    const completedRevision = completedTranscriptRevision(completedMessages);
+    const interruptedRevision = completedTranscriptRevision(buildTranscript(interruptedHistory));
+    mocks.findAll.mockResolvedValue(
+      previewTranscript(completedMessages).map((message) => ({
+        previewJson: JSON.stringify(message),
+        sourceRevision: completedRevision,
+      })),
+    );
+
+    const result = await readOrBackfillNormalizedTranscript(
+      'session-interrupted',
+      JSON.stringify(interruptedHistory),
+      interruptedRevision,
+    );
+
+    expect(result.at(-2)).toMatchObject({ role: 'user', text: 'Question B' });
+    expect(result.at(-1)?.blocks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'shellCommand',
+          activityId: 'call-b',
+          activityPhase: 'started',
+        }),
+      ]),
+    );
+    expect(mocks.destroy).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { sessionId: 'session-interrupted' } }),
+    );
+  });
+
   it('publishes large SQLite transcripts through stable single-row inserts', async () => {
     const history = Array.from({ length: 6 }, (_, index) => [
       { role: 'user', content: `<user_input>Question ${index}</user_input>` },

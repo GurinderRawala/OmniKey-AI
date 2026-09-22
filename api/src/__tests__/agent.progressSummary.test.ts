@@ -209,18 +209,19 @@ describe('Agent transcript pagination', () => {
     );
   });
 
-  it('loads only the latest assistant turn while preserving an unanswered trailing user message', () => {
+  it('loads the latest user and assistant turn without falling back past a trailing request', () => {
     const latest = latestTranscriptTurn(transcript, 'session-a');
-    expect(latest.messages).toHaveLength(1);
-    expect(latest.messages[0].role).toBe('assistant');
-    const latestBlocks = latest.messages[0].blocks ?? [];
+    expect(latest.messages.map((message) => message.role)).toEqual(['user', 'assistant']);
+    const latestBlocks = latest.messages[1].blocks ?? [];
     expect(latestBlocks[latestBlocks.length - 1]?.kind).toBe('finalAnswer');
 
     const interrupted = latestTranscriptTurn(
       [...transcript, { id: 'trailing-user', role: 'user', text: 'Are you there?' }],
       'session-a',
     );
-    expect(interrupted.messages.map((message) => message.role)).toEqual(['assistant', 'user']);
+    expect(interrupted.messages).toEqual([
+      expect.objectContaining({ id: 'trailing-user', role: 'user', text: 'Are you there?' }),
+    ]);
   });
 
   it('handles empty, user-only, and interrupted assistant histories deterministically', () => {
@@ -247,10 +248,11 @@ describe('Agent transcript pagination', () => {
       ],
       'session-a',
     );
-    expect(interrupted.messages[0].blocks?.[0].activityPhase).toBe('cancelled');
+    expect(interrupted.messages.map((message) => message.role)).toEqual(['user', 'assistant']);
+    expect(interrupted.messages[1].blocks?.[0].activityPhase).toBe('cancelled');
   });
 
-  it('serves the last completed answer instead of a newer unfinished tool turn', () => {
+  it('serves and snapshots a newer unfinished tool turn instead of hiding it', () => {
     const messages = [
       {
         id: 'complete',
@@ -267,8 +269,8 @@ describe('Agent transcript pagination', () => {
       },
     ];
 
-    expect(latestTranscriptTurn(messages, 'session-a').messages).toEqual([messages[0]]);
-    expect(completedTranscriptSnapshot(messages)).toEqual([messages[0]]);
+    expect(latestTranscriptTurn(messages, 'session-a').messages).toEqual(messages.slice(1));
+    expect(completedTranscriptSnapshot(messages)).toEqual(messages);
   });
 
   it('returns boundary-safe metadata for oversized answers and tool output', () => {
