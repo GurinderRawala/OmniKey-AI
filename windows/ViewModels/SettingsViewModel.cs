@@ -156,12 +156,14 @@ namespace OmniKey.Windows.ViewModels
         [ObservableProperty] private bool webSearchEnabled;
         [ObservableProperty] private bool browserAccessEnabled;
         [ObservableProperty] private bool usageRecordingEnabled;
+        [ObservableProperty] private string grammarEnhancementModel = string.Empty;
         [ObservableProperty] private string browserAccessSummary = "Not loaded";
 
         [ObservableProperty] private string pendingTerminalAccess = "limited";
         [ObservableProperty] private bool pendingWebSearchEnabled;
         [ObservableProperty] private bool pendingBrowserAccessEnabled;
         [ObservableProperty] private bool pendingUsageRecordingEnabled;
+        [ObservableProperty] private string pendingGrammarEnhancementModel = string.Empty;
         [ObservableProperty] private string selectedBrowserAccessMethod = "Debug profile";
         [ObservableProperty] private string selectedBrowserName = BrowserAccessSetup.InstalledBrowsers.FirstOrDefault() ?? "";
         [ObservableProperty] private string browserProfileName = "default";
@@ -222,7 +224,11 @@ namespace OmniKey.Windows.ViewModels
             || (PendingBrowserAccessEnabled
                 && (!string.Equals(SelectedBrowserName, loadedBrowserName, StringComparison.OrdinalIgnoreCase)
                     || !string.Equals(BrowserProfileName.Trim(), loadedBrowserProfileName, StringComparison.Ordinal)))
-            || PendingUsageRecordingEnabled != UsageRecordingEnabled;
+            || PendingUsageRecordingEnabled != UsageRecordingEnabled
+            || !string.Equals(
+                PendingGrammarEnhancementModel.Trim(),
+                GrammarEnhancementModel,
+                StringComparison.Ordinal);
 
         public bool CanSaveAgentAccess => !IsBusy && AgentAccessDirty;
 
@@ -299,10 +305,12 @@ namespace OmniKey.Windows.ViewModels
         partial void OnWebSearchEnabledChanged(bool value) => RefreshAgentAccessDirty();
         partial void OnBrowserAccessEnabledChanged(bool value) => RefreshAgentAccessDirty();
         partial void OnUsageRecordingEnabledChanged(bool value) => RefreshAgentAccessDirty();
+        partial void OnGrammarEnhancementModelChanged(string value) => RefreshAgentAccessDirty();
         partial void OnPendingTerminalAccessChanged(string value) => RefreshAgentAccessDirty();
         partial void OnPendingWebSearchEnabledChanged(bool value) => RefreshAgentAccessDirty();
         partial void OnPendingBrowserAccessEnabledChanged(bool value) => RefreshAgentAccessDirty();
         partial void OnPendingUsageRecordingEnabledChanged(bool value) => RefreshAgentAccessDirty();
+        partial void OnPendingGrammarEnhancementModelChanged(string value) => RefreshAgentAccessDirty();
         partial void OnSelectedBrowserNameChanged(string value) => RefreshAgentAccessDirty();
         partial void OnBrowserProfileNameChanged(string value) => RefreshAgentAccessDirty();
 
@@ -357,6 +365,7 @@ namespace OmniKey.Windows.ViewModels
                 WebSearchEnabled = settings.WebSearchEnabled;
                 BrowserAccessEnabled = settings.BrowserAccessEnabled;
                 UsageRecordingEnabled = settings.UsageRecordingEnabled;
+                GrammarEnhancementModel = settings.GrammarEnhancementModel?.Trim() ?? string.Empty;
                 // Reset the pending values to whatever's persisted so the
                 // Save button only lights up after the user actually changes
                 // something.
@@ -364,6 +373,7 @@ namespace OmniKey.Windows.ViewModels
                 PendingWebSearchEnabled = WebSearchEnabled;
                 PendingBrowserAccessEnabled = BrowserAccessEnabled;
                 PendingUsageRecordingEnabled = UsageRecordingEnabled;
+                PendingGrammarEnhancementModel = GrammarEnhancementModel;
                 if (!string.IsNullOrWhiteSpace(settings.BrowserDebugBrowserName)
                     && InstalledBrowserOptions.Contains(settings.BrowserDebugBrowserName, StringComparer.OrdinalIgnoreCase))
                 {
@@ -458,13 +468,22 @@ namespace OmniKey.Windows.ViewModels
                 bool? usageArg = PendingUsageRecordingEnabled != UsageRecordingEnabled
                     ? PendingUsageRecordingEnabled
                     : (bool?)null;
+                bool writingModelChanged = !string.Equals(
+                    PendingGrammarEnhancementModel.Trim(),
+                    GrammarEnhancementModel,
+                    StringComparison.Ordinal);
 
-                if (termArg is not null || webArg is not null || usageArg is not null)
+                if (termArg is not null || webArg is not null || usageArg is not null || writingModelChanged)
                 {
-                    // Single PATCH covers all three: they all live in the
+                    // A single PATCH covers these DB-backed settings. They live in the
                     // agent_settings row, and the agent re-reads them per turn,
                     // so there's no restart to schedule any more.
-                    var result = await _api.UpdateAppSettingsAsync(termArg, webArg, usageArg);
+                    var result = await _api.UpdateAppSettingsAsync(
+                        termArg,
+                        webArg,
+                        usageArg,
+                        writingModelChanged,
+                        PendingGrammarEnhancementModel);
                     SetStatus(result.Message ?? "Agent access updated.", StatusKind.Positive);
                 }
 
@@ -489,6 +508,9 @@ namespace OmniKey.Windows.ViewModels
                 await LoadAsync();
             }, "Failed to save agent access");
         }
+
+        [RelayCommand]
+        private void UseDefaultGrammarEnhancementModel() => PendingGrammarEnhancementModel = string.Empty;
 
         private static string BrowserProfileLabel(string? userDataDir, string browserName)
         {

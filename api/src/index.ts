@@ -125,8 +125,8 @@ app.get('/macos/appcast', (req, res) => {
 
   // These should match the values embedded into the macOS app
   // Info.plist in macOS/build_release_dmg.sh.
-  const bundleVersion = '65';
-  const shortVersion = '1.9.5';
+  const bundleVersion = '66';
+  const shortVersion = '1.9.6';
 
   const xml = `<?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0"
@@ -157,7 +157,7 @@ app.get('/macos/appcast', (req, res) => {
 // ── Windows distribution endpoints ───────────────────────────────────────────
 // These should match the values in windows/OmniKey.Windows.csproj
 // <Version> and windows/build_release_zip.ps1 $APP_VERSION.
-const WIN_VERSION = '1.21.0';
+const WIN_VERSION = '1.21.1';
 const WIN_ZIP_FILENAME = 'OmniKeyAI-windows-win-x64.zip';
 const WIN_ZIP_PATH = path.join(process.cwd(), 'windows', WIN_ZIP_FILENAME);
 
@@ -211,17 +211,11 @@ app.get('/windows/update', (req, res) => {
       `What's new in ${WIN_VERSION}`,
       ``,
       `Fixes`,
-      `- Startup: the app could crash on launch instead of opening the chat window.`,
-      `- Scrolling: the mouse wheel did nothing on every page (Usage, Settings, MCP Servers and the rest). Only dragging the scrollbar worked.`,
-      `- Shortcuts: Ctrl+E and Ctrl+G silently returned your text unchanged on open-model providers whose gateway does not implement the OpenAI Responses API. OmniKey now falls back to chat completions automatically.`,
-      `- Composer: the task-instruction chip turned black and became unreadable once a chat started.`,
+      `- Agent transcript publishing no longer races with cleanup of internal grouping sessions.`,
+      `- NVIDIA grammar and prompt enhancement use the current Nemotron reasoning model by default.`,
       ``,
       `Improvements`,
-      `- Daemon: starting the local daemon no longer means copying an admin command into a terminal. OmniKey launches it elevated for you after one Windows permission prompt, with an "Open Admin Terminal" fallback if you decline.`,
-      `- Alerts: hotkey notifications now clear in well under a second instead of lingering, and no longer change width per message.`,
-      `- Composer: the project picker locks to the session once a chat starts, matching task instructions. The model can still be changed between turns. Empty dropdowns now say what they are for.`,
-      `- Onboarding: the Self-hosted / SaaS switch is a proper segmented control, the card no longer changes width when you switch tabs, and the step rail is centred and tracks the step you are actually on.`,
-      `- Chat sidebar: tighter alignment and spacing, and the list no longer shifts when you hover a row.`,
+      `- Agent Access now lets you choose a custom model for Grammar and Prompt Enhancement, with a safe provider-specific fallback.`,
     ].join('\n'),
   });
 });

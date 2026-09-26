@@ -6,6 +6,7 @@ import path from 'path';
 import { spawn } from 'child_process';
 import { authMiddleware } from './authMiddleware';
 import { logger } from './logger';
+import { config } from './config';
 import {
   getAgentSettings,
   readLocalConfigFile,
@@ -31,6 +32,7 @@ const updateSchema = zod
     terminalAccess: zod.enum(['full', 'limited']).optional(),
     webSearchEnabled: zod.boolean().optional(),
     usageRecordingEnabled: zod.boolean().optional(),
+    grammarEnhancementModel: zod.string().max(255).nullable().optional(),
   })
   .strict();
 
@@ -79,6 +81,10 @@ export function appSettingsRouter(): express.Router {
     const { logger: reqLogger } = res.locals;
     try {
       const settings = await getAgentSettings();
+      const grammarEnhancementModel =
+        settings.grammarEnhancementProvider === config.aiProvider
+          ? settings.grammarEnhancementModel
+          : null;
       res.json({
         terminalAccess: settings.terminalAccess,
         webSearchEnabled: settings.webSearchEnabled,
@@ -89,6 +95,7 @@ export function appSettingsRouter(): express.Router {
         browserDebugPort: settings.browserDebugPort,
         browserDebugUserDataDir: settings.browserDebugUserDataDir,
         browserJavascriptEventBrowsers: settings.browserJavascriptEventBrowsers,
+        grammarEnhancementModel,
         runtime: {
           terminalAccess: settings.terminalAccess,
           webSearchEnabled: settings.webSearchEnabled,
@@ -116,7 +123,8 @@ export function appSettingsRouter(): express.Router {
       if (
         parsed.terminalAccess === undefined &&
         parsed.webSearchEnabled === undefined &&
-        parsed.usageRecordingEnabled === undefined
+        parsed.usageRecordingEnabled === undefined &&
+        parsed.grammarEnhancementModel === undefined
       ) {
         return res.status(400).json({ error: 'No supported fields supplied.' });
       }
@@ -125,6 +133,8 @@ export function appSettingsRouter(): express.Router {
         terminalAccess?: TerminalAccessMode;
         webSearchEnabled?: boolean;
         usageRecordingEnabled?: boolean;
+        grammarEnhancementModel?: string | null;
+        grammarEnhancementProvider?: typeof config.aiProvider | null;
       } = {};
       if (parsed.terminalAccess !== undefined) {
         patch.terminalAccess = parsed.terminalAccess;
@@ -135,12 +145,21 @@ export function appSettingsRouter(): express.Router {
       if (parsed.usageRecordingEnabled !== undefined) {
         patch.usageRecordingEnabled = parsed.usageRecordingEnabled;
       }
+      if (parsed.grammarEnhancementModel !== undefined) {
+        patch.grammarEnhancementModel = parsed.grammarEnhancementModel?.trim() || null;
+        patch.grammarEnhancementProvider = patch.grammarEnhancementModel ? config.aiProvider : null;
+      }
       const settings = await updateAgentSettings(patch);
+      const grammarEnhancementModel =
+        settings.grammarEnhancementProvider === config.aiProvider
+          ? settings.grammarEnhancementModel
+          : null;
       res.json({
         terminalAccess: settings.terminalAccess,
         webSearchEnabled: settings.webSearchEnabled,
         browserAccessEnabled: settings.browserAccessEnabled,
         usageRecordingEnabled: settings.usageRecordingEnabled,
+        grammarEnhancementModel,
         restartScheduled: false,
         message: 'Settings updated.',
       });

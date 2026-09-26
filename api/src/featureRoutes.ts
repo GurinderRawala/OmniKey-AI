@@ -15,7 +15,7 @@ import { AuthLocals, authMiddleware } from './authMiddleware';
 import { Subscription } from './models/subscription';
 import { decompressString } from './compression';
 import { SubscriptionTaskTemplate } from './models/subscriptionTaskTemplate';
-import { aiClient, AIMessage, getFixedHelperModel } from './ai-client';
+import { aiClient, AIMessage, getFixedHelperModel, modelSupportsTemperature } from './ai-client';
 import { recordTokenUsage, UsageMode } from './usageRecorder';
 import { getAgentSettings, selectedAgentModelForProvider } from './agentSettingsStore';
 
@@ -169,16 +169,19 @@ type CompletionUsage = {
 };
 
 async function getModelForCommand(cmd: EnhanceCommand): Promise<string> {
-  // Prompt enhancement and grammar are latency/cost-sensitive helpers, not
-  // agent turns. Keep them pinned to cheap provider-specific models so custom
-  // or expensive agent model selections never affect keyboard enhancement.
+  const settings = await getAgentSettings();
+
+  // Prompt enhancement and grammar default to a latency/cost-sensitive helper,
+  // but users can opt into any model supported by their active provider.
   if (cmd === 'enhance' || cmd === 'grammar') {
-    return getFixedHelperModel(config.aiProvider);
+    return settings.grammarEnhancementProvider === config.aiProvider &&
+      settings.grammarEnhancementModel
+      ? settings.grammarEnhancementModel
+      : getFixedHelperModel(config.aiProvider);
   }
 
   // 'task' is the custom-task command and should follow the same DB-backed
   // provider model selected for OmniAgent turns.
-  const settings = await getAgentSettings();
   return selectedAgentModelForProvider(settings, config.aiProvider);
 }
 
@@ -258,7 +261,8 @@ export async function runEnhancementModel(
   // omitting `temperature` keeps the request shape uniform across providers
   // and lets each model use its own tuned default. The fast-tier models used
   // by `enhance` and `grammar` keep the previous 0.3 default.
-  const completionOptions = cmd === 'task' ? {} : { temperature: 0.3 };
+  const completionOptions =
+    cmd === 'task' || !modelSupportsTemperature(model) ? {} : { temperature: 0.3 };
   const result = await aiClient.streamComplete(model, messages, completionOptions, (delta) => {
     rawResponse += delta;
     if (onDelta) onDelta(delta);

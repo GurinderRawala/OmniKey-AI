@@ -190,6 +190,8 @@ describe('agent session persistence checkpoints', () => {
       anthropicModel: 'test-model',
       geminiModel: 'test-model',
       nemotronModel: 'test-model',
+      grammarEnhancementModel: null,
+      grammarEnhancementProvider: null,
     });
     mocks.runScript.mockResolvedValue({ output: 'script output', isError: false });
     activeSessions.clear();
@@ -394,6 +396,26 @@ describe('agent session persistence checkpoints', () => {
         sessionId: 'session-1',
         transcriptRevision: values.transcriptRevision,
       }),
+    );
+  });
+
+  it('does not publish transcript rows after the parent session was deleted', async () => {
+    mocks.agentSession.update.mockResolvedValueOnce([0]);
+    const state = {
+      history: [
+        { role: 'user', content: '<user_input>Internal helper work</user_input>' },
+        { role: 'assistant', content: '<final_answer>Done</final_answer>' },
+      ],
+      turns: 1,
+      activeModel: 'test-model',
+    } as any;
+
+    await persistSessionToDB('grouping-subscription-1', state);
+
+    expect(mocks.replaceNormalizedTranscript).not.toHaveBeenCalled();
+    expect(mocks.log.debug).toHaveBeenCalledWith(
+      'Skipping transcript publication for a deleted agent session',
+      { sessionId: 'grouping-subscription-1' },
     );
   });
 
@@ -1279,6 +1301,8 @@ describe('agent session persistence checkpoints', () => {
       anthropicModel: 'test-model',
       geminiModel: 'test-model',
       nemotronModel: 'test-model',
+      grammarEnhancementModel: null,
+      grammarEnhancementProvider: null,
     });
     mocks.executeTool.mockResolvedValue('Error fetching URL: Request failed with status code 404');
     mocks.complete

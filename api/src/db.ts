@@ -70,6 +70,8 @@ const COLUMN_MIGRATIONS: ColumnMigration[] = [
   { table: 'agent_settings', column: 'anthropic_model', definition: 'VARCHAR(255)' },
   { table: 'agent_settings', column: 'gemini_model', definition: 'VARCHAR(255)' },
   { table: 'agent_settings', column: 'nemotron_model', definition: 'VARCHAR(255)' },
+  { table: 'agent_settings', column: 'grammar_enhancement_model', definition: 'VARCHAR(255)' },
+  { table: 'agent_settings', column: 'grammar_enhancement_provider', definition: 'VARCHAR(32)' },
   { table: 'agent_settings', column: 'browser_access_method', definition: 'VARCHAR(32)' },
   { table: 'agent_settings', column: 'browser_debug_port', definition: 'INTEGER' },
   { table: 'agent_settings', column: 'browser_debug_browser_name', definition: 'VARCHAR(255)' },

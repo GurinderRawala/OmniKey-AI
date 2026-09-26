@@ -25,6 +25,8 @@ const mocks = vi.hoisted(() => {
       anthropicModel: 'claude-opus-4-5',
       geminiModel: 'gemini-2.5-pro',
       nemotronModel: 'nvidia/nemotron-3-ultra-550b-a55b',
+      grammarEnhancementModel: null,
+      grammarEnhancementProvider: null,
     },
     updateAgentSettings: vi.fn(),
   };

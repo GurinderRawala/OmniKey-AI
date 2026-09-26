@@ -28,6 +28,8 @@ export type AgentSettingsSnapshot = {
   anthropicModel: string;
   geminiModel: string;
   nemotronModel: string;
+  grammarEnhancementModel: string | null;
+  grammarEnhancementProvider: AIProvider | null;
 };
 
 export type AgentSettingsPatch = Partial<{
@@ -45,6 +47,8 @@ export type AgentSettingsPatch = Partial<{
   anthropicModel: string;
   geminiModel: string;
   nemotronModel: string;
+  grammarEnhancementModel: string | null;
+  grammarEnhancementProvider: AIProvider | null;
 }>;
 
 export type AgentModelField = 'openaiModel' | 'anthropicModel' | 'geminiModel' | 'nemotronModel';
@@ -80,8 +84,8 @@ export const AGENT_MODEL_OPTIONS: Record<AIProvider, AgentModelOption[]> = {
       label: 'nvidia/nemotron-3-super-120b-a12b',
     },
     {
-      id: 'nvidia/nemotron-3-nano-30b-a3b',
-      label: 'nvidia/nemotron-3-nano-30b-a3b',
+      id: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
+      label: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
     },
   ],
 };
@@ -177,6 +181,10 @@ function legacyDefaults(): Omit<AgentSettingsSnapshot, 'id'> {
     geminiModel: firstString(cfg.GEMINI_MODEL) ?? defaultModelForProvider('gemini'),
     nemotronModel:
       firstString(cfg.OPEN_MODEL_MODEL, cfg.NEMOTRON_MODEL) ?? defaultModelForProvider('nemotron'),
+    grammarEnhancementModel: firstString(cfg.GRAMMAR_ENHANCEMENT_MODEL) ?? null,
+    grammarEnhancementProvider: firstString(cfg.GRAMMAR_ENHANCEMENT_MODEL)
+      ? config.aiProvider
+      : null,
   };
 }
 
@@ -214,6 +222,14 @@ function rowToSnapshot(row: AgentSettings): AgentSettingsSnapshot {
     anthropicModel: normalizeModel('anthropic', row.anthropicModel ?? defaults.anthropicModel),
     geminiModel: normalizeModel('gemini', row.geminiModel ?? defaults.geminiModel),
     nemotronModel: normalizeModel('nemotron', row.nemotronModel ?? defaults.nemotronModel),
+    grammarEnhancementModel: firstString(row.grammarEnhancementModel) ?? null,
+    grammarEnhancementProvider:
+      row.grammarEnhancementProvider === 'openai' ||
+      row.grammarEnhancementProvider === 'anthropic' ||
+      row.grammarEnhancementProvider === 'gemini' ||
+      row.grammarEnhancementProvider === 'nemotron'
+        ? row.grammarEnhancementProvider
+        : null,
   };
 }
 
@@ -237,6 +253,8 @@ export async function getAgentSettings(): Promise<AgentSettingsSnapshot> {
       anthropicModel: defaults.anthropicModel,
       geminiModel: defaults.geminiModel,
       nemotronModel: defaults.nemotronModel,
+      grammarEnhancementModel: defaults.grammarEnhancementModel,
+      grammarEnhancementProvider: defaults.grammarEnhancementProvider,
     },
   });
   if (created) {
@@ -250,6 +268,8 @@ export async function getAgentSettings(): Promise<AgentSettingsSnapshot> {
       anthropicModel: defaults.anthropicModel,
       geminiModel: defaults.geminiModel,
       nemotronModel: defaults.nemotronModel,
+      grammarEnhancementModel: defaults.grammarEnhancementModel,
+      grammarEnhancementProvider: defaults.grammarEnhancementProvider,
     });
   } else {
     // Columns added to an existing database are nullable. Populate model

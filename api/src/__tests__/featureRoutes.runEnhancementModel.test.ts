@@ -1,8 +1,8 @@
 /**
  * Tests for the temperature-handling change in `runEnhancementModel`.
  *
- * - 'enhance' → pinned cheap model + { temperature: 0.3 }
- * - 'grammar' → pinned cheap model + { temperature: 0.3 }
+ * - 'enhance' → optional writing-model override, otherwise cheap default + { temperature: 0.3 }
+ * - 'grammar' → optional writing-model override, otherwise cheap default + { temperature: 0.3 }
  * - 'task'    → DB-backed selected agent model + {} (no temperature)
  *
  * Mocks `./ai-client` and `./models/subscriptionTaskTemplate` so the test
@@ -18,11 +18,13 @@ const mocks = vi.hoisted(() => ({
   findOne: vi.fn(),
   getAgentSettings: vi.fn(),
   selectedAgentModelForProvider: vi.fn(),
+  modelSupportsTemperature: vi.fn(),
 }));
 
 vi.mock('../ai-client', () => ({
   aiClient: { streamComplete: mocks.streamComplete },
   getFixedHelperModel: mocks.getFixedHelperModel,
+  modelSupportsTemperature: mocks.modelSupportsTemperature,
 }));
 
 vi.mock('../config', async (importOriginal) => {
@@ -64,6 +66,8 @@ beforeEach(() => {
 
   mocks.getFixedHelperModel.mockReset();
   mocks.getFixedHelperModel.mockReturnValue('fixed-openai-helper-model');
+  mocks.modelSupportsTemperature.mockReset();
+  mocks.modelSupportsTemperature.mockReturnValue(true);
 
   mocks.getAgentSettings.mockReset();
   mocks.getAgentSettings.mockResolvedValue({
@@ -76,6 +80,8 @@ beforeEach(() => {
     anthropicModel: 'stored-anthropic-agent-model',
     geminiModel: 'stored-gemini-agent-model',
     nemotronModel: 'stored-open-model-agent-model',
+    grammarEnhancementModel: null,
+    grammarEnhancementProvider: null,
   });
 
   mocks.selectedAgentModelForProvider.mockReset();
@@ -142,8 +148,51 @@ describe('runEnhancementModel — temperature per command', () => {
     ]);
     expect(mocks.getFixedHelperModel).toHaveBeenCalledTimes(2);
     expect(mocks.getFixedHelperModel).toHaveBeenCalledWith('openai');
-    expect(mocks.getAgentSettings).toHaveBeenCalledTimes(1);
+    expect(mocks.getAgentSettings).toHaveBeenCalledTimes(3);
     expect(mocks.selectedAgentModelForProvider).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses the optional grammar and enhancement model override for both shortcuts', async () => {
+    mocks.getAgentSettings.mockResolvedValue({
+      id: 'default',
+      grammarEnhancementModel: 'custom-writing-model',
+      grammarEnhancementProvider: 'openai',
+    });
+
+    await runEnhancementModel(makeLogger(), 'a', 'enhance', fakeSubscription);
+    await runEnhancementModel(makeLogger(), 'b', 'grammar', fakeSubscription);
+
+    expect(mocks.streamComplete.mock.calls.map(([model]) => model)).toEqual([
+      'custom-writing-model',
+      'custom-writing-model',
+    ]);
+    expect(mocks.getFixedHelperModel).not.toHaveBeenCalled();
+  });
+
+  it('omits temperature when the custom writing model does not support it', async () => {
+    mocks.getAgentSettings.mockResolvedValue({
+      id: 'default',
+      grammarEnhancementModel: 'reasoning-model',
+      grammarEnhancementProvider: 'openai',
+    });
+    mocks.modelSupportsTemperature.mockReturnValue(false);
+
+    await runEnhancementModel(makeLogger(), 'a', 'enhance', fakeSubscription);
+
+    expect(mocks.streamComplete.mock.calls[0][2]).toEqual({});
+  });
+
+  it('falls back to the provider default when the override belongs to another provider', async () => {
+    mocks.getAgentSettings.mockResolvedValue({
+      id: 'default',
+      grammarEnhancementModel: 'claude-writing-model',
+      grammarEnhancementProvider: 'anthropic',
+    });
+
+    await runEnhancementModel(makeLogger(), 'a', 'grammar', fakeSubscription);
+
+    expect(mocks.streamComplete.mock.calls[0][0]).toBe('fixed-openai-helper-model');
+    expect(mocks.getFixedHelperModel).toHaveBeenCalledWith('openai');
   });
 });
 

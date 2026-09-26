@@ -24,7 +24,7 @@ export async function persistSessionToDB(sessionId: string, state: SessionState)
       buildTrimmedHistoryForRequest(state, state.activeModel, sessionId),
     );
     const transcriptRevision = completedTranscriptRevision(buildTranscript(state.history));
-    await AgentSession.update(
+    const [updatedRows] = await AgentSession.update(
       {
         historyJson,
         transcriptRevision,
@@ -40,6 +40,13 @@ export async function persistSessionToDB(sessionId: string, state: SessionState)
       },
       { where: { id: sessionId } },
     );
+    // Internal helper sessions can be deleted while a late asynchronous
+    // checkpoint is unwinding. Never publish child transcript rows when the
+    // authoritative parent session no longer exists.
+    if (updatedRows === 0) {
+      logger.debug('Skipping transcript publication for a deleted agent session', { sessionId });
+      return;
+    }
     // Persist every visible checkpoint, including an unanswered user message
     // or incomplete tool turn. Those tails are exactly what a user expects to
     // see after stopping a task or reopening one that failed.
