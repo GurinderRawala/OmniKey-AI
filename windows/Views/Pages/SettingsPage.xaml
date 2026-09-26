@@ -549,6 +549,46 @@
                         </Grid>
                     </Border>
 
+                    <!--  Grammar and prompt enhancement model  -->
+                    <Border
+                        Margin="0,0,0,14"
+                        Padding="18,16"
+                        Background="{StaticResource Nord.PanelBackgroundBrush}"
+                        CornerRadius="14">
+                        <StackPanel>
+                            <TextBlock
+                                Margin="0,0,0,4"
+                                FontFamily="{StaticResource OK.FontFamily}"
+                                FontSize="{StaticResource OK.Font.Headline}"
+                                FontWeight="SemiBold"
+                                Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                                Text="Grammar &amp; prompt enhancement model" />
+                            <TextBlock
+                                Margin="0,0,0,10"
+                                FontFamily="{StaticResource OK.FontFamily}"
+                                FontSize="{StaticResource OK.Font.Caption}"
+                                Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                                Text="Optionally use a custom model supported by the active AI provider. Leave it blank to use OmniKey's fast default model."
+                                TextWrapping="Wrap" />
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="12" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <ui:TextBox
+                                    Grid.Column="0"
+                                    PlaceholderText="Use the provider default"
+                                    Text="{Binding PendingGrammarEnhancementModel, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                <ui:Button
+                                    Grid.Column="2"
+                                    Appearance="Secondary"
+                                    Command="{Binding UseDefaultGrammarEnhancementModelCommand}"
+                                    Content="Use provider default" />
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
                     <!--  Browser access  -->
                     <Border
                         Margin="0,0,0,16"

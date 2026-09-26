@@ -26,7 +26,7 @@ const MAX_UNGROUPED = 40;
 const MAX_GROUPED_TO_SUMMARISE = 15;
 const MAX_SNIPPETS_PER_SESSION = 3;
 const GROUPING_AGENT_TIMEOUT_MS = 5 * 60 * 1_000;
-const FINAL_ANSWER_RE = /<final_answer>/;
+const activeGroupingSubscriptions = new Set<string>();
 
 function snippetFor(historyJson: string): string {
   const inputs = extractUserInputs(historyJson);
@@ -129,7 +129,7 @@ async function gatherContext(subscriptionId: string): Promise<GatheredContext> {
   const hasWork = ungrouped.length > 0 || groupBlocks.length > 0 || summaryBlocks.length > 0;
 
   const prompt = [
-    'You are organising this user\'s agent chat sessions into groups. Most groups correspond to a single',
+    "You are organising this user's agent chat sessions into groups. Most groups correspond to a single",
     'project (one project root directory); distinct projects — including a parent repo and a child package',
     'inside it (e.g. /Users/me/Repo vs /Users/me/Repo/api) — are DIFFERENT groups. When a session is not',
     'about a codebase, group it by its TOPIC instead (e.g. "Postgres Migration", "Prompt Tuning",',
@@ -153,7 +153,7 @@ async function gatherContext(subscriptionId: string): Promise<GatheredContext> {
     '   NOT omit any from the `sessions` list — every session id above must appear exactly once.',
     '2. Reuse an existing group when the session belongs to the same project or topic. Otherwise create a',
     '   new SPECIFIC group name (2-4 words, Title Case) describing the project (from its path/product) or,',
-    '   when there is no codebase, the session\'s topic/subject. Prefer putting related sessions in the same',
+    "   when there is no codebase, the session's topic/subject. Prefer putting related sessions in the same",
     '   group; a small or single-session group is fine when nothing else matches.',
     '3. NEVER use a generic catch-all name. Names like "Other", "Miscellaneous", "General", "Uncategorized",',
     '   "Various", "Stuff", or anything that just means "everything else" are FORBIDDEN and will be rejected.',
@@ -177,7 +177,16 @@ async function gatherContext(subscriptionId: string): Promise<GatheredContext> {
  * that sees every session at once and can verify project roots on disk.
  */
 export async function regroupSubscriptionViaAgent(subscriptionId: string): Promise<void> {
+  if (activeGroupingSubscriptions.has(subscriptionId)) {
+    logger.debug('Grouping agent pass already in flight; skipping overlapping pass', {
+      subscriptionId,
+    });
+    return;
+  }
+  activeGroupingSubscriptions.add(subscriptionId);
+
   const gid = groupingSessionId(subscriptionId);
+  let cleanupDeferred = false;
   try {
     const subscription = await Subscription.findByPk(subscriptionId);
     if (!subscription) return;
@@ -203,54 +212,62 @@ export async function regroupSubscriptionViaAgent(subscriptionId: string): Promi
     // statically import the agent back.
     const { runAgentTurn } = await import('../../agentServer');
 
-    await new Promise<void>((resolve) => {
-      let settled = false;
-      const settle = () => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timeout);
-        resolve();
-      };
-      const timeout = setTimeout(() => {
-        logger.warn('Grouping agent timed out', { subscriptionId });
-        settle();
-      }, GROUPING_AGENT_TIMEOUT_MS);
-
-      const send: AgentSendFn = (msg) => {
-        if (settled) return;
-        const content = msg.content ?? '';
-        if (msg.is_error) {
-          logger.warn('Grouping agent reported an error', {
-            subscriptionId,
-            content: content.slice(0, 300),
-          });
-          settle();
-          return;
-        }
-        // Progress notifications (tool calls, shell output requests) — keep waiting.
-        if (msg.is_web_call || msg.is_image_rendering || msg.is_mcp_call) return;
-        if (FINAL_ANSWER_RE.test(content) || content.trim()) {
-          settle();
-        }
-      };
-
-      void runAgentTurn(
-        gid,
-        subscription,
-        { session_id: gid, sender: 'user', content: prompt },
-        send,
-        logger,
-        {
-          isCronJob: true,
-          skipGrouping: true,
-          extraTools: [ASSIGN_SESSION_GROUPS_TOOL],
-          toolHandlers: new Map([['assign_session_groups', handler]]),
-        },
-      ).catch((err) => {
-        logger.error('Grouping agent turn failed', { subscriptionId, error: err });
-        settle();
+    const send: AgentSendFn = (msg) => {
+      if (!msg.is_error) return;
+      logger.warn('Grouping agent reported an error', {
+        subscriptionId,
+        content: (msg.content ?? '').slice(0, 300),
       });
+    };
+
+    type RunOutcome = { status: 'completed' } | { status: 'failed'; error: unknown };
+    const runPromise: Promise<RunOutcome> = runAgentTurn(
+      gid,
+      subscription,
+      { session_id: gid, sender: 'user', content: prompt },
+      send,
+      logger,
+      {
+        isCronJob: true,
+        skipGrouping: true,
+        extraTools: [ASSIGN_SESSION_GROUPS_TOOL],
+        toolHandlers: new Map([['assign_session_groups', handler]]),
+      },
+    ).then(
+      () => ({ status: 'completed' as const }),
+      (error: unknown) => ({ status: 'failed' as const, error }),
+    );
+
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<{ status: 'timeout' }>((resolve) => {
+      timeoutHandle = setTimeout(() => resolve({ status: 'timeout' }), GROUPING_AGENT_TIMEOUT_MS);
     });
+    const outcome = await Promise.race([runPromise, timeoutPromise]);
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+
+    if (outcome.status === 'timeout') {
+      logger.warn('Grouping agent timed out; deferring helper-session cleanup until it stops', {
+        subscriptionId,
+      });
+      cleanupDeferred = true;
+      void runPromise
+        .then(async (lateOutcome) => {
+          if (lateOutcome.status === 'failed') {
+            logger.error('Grouping agent turn failed after timeout', {
+              subscriptionId,
+              error: lateOutcome.error,
+            });
+          }
+          await AgentSession.destroy({ where: { id: gid, subscriptionId } }).catch(() => {});
+        })
+        .finally(() => {
+          activeGroupingSubscriptions.delete(subscriptionId);
+        });
+      return;
+    }
+    if (outcome.status === 'failed') {
+      throw outcome.error;
+    }
 
     logger.info('Grouping agent pass completed', {
       subscriptionId,
@@ -261,6 +278,9 @@ export async function regroupSubscriptionViaAgent(subscriptionId: string): Promi
     logger.error('regroupSubscriptionViaAgent failed', { subscriptionId, error: err });
   } finally {
     // Always remove the helper session so it never lingers in the user's list.
-    await AgentSession.destroy({ where: { id: gid, subscriptionId } }).catch(() => {});
+    if (!cleanupDeferred) {
+      await AgentSession.destroy({ where: { id: gid, subscriptionId } }).catch(() => {});
+      activeGroupingSubscriptions.delete(subscriptionId);
+    }
   }
 }

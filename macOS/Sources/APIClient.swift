@@ -1214,6 +1214,7 @@ final class APIClient: @unchecked Sendable {
         let browserDebugPort: Int?
         let browserAccessMethod: String?
         let browserJavascriptEventBrowsers: [String]?
+        let grammarEnhancementModel: String?
     }
 
     /// Server response shape for the GET endpoint. The "runtime" object is
@@ -1228,6 +1229,7 @@ final class APIClient: @unchecked Sendable {
         let browserDebugPort: Int?
         let browserAccessMethod: String?
         let browserJavascriptEventBrowsers: [String]?
+        let grammarEnhancementModel: String?
     }
 
     /// Response from the PATCH endpoint and the browser-access POST endpoint.
@@ -1236,6 +1238,7 @@ final class APIClient: @unchecked Sendable {
         let webSearchEnabled: Bool
         let browserAccessEnabled: Bool
         let usageRecordingEnabled: Bool?
+        let grammarEnhancementModel: String?
         let restartScheduled: Bool?
         let message: String?
     }
@@ -1278,7 +1281,8 @@ final class APIClient: @unchecked Sendable {
                     browserDebugBrowserName: decoded.browserDebugBrowserName,
                     browserDebugPort: decoded.browserDebugPort,
                     browserAccessMethod: decoded.browserAccessMethod,
-                    browserJavascriptEventBrowsers: decoded.browserJavascriptEventBrowsers
+                    browserJavascriptEventBrowsers: decoded.browserJavascriptEventBrowsers,
+                    grammarEnhancementModel: decoded.grammarEnhancementModel
                 )))
             } catch { completion(.failure(error)) }
         }
@@ -1310,6 +1314,46 @@ final class APIClient: @unchecked Sendable {
             return
         }
         request.httpBody = body
+        let task = URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error = error { completion(.failure(error)); return }
+            guard let httpResponse = response as? HTTPURLResponse else {
+                completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response"])))
+                return
+            }
+            guard (200...299).contains(httpResponse.statusCode) else {
+                completion(.failure(APIClient.makeBackendError(statusCode: httpResponse.statusCode, data: data)))
+                return
+            }
+            guard let data = data, !data.isEmpty else {
+                completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No data"])))
+                return
+            }
+            do { completion(.success(try JSONDecoder().decode(AppSettingsMutationResponse.self, from: data))) }
+            catch { completion(.failure(error)) }
+        }
+        task.resume()
+    }
+
+    /// Sets the optional model used by the grammar and prompt-enhancement
+    /// shortcuts. Passing nil clears the override and restores the backend's
+    /// provider-specific helper model.
+    func updateGrammarEnhancementModel(
+        _ model: String?,
+        completion: @escaping @Sendable (Result<AppSettingsMutationResponse, Error>) -> Void
+    ) {
+        var request = URLRequest(url: appSettingsBaseURL)
+        request.httpMethod = "PATCH"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = SubscriptionManager.shared.jwtToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        let payload: [String: Any] = ["grammarEnhancementModel": model ?? NSNull()]
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        } catch {
+            completion(.failure(error))
+            return
+        }
         let task = URLSession.shared.dataTask(with: request) { data, response, error in
             if let error = error { completion(.failure(error)); return }
             guard let httpResponse = response as? HTTPURLResponse else {

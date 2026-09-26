@@ -1,5 +1,6 @@
 import { DataTypes, Model, Optional } from 'sequelize';
 import { sequelize } from '../db';
+import type { AIProvider } from '../config';
 
 export type TerminalAccessMode = 'full' | 'limited';
 export type BrowserAccessMethod = 'debug-profile' | 'javascript-events';
@@ -20,6 +21,8 @@ export interface AgentSettingsAttributes {
   anthropicModel?: string | null;
   geminiModel?: string | null;
   nemotronModel?: string | null;
+  grammarEnhancementModel?: string | null;
+  grammarEnhancementProvider?: AIProvider | null;
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -41,6 +44,8 @@ interface AgentSettingsCreationAttributes extends Optional<
   | 'anthropicModel'
   | 'geminiModel'
   | 'nemotronModel'
+  | 'grammarEnhancementModel'
+  | 'grammarEnhancementProvider'
   | 'createdAt'
   | 'updatedAt'
 > {}
@@ -64,6 +69,8 @@ export class AgentSettings
   public anthropicModel?: string | null;
   public geminiModel?: string | null;
   public nemotronModel?: string | null;
+  public grammarEnhancementModel?: string | null;
+  public grammarEnhancementProvider?: AIProvider | null;
   public readonly createdAt!: Date;
   public readonly updatedAt!: Date;
 }
@@ -149,6 +156,16 @@ AgentSettings.init(
       type: DataTypes.STRING,
       allowNull: true,
       field: 'nemotron_model',
+    },
+    grammarEnhancementModel: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      field: 'grammar_enhancement_model',
+    },
+    grammarEnhancementProvider: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      field: 'grammar_enhancement_provider',
     },
   },
   {

@@ -23,6 +23,8 @@ struct AgentAccessSettingsView: View {
     @State private var browserDebugPort: Int? = nil
     @State private var browserAccessMethod: String? = nil
     @State private var browserJavascriptEventBrowsers: [String] = []
+    @State private var grammarEnhancementModel: String = ""
+    @State private var savedGrammarEnhancementModel: String = ""
 
     @State private var isLoading: Bool = false
     @State private var statusMessage: String = ""
@@ -61,6 +63,7 @@ struct AgentAccessSettingsView: View {
                         terminalAccessCard
                         webSearchCard
                         usageRecordingCard
+                        writingModelCard
                         browserAccessCard
                     }
                     .padding(.horizontal, 24)
@@ -340,6 +343,42 @@ struct AgentAccessSettingsView: View {
         }
     }
 
+    private var writingModelCard: some View {
+        settingCard(
+            icon: "text.badge.checkmark",
+            title: "Grammar & prompt enhancement model",
+            subtitle: "Optionally use a custom model for the grammar and prompt-enhancement shortcuts."
+        ) {
+            VStack(alignment: .leading, spacing: 10) {
+                TextField("Use the provider default", text: $grammarEnhancementModel)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 12, design: .monospaced))
+                    .disabled(isLoading)
+
+                HStack(spacing: 8) {
+                    Button("Save") { applyGrammarEnhancementModel(grammarEnhancementModel) }
+                        .buttonStyle(.borderedProminent)
+                        .tint(NordTheme.accentBlue(colorScheme))
+                        .disabled(
+                            isLoading ||
+                            grammarEnhancementModel.trimmingCharacters(in: .whitespacesAndNewlines)
+                                == savedGrammarEnhancementModel
+                        )
+                    Button("Use Default") {
+                        applyGrammarEnhancementModel("")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(isLoading || savedGrammarEnhancementModel.isEmpty)
+                    Spacer()
+                }
+
+                Text("Enter a model identifier supported by the active AI provider. Leave it blank to use OmniKey's fast default model.")
+                    .font(.system(size: 11))
+                    .foregroundColor(NordTheme.secondaryText(colorScheme))
+            }
+        }
+    }
+
     private var browserAccessDescription: String {
         if browserAccessMethod == "javascript-events" {
             let browsers = browserJavascriptEventBrowsers.isEmpty
@@ -472,6 +511,8 @@ struct AgentAccessSettingsView: View {
                     browserDebugPort = response.browserDebugPort
                     browserAccessMethod = response.browserAccessMethod
                     browserJavascriptEventBrowsers = response.browserJavascriptEventBrowsers ?? []
+                    grammarEnhancementModel = response.grammarEnhancementModel ?? ""
+                    savedGrammarEnhancementModel = response.grammarEnhancementModel ?? ""
                 case .failure(let error):
                     statusMessage = "Failed to load settings: \(error.localizedDescription)"
                 }
@@ -528,6 +569,31 @@ struct AgentAccessSettingsView: View {
                 case .failure(let error):
                     isLoading = false
                     statusMessage = "Failed to apply: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    private func applyGrammarEnhancementModel(_ model: String) {
+        let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        isLoading = true
+        statusMessage = trimmed.isEmpty
+            ? "Restoring the default grammar and enhancement model…"
+            : "Updating the grammar and enhancement model…"
+        apiClient.updateGrammarEnhancementModel(trimmed.isEmpty ? nil : trimmed) { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let response):
+                    let saved = response.grammarEnhancementModel ?? ""
+                    grammarEnhancementModel = saved
+                    savedGrammarEnhancementModel = saved
+                    statusMessage = saved.isEmpty
+                        ? "Grammar and prompt enhancement now use the provider default."
+                        : "Grammar and prompt enhancement now use \(saved)."
+                    isLoading = false
+                case .failure(let error):
+                    isLoading = false
+                    statusMessage = "Failed to update the model: \(error.localizedDescription)"
                 }
             }
         }

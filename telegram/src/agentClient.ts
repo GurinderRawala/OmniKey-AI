@@ -162,8 +162,8 @@ const FALLBACK_AGENT_MODEL_OPTIONS: Record<string, AgentModelOption[]> = {
       label: 'nvidia/nemotron-3-super-120b-a12b',
     },
     {
-      id: 'nvidia/nemotron-3-nano-30b-a3b',
-      label: 'nvidia/nemotron-3-nano-30b-a3b',
+      id: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
+      label: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
     },
   ],
 };

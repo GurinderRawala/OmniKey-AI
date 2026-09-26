@@ -109,7 +109,7 @@ const DEFAULT_MODELS: Record<AIProvider, { fast: string; smart: string }> = {
   // type any exact model id from the chat model picker and point the base URL at
   // any compatible gateway.
   nemotron: {
-    fast: 'nvidia/nemotron-3-nano-30b-a3b',
+    fast: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
     smart: 'nvidia/nemotron-3-ultra-550b-a55b',
   },
 };

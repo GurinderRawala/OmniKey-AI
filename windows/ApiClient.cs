@@ -99,6 +99,7 @@ namespace OmniKey.Windows
         /// <c>agent_settings.usage_recording_enabled</c> column (no longer an
         /// environment variable) and read by the Usage page.</summary>
         public bool UsageRecordingEnabled { get; set; }
+        public string? GrammarEnhancementModel { get; set; }
 
         public string? BrowserDebugBrowserName { get; set; }
         public int? BrowserDebugPort { get; set; }
@@ -118,6 +119,7 @@ namespace OmniKey.Windows
         public bool WebSearchEnabled { get; set; }
         public bool BrowserAccessEnabled { get; set; }
         public bool UsageRecordingEnabled { get; set; }
+        public string? GrammarEnhancementModel { get; set; }
         public bool? RestartScheduled { get; set; }
         public string? Message { get; set; }
     }
@@ -706,18 +708,28 @@ namespace OmniKey.Windows
         }
 
         /// <summary>PATCH /api/app-settings — partial update of terminalAccess,
-        /// webSearchEnabled and/or usageRecordingEnabled (each omitted when null).
-        /// All three are now persisted in the <c>agent_settings</c> table rather
+        /// webSearchEnabled, usageRecordingEnabled, and/or the optional writing
+        /// model. The explicit update flag lets callers distinguish an omitted
+        /// model from clearing the override with JSON null.
+        /// These values are persisted in the <c>agent_settings</c> table rather
         /// than written back as environment variables, so no daemon restart is
         /// required — the agent re-reads them on every turn.</summary>
         public async Task<AppSettingsMutationResponse> UpdateAppSettingsAsync(
-            string? terminalAccess, bool? webSearchEnabled, bool? usageRecordingEnabled = null)
+            string? terminalAccess,
+            bool? webSearchEnabled,
+            bool? usageRecordingEnabled = null,
+            bool updateGrammarEnhancementModel = false,
+            string? grammarEnhancementModel = null)
         {
             using var req = BuildRequest(HttpMethod.Patch, "/api/app-settings");
             var body = new Dictionary<string, object?>();
             if (terminalAccess != null)          body["terminalAccess"]        = terminalAccess;
             if (webSearchEnabled.HasValue)       body["webSearchEnabled"]      = webSearchEnabled.Value;
             if (usageRecordingEnabled.HasValue)  body["usageRecordingEnabled"] = usageRecordingEnabled.Value;
+            if (updateGrammarEnhancementModel)
+                body["grammarEnhancementModel"] = string.IsNullOrWhiteSpace(grammarEnhancementModel)
+                    ? null
+                    : grammarEnhancementModel.Trim();
             req.Content = JsonContent.Create(body);
             using var resp = await Http.SendAsync(req);
             await EnsureSuccessAsync(resp);
@@ -846,6 +858,7 @@ namespace OmniKey.Windows
                 WebSearchEnabled = ReadBool(root, "webSearchEnabled"),
                 BrowserAccessEnabled = ReadBool(root, "browserAccessEnabled"),
                 UsageRecordingEnabled = ReadBool(root, "usageRecordingEnabled"),
+                GrammarEnhancementModel = ReadString(root, "grammarEnhancementModel"),
                 RestartScheduled = ReadNullableBool(root, "restartScheduled"),
                 Message = ReadString(root, "message")
             };

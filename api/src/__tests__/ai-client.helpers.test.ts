@@ -60,7 +60,7 @@ describe('modelSupportsTemperature', () => {
 
   describe('Nemotron', () => {
     it.each([
-      'nvidia/nemotron-3-nano-30b-a3b',
+      'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
       'nvidia/nemotron-3-super-120b-a12b',
       'nvidia/nemotron-3-ultra-550b-a55b',
     ])('allows temperature for %s', (model) => {
@@ -94,14 +94,12 @@ describe('modelSupportsTemperature', () => {
     });
   });
 
-  it.each([
-    'unknown-model',
-    'gpt-7-future',
-    'gemini-future-pro',
-    'claude-future-model',
-  ])('defaults unknown model %s to no temperature support', (model) => {
-    expect(modelSupportsTemperature(model)).toBe(false);
-  });
+  it.each(['unknown-model', 'gpt-7-future', 'gemini-future-pro', 'claude-future-model'])(
+    'defaults unknown model %s to no temperature support',
+    (model) => {
+      expect(modelSupportsTemperature(model)).toBe(false);
+    },
+  );
 });
 
 describe('getDefaultModel', () => {
@@ -237,7 +235,9 @@ describe('getMaxHistoryLength / getMaxMessageContentLength', () => {
   });
 
   it('bounds a single non-Anthropic message by the history budget', () => {
-    expect(getMaxMessageContentLength('openai', 'gpt-4o')).toBe(getMaxHistoryLength('openai', 'gpt-4o'));
+    expect(getMaxMessageContentLength('openai', 'gpt-4o')).toBe(
+      getMaxHistoryLength('openai', 'gpt-4o'),
+    );
   });
 });
 

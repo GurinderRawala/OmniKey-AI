@@ -147,7 +147,7 @@ describe('OpenAI-compatible open-model adapter', () => {
     const client = new AIClient('nemotron', 'nvapi-test');
     const received: string[] = [];
     const { usage } = await client.streamComplete(
-      'nvidia/nemotron-3-nano-30b-a3b',
+      'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
       messages,
       {},
       (d) => received.push(d),
@@ -201,7 +201,9 @@ describe('OpenAI-compatible open-model adapter', () => {
   });
 
   it('exposes fast and smart defaults via getDefaultModel', () => {
-    expect(getDefaultModel('nemotron', 'fast')).toBe('nvidia/nemotron-3-nano-30b-a3b');
+    expect(getDefaultModel('nemotron', 'fast')).toBe(
+      'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
+    );
     expect(getDefaultModel('nemotron', 'smart')).toBe('nvidia/nemotron-3-ultra-550b-a55b');
   });
 
