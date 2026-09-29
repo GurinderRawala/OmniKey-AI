@@ -3331,14 +3331,8 @@ struct FinalAnswerView: View {
             // surrounding chrome. `.font(...)` sets the body size;
             // headings scale off it proportionally through Textual's
             // font-scale system.
-            //
-            // `.codeBlockStyle(.chat)` is applied *after*
-            // `.structuredTextStyle(.gitHub)` so it overrides the
-            // preset's bare code slab with the app's own chrome
-            // (language label + copy button + horizontal scroll).
             StructuredText(markdown: displayedText)
-                .textual.structuredTextStyle(.gitHub)
-                .textual.codeBlockStyle(.chat)
+                .chatStructuredTextStyle()
                 .textual.inlineStyle(nordInlineStyle)
                 .textual.textSelection(.enabled)
                 .font(.system(size: 14.5))

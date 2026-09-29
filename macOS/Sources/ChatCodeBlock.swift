@@ -232,3 +232,17 @@ struct ChatStructuredCodeBlockStyle: StructuredText.CodeBlockStyle {
 extension StructuredText.CodeBlockStyle where Self == ChatStructuredCodeBlockStyle {
     static var chat: Self { .init() }
 }
+
+extension View {
+    /// The `.gitHub` preset with the app's code-block chrome.
+    ///
+    /// Order matters: both modifiers write the same environment key and
+    /// SwiftUI resolves the innermost value, so `.codeBlockStyle(.chat)`
+    /// has to be applied *before* (inside) `.structuredTextStyle(.gitHub)`
+    /// or the preset's bare code slab silently wins.
+    func chatStructuredTextStyle() -> some View {
+        self
+            .textual.codeBlockStyle(.chat)
+            .textual.structuredTextStyle(.gitHub)
+    }
+}
