@@ -95,8 +95,14 @@ struct CodeBlockCopyButton: View {
         .help(copied ? "Copied" : "Copy code")
         .accessibilityLabel(copied ? "Code copied" : "Copy code")
         .onDisappear {
+            // Cancelling the pending revert must also clear the
+            // confirmation, otherwise a block that disappears during
+            // the 1.6s window (transcript scrolling, collapsing the
+            // execution history) keeps a stale checkmark if SwiftUI
+            // preserves this `@State` and reuses the view.
             resetTask?.cancel()
             resetTask = nil
+            copied = false
         }
     }
 
