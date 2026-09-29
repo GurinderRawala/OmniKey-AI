@@ -4212,6 +4212,7 @@ struct ChatCodeBlockView: View {
     let code: String
     var baseFontSize: CGFloat = 13
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.chatCodeBlockPasteboardName) private var pasteboardName
 
     var body: some View {
         ChatCodeBlockContainer(
@@ -4239,7 +4240,10 @@ struct ChatCodeBlockView: View {
     }
 
     private func copyCode() {
-        ChatCodeBlockPasteboard.write(code)
+        let pasteboard = pasteboardName == .general
+            ? NSPasteboard.general
+            : NSPasteboard(name: pasteboardName)
+        ChatCodeBlockPasteboard.write(code, to: pasteboard)
     }
 }
 

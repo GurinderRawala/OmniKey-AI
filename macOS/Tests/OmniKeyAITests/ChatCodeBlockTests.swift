@@ -147,30 +147,43 @@ final class ChatCodeBlockCopyClickTests: XCTestCase {
 
     @MainActor
     func testClickingCopyInFinalAnswerCodeBlockCopiesCode() {
+        let pasteboard = privatePasteboard("final-answer")
         let view = StructuredText(markdown: "Intro\n\n```swift\n\(code)\n```\n")
-            .chatStructuredTextStyle()
+            .chatStructuredTextStyle { _ in
+                ChatCodeBlockPasteboard.write(self.code, to: pasteboard)
+            }
             .textual.textSelection(.enabled)
-        XCTAssertTrue(clickCopyButton(in: view).contains(code))
+        XCTAssertTrue(clickCopyButton(in: view, pasteboard: pasteboard).contains(code))
     }
 
     @MainActor
     func testClickingCopyInUserMessageCodeBlockCopiesCode() {
+        let pasteboard = privatePasteboard("user-code-block")
         let view = ChatCodeBlockView(language: "swift", code: code)
-        XCTAssertTrue(clickCopyButton(in: view).contains(code))
+            .chatCodeBlockPasteboard(pasteboard.name)
+        XCTAssertTrue(clickCopyButton(in: view, pasteboard: pasteboard).contains(code))
     }
 
     @MainActor
     func testClickingCopyInsideUserBubbleCopiesCode() {
+        let pasteboard = privatePasteboard("user-bubble")
         let view = UserBubbleView(text: "Run this:\n\n```swift\n\(code)\n```")
+            .chatCodeBlockPasteboard(pasteboard.name)
         // The bubble's own footer "Copy message" button sits in the same
         // column, so only require that the code block's button copies the code.
-        XCTAssertTrue(clickCopyButton(in: view, trailingInset: 17 + 14).contains(code))
+        XCTAssertTrue(
+            clickCopyButton(in: view, pasteboard: pasteboard, trailingInset: 17 + 14).contains(code)
+        )
     }
 
     /// Clicks down the column where the header's copy button sits and
     /// returns every distinct value any click wrote to the pasteboard.
     @MainActor
-    private func clickCopyButton(in view: some View, trailingInset: CGFloat = 17) -> Set<String> {
+    private func clickCopyButton(
+        in view: some View,
+        pasteboard: NSPasteboard,
+        trailingInset: CGFloat = 17
+    ) -> Set<String> {
         _ = NSApplication.shared
         let width: CGFloat = 480
         let host = NSHostingView(rootView: view.frame(width: width))
@@ -191,7 +204,7 @@ final class ChatCodeBlockCopyClickTests: XCTestCase {
         // add any padding their container puts around the code block.
         let x = width - trailingInset
         for offset in stride(from: 4.0, to: host.bounds.height, by: 4.0) {
-            NSPasteboard.general.clearContents()
+            pasteboard.clearContents()
             let point = host.convert(NSPoint(x: x, y: host.bounds.height - offset), to: nil)
             for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
                 guard let event = NSEvent.mouseEvent(
@@ -203,8 +216,12 @@ final class ChatCodeBlockCopyClickTests: XCTestCase {
                 NSApp.sendEvent(event)
             }
             RunLoop.main.run(until: Date().addingTimeInterval(0.03))
-            if let value = NSPasteboard.general.string(forType: .string) { copied.insert(value) }
+            if let value = pasteboard.string(forType: .string) { copied.insert(value) }
         }
         return copied
+    }
+
+    private func privatePasteboard(_ suffix: String) -> NSPasteboard {
+        NSPasteboard(name: .init("ChatCodeBlockCopyClickTests.\(suffix).\(UUID().uuidString)"))
     }
 }
