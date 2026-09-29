@@ -21,7 +21,9 @@ const mocks = vi.hoisted(() => {
       update: vi.fn(),
     },
     complete: vi.fn(),
+    activateMcpServerForSubscription: vi.fn(),
     executeTool: vi.fn(),
+    getMcpToolsForSubscription: vi.fn(),
     getAgentSettings: vi.fn(),
     replaceNormalizedTranscript: vi.fn(),
     runScript: vi.fn(),
@@ -58,9 +60,11 @@ vi.mock('../agent/mcpPromptCache', () => ({
 }));
 
 vi.mock('../agent/mcpRuntime', () => ({
+  CONNECT_MCP_TOOL_NAME: 'connect_mcp',
   MCP_TOOL_PREFIX: 'mcp__',
+  activateMcpServerForSubscription: mocks.activateMcpServerForSubscription,
   executeMcpTool: vi.fn(),
-  getMcpToolsForSubscription: vi.fn(async () => ({ aiTools: [], dispatch: new Map() })),
+  getMcpToolsForSubscription: mocks.getMcpToolsForSubscription,
 }));
 
 vi.mock('../featureRoutes', () => ({
@@ -178,6 +182,7 @@ describe('agent session persistence checkpoints', () => {
     mocks.agentSession.destroy.mockResolvedValue(0);
     mocks.agentSession.increment.mockResolvedValue([1]);
     mocks.executeTool.mockResolvedValue('tool result');
+    mocks.getMcpToolsForSubscription.mockResolvedValue({ aiTools: [], dispatch: new Map() });
     mocks.getAgentSettings.mockResolvedValue({
       id: 'default',
       terminalAccess: 'full',
@@ -295,6 +300,91 @@ describe('agent session persistence checkpoints', () => {
           role: 'tool',
           tool_name: 'web_search',
           content: 'tool result',
+        }),
+      ]),
+    );
+  });
+
+  it('connects an MCP serially and exposes its tools to the follow-up model call', async () => {
+    const connectTool = {
+      name: 'connect_mcp',
+      description: 'Connect an MCP server',
+      parameters: {
+        type: 'object',
+        properties: { name: { type: 'string' } },
+        required: ['name'],
+      },
+    };
+    const slackTool = {
+      name: 'mcp_slack__search',
+      description: 'Search Slack',
+      parameters: { type: 'object', properties: {} },
+    };
+    const dispatch = new Map();
+    const toolCall = {
+      id: 'call-connect-slack',
+      name: 'connect_mcp',
+      arguments: { name: 'Slack' },
+    };
+
+    mocks.getMcpToolsForSubscription.mockResolvedValue({
+      aiTools: [connectTool],
+      dispatch,
+    });
+    mocks.activateMcpServerForSubscription.mockResolvedValue({
+      message: 'Connected to MCP server "Slack".',
+      aiTools: [slackTool],
+      replaceExistingTools: true,
+    });
+    mocks.complete
+      .mockResolvedValueOnce({
+        assistantMessage: { role: 'assistant', content: '', tool_calls: [toolCall] },
+        content: '',
+        finish_reason: 'tool_calls',
+        model: 'test-model',
+        tool_calls: [toolCall],
+      })
+      .mockResolvedValueOnce({
+        assistantMessage: {
+          role: 'assistant',
+          content: '<final_answer>Slack is connected.</final_answer>',
+        },
+        content: '<final_answer>Slack is connected.</final_answer>',
+        finish_reason: 'stop',
+        model: 'test-model',
+      });
+
+    await runAgentTurn(
+      'session-1',
+      { id: 'subscription-1' } as any,
+      {
+        session_id: 'session-1',
+        sender: 'client',
+        content: 'Use Slack to summarize a thread.',
+        platform: 'macos',
+      },
+      vi.fn(),
+      mocks.log as any,
+      { skipGrouping: true },
+    );
+
+    expect(mocks.activateMcpServerForSubscription).toHaveBeenCalledWith(
+      'subscription-1',
+      'Slack',
+      dispatch,
+      mocks.log,
+    );
+    expect(mocks.complete).toHaveBeenCalledTimes(2);
+    expect(mocks.complete.mock.calls[1]?.[2]?.tools).toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: 'mcp_slack__search' })]),
+    );
+    const finalHistory = parsedHistoryFromCall(historyUpdateCalls().at(-1) ?? []);
+    expect(finalHistory).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: 'tool',
+          tool_name: 'connect_mcp',
+          content: 'Connected to MCP server "Slack".',
         }),
       ]),
     );

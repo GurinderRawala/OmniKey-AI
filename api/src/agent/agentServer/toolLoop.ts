@@ -3,7 +3,12 @@ import { logger } from '../../logger';
 import { runScript } from '../../shellRunner';
 import { executeTool } from '../../web-search/web-search-provider';
 import { executeImageGenerationTool } from '../imageTool';
-import { executeMcpTool, MCP_TOOL_PREFIX } from '../mcpRuntime';
+import {
+  activateMcpServerForSubscription,
+  CONNECT_MCP_TOOL_NAME,
+  executeMcpTool,
+  MCP_TOOL_PREFIX,
+} from '../mcpRuntime';
 import { pushToSessionHistory } from '../utils';
 import type { AgentSendFn, SessionState } from '../types';
 import type { AITool, AICompletionResult } from '../../ai-client';
@@ -82,6 +87,7 @@ export async function runToolLoop(
   initialResult: AICompletionResult,
   session: SessionState,
   sessionId: string,
+  subscriptionId: string,
   model: string,
   send: AgentSendFn,
   log: Logger,
@@ -208,6 +214,49 @@ export async function runToolLoop(
             `Error: Tool "${tc.name}" is not enabled for this session. ` +
             `Available tools: ${Array.from(allowedToolNames).join(', ') || '(none)'}.`,
         };
+      }
+
+      if (tc.name === CONNECT_MCP_TOOL_NAME) {
+        send({
+          session_id: sessionId,
+          sender: 'agent',
+          content: `Connecting MCP server: ${String(args.name ?? '')}`,
+          is_terminal_output: false,
+          is_error: false,
+          is_mcp_call: true,
+          activity_id: tc.id,
+          activity_phase: 'started',
+        });
+        const activation = await activateMcpServerForSubscription(
+          subscriptionId,
+          args.name,
+          mcpDispatch,
+          log,
+        );
+        if (activation.replaceExistingTools) {
+          for (let i = tools.length - 1; i >= 0; i--) {
+            if (!tools[i].name.startsWith(MCP_TOOL_PREFIX)) continue;
+            allowedToolNames.delete(tools[i].name);
+            tools.splice(i, 1);
+          }
+        }
+        for (const tool of activation.aiTools) {
+          if (allowedToolNames.has(tool.name)) continue;
+          tools.push(tool);
+          allowedToolNames.add(tool.name);
+        }
+        const failed = isToolFailureResult(activation.message);
+        send({
+          session_id: sessionId,
+          sender: 'agent',
+          content: `Tool: ${CONNECT_MCP_TOOL_NAME}\n\n${activation.message}`,
+          is_terminal_output: false,
+          is_error: failed,
+          is_mcp_call: true,
+          activity_id: tc.id,
+          activity_phase: failed ? 'failed' : 'completed',
+        });
+        return { id: tc.id, name: tc.name, result: activation.message };
       }
 
       if (tc.name.startsWith(MCP_TOOL_PREFIX)) {
@@ -385,7 +434,11 @@ export async function runToolLoop(
     let callIndex = 0;
     while (callIndex < toolCalls.length) {
       const tc = toolCalls[callIndex];
-      if (tc.name === 'shell_script') {
+      // Both shell_script and connect_mcp mutate state that subsequent calls
+      // depend on, so execute them serially. The batch below intentionally
+      // stops before either tool; handling both here also guarantees the
+      // cursor advances instead of repeatedly processing an empty batch.
+      if (tc.name === 'shell_script' || tc.name === CONNECT_MCP_TOOL_NAME) {
         toolResults[callIndex] = await executeOneToolCall(tc);
         callIndex++;
         continue;
@@ -393,7 +446,11 @@ export async function runToolLoop(
 
       const batchStart = callIndex;
       const batch: typeof toolCalls = [];
-      while (callIndex < toolCalls.length && toolCalls[callIndex].name !== 'shell_script') {
+      while (
+        callIndex < toolCalls.length &&
+        toolCalls[callIndex].name !== 'shell_script' &&
+        toolCalls[callIndex].name !== CONNECT_MCP_TOOL_NAME
+      ) {
         batch.push(toolCalls[callIndex]);
         callIndex++;
       }

@@ -125,8 +125,8 @@ app.get('/macos/appcast', (req, res) => {
 
   // These should match the values embedded into the macOS app
   // Info.plist in macOS/build_release_dmg.sh.
-  const bundleVersion = '66';
-  const shortVersion = '1.9.6';
+  const bundleVersion = '67';
+  const shortVersion = '1.9.7';
 
   const xml = `<?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0"
@@ -157,7 +157,7 @@ app.get('/macos/appcast', (req, res) => {
 // ── Windows distribution endpoints ───────────────────────────────────────────
 // These should match the values in windows/OmniKey.Windows.csproj
 // <Version> and windows/build_release_zip.ps1 $APP_VERSION.
-const WIN_VERSION = '1.21.1';
+const WIN_VERSION = '1.21.2';
 const WIN_ZIP_FILENAME = 'OmniKeyAI-windows-win-x64.zip';
 const WIN_ZIP_PATH = path.join(process.cwd(), 'windows', WIN_ZIP_FILENAME);
 
@@ -211,11 +211,12 @@ app.get('/windows/update', (req, res) => {
       `What's new in ${WIN_VERSION}`,
       ``,
       `Fixes`,
-      `- Agent transcript publishing no longer races with cleanup of internal grouping sessions.`,
-      `- NVIDIA grammar and prompt enhancement use the current Nemotron reasoning model by default.`,
+      `- Agents no longer hang while connecting to an MCP server on demand.`,
+      `- MCP servers remain available by name even when their tools would previously have fallen outside the initial 50-tool limit.`,
       ``,
       `Improvements`,
-      `- Agent Access now lets you choose a custom model for Grammar and Prompt Enhancement, with a safe provider-specific fallback.`,
+      `- MCP connections are now opened only when needed, reducing the initial prompt and connection overhead.`,
+      `- MCP configuration now explains that the configured server name can be mentioned directly in a task.`,
     ].join('\n'),
   });
 });

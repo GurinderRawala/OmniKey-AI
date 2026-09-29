@@ -71,3 +71,32 @@ describe('agent browser-access prompt', () => {
     expect(prompt).not.toContain('Authenticated browser access via JavaScript Events');
   });
 });
+
+describe('agent MCP prompt', () => {
+  it('advertises every configured name and explains on-demand connection', () => {
+    const prompt = getAgentPrompt(
+      'macos',
+      false,
+      [
+        {
+          name: 'Slack',
+          description: 'Workspace messages',
+          transport: 'http',
+        },
+        {
+          name: 'GitHub',
+          description: 'Repository data',
+          transport: 'stdio',
+        },
+      ],
+      settings(),
+    );
+
+    expect(prompt).toContain('loaded only on demand');
+    expect(prompt).toContain('call `connect_mcp` with its exact configured name');
+    expect(prompt).toContain('name="Slack"');
+    expect(prompt).toContain('name="GitHub"');
+    expect(prompt).toContain('Use any server from the list when it is needed');
+    expect(prompt).toContain('Connecting another server replaces the previously exposed MCP tool');
+  });
+});

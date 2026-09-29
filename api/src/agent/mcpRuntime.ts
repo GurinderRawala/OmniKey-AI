@@ -1,9 +1,8 @@
 // MCP client runtime.
 //
-// Maintains long-lived connections to each user-configured MCP server and
-// exposes their tools to the agent as `AITool` entries. The agent's tool
-// dispatcher routes any tool call whose name starts with `MCP_TOOL_PREFIX`
-// back here so it is forwarded to the originating MCP server.
+// Maintains long-lived connections to user-configured MCP servers. Connections
+// are established only after the agent calls `connect_mcp` with a configured
+// server name; the resulting tools are then exposed as `AITool` entries.
 
 import { accessSync, constants as fsConstants, existsSync } from 'fs';
 import path from 'path';
@@ -17,6 +16,7 @@ import { MCPServer } from '../models/mcpServer';
 import { AITool } from '../ai-client';
 
 export const MCP_TOOL_PREFIX = 'mcp_';
+export const CONNECT_MCP_TOOL_NAME = 'connect_mcp';
 const MAX_TOOL_NAME_LEN = 64;
 const MAX_MCP_TOOLS_PER_TURN = 50;
 const MAX_MCP_TOOL_DESCRIPTION_CHARS = 700;
@@ -177,6 +177,12 @@ interface DispatchEntry {
 export interface McpToolBundle {
   aiTools: AITool[];
   dispatch: Map<string, DispatchEntry>;
+}
+
+export interface McpActivationResult {
+  message: string;
+  aiTools: AITool[];
+  replaceExistingTools: boolean;
 }
 
 const clients = new Map<string, ConnectedClient>(); // by MCPServer.id
@@ -514,9 +520,9 @@ async function getOrConnect(server: MCPServer, log: Logger): Promise<ConnectedCl
 }
 
 /**
- * Builds the set of AI tool definitions exposed to the LLM for one subscription.
- * Returns both the tool definitions and a dispatch map used by `executeMcpTool`
- * to route a tool call back to the right (server, mcpToolName) pair.
+ * Builds the lightweight MCP activation tool for one subscription. No MCP
+ * server connection is opened here; individual tool schemas are loaded only
+ * after the model selects a configured server name with `connect_mcp`.
  */
 export async function getMcpToolsForSubscription(
   subscriptionId: string,
@@ -529,45 +535,140 @@ export async function getMcpToolsForSubscription(
   try {
     servers = await MCPServer.findAll({
       where: { subscriptionId, isEnabled: true },
+      attributes: ['id', 'name'],
+      order: [['name', 'ASC']],
     });
   } catch (err) {
     log.error('Failed to load MCP servers for runtime', { error: err });
     return { aiTools, dispatch };
   }
 
-  // Connect / re-use clients in parallel.
-  const connected = await Promise.all(servers.map((s) => getOrConnect(s, log)));
-
-  for (const c of connected) {
-    if (!c) continue;
-    for (const tool of c.tools) {
-      if (aiTools.length >= MAX_MCP_TOOLS_PER_TURN) {
-        log.warn('Reached MCP tool exposure cap for this turn; skipping remaining tools', {
-          subscriptionId,
-          maxMcpToolsPerTurn: MAX_MCP_TOOLS_PER_TURN,
-        });
-        return { aiTools, dispatch };
-      }
-
-      const toolName = buildToolName(c.serverName, tool.name);
-      if (dispatch.has(toolName)) {
-        log.warn('MCP tool name collision — skipping', {
-          toolName,
-          mcpServerName: c.serverName,
-          mcpToolName: tool.name,
-        });
-        continue;
-      }
-      dispatch.set(toolName, { serverId: c.serverId, mcpToolName: tool.name });
-      aiTools.push({
-        name: toolName,
-        description: sanitizeToolDescription(c.serverName, tool.name, tool.description),
-        parameters: compactMcpToolSchema(tool.inputSchema),
-      });
-    }
+  if (servers.length > 0) {
+    aiTools.push({
+      name: CONNECT_MCP_TOOL_NAME,
+      description:
+        "Connect one configured MCP server on demand. Use the exact name from the installed MCP server list in the system prompt. After this succeeds, that server's native tools replace any previously connected MCP tools and will be available on the next step.",
+      parameters: {
+        type: 'object',
+        properties: {
+          name: {
+            type: 'string',
+            enum: servers.map((server) => server.name),
+            description: 'Exact configured MCP server name.',
+          },
+        },
+        required: ['name'],
+        additionalProperties: false,
+      },
+    });
   }
 
   return { aiTools, dispatch };
+}
+
+/**
+ * Connect a single MCP server selected by name and add up to the per-turn
+ * MCP tool cap to the supplied dispatch map. The returned definitions are
+ * appended to the live tool list by the agent loop before its next completion.
+ */
+export async function activateMcpServerForSubscription(
+  subscriptionId: string,
+  name: unknown,
+  dispatch: Map<string, DispatchEntry>,
+  log: Logger,
+): Promise<McpActivationResult> {
+  if (typeof name !== 'string' || !name.trim()) {
+    return {
+      message: 'Error: connect_mcp requires a non-empty server name.',
+      aiTools: [],
+      replaceExistingTools: false,
+    };
+  }
+
+  const selectedName = name.trim();
+  const server = await MCPServer.findOne({
+    where: { subscriptionId, name: selectedName, isEnabled: true },
+  }).catch((err) => {
+    log.error('Failed to load MCP server for on-demand activation', {
+      subscriptionId,
+      mcpServerName: selectedName,
+      error: err,
+    });
+    return null;
+  });
+
+  if (!server) {
+    return {
+      message: `Error: no enabled MCP server is configured with name "${selectedName}".`,
+      aiTools: [],
+      replaceExistingTools: false,
+    };
+  }
+
+  const connected = await getOrConnect(server, log);
+  if (!connected) {
+    return {
+      message: `Error: failed to connect to MCP server "${selectedName}". Check its configuration and last error.`,
+      aiTools: [],
+      replaceExistingTools: false,
+    };
+  }
+
+  const alreadyAdded = Array.from(dispatch.values()).filter(
+    (entry) => entry.serverId === server.id,
+  ).length;
+  if (alreadyAdded > 0) {
+    return {
+      message: `MCP server "${selectedName}" is already connected with ${alreadyAdded} tool(s) available.`,
+      aiTools: [],
+      replaceExistingTools: false,
+    };
+  }
+
+  // Only one server's schemas are exposed at a time. This keeps the prompt
+  // below the 50-tool budget while still allowing any configured server to be
+  // selected later in the same turn.
+  dispatch.clear();
+  const aiTools: AITool[] = [];
+  for (const tool of connected.tools) {
+    if (aiTools.length >= MAX_MCP_TOOLS_PER_TURN) break;
+
+    const toolName = buildToolName(connected.serverName, tool.name);
+    if (dispatch.has(toolName)) {
+      log.warn('MCP tool name collision — skipping', {
+        toolName,
+        mcpServerName: connected.serverName,
+        mcpToolName: tool.name,
+      });
+      continue;
+    }
+    dispatch.set(toolName, { serverId: connected.serverId, mcpToolName: tool.name });
+    aiTools.push({
+      name: toolName,
+      description: sanitizeToolDescription(connected.serverName, tool.name, tool.description),
+      parameters: compactMcpToolSchema(tool.inputSchema),
+    });
+  }
+
+  const omitted = Math.max(0, connected.tools.length - aiTools.length);
+  if (omitted > 0) {
+    log.warn('Reached MCP tool exposure cap for activated server', {
+      subscriptionId,
+      mcpServerId: server.id,
+      maxMcpToolsPerTurn: MAX_MCP_TOOLS_PER_TURN,
+      omitted,
+    });
+  }
+
+  const names = aiTools.map((tool) => tool.name).join(', ');
+  return {
+    message:
+      `Connected to MCP server "${selectedName}". ${aiTools.length} tool(s) are now available` +
+      `${names ? `: ${names}` : '.'}` +
+      `${omitted ? ` (${omitted} additional tools were omitted by the per-server cap).` : ''}`,
+    aiTools,
+    replaceExistingTools: true,
+  };
 }
 
 /**

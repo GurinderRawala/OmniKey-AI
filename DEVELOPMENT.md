@@ -99,7 +99,7 @@ These are the commands the published CLI exposes — useful both for trying your
 | `omnikey remove-config [--db]`                        | Wipe the config directory (and optionally the SQLite database).                                                                                        |
 | `omnikey grant-browser-access`                        | Create a dedicated CDP debug profile so the agent can read authenticated browser tabs.                                                                 |
 | `omnikey browser open`                                | Reopen the debug profile browser.                                                                                                                      |
-| `omnikey mcp add` / `list` / `toggle <id>`            | Manage MCP servers exposed to the agent.                                                                                                               |
+| `omnikey mcp add` / `list` / `toggle <id>`            | Manage named MCP servers that connect on demand.                                                                                                       |
 | `omnikey schedule add` / `list` / `remove`            | Manage scheduled jobs.                                                                                                                                 |
 | `omnikey telegram start` / `status` / `logs` / `stop` | Manage the Telegram bot daemon.                                                                                                                        |
 

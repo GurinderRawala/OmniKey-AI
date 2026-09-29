@@ -861,8 +861,10 @@ npm install -g omnikey-cli</code></pre>
             <p>
               MCP servers expose tool capabilities to OmniAgent, such as filesystem access, browser
               automation, GitHub, databases, internal APIs, or custom company tools. Once a server
-              is registered and enabled, OmniAgent can discover and call its tools when they are
-              relevant to the task.
+              is registered and enabled, OmniAgent sees its name and description. It connects to
+              the server and loads its tool schemas only when they are relevant to the task.
+              Mention the configured MCP name in your request—for example,
+              <em>“Use Slack to search messages.”</em>
             </p>
             <div class="docs-two-col">
               <article class="docs-panel">
@@ -870,8 +872,9 @@ npm install -g omnikey-cli</code></pre>
                 <p>
                   Open <strong>MCP Servers</strong> from the menu bar or system tray. Add a server,
                   choose <strong>stdio</strong>, <strong>HTTP</strong>, or <strong>SSE</strong>,
-                  then provide the command, URL, arguments, headers, and environment variables
-                  required by that server. Toggle a server off to keep it configured but unavailable
+                  give it a clear, unique name, then provide the command, URL, arguments, headers,
+                  and environment variables required by that server. Use that name when asking the
+                  agent to use the MCP. Toggle a server off to keep it configured but unavailable
                   to agents.
                 </p>
               </article>

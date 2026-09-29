@@ -179,7 +179,7 @@ Runs a job immediately using its job ID.
 
 ## MCP Servers
 
-MCP (Model Context Protocol) servers extend the OmniKey agent with external tools — file systems, databases, APIs, or any custom capability. Once a server is registered and enabled, the agent automatically discovers and calls its tools during task execution. The same servers can also be managed from the **macOS** and **Windows** desktop apps via the MCP Servers window in the menu bar / system tray.
+MCP (Model Context Protocol) servers extend the OmniKey agent with external tools — file systems, databases, APIs, or any custom capability. The agent sees all enabled server metadata, then connects to a server and loads its tools only when the task needs it. Mention the configured MCP name in your task—for example, “Use Slack to search messages.” The same servers can also be managed from the **macOS** and **Windows** desktop apps via the MCP Servers window in the menu bar / system tray.
 
 All `mcp` commands require the daemon to be running. They authenticate against the local backend at `http://localhost:<OMNIKEY_PORT>/api/mcp-servers`.
 
@@ -187,7 +187,7 @@ All `mcp` commands require the daemon to be running. They authenticate against t
 
 Installs a new MCP server interactively:
 
-- Prompts for a **name** and **description**
+- Prompts for a unique **name** and **description**. Use that name when asking the agent to use the MCP.
 - Asks you to choose a **transport**: `stdio`, `http`, or `sse`
 - Asks whether the server should be **enabled** immediately
 - For **stdio**: prompts for the executable **command**, arguments (one per line, blank line to finish), and environment variables (one `KEY=VALUE` per line, blank line to finish)

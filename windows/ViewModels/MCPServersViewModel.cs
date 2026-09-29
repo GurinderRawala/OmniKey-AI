@@ -482,5 +482,6 @@ namespace OmniKey.Windows.ViewModels
             }
             return result;
         }
+
     }
 }

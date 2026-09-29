@@ -252,6 +252,9 @@ struct MCPServersView: View {
                 fieldLabel("Name")
                 TextField("e.g. github", text: $nameInput)
                     .textFieldStyle(.roundedBorder)
+                Text("Mention this name when asking the agent to use this MCP, for example: “Use github to list my pull requests.”")
+                    .font(.system(size: 11))
+                    .foregroundColor(NordTheme.secondaryText(colorScheme))
             }
 
             VStack(alignment: .leading, spacing: 4) {

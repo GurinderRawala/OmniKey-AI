@@ -144,7 +144,7 @@ export async function mcpAdd(): Promise<void> {
     {
       type: 'input',
       name: 'name',
-      message: 'Name (unique, e.g. "github"):',
+      message: 'Name (unique; mention it in tasks, e.g. "github"):',
       validate: (v: string) => v.trim().length > 0 || 'Name is required',
     },
     {

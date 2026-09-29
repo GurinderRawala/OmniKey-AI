@@ -155,12 +155,12 @@ struct ManualView: View {
                         // MCP Servers
                         sectionTitle("MCP servers", icon: "puzzlepiece.extension.fill")
 
-                        Text("Plug in any Model Context Protocol server — via stdio, HTTP, or SSE transport — from the MCP Servers window or the CLI. The agent automatically discovers and calls those tools during task execution.")
+                        Text("Plug in any Model Context Protocol server — via stdio, HTTP, or SSE transport — from the MCP Servers window or the CLI. The agent sees every configured server and connects only to the one it needs during task execution.")
                             .font(.system(size: 13))
                             .foregroundColor(NordTheme.primaryText(colorScheme))
 
                         VStack(alignment: .leading, spacing: 8) {
-                            bulletRow(text: "Add or edit servers from MCP Servers in the menu bar (transport, command, args, env, URL, headers).")
+                            bulletRow(text: "Add or edit servers from MCP Servers in the menu bar (name, transport, command, args, env, URL, headers). Mention the MCP name in your task when you want the agent to use it.")
                             bulletRow(text: "Toggle a server on or off without deleting it; disabled servers are hidden from the agent.")
                             bulletRow(text: "Custom HTTP headers (e.g. Authorization) round-trip through edit so credentials never get lost.")
                         }

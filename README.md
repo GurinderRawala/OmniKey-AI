@@ -47,7 +47,7 @@ A quick reference of the core capabilities and the commands or shortcuts that dr
 - **Multiple LLM providers** — switch between OpenAI, Anthropic, Google Gemini, and OpenAI-compatible open models during onboarding or via `omnikey set`.
 - **Web Search** — opt in during onboarding. Supports DuckDuckGo, Serper, Brave Search, Tavily, and SearXNG.
 - **Authenticated Browser Sessions** — `omnikey grant-browser-access` sets up a dedicated debug profile so the agent can read logged-in pages (Chrome, Brave, Edge, Arc, Vivaldi, Opera, Chromium, and Safari on macOS).
-- **MCP Servers** — extend the agent with Model Context Protocol tools:
+- **MCP Servers** — the agent sees every configured server and connects only to the one it needs. Mention the configured MCP name in your task, such as “Use Slack to search messages”:
 
   ```sh
   omnikey mcp add
