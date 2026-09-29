@@ -138,3 +138,73 @@ final class ChatStructuredTextStyleTests: XCTestCase {
         return host.fittingSize.height
     }
 }
+
+/// Drives real mouse events through a window at the copy button's
+/// location. Layout-only tests can't catch hit-testing bugs such as
+/// Textual's selection overlay swallowing clicks on the header.
+final class ChatCodeBlockCopyClickTests: XCTestCase {
+    private let code = "let marker = 42"
+
+    @MainActor
+    func testClickingCopyInFinalAnswerCodeBlockCopiesCode() {
+        let view = StructuredText(markdown: "Intro\n\n```swift\n\(code)\n```\n")
+            .chatStructuredTextStyle()
+            .textual.textSelection(.enabled)
+        XCTAssertTrue(clickCopyButton(in: view).contains(code))
+    }
+
+    @MainActor
+    func testClickingCopyInUserMessageCodeBlockCopiesCode() {
+        let view = ChatCodeBlockView(language: "swift", code: code)
+        XCTAssertTrue(clickCopyButton(in: view).contains(code))
+    }
+
+    @MainActor
+    func testClickingCopyInsideUserBubbleCopiesCode() {
+        let view = UserBubbleView(text: "Run this:\n\n```swift\n\(code)\n```")
+        // The bubble's own footer "Copy message" button sits in the same
+        // column, so only require that the code block's button copies the code.
+        XCTAssertTrue(clickCopyButton(in: view, trailingInset: 17 + 14).contains(code))
+    }
+
+    /// Clicks down the column where the header's copy button sits and
+    /// returns every distinct value any click wrote to the pasteboard.
+    @MainActor
+    private func clickCopyButton(in view: some View, trailingInset: CGFloat = 17) -> Set<String> {
+        _ = NSApplication.shared
+        let width: CGFloat = 480
+        let host = NSHostingView(rootView: view.frame(width: width))
+        let window = NSWindow(
+            contentRect: NSRect(x: 100, y: 100, width: width, height: 300),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.orderOut(nil) }
+        for _ in 0..<5 {
+            host.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+
+        var copied: Set<String> = []
+        // The copy button is 22pt wide with 6pt trailing padding; callers
+        // add any padding their container puts around the code block.
+        let x = width - trailingInset
+        for offset in stride(from: 4.0, to: host.bounds.height, by: 4.0) {
+            NSPasteboard.general.clearContents()
+            let point = host.convert(NSPoint(x: x, y: host.bounds.height - offset), to: nil)
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                guard let event = NSEvent.mouseEvent(
+                    with: type, location: point, modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime,
+                    windowNumber: window.windowNumber, context: nil,
+                    eventNumber: 0, clickCount: 1, pressure: 1
+                ) else { continue }
+                NSApp.sendEvent(event)
+            }
+            RunLoop.main.run(until: Date().addingTimeInterval(0.03))
+            if let value = NSPasteboard.general.string(forType: .string) { copied.insert(value) }
+        }
+        return copied
+    }
+}

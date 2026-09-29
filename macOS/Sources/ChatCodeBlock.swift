@@ -137,26 +137,33 @@ struct CodeBlockCopyButton: View {
 struct ChatCodeBlockContainer<Content: View>: View {
     let languageLabel: String
     let copy: () -> Void
+    /// Set when hosted inside Textual's `StructuredText`. Textual lays a
+    /// text-selection view over the whole document that swallows every
+    /// click except inside `Overflow` regions, so the header (and its
+    /// copy button) must live in one to stay clickable.
+    var hostedInStructuredText = false
     @ViewBuilder var content: Content
 
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
-                Text(languageLabel)
-                    .font(OKFont.eyebrow)
-                    .foregroundColor(NordTheme.secondaryText(colorScheme))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Spacer(minLength: 8)
-                CodeBlockCopyButton(copy: copy)
+            if hostedInStructuredText {
+                // Sized to the scroll container so it never actually
+                // scrolls; the `Overflow` only exists to exclude the
+                // header from Textual's selection hit-testing.
+                //
+                // `Overflow` also installs its own selection overlay for
+                // any selectable text inside it, which would swallow the
+                // click again — so selection is disabled for the header.
+                Overflow { state in
+                    header.frame(width: state.containerWidth)
+                }
+                .scrollDisabled(true)
+                .textual.textSelection(.disabled)
+            } else {
+                header
             }
-            .padding(.leading, 12)
-            .padding(.trailing, 6)
-            .padding(.vertical, 5)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(NordTheme.badgeFill(colorScheme))
 
             Rectangle()
                 .fill(NordTheme.border(colorScheme))
@@ -175,6 +182,23 @@ struct ChatCodeBlockContainer<Content: View>: View {
                 .strokeBorder(NordTheme.border(colorScheme), lineWidth: 1)
         )
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var header: some View {
+        HStack(spacing: 8) {
+            Text(languageLabel)
+                .font(OKFont.eyebrow)
+                .foregroundColor(NordTheme.secondaryText(colorScheme))
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 8)
+            CodeBlockCopyButton(copy: copy)
+        }
+        .padding(.leading, 12)
+        .padding(.trailing, 6)
+        .padding(.vertical, 5)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(NordTheme.badgeFill(colorScheme))
     }
 }
 
@@ -213,7 +237,8 @@ struct ChatStructuredCodeBlockStyle: StructuredText.CodeBlockStyle {
     func makeBody(configuration: Configuration) -> some View {
         ChatCodeBlockContainer(
             languageLabel: CodeBlockLanguageLabel.display(for: configuration.languageHint),
-            copy: { configuration.codeBlock.copyToPasteboard() }
+            copy: { configuration.codeBlock.copyToPasteboard() },
+            hostedInStructuredText: true
         ) {
             Overflow {
                 configuration.label
