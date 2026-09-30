@@ -139,71 +139,176 @@ final class ChatStructuredTextStyleTests: XCTestCase {
     }
 }
 
-/// Drives real mouse events through a window at the copy button's
-/// location. Layout-only tests can't catch hit-testing bugs such as
-/// Textual's selection overlay swallowing clicks on the header.
+/// Click the actual control centre, not a sweep of unrelated points. Also
+/// enforce that Textual copy controls live outside its inner scroll regions:
+/// XCTest alone does not reproduce its running-app hover interception.
 final class ChatCodeBlockCopyClickTests: XCTestCase {
     private let code = "let marker = 42"
 
+    private func markdown(_ source: String) -> String {
+        let fence = String(repeating: "\u{0060}", count: 3)
+        return "\(fence)swift\n\(source)\n\(fence)\n"
+    }
+
     @MainActor
     func testClickingCopyInFinalAnswerCodeBlockCopiesCode() {
-        let view = StructuredText(markdown: "Intro\n\n```swift\n\(code)\n```\n")
+        let view = StructuredText(markdown: "Intro\n\n" + markdown(code))
             .chatStructuredTextStyle()
             .textual.textSelection(.enabled)
-        XCTAssertTrue(clickCopyButton(in: view).contains(code))
+        XCTAssertEqual(clickCopyButtons(in: view, count: 1), [code])
+    }
+
+    @MainActor
+    func testClickingCopyInScrolledFinalAnswerCopiesCode() {
+        let block = ChatBlock(kind: .finalAnswer, text: "Intro\n\n" + markdown(code))
+        let view = ScrollView {
+            VStack(spacing: 20) {
+                Color.clear.frame(height: 600)
+                FinalAnswerView(block: block)
+            }
+        }
+        .defaultScrollAnchor(.bottom)
+        XCTAssertEqual(clickCopyButtons(in: view, count: 1, transcriptHeight: 300), [code])
+    }
+
+    @MainActor
+    func testMultipleCodeBlocksRetainTheirOwnCopyActions() {
+        let second = "print(\"second\")\n  indented\ttabbed"
+        let view = StructuredText(markdown: markdown(code) + "\nBetween blocks\n\n" + markdown(second))
+            .chatStructuredTextStyle()
+            .textual.textSelection(.enabled)
+        XCTAssertEqual(clickCopyButtons(in: view, count: 2), [code, second])
+    }
+
+    @MainActor
+    func testCopyControlStaysFixedWhenCodeScrollsHorizontally() {
+        let source = "let value = \"" + String(repeating: "x", count: 600) + "\""
+        let view = StructuredText(markdown: markdown(source))
+            .chatStructuredTextStyle()
+            .textual.textSelection(.enabled)
+        XCTAssertEqual(clickCopyButtons(in: view, count: 1, scrollCodeHorizontally: true), [source])
     }
 
     @MainActor
     func testClickingCopyInUserMessageCodeBlockCopiesCode() {
-        let view = ChatCodeBlockView(language: "swift", code: code)
-        XCTAssertTrue(clickCopyButton(in: view).contains(code))
+        XCTAssertEqual(clickCopyButtons(in: ChatCodeBlockView(language: "swift", code: code), count: 1), [code])
     }
 
     @MainActor
-    func testClickingCopyInsideUserBubbleCopiesCode() {
-        let view = UserBubbleView(text: "Run this:\n\n```swift\n\(code)\n```")
-        // The bubble's own footer "Copy message" button sits in the same
-        // column, so only require that the code block's button copies the code.
-        XCTAssertTrue(clickCopyButton(in: view, trailingInset: 17 + 14).contains(code))
+    func testClickingCopyInsideUserBubbleCopiesOnlyCode() {
+        let view = UserBubbleView(text: "Run this:\n\n" + markdown(code))
+        XCTAssertEqual(clickCopyButtons(in: view, count: 1), [code])
     }
 
-    /// Clicks down the column where the header's copy button sits and
-    /// returns every distinct value any click wrote to the pasteboard.
     @MainActor
-    private func clickCopyButton(in view: some View, trailingInset: CGFloat = 17) -> Set<String> {
+    func testBothRenderersCopyInLongTranscript() {
+        let assistant = ChatBlock(kind: .finalAnswer, text:
+            String(repeating: "Paragraph before code.\n\n", count: 40) + markdown(code))
+        let userCode = "let userMarker = 43"
+        let view = ScrollView {
+            VStack(spacing: 18) {
+                FinalAnswerView(block: assistant)
+                UserBubbleView(text: markdown(userCode))
+            }
+            .padding(.horizontal, 32)
+        }
+        .defaultScrollAnchor(.bottom)
+        XCTAssertEqual(clickCopyButtons(in: view, count: 2, transcriptHeight: 300), [code, userCode])
+    }
+
+    @MainActor
+    private func clickCopyButtons(
+        in view: some View, count: Int, transcriptHeight: CGFloat? = nil,
+        scrollCodeHorizontally: Bool = false
+    ) -> Set<String> {
         _ = NSApplication.shared
-        let width: CGFloat = 480
-        let host = NSHostingView(rootView: view.frame(width: width))
+        let host = NSHostingView(rootView: view.frame(width: 695))
         let window = NSWindow(
-            contentRect: NSRect(x: 100, y: 100, width: width, height: 300),
+            contentRect: NSRect(x: 100, y: 100, width: 695, height: 300),
             styleMask: [.titled], backing: .buffered, defer: false
         )
         window.contentView = host
         window.orderFront(nil)
         defer { window.orderOut(nil) }
-        for _ in 0..<5 {
+        for _ in 0..<10 {
             host.layoutSubtreeIfNeeded()
             RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         }
 
-        var copied: Set<String> = []
-        // The copy button is 22pt wide with 6pt trailing padding; callers
-        // add any padding their container puts around the code block.
-        let x = width - trailingInset
-        for offset in stride(from: 4.0, to: host.bounds.height, by: 4.0) {
-            NSPasteboard.general.clearContents()
-            let point = host.convert(NSPoint(x: x, y: host.bounds.height - offset), to: nil)
-            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
-                guard let event = NSEvent.mouseEvent(
-                    with: type, location: point, modifierFlags: [],
-                    timestamp: ProcessInfo.processInfo.systemUptime,
-                    windowNumber: window.windowNumber, context: nil,
-                    eventNumber: 0, clickCount: 1, pressure: 1
-                ) else { continue }
-                NSApp.sendEvent(event)
+        func descendants(_ view: NSView) -> [NSView] {
+            [view] + view.subviews.flatMap { descendants($0) }
+        }
+        let buttons = descendants(host).compactMap { $0 as? NSButton }
+            .filter { $0.accessibilityIdentifier() == "chat-code-block-copy" }
+        XCTAssertEqual(buttons.count, count)
+
+        if scrollCodeHorizontally {
+            let frames = buttons.map { $0.convert($0.bounds, to: host) }
+            let overflowing = descendants(host).compactMap { $0 as? NSScrollView }.filter {
+                ($0.documentView?.bounds.width ?? 0) > $0.contentView.bounds.width + 1
             }
-            RunLoop.main.run(until: Date().addingTimeInterval(0.03))
-            if let value = NSPasteboard.general.string(forType: .string) { copied.insert(value) }
+            XCTAssertFalse(overflowing.isEmpty, "Fixture must contain horizontally overflowing code")
+            for scroll in overflowing {
+                scroll.contentView.scroll(to: NSPoint(x: 80, y: scroll.contentView.bounds.minY))
+                scroll.reflectScrolledClipView(scroll.contentView)
+            }
+            host.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+            XCTAssertEqual(buttons.map { $0.convert($0.bounds, to: host) }, frames,
+                "Horizontal code scrolling must not move the copy controls")
+        }
+
+        // Textual's proxy writes both plain text and HTML to the general
+        // pasteboard. Preserve all pre-existing types/items, not only text.
+        let pasteboard = NSPasteboard.general
+        let savedItems = (pasteboard.pasteboardItems ?? []).map { item in
+            let saved = NSPasteboardItem()
+            for type in item.types {
+                if let data = item.data(forType: type) { saved.setData(data, forType: type) }
+            }
+            return saved
+        }
+        var lastOwnedChange = pasteboard.changeCount
+        defer {
+            if pasteboard.changeCount == lastOwnedChange {
+                pasteboard.clearContents()
+                if !savedItems.isEmpty { pasteboard.writeObjects(savedItems) }
+            }
+        }
+
+        var copied: Set<String> = []
+        for button in buttons {
+            if let transcriptHeight {
+                // A nested header/body Overflow is not an acceptable home
+                // for the control even if synthetic XCTest clicks pass.
+                XCTAssertGreaterThan(button.enclosingScrollView?.documentView?.bounds.height ?? 0,
+                    transcriptHeight, "Copy control must be above Textual's internal scroll/selection layers")
+            } else {
+                XCTAssertNil(button.enclosingScrollView,
+                    "Standalone code-copy control must not be nested in Textual's Overflow")
+            }
+            let centre = NSPoint(x: button.bounds.midX, y: button.bounds.midY)
+            XCTAssertTrue(button.visibleRect.contains(centre), "Copy control must be visible")
+            let parentPoint = button.convert(centre, to: host.superview)
+            let hit = host.hitTest(parentPoint)
+            XCTAssertTrue(hit === button || hit?.isDescendant(of: button) == true,
+                "Button centre hit \(String(describing: hit)) instead")
+
+            pasteboard.clearContents()
+            let location = button.convert(centre, to: nil)
+            let up = NSEvent.mouseEvent(
+                with: .leftMouseUp, location: location, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 1, clickCount: 1, pressure: 0)!
+            let down = NSEvent.mouseEvent(
+                with: .leftMouseDown, location: location, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
+            // NSButton tracks synchronously until mouse-up; enqueue it first.
+            NSApp.postEvent(up, atStart: true)
+            window.sendEvent(down)
+            lastOwnedChange = pasteboard.changeCount
+            if let value = pasteboard.string(forType: .string) { copied.insert(value) }
         }
         return copied
     }

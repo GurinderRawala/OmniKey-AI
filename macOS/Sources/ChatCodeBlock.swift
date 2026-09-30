@@ -72,23 +72,18 @@ struct CodeBlockCopyButton: View {
     private static let confirmationDuration: Duration = .milliseconds(1600)
 
     var body: some View {
-        Button(action: performCopy) {
-            Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                .font(.system(size: 10.5, weight: .semibold))
-                .contentTransition(.symbolEffect(.replace))
-                .foregroundColor(
-                    copied
-                        ? NordTheme.accentGreen(colorScheme)
-                        : NordTheme.secondaryText(colorScheme).opacity(hovered ? 1.0 : 0.7)
-                )
-                .frame(width: 22, height: 20)
-                .background(
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .fill(hovered && !copied ? NordTheme.badgeFill(colorScheme) : Color.clear)
-                )
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
+        NativeCodeBlockCopyButton(
+            copied: copied,
+            tint: NSColor(copied
+                ? NordTheme.accentGreen(colorScheme)
+                : NordTheme.secondaryText(colorScheme).opacity(hovered ? 1 : 0.7)),
+            action: performCopy
+        )
+        .frame(width: 22, height: 20)
+        .background(
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .fill(hovered && !copied ? NordTheme.badgeFill(colorScheme) : Color.clear)
+        )
         .onHover { hovered = $0 }
         .animation(motion, value: copied)
         .animation(motion, value: hovered)
@@ -125,11 +120,53 @@ struct CodeBlockCopyButton: View {
     }
 }
 
+/// Keep pointer, keyboard, and accessibility activation on the same native
+/// control. Textual controls are placed above its selection overlay below.
+private struct NativeCodeBlockCopyButton: NSViewRepresentable {
+    let copied: Bool
+    let tint: NSColor
+    let action: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(action: action) }
+
+    func makeNSView(context: Context) -> NSButton {
+        let button = NSButton()
+        button.isBordered = false
+        button.setButtonType(.momentaryChange)
+        button.imagePosition = .imageOnly
+        button.controlSize = .small
+        button.target = context.coordinator
+        button.action = #selector(Coordinator.copyCode)
+        button.setAccessibilityIdentifier("chat-code-block-copy")
+        return button
+    }
+
+    func updateNSView(_ button: NSButton, context: Context) {
+        context.coordinator.action = action
+        button.isEnabled = context.environment.isEnabled
+        button.image = NSImage(systemSymbolName: copied ? "checkmark" : "doc.on.doc", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 10.5, weight: .semibold))
+        button.contentTintColor = tint
+        button.toolTip = copied ? "Copied" : "Copy code"
+        button.setAccessibilityLabel(copied ? "Code copied" : "Copy code")
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSButton, context: Context) -> CGSize? {
+        CGSize(width: 22, height: 20)
+    }
+
+    final class Coordinator: NSObject {
+        var action: () -> Void
+        init(action: @escaping () -> Void) { self.action = action }
+        @objc func copyCode() { action() }
+    }
+}
+
 // MARK: - Container
 
-/// Shared chrome for rendered code blocks: a header strip carrying the
-/// language label and the copy button, a hairline separator, and the
-/// rounded surface that clips the horizontally scrollable body.
+/// Shared chrome for code blocks rendered outside Textual, such as user
+/// messages. Textual uses the same header and surface, but publishes a
+/// copy-button anchor so its control can sit above document text selection.
 ///
 /// The stack is clipped to the rounded shape *before* the background
 /// and border are drawn so the header's rectangular fill and the
@@ -137,54 +174,29 @@ struct CodeBlockCopyButton: View {
 struct ChatCodeBlockContainer<Content: View>: View {
     let languageLabel: String
     let copy: () -> Void
-    /// Set when hosted inside Textual's `StructuredText`. Textual lays a
-    /// text-selection view over the whole document that swallows every
-    /// click except inside `Overflow` regions, so the header (and its
-    /// copy button) must live in one to stay clickable.
-    var hostedInStructuredText = false
     @ViewBuilder var content: Content
-
-    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if hostedInStructuredText {
-                // Sized to the scroll container so it never actually
-                // scrolls; the `Overflow` only exists to exclude the
-                // header from Textual's selection hit-testing.
-                //
-                // `Overflow` also installs its own selection overlay for
-                // any selectable text inside it, which would swallow the
-                // click again — so selection is disabled for the header.
-                Overflow { state in
-                    header.frame(width: state.containerWidth)
-                }
-                .scrollDisabled(true)
-                .textual.textSelection(.disabled)
-            } else {
-                header
-            }
-
-            Rectangle()
-                .fill(NordTheme.border(colorScheme))
-                .frame(height: 1)
+            ChatCodeBlockHeader(languageLabel: languageLabel, copy: copy)
+            ChatCodeBlockDivider()
 
             content
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(ChatCodeBlockPalette.surface(colorScheme))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .strokeBorder(NordTheme.border(colorScheme), lineWidth: 1)
-        )
+        .modifier(ChatCodeBlockSurface())
         .frame(maxWidth: .infinity, alignment: .leading)
     }
+}
 
-    private var header: some View {
+private struct ChatCodeBlockHeader: View {
+    let languageLabel: String
+    let copy: () -> Void
+    var overlaysCopyControl = false
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
         HStack(spacing: 8) {
             Text(languageLabel)
                 .font(OKFont.eyebrow)
@@ -192,14 +204,53 @@ struct ChatCodeBlockContainer<Content: View>: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer(minLength: 8)
-            CodeBlockCopyButton(copy: copy)
+            if overlaysCopyControl {
+                Color.clear
+                    .frame(width: 22, height: 20)
+                    .anchorPreference(key: CodeBlockCopyAnchorKey.self, value: .bounds) {
+                        [CodeBlockCopyAnchor(bounds: $0, copy: copy)]
+                    }
+            } else {
+                CodeBlockCopyButton(copy: copy)
+            }
         }
         .padding(.leading, 12)
         .padding(.trailing, 6)
-        .padding(.vertical, 5)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: ChatCodeBlockMetrics.headerHeight, alignment: .leading)
         .background(NordTheme.badgeFill(colorScheme))
     }
+}
+
+private struct ChatCodeBlockDivider: View {
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        Rectangle()
+            .fill(NordTheme.border(colorScheme))
+            .frame(height: ChatCodeBlockMetrics.dividerHeight)
+    }
+}
+
+private struct ChatCodeBlockSurface: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
+
+    func body(content: Content) -> some View {
+        content
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(ChatCodeBlockPalette.surface(colorScheme))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(NordTheme.border(colorScheme), lineWidth: 1)
+            )
+    }
+}
+
+private enum ChatCodeBlockMetrics {
+    static let headerHeight: CGFloat = 30
+    static let dividerHeight: CGFloat = 1
 }
 
 /// Single place where code-block copy actions touch the pasteboard, so
@@ -235,11 +286,22 @@ enum ChatCodeBlockPalette {
 /// renderer uses.
 struct ChatStructuredCodeBlockStyle: StructuredText.CodeBlockStyle {
     func makeBody(configuration: Configuration) -> some View {
-        ChatCodeBlockContainer(
-            languageLabel: CodeBlockLanguageLabel.display(for: configuration.languageHint),
-            copy: { configuration.codeBlock.copyToPasteboard() },
-            hostedInStructuredText: true
-        ) {
+        // Overflow is Textual's supported horizontal-scroll container. The
+        // header has its own fixed-width region so scrolling code cannot move
+        // the copy anchor. The actual control is outside StructuredText's
+        // selection/hover overlay, not merely inside its exclusion rectangle.
+        VStack(spacing: 0) {
+            Overflow { state in
+                ChatCodeBlockHeader(
+                    languageLabel: CodeBlockLanguageLabel.display(for: configuration.languageHint),
+                    copy: { configuration.codeBlock.copyToPasteboard() },
+                    overlaysCopyControl: true
+                )
+                .frame(width: state.containerWidth)
+            }
+            .scrollDisabled(true)
+            .textual.textSelection(.disabled)
+            ChatCodeBlockDivider()
             Overflow {
                 configuration.label
                     .textual.lineSpacing(.fontScaled(0.225))
@@ -250,12 +312,26 @@ struct ChatStructuredCodeBlockStyle: StructuredText.CodeBlockStyle {
                     .padding(.vertical, 10)
             }
         }
+        .modifier(ChatCodeBlockSurface())
         .textual.blockSpacing(.init(top: 4, bottom: 14))
     }
 }
 
 extension StructuredText.CodeBlockStyle where Self == ChatStructuredCodeBlockStyle {
     static var chat: Self { .init() }
+}
+
+private struct CodeBlockCopyAnchor {
+    let bounds: Anchor<CGRect>
+    let copy: () -> Void
+}
+
+private enum CodeBlockCopyAnchorKey: PreferenceKey {
+    static var defaultValue: [CodeBlockCopyAnchor] { [] }
+
+    static func reduce(value: inout [CodeBlockCopyAnchor], nextValue: () -> [CodeBlockCopyAnchor]) {
+        value.append(contentsOf: nextValue())
+    }
 }
 
 extension View {
@@ -269,5 +345,20 @@ extension View {
         self
             .textual.codeBlockStyle(.chat)
             .textual.structuredTextStyle(.gitHub)
+            // Textual's native selection view excludes Overflow rectangles,
+            // but its enclosing SwiftUI hover layer can still intercept clicks
+            // on controls inside those regions in a running app. Anchor the
+            // controls here, above the entire renderer, without disabling
+            // selection for prose or code. Each closure retains its own proxy.
+            .overlayPreferenceValue(CodeBlockCopyAnchorKey.self) { controls in
+                GeometryReader { geometry in
+                    ForEach(Array(controls.enumerated()), id: \.offset) { _, control in
+                        let rect = geometry[control.bounds]
+                        CodeBlockCopyButton(copy: control.copy)
+                            .frame(width: rect.width, height: rect.height)
+                            .position(x: rect.midX, y: rect.midY)
+                    }
+                }
+            }
     }
 }
