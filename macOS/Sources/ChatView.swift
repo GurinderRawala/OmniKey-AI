@@ -3332,7 +3332,7 @@ struct FinalAnswerView: View {
             // headings scale off it proportionally through Textual's
             // font-scale system.
             StructuredText(markdown: displayedText)
-                .textual.structuredTextStyle(.gitHub)
+                .chatStructuredTextStyle()
                 .textual.inlineStyle(nordInlineStyle)
                 .textual.textSelection(.enabled)
                 .font(.system(size: 14.5))
@@ -3448,8 +3448,9 @@ struct ChatCopyButton: View {
     var copyProvider: ((@escaping (String?) -> Void) -> Void)? = nil
     /// When true (the default), the button renders as a compact
     /// icon-only square — used for the persistent affordances on the
-    /// final answer and user bubble. Set to false to get the original
-    /// "icon + Copy" label (e.g. inside the code-block toolbar).
+    /// final answer and user bubble. Set to false to get the labelled
+    /// "icon + Copy" pill. Code blocks use `CodeBlockCopyButton`
+    /// instead, which matches their tighter header metrics.
     var iconOnly: Bool = true
     @Environment(\.colorScheme) private var colorScheme
     @State private var copied = false
@@ -4202,44 +4203,26 @@ private struct MarkdownTableView: View {
 
 // MARK: - Code Block
 
+/// Fenced code block rendered by `ChatMarkdownView` (user bubbles and
+/// nested markdown). Shares its chrome — language label, copy button,
+/// rounded surface — with the Textual-rendered final answer through
+/// `ChatCodeBlockContainer`.
 struct ChatCodeBlockView: View {
     let language: String?
     let code: String
     var baseFontSize: CGFloat = 13
     @Environment(\.colorScheme) private var colorScheme
-    @State private var copied = false
+    @Environment(\.chatCodeBlockPasteboardName) private var pasteboardName
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Top bar: language + copy button
-            HStack {
-                Text(languageLabel)
-                    .font(OKFont.eyebrow)
-                    .foregroundColor(NordTheme.secondaryText(colorScheme))
-                Spacer()
-                Button(action: doCopy) {
-                    HStack(spacing: 4) {
-                        Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                            .font(.system(size: 10))
-                        Text(copied ? "Copied" : "Copy")
-                            .font(.system(size: 10, weight: .medium))
-                    }
-                    .foregroundColor(
-                        copied ? NordTheme.accentGreen(colorScheme) : NordTheme.secondaryText(colorScheme)
-                    )
-                }
-                .buttonStyle(.plain)
-                .help(copied ? "Copied" : "Copy code")
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 7)
-            .background(NordTheme.badgeFill(colorScheme))
-
-            Rectangle()
-                .fill(NordTheme.border(colorScheme))
-                .frame(height: 1)
-
-            ScrollView(.horizontal, showsIndicators: true) {
+        ChatCodeBlockContainer(
+            languageLabel: CodeBlockLanguageLabel.display(for: language),
+            copy: copyCode
+        ) {
+            // `fixedSize(horizontal: true)` lets the text keep its
+            // intrinsic width so long lines overflow into the scroll
+            // view instead of wrapping.
+            ScrollView(.horizontal) {
                 Text(code)
                     .font(
                         .system(size: max(baseFontSize - 0.25, 10.5), weight: .regular, design: .monospaced)
@@ -4248,45 +4231,19 @@ struct ChatCodeBlockView: View {
                     .lineSpacing(2)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: true, vertical: true)
-                    .padding(12)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .frame(minWidth: 0, alignment: .leading)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
         }
-        // Clip the entire stack to the rounded outer shape *before*
-        // drawing the background and border. Without this, the
-        // top-bar's rectangular `.background(badgeFill)` fill and the
-        // separator rectangle paint into the four corners that should
-        // be carved out by the rounded rectangle — producing the
-        // "shadowed corner" artifact reported on the chat page.
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(
-                    colorScheme == .dark
-                        ? Color(red: 10 / 255, green: 12 / 255, blue: 22 / 255)
-                        : Color(red: 246 / 255, green: 248 / 255, blue: 252 / 255)
-                )
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .strokeBorder(NordTheme.border(colorScheme), lineWidth: 1)
-        )
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var languageLabel: String {
-        let raw = language?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !raw.isEmpty else { return "code" }
-        return raw.lowercased()
-    }
-
-    private func doCopy() {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(code, forType: .string)
-        withAnimation { copied = true }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-            withAnimation { copied = false }
-        }
+    private func copyCode() {
+        let pasteboard = pasteboardName == .general
+            ? NSPasteboard.general
+            : NSPasteboard(name: pasteboardName)
+        ChatCodeBlockPasteboard.write(code, to: pasteboard)
     }
 }
 
