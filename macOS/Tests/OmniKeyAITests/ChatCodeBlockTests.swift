@@ -152,10 +152,14 @@ final class ChatCodeBlockCopyClickTests: XCTestCase {
 
     @MainActor
     func testClickingCopyInFinalAnswerCodeBlockCopiesCode() {
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
         let view = StructuredText(markdown: "Intro\n\n" + markdown(code))
-            .chatStructuredTextStyle()
+            .chatStructuredTextStyle { _ in
+                ChatCodeBlockPasteboard.write(self.code, to: pasteboard)
+            }
             .textual.textSelection(.enabled)
-        XCTAssertEqual(clickCopyButtons(in: view, count: 1), [code])
+        XCTAssertEqual(clickCopyButtons(in: view, count: 1, pasteboard: pasteboard), [code])
     }
 
     @MainActor
@@ -191,13 +195,20 @@ final class ChatCodeBlockCopyClickTests: XCTestCase {
 
     @MainActor
     func testClickingCopyInUserMessageCodeBlockCopiesCode() {
-        XCTAssertEqual(clickCopyButtons(in: ChatCodeBlockView(language: "swift", code: code), count: 1), [code])
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        let view = ChatCodeBlockView(language: "swift", code: code)
+            .chatCodeBlockPasteboard(pasteboard.name)
+        XCTAssertEqual(clickCopyButtons(in: view, count: 1, pasteboard: pasteboard), [code])
     }
 
     @MainActor
     func testClickingCopyInsideUserBubbleCopiesOnlyCode() {
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
         let view = UserBubbleView(text: "Run this:\n\n" + markdown(code))
-        XCTAssertEqual(clickCopyButtons(in: view, count: 1), [code])
+            .chatCodeBlockPasteboard(pasteboard.name)
+        XCTAssertEqual(clickCopyButtons(in: view, count: 1, pasteboard: pasteboard), [code])
     }
 
     @MainActor
@@ -219,7 +230,7 @@ final class ChatCodeBlockCopyClickTests: XCTestCase {
     @MainActor
     private func clickCopyButtons(
         in view: some View, count: Int, transcriptHeight: CGFloat? = nil,
-        scrollCodeHorizontally: Bool = false
+        scrollCodeHorizontally: Bool = false, pasteboard: NSPasteboard = .general
     ) -> Set<String> {
         _ = NSApplication.shared
         let host = NSHostingView(rootView: view.frame(width: 695))
@@ -260,7 +271,6 @@ final class ChatCodeBlockCopyClickTests: XCTestCase {
 
         // Textual's proxy writes both plain text and HTML to the general
         // pasteboard. Preserve all pre-existing types/items, not only text.
-        let pasteboard = NSPasteboard.general
         let savedItems = (pasteboard.pasteboardItems ?? []).map { item in
             let saved = NSPasteboardItem()
             for type in item.types {

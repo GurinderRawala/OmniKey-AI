@@ -263,6 +263,26 @@ enum ChatCodeBlockPasteboard {
     }
 }
 
+private struct ChatCodeBlockPasteboardNameKey: EnvironmentKey {
+    static let defaultValue = NSPasteboard.Name.general
+}
+
+extension EnvironmentValues {
+    var chatCodeBlockPasteboardName: NSPasteboard.Name {
+        get { self[ChatCodeBlockPasteboardNameKey.self] }
+        set { self[ChatCodeBlockPasteboardNameKey.self] = newValue }
+    }
+}
+
+extension View {
+    /// Redirects plain-text code-block copies to a named pasteboard.
+    /// Production uses the general pasteboard; tests provide a private name
+    /// so click simulation never clears or reads the user's clipboard.
+    func chatCodeBlockPasteboard(_ name: NSPasteboard.Name) -> some View {
+        environment(\.chatCodeBlockPasteboardName, name)
+    }
+}
+
 enum ChatCodeBlockPalette {
     /// Deep, low-chroma surface shared by every code block so the
     /// SwiftUI and Textual renderers stay visually identical.
@@ -285,6 +305,12 @@ enum ChatCodeBlockPalette {
 /// selection gestures) while wrapping it in the same chrome the SwiftUI
 /// renderer uses.
 struct ChatStructuredCodeBlockStyle: StructuredText.CodeBlockStyle {
+    var copy: ((StructuredText.CodeBlockProxy) -> Void)?
+
+    init(copy: ((StructuredText.CodeBlockProxy) -> Void)? = nil) {
+        self.copy = copy
+    }
+
     func makeBody(configuration: Configuration) -> some View {
         // Overflow is Textual's supported horizontal-scroll container. The
         // header has its own fixed-width region so scrolling code cannot move
@@ -294,7 +320,13 @@ struct ChatStructuredCodeBlockStyle: StructuredText.CodeBlockStyle {
             Overflow { state in
                 ChatCodeBlockHeader(
                     languageLabel: CodeBlockLanguageLabel.display(for: configuration.languageHint),
-                    copy: { configuration.codeBlock.copyToPasteboard() },
+                    copy: {
+                        if let copy {
+                            copy(configuration.codeBlock)
+                        } else {
+                            configuration.codeBlock.copyToPasteboard()
+                        }
+                    },
                     overlaysCopyControl: true
                 )
                 .frame(width: state.containerWidth)
@@ -341,9 +373,11 @@ extension View {
     /// SwiftUI resolves the innermost value, so `.codeBlockStyle(.chat)`
     /// has to be applied *before* (inside) `.structuredTextStyle(.gitHub)`
     /// or the preset's bare code slab silently wins.
-    func chatStructuredTextStyle() -> some View {
+    func chatStructuredTextStyle(
+        copyCodeBlock: ((StructuredText.CodeBlockProxy) -> Void)? = nil
+    ) -> some View {
         self
-            .textual.codeBlockStyle(.chat)
+            .textual.codeBlockStyle(ChatStructuredCodeBlockStyle(copy: copyCodeBlock))
             .textual.structuredTextStyle(.gitHub)
             // Textual's native selection view excludes Overflow rectangles,
             // but its enclosing SwiftUI hover layer can still intercept clicks
