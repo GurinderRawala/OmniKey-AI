@@ -1,20 +1,65 @@
 import Foundation
 
+/// The turn owns one receive loop independently of shell execution. Keeping the
+/// transport injectable lets tests hold a command open while delivering events.
+protocol ChatSessionSocket: Sendable {
+    func resume()
+    func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?)
+    func receive(completionHandler: @escaping @Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void)
+    func send(_ message: URLSessionWebSocketTask.Message, completionHandler: @escaping @Sendable (Error?) -> Void)
+}
+
+extension URLSessionWebSocketTask: ChatSessionSocket {}
+
+/// Receive failures and shell/send completions can race on different queues.
+private final class ChatSessionCompletion: @unchecked Sendable {
+    private let lock = NSLock()
+    private var finished = false
+    private var shellRunning = false
+
+    var isShellRunning: Bool { lock.withLock { shellRunning } }
+
+    func setShellRunning(_ running: Bool) {
+        lock.withLock { shellRunning = running }
+    }
+
+    var isFinished: Bool {
+        lock.withLock { finished }
+    }
+
+    /// Keep completion from overtaking an active turn's send invocation.
+    /// Actions must not synchronously reenter this gate, including in callbacks.
+    func withActiveTurn(_ action: () -> Void) {
+        lock.withLock {
+            guard !finished else { return }
+            action()
+        }
+    }
+
+    func finish() -> Bool {
+        lock.withLock {
+            guard !finished else { return false }
+            finished = true
+            return true
+        }
+    }
+}
+
 // MARK: - Per-turn cancellation handle
 
 /// Owns one `URLSessionWebSocketTask` and one cancellation flag for exactly one
 /// chat turn. Multiple handles can coexist in parallel — cancelling one does not
 /// affect any other in-flight chat.
 final class ChatSessionRunHandle: @unchecked Sendable {
-    private var _task: URLSessionWebSocketTask?
+    private var _task: (any ChatSessionSocket)?
     private var _process: Process?
-    private let cancelFlag = BoolBox()
+    private var cancelledByUser = false
     private let lock = NSLock()
 
     /// `true` once `cancel()` has been called on this handle.
-    var isCancelledByUser: Bool { cancelFlag.value }
+    var isCancelledByUser: Bool { lock.withLock { cancelledByUser } }
 
-    func attach(task: URLSessionWebSocketTask) {
+    func attach(task: any ChatSessionSocket) {
         lock.lock()
         defer { lock.unlock() }
         _task = task
@@ -68,9 +113,8 @@ final class ChatSessionRunHandle: @unchecked Sendable {
     /// process (if any) for this turn. Other parallel turns are unaffected
     /// because each owns its own `ChatSessionRunHandle`.
     func cancel() {
-        cancelFlag.value = true
-
         lock.lock()
+        cancelledByUser = true
         let t = _task
         let p = _process
         _task = nil
@@ -91,14 +135,6 @@ final class ChatSessionRunHandle: @unchecked Sendable {
             print("[ChatSessionRunner] Cancelled turn — sent SIGTERM to process group \(pid).")
         }
     }
-
-    /// Returns and clears the cancelled flag. Synchronous — safe to call from
-    /// `DispatchQueue` closures that cannot `await`.
-    func takeWasCancelledByUser() -> Bool {
-        let was = cancelFlag.value
-        cancelFlag.value = false
-        return was
-    }
 }
 
 enum SteeringServerStatus: String, Codable, Equatable {
@@ -113,19 +149,22 @@ struct SteeringServerEvent: Equatable {
     let message: String
     let pendingCount: Int?
     let isLegacyAcknowledgement: Bool
+    let isWaitingForShell: Bool
 
     init(
         id: String?,
         status: SteeringServerStatus,
         message: String,
         pendingCount: Int?,
-        isLegacyAcknowledgement: Bool = false
+        isLegacyAcknowledgement: Bool = false,
+        isWaitingForShell: Bool = false
     ) {
         self.id = id
         self.status = status
         self.message = message
         self.pendingCount = pendingCount
         self.isLegacyAcknowledgement = isLegacyAcknowledgement
+        self.isWaitingForShell = status == .received && isWaitingForShell
     }
 }
 
@@ -389,14 +428,18 @@ final class ChatSessionRunner {
         }
     }
 
-    nonisolated static func steeringEvent(from response: AgentMessage) -> SteeringServerEvent? {
+    nonisolated static func steeringEvent(
+        from response: AgentMessage,
+        isShellRunning: Bool = false
+    ) -> SteeringServerEvent? {
         guard response.isSteering == true else { return nil }
         if let id = response.steeringID {
             return SteeringServerEvent(
                 id: id,
                 status: response.steeringStatus ?? (response.isError == true ? .rejected : .received),
                 message: response.content,
-                pendingCount: response.steeringPendingCount
+                pendingCount: response.steeringPendingCount,
+                isWaitingForShell: isShellRunning
             )
         }
         // Daemons released before correlated steering only sent
@@ -412,7 +455,7 @@ final class ChatSessionRunner {
         )
     }
 
-    static func finalAnswerDisplayText(from response: AgentMessage) -> String? {
+    nonisolated static func finalAnswerDisplayText(from response: AgentMessage) -> String? {
         guard let final = AgentRunner.extractFinalAnswer(from: response.content) else { return nil }
         if response.isError == true && !final.hasPrefix("**Error:**") {
             return "**Error:** \(final)"
@@ -420,7 +463,7 @@ final class ChatSessionRunner {
         return final
     }
 
-    private func startAgentWebSocketSession(
+    func startAgentWebSocketSession(
         url: URL,
         sessionID: String,
         jwt: String,
@@ -431,13 +474,17 @@ final class ChatSessionRunner {
         onBlock: @escaping @MainActor @Sendable (ChatBlock) -> Void,
         onSteeringEvent: @escaping @MainActor @Sendable (SteeringServerEvent) -> Void,
         onFinal: @escaping @MainActor @Sendable (String) -> Void,
-        onError: @escaping @MainActor @Sendable (Error) -> Void
+        onError: @escaping @MainActor @Sendable (Error) -> Void,
+        socket: (any ChatSessionSocket)? = nil,
+        executeShell: @escaping @Sendable (String, @escaping @Sendable (Process?) -> Void) -> (output: String, status: Int32) = {
+            runShellCommandWithStatus($0, processRegistrar: $1)
+        }
     ) {
         var request = URLRequest(url: url)
         request.addValue("Bearer \(jwt)", forHTTPHeaderField: "Authorization")
 
-        let session = URLSession(configuration: .default)
-        let task = session.webSocketTask(with: request)
+        let task: any ChatSessionSocket = socket
+            ?? URLSession(configuration: .default).webSocketTask(with: request)
 
         // Bind this socket to the per-turn handle so the chat view's
         // Stop button (or session deletion) closes only this turn's
@@ -448,34 +495,32 @@ final class ChatSessionRunner {
 
         let encoder = JSONEncoder()
         let decoder = JSONDecoder()
-        let finalDelivered = BoolBox()
+        let completion = ChatSessionCompletion()
 
-        func finishWithError(_ error: Error) {
-            if !finalDelivered.value {
-                finalDelivered.value = true
-                DispatchQueue.main.async { onError(error) }
-            }
+        @Sendable func finishWithError(_ error: Error) {
+            guard completion.finish() else { return }
+            DispatchQueue.main.async { onError(error) }
             task.cancel(with: .goingAway, reason: nil)
             handle.detach()
         }
 
-        func finishWithFinal(_ text: String) {
-            if !finalDelivered.value {
-                finalDelivered.value = true
-                DispatchQueue.main.async { onFinal(text) }
-            }
+        @Sendable func finishWithFinal(_ text: String) {
+            guard completion.finish() else { return }
+            DispatchQueue.main.async { onFinal(text) }
             task.cancel(with: .goingAway, reason: nil)
             handle.detach()
         }
 
-        func receiveNext() {
+        @Sendable func receiveNext() {
+            guard !completion.isFinished else { return }
             task.receive { result in
+                guard !completion.isFinished else { return }
                 switch result {
                 case let .failure(error):
                     // Check whether this was a user-initiated cancel — if so,
                     // surface a clean cancellation error instead of the raw
                     // socket failure.
-                    if handle.takeWasCancelledByUser() {
+                    if handle.isCancelledByUser {
                         let cancelError = NSError(
                             domain: "ChatSessionRunner",
                             code: -9999,
@@ -541,7 +586,9 @@ final class ChatSessionRunner {
                         return
                     }
                     if response.isSteering == true {
-                        if let event = ChatSessionRunner.steeringEvent(from: response) {
+                        if let event = ChatSessionRunner.steeringEvent(
+                            from: response, isShellRunning: completion.isShellRunning
+                        ) {
                             DispatchQueue.main.async { onSteeringEvent(event) }
                         }
                         receiveNext()
@@ -572,6 +619,9 @@ final class ChatSessionRunner {
 
                     // Shell script request — run it and stream output back.
                     if let script = AgentRunner.extractShellScript(from: content) {
+                        // Set this before dispatching the worker so a receipt
+                        // arriving before Process registration still shows waiting.
+                        completion.setShellRunning(true)
                         // Surface the reasoning that accompanied the script too.
                         let reasoning = ChatSessionRunner.cleanedTextRemovingShellScript(from: content)
                         if !reasoning.isEmpty {
@@ -594,10 +644,10 @@ final class ChatSessionRunner {
                             // chat's running script. The global
                             // `AgentSessionState.shared.shellProcess` slot is
                             // intentionally untouched here.
-                            let (output, status) = runShellCommandWithStatus(
+                            guard !completion.isFinished, !handle.isCancelledByUser else { return }
+                            let (output, status) = executeShell(
                                 script,
-                                processRegistrar: { [weak handle] process in
-                                    guard let handle else { return }
+                                { process in
                                     if let process {
                                         handle.attach(process: process)
                                     } else {
@@ -605,6 +655,9 @@ final class ChatSessionRunner {
                                     }
                                 }
                             )
+
+                            completion.setShellRunning(false)
+                            guard !completion.isFinished else { return }
 
                             // If the user cancelled this specific turn while the
                             // command was running, discard the output and surface a
@@ -620,17 +673,6 @@ final class ChatSessionRunner {
                                 )
                                 finishWithError(cancelError)
                                 return
-                            }
-
-                            DispatchQueue.main.async {
-                                let statusLabel = (status == 0) ? "success" : "error (exit code: \(status))"
-                                let display = "[terminal \(statusLabel)]\n\(output)"
-                                onBlock(ChatBlock(
-                                    kind: .terminalOutput,
-                                    text: display,
-                                    activityId: response.activityID,
-                                    activityPhase: status == 0 ? .completed : .failed
-                                ))
                             }
 
                             let reply = AgentMessage(
@@ -654,14 +696,33 @@ final class ChatSessionRunner {
                                 return
                             }
 
-                            task.send(.string(jsonString)) { error in
-                                if let error = error {
-                                    finishWithError(error)
-                                } else {
-                                    receiveNext()
+                            completion.withActiveTurn {
+                                DispatchQueue.main.async {
+                                    let statusLabel = (status == 0) ? "success" : "error (exit code: \(status))"
+                                    let display = "[terminal \(statusLabel)]\n\(output)"
+                                    onBlock(ChatBlock(
+                                        kind: .terminalOutput,
+                                        text: display,
+                                        activityId: response.activityID,
+                                        activityPhase: status == 0 ? .completed : .failed
+                                    ))
+                                }
+
+                                task.send(.string(jsonString)) { error in
+                                    if let error {
+                                        // A socket may invoke this callback inline.
+                                        // Finish outside the gate to avoid deadlock.
+                                        DispatchQueue.global(qos: .userInitiated).async {
+                                            finishWithError(error)
+                                        }
+                                    }
                                 }
                             }
                         }
+                        // A shell command can outlive the steering acknowledgement
+                        // timeout. Read control events while it runs; the terminal
+                        // send callback must never start a second receive loop.
+                        receiveNext()
                         return
                     }
 
@@ -741,7 +802,7 @@ final class ChatSessionRunner {
         return components.url
     }
 
-    private static func cleanedTextRemovingShellScript(from content: String) -> String {
+    private nonisolated static func cleanedTextRemovingShellScript(from content: String) -> String {
         var cleaned = content
         if let startRange = cleaned.range(of: "<shell_script>"),
            let endRange = cleaned.range(

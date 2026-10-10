@@ -655,9 +655,9 @@ final class AgentTimelinePresentationTests: XCTestCase {
         XCTAssertEqual(received.steeringPendingCount, 2)
         XCTAssertEqual(rejected.steeringID, "steer-a")
         XCTAssertEqual(rejected.steeringStatus, .rejected)
-        XCTAssertTrue(SteeringContinuationPolicy.shouldCreateContinuation(for: .received))
+        XCTAssertFalse(SteeringContinuationPolicy.shouldCreateContinuation(for: .received))
         XCTAssertFalse(SteeringContinuationPolicy.shouldCreateContinuation(for: .rejected))
-        XCTAssertFalse(SteeringContinuationPolicy.shouldCreateContinuation(for: .applied))
+        XCTAssertTrue(SteeringContinuationPolicy.shouldCreateContinuation(for: .applied))
     }
 
     func testLegacySteeringAcknowledgementTargetsTheOldestPendingUpdate() throws {
@@ -695,6 +695,12 @@ final class AgentTimelinePresentationTests: XCTestCase {
         XCTAssertNil(acknowledgement.id)
         XCTAssertEqual(acknowledgement.status, .received)
         XCTAssertTrue(acknowledgement.isLegacyAcknowledgement)
+        XCTAssertTrue(SteeringContinuationPolicy.shouldCreateContinuation(
+            for: acknowledgement.status, isLegacyAcknowledgement: acknowledgement.isLegacyAcknowledgement
+        ))
+        XCTAssertFalse(SteeringContinuationPolicy.shouldCreateContinuation(
+            for: rejection.status, isLegacyAcknowledgement: rejection.isLegacyAcknowledgement
+        ))
         XCTAssertEqual(rejection.status, .rejected)
         XCTAssertEqual(
             SteeringEventResolver.targetID(

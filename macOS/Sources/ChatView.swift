@@ -3145,7 +3145,8 @@ struct UserBubbleView: View {
     private func steeringLabel(for state: SteeringDeliveryState) -> String {
         switch state {
         case .pending: return "Sending update…"
-        case let .received(pendingCount):
+        case let .received(pendingCount, isWaitingForShell):
+            if isWaitingForShell { return "Waiting for running script to finish" }
             guard let pendingCount, pendingCount > 1 else { return "Update queued for current task" }
             return "Update queued · \(pendingCount) pending"
         case .applied: return "Applied to current task"
@@ -3173,7 +3174,10 @@ struct UserBubbleView: View {
     private func steeringHelp(for state: SteeringDeliveryState) -> String {
         switch state {
         case .pending: return "Waiting for the server to acknowledge this update"
-        case .received: return "The server queued this update for the running task"
+        case let .received(_, isWaitingForShell):
+            return isWaitingForShell
+                ? "Your update was received. The current script will finish normally, then the agent will apply your guidance."
+                : "The server queued this update for the running task"
         case .applied: return "The running task received this update"
         case let .failed(reason): return reason
         }

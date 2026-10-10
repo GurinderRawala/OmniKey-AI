@@ -12,14 +12,17 @@ enum ChatMessageRole: String {
 
 enum SteeringDeliveryState: Equatable {
     case pending
-    case received(pendingCount: Int?)
+    case received(pendingCount: Int?, isWaitingForShell: Bool = false)
     case applied
     case failed(String)
 }
 
 enum SteeringContinuationPolicy {
-    static func shouldCreateContinuation(for status: SteeringServerStatus) -> Bool {
-        status == .received
+    static func shouldCreateContinuation(
+        for status: SteeringServerStatus,
+        isLegacyAcknowledgement: Bool = false
+    ) -> Bool {
+        status == .applied || (status == .received && isLegacyAcknowledgement)
     }
 }
 
@@ -1523,7 +1526,11 @@ final class ChatModel: ObservableObject {
         })?.key ?? currentAssistantMessageID
         let steeringID = UUID().uuidString
         let steeringMessage = ChatMessage.user(text, steeringState: .pending)
-        let insertIndex = min(currentAssistantIndex + 1, sessionSt.messages.count)
+        let pendingMessageIDs = Set(sessionSt.pendingSteering.values
+            .filter { $0.redirectKey == redirectKey }.map(\.messageID))
+        let lastPendingIndex = sessionSt.messages.lastIndex { pendingMessageIDs.contains($0.id) }
+        let insertIndex = min(max(currentAssistantIndex, lastPendingIndex ?? currentAssistantIndex) + 1,
+                              sessionSt.messages.count)
         sessionSt.messages.insert(steeringMessage, at: insertIndex)
         sessionSt.loadedMessageIDs.insert(steeringMessage.id)
         sessionSt.pendingSteering[steeringID] = PendingSteeringContext(
@@ -1580,26 +1587,33 @@ final class ChatModel: ObservableObject {
               let messageIndex = sessionSt.messages.firstIndex(where: { $0.id == context.messageID })
         else { return }
 
+        // A receipt only queues guidance. Keep the running script and its
+        // terminal output together until the daemon actually applies the update.
+        if SteeringContinuationPolicy.shouldCreateContinuation(
+            for: event.status, isLegacyAcknowledgement: event.isLegacyAcknowledgement
+        ),
+           context.continuationMessageID == nil
+        {
+            let continuation = ChatMessage.assistant()
+            let continuationIndex = min(messageIndex + 1, sessionSt.messages.count)
+            sessionSt.messages.insert(continuation, at: continuationIndex)
+            sessionSt.loadedMessageIDs.insert(continuation.id)
+            context.continuationMessageID = continuation.id
+            sessionSt.pendingSteering[steeringID] = context
+            sessionSt.nextSteeringRedirectSequence += 1
+            sessionSt.steeringRedirectRecords[steeringID] = SteeringRedirectRecord(
+                redirectKey: context.redirectKey,
+                continuationMessageID: continuation.id,
+                sequence: sessionSt.nextSteeringRedirectSequence
+            )
+            recomputeSteeringRedirect(for: context.redirectKey, in: sessionSt)
+        }
+
         switch event.status {
         case .received:
-            sessionSt.messages[messageIndex].steeringState = .received(pendingCount: event.pendingCount)
-            if SteeringContinuationPolicy.shouldCreateContinuation(for: event.status),
-               context.continuationMessageID == nil
-            {
-                let continuation = ChatMessage.assistant()
-                let continuationIndex = min(messageIndex + 1, sessionSt.messages.count)
-                sessionSt.messages.insert(continuation, at: continuationIndex)
-                sessionSt.loadedMessageIDs.insert(continuation.id)
-                context.continuationMessageID = continuation.id
-                sessionSt.pendingSteering[steeringID] = context
-                sessionSt.nextSteeringRedirectSequence += 1
-                sessionSt.steeringRedirectRecords[steeringID] = SteeringRedirectRecord(
-                    redirectKey: context.redirectKey,
-                    continuationMessageID: continuation.id,
-                    sequence: sessionSt.nextSteeringRedirectSequence
-                )
-                recomputeSteeringRedirect(for: context.redirectKey, in: sessionSt)
-            }
+            sessionSt.messages[messageIndex].steeringState = .received(
+                pendingCount: event.pendingCount, isWaitingForShell: event.isWaitingForShell
+            )
             if event.isLegacyAcknowledgement {
                 // Legacy servers send no later `applied` event. The receipt is
                 // their terminal acknowledgement, so keep the continuation

@@ -810,7 +810,7 @@ final class AgentRunner {
 
     // MARK: - Tag parsing helpers
 
-    static func extractShellScript(from text: String) -> String? {
+    nonisolated static func extractShellScript(from text: String) -> String? {
         guard let startRange = text.range(of: "<shell_script>") else { return nil }
         guard let endRange = text.range(of: "</shell_script>", range: startRange.upperBound ..< text.endIndex) else { return nil }
 
@@ -821,7 +821,7 @@ final class AgentRunner {
     /// Remove internal XML-like tags used by the agent protocol
     /// so that we can show a clean, human-readable stream of
     /// content in the UI.
-    static func cleanedDisplayText(from text: String) -> String {
+    nonisolated static func cleanedDisplayText(from text: String) -> String {
         var result = text
         let tags = ["<shell_script>", "</shell_script>", "<final_answer>", "</final_answer>"]
         for tag in tags {
@@ -830,7 +830,7 @@ final class AgentRunner {
         return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    static func extractFinalAnswer(from text: String) -> String? {
+    nonisolated static func extractFinalAnswer(from text: String) -> String? {
         guard let startRange = text.range(of: "<final_answer>") else { return nil }
         guard let endRange = text.range(of: "</final_answer>", range: startRange.upperBound ..< text.endIndex) else { return nil }
 
