@@ -11,9 +11,9 @@ final class ChatSessionSteeringTests: XCTestCase {
         let shell = SuspendedShell()
         defer { shell.release() }
         let terminalSent = expectation(description: "terminal output sent")
-        let socket = TestSocket { message in
+        let socket = TestSocket(onSend: { message in
             if message.isTerminalOutput == true { terminalSent.fulfill() }
-        }
+        })
         let received = expectation(description: "both steering receipts delivered while shell is running")
         received.expectedFulfillmentCount = 2
         let applied = expectation(description: "steering applied after shell result")
@@ -62,9 +62,9 @@ final class ChatSessionSteeringTests: XCTestCase {
         defer { shell.release() }
         let rejected = expectation(description: "steering rejected immediately")
         let terminalSent = expectation(description: "shell still returns normally")
-        let socket = TestSocket { message in
+        let socket = TestSocket(onSend: { message in
             if message.isTerminalOutput == true { terminalSent.fulfill() }
-        }
+        })
         start(socket, shell: shell, onSteering: { event in
             XCTAssertEqual(event.status, .rejected)
             XCTAssertEqual(event.id, "first")
@@ -119,6 +119,48 @@ final class ChatSessionSteeringTests: XCTestCase {
         shell.release()
         await fulfillment(of: [shell.returned], timeout: 2)
         XCTAssertFalse(socket.sentMessages.contains { $0.isTerminalOutput == true })
+        XCTAssertEqual(socket.pendingReceiveCount, 0)
+    }
+
+    @MainActor
+    func testFinalCannotOvertakeTerminalSendInvocation() async {
+        let shell = SuspendedShell()
+        let sendEntered = expectation(description: "terminal send entered")
+        let releaseSend = DispatchSemaphore(value: 0)
+        let finalEntered = expectation(description: "final delivery started")
+        let finalReturned = DispatchSemaphore(value: 0)
+        let final = expectation(description: "final delivered after send")
+        defer {
+            shell.release()
+            releaseSend.signal()
+        }
+        let socket = TestSocket(beforeTerminalSend: {
+            sendEntered.fulfill()
+            XCTAssertEqual(releaseSend.wait(timeout: .now() + 5), .success)
+        })
+        start(socket, shell: shell, onFinal: { _ in
+            XCTAssertEqual(socket.sentMessages.filter { $0.isTerminalOutput == true }.count, 1)
+            final.fulfill()
+        })
+        socket.deliver(shellMessage)
+        await fulfillment(of: [shell.started], timeout: 2)
+        shell.release()
+        await fulfillment(of: [sendEntered], timeout: 2)
+
+        let message = finalMessage
+        DispatchQueue.global(qos: .userInitiated).async {
+            finalEntered.fulfill()
+            socket.deliver(message)
+            finalReturned.signal()
+        }
+        await fulfillment(of: [finalEntered], timeout: 2)
+        // This signal comes from the delivery worker, independently of the main
+        // actor. Completion must wait until the send invocation returns.
+        XCTAssertEqual(finalReturned.wait(timeout: .now() + 0.1), .timedOut)
+        XCTAssertFalse(socket.sentMessages.contains { $0.isTerminalOutput == true })
+        releaseSend.signal()
+        await fulfillment(of: [final], timeout: 2)
+        XCTAssertEqual(finalReturned.wait(timeout: .now() + 2), .success)
         XCTAssertEqual(socket.pendingReceiveCount, 0)
     }
 
@@ -199,12 +241,15 @@ private final class TestSocket: ChatSessionSocket, @unchecked Sendable {
     private var overlap = false
     private let onSend: @Sendable (ChatSessionRunner.AgentMessage) -> Void
     private let failTerminalSend: Bool
+    private let beforeTerminalSend: @Sendable () -> Void
 
     init(
         failTerminalSend: Bool = false,
+        beforeTerminalSend: @escaping @Sendable () -> Void = {},
         onSend: @escaping @Sendable (ChatSessionRunner.AgentMessage) -> Void = { _ in }
     ) {
         self.failTerminalSend = failTerminalSend
+        self.beforeTerminalSend = beforeTerminalSend
         self.onSend = onSend
     }
 
@@ -255,6 +300,7 @@ private final class TestSocket: ChatSessionSocket, @unchecked Sendable {
             XCTFail("Invalid outgoing message")
             return
         }
+        if decoded.isTerminalOutput == true { beforeTerminalSend() }
         lock.withLock { sent.append(decoded) }
         if failTerminalSend && decoded.isTerminalOutput == true {
             completionHandler(NSError(domain: "TestSocket", code: 42))

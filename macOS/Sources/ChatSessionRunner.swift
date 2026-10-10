@@ -20,6 +20,15 @@ private final class ChatSessionCompletion: @unchecked Sendable {
         lock.withLock { finished }
     }
 
+    /// Keep completion from overtaking an active turn's send invocation.
+    /// Actions must not synchronously reenter this gate, including in callbacks.
+    func withActiveTurn(_ action: () -> Void) {
+        lock.withLock {
+            guard !finished else { return }
+            action()
+        }
+    }
+
     func finish() -> Bool {
         lock.withLock {
             guard !finished else { return false }
@@ -646,17 +655,6 @@ final class ChatSessionRunner {
                                 return
                             }
 
-                            DispatchQueue.main.async {
-                                let statusLabel = (status == 0) ? "success" : "error (exit code: \(status))"
-                                let display = "[terminal \(statusLabel)]\n\(output)"
-                                onBlock(ChatBlock(
-                                    kind: .terminalOutput,
-                                    text: display,
-                                    activityId: response.activityID,
-                                    activityPhase: status == 0 ? .completed : .failed
-                                ))
-                            }
-
                             let reply = AgentMessage(
                                 sessionID: response.sessionID,
                                 sender: "client",
@@ -678,9 +676,26 @@ final class ChatSessionRunner {
                                 return
                             }
 
-                            task.send(.string(jsonString)) { error in
-                                if let error = error {
-                                    finishWithError(error)
+                            completion.withActiveTurn {
+                                DispatchQueue.main.async {
+                                    let statusLabel = (status == 0) ? "success" : "error (exit code: \(status))"
+                                    let display = "[terminal \(statusLabel)]\n\(output)"
+                                    onBlock(ChatBlock(
+                                        kind: .terminalOutput,
+                                        text: display,
+                                        activityId: response.activityID,
+                                        activityPhase: status == 0 ? .completed : .failed
+                                    ))
+                                }
+
+                                task.send(.string(jsonString)) { error in
+                                    if let error {
+                                        // A socket may invoke this callback inline.
+                                        // Finish outside the gate to avoid deadlock.
+                                        DispatchQueue.global(qos: .userInitiated).async {
+                                            finishWithError(error)
+                                        }
+                                    }
                                 }
                             }
                         }
