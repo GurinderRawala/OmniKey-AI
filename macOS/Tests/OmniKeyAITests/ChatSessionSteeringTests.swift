@@ -41,6 +41,10 @@ final class ChatSessionSteeringTests: XCTestCase {
         }
         await fulfillment(of: [received], timeout: 2)
         XCTAssertEqual(events.map(\.id), ["first", "second"])
+        XCTAssertTrue(events.allSatisfy(\.isWaitingForShell))
+        XCTAssertTrue(events.allSatisfy {
+            !SteeringContinuationPolicy.shouldCreateContinuation(for: $0.status)
+        })
         XCTAssertFalse(socket.sentMessages.contains { $0.isTerminalOutput == true })
         XCTAssertEqual(socket.pendingReceiveCount, 1)
 
@@ -48,12 +52,37 @@ final class ChatSessionSteeringTests: XCTestCase {
         await fulfillment(of: [terminalSent], timeout: 2)
         socket.deliver(steeringMessage(id: "first", status: "applied"))
         await fulfillment(of: [applied], timeout: 2)
+        XCTAssertEqual(events.last?.isWaitingForShell, false)
+        XCTAssertTrue(SteeringContinuationPolicy.shouldCreateContinuation(for: events.last!.status))
         XCTAssertEqual(socket.pendingReceiveCount, 1)
         XCTAssertFalse(socket.hadOverlappingReceives)
         socket.deliver(finalMessage)
         await fulfillment(of: [final], timeout: 2)
         XCTAssertEqual(socket.sentMessages.filter { $0.isTerminalOutput == true }.count, 1)
         XCTAssertEqual(socket.pendingReceiveCount, 0)
+    }
+
+    @MainActor
+    func testSteeringBetweenScriptsDoesNotShowWaitingForScript() async {
+        let shell = SuspendedShell()
+        defer { shell.release() }
+        let terminalSent = expectation(description: "script finished")
+        let socket = TestSocket(onSend: { message in
+            if message.isTerminalOutput == true { terminalSent.fulfill() }
+        })
+        let received = expectation(description: "receipt after script finished")
+        start(socket, shell: shell, onSteering: { event in
+            XCTAssertEqual(event.status, .received)
+            XCTAssertFalse(event.isWaitingForShell)
+            received.fulfill()
+        })
+        socket.deliver(shellMessage)
+        await fulfillment(of: [shell.started], timeout: 2)
+        shell.release()
+        await fulfillment(of: [terminalSent], timeout: 2)
+        socket.deliver(steeringMessage(id: "after-script", status: "received"))
+        await fulfillment(of: [received], timeout: 2)
+        socket.deliver(finalMessage)
     }
 
     @MainActor
@@ -67,6 +96,7 @@ final class ChatSessionSteeringTests: XCTestCase {
         })
         start(socket, shell: shell, onSteering: { event in
             XCTAssertEqual(event.status, .rejected)
+            XCTAssertFalse(event.isWaitingForShell)
             XCTAssertEqual(event.id, "first")
             rejected.fulfill()
         })

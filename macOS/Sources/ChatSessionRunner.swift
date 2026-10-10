@@ -15,6 +15,13 @@ extension URLSessionWebSocketTask: ChatSessionSocket {}
 private final class ChatSessionCompletion: @unchecked Sendable {
     private let lock = NSLock()
     private var finished = false
+    private var shellRunning = false
+
+    var isShellRunning: Bool { lock.withLock { shellRunning } }
+
+    func setShellRunning(_ running: Bool) {
+        lock.withLock { shellRunning = running }
+    }
 
     var isFinished: Bool {
         lock.withLock { finished }
@@ -142,19 +149,22 @@ struct SteeringServerEvent: Equatable {
     let message: String
     let pendingCount: Int?
     let isLegacyAcknowledgement: Bool
+    let isWaitingForShell: Bool
 
     init(
         id: String?,
         status: SteeringServerStatus,
         message: String,
         pendingCount: Int?,
-        isLegacyAcknowledgement: Bool = false
+        isLegacyAcknowledgement: Bool = false,
+        isWaitingForShell: Bool = false
     ) {
         self.id = id
         self.status = status
         self.message = message
         self.pendingCount = pendingCount
         self.isLegacyAcknowledgement = isLegacyAcknowledgement
+        self.isWaitingForShell = status == .received && isWaitingForShell
     }
 }
 
@@ -418,14 +428,18 @@ final class ChatSessionRunner {
         }
     }
 
-    nonisolated static func steeringEvent(from response: AgentMessage) -> SteeringServerEvent? {
+    nonisolated static func steeringEvent(
+        from response: AgentMessage,
+        isShellRunning: Bool = false
+    ) -> SteeringServerEvent? {
         guard response.isSteering == true else { return nil }
         if let id = response.steeringID {
             return SteeringServerEvent(
                 id: id,
                 status: response.steeringStatus ?? (response.isError == true ? .rejected : .received),
                 message: response.content,
-                pendingCount: response.steeringPendingCount
+                pendingCount: response.steeringPendingCount,
+                isWaitingForShell: isShellRunning
             )
         }
         // Daemons released before correlated steering only sent
@@ -572,7 +586,9 @@ final class ChatSessionRunner {
                         return
                     }
                     if response.isSteering == true {
-                        if let event = ChatSessionRunner.steeringEvent(from: response) {
+                        if let event = ChatSessionRunner.steeringEvent(
+                            from: response, isShellRunning: completion.isShellRunning
+                        ) {
                             DispatchQueue.main.async { onSteeringEvent(event) }
                         }
                         receiveNext()
@@ -603,6 +619,9 @@ final class ChatSessionRunner {
 
                     // Shell script request — run it and stream output back.
                     if let script = AgentRunner.extractShellScript(from: content) {
+                        // Set this before dispatching the worker so a receipt
+                        // arriving before Process registration still shows waiting.
+                        completion.setShellRunning(true)
                         // Surface the reasoning that accompanied the script too.
                         let reasoning = ChatSessionRunner.cleanedTextRemovingShellScript(from: content)
                         if !reasoning.isEmpty {
@@ -637,6 +656,7 @@ final class ChatSessionRunner {
                                 }
                             )
 
+                            completion.setShellRunning(false)
                             guard !completion.isFinished else { return }
 
                             // If the user cancelled this specific turn while the
