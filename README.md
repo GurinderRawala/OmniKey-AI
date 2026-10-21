@@ -2,9 +2,32 @@
    <img src="macOS/Assets.xcassets/AppIcon.appiconset/Icon-iOS-Default-1024x1024@1x.png" alt="OmniKey AI Icon" width="128" height="128" />
 </p>
 
-# OmniKey AI
+<h1 align="center">OmniKey AI</h1>
 
-OmniKey AI is a productivity tool that enhances your workflow with AI-powered prompt enhancements, grammar correction, and custom tasks — triggered by a keyboard shortcut on whatever text you have selected.
+<p align="center">
+  <strong>Select text anywhere. Press a shortcut. AI rewrites it in place.</strong><br />
+  Prompt enhancement, grammar fixes, and custom AI tasks in <em>every</em> app on macOS and Windows.
+</p>
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/omnikey-cli"><img alt="npm downloads" src="https://img.shields.io/npm/dm/omnikey-cli?style=flat-square&label=npm%20downloads&color=0b8f3a" /></a>
+  <a href="https://www.npmjs.com/package/omnikey-cli"><img alt="npm version" src="https://img.shields.io/npm/v/omnikey-cli?style=flat-square&color=2b6cb0" /></a>
+  <a href="https://github.com/GurinderRawala/OmniKey-AI/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/GurinderRawala/OmniKey-AI?style=flat-square&color=d4a017" /></a>
+  <a href="https://github.com/GurinderRawala/OmniKey-AI/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/GurinderRawala/OmniKey-AI?style=flat-square&color=6b46c1" /></a>
+  <a href="./LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-black?style=flat-square" /></a>
+  <img alt="Platforms" src="https://img.shields.io/badge/platform-macOS%2013%2B%20%7C%20Windows%2010%2F11-444?style=flat-square" />
+</p>
+
+<p align="center">
+  <a href="https://omnikeyai.ca">Website</a> &nbsp;·&nbsp;
+  <a href="https://omnikeyai.ca/docs">Docs</a> &nbsp;·&nbsp;
+  <a href="https://omnikeyai.ca/changelog">Changelog</a> &nbsp;·&nbsp;
+  <a href="https://github.com/GurinderRawala/OmniKey-AI/discussions">Discussions</a>
+</p>
+
+<p align="center">
+  <img src="docs/media/omnikey-demo.png" alt="OmniKey AI demo: selecting rough text and pressing Command-E rewrites it into a clear prompt in place" width="760" />
+</p>
 
 > Available on **macOS** (menu bar app) and **Windows** (system tray app).
 

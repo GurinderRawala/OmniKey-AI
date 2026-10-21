@@ -1,0 +1,61 @@
+# OmniKey AI
+
+> OmniKey AI is a free, open-source (MIT) desktop tool for macOS and Windows that enhances
+> prompts, fixes grammar, and runs custom AI tasks on whatever text you have selected, in any
+> application, triggered by a keyboard shortcut. Bring your own model: OpenAI, Anthropic,
+> Google Gemini, or any OpenAI-compatible endpoint.
+
+OmniKey runs locally as a background daemon plus a menu bar app (macOS) or system tray app
+(Windows). Select text in any app, press a shortcut, and the result is pasted back in place.
+No copy-paste, no separate chat tab, no subscription.
+
+## Core shortcuts
+
+- `⌘E` / `Ctrl+E` — Enhance Prompt. Rewrites selected text with better clarity, structure, and tone.
+- `⌘G` / `Ctrl+G` — Grammar & Clarity. Fixes spelling, grammar, and readability without changing meaning.
+- `⌘T` / `Ctrl+T` — Custom Task or Agent. Applies your saved task instructions, or runs OmniAgent.
+
+## Inline commands
+
+- `@omnikeyai <instruction>` — ad-hoc instruction applied to the selected text.
+- `@omniAgent <instruction>` — hands the task to the autonomous agent, which has terminal
+  access, web search, authenticated browser reading, and any configured MCP server.
+
+## Install
+
+- macOS (Homebrew): `brew tap GurinderRawala/omnikey-ai https://github.com/GurinderRawala/OmniKey-AI.git && brew install omnikey-cli`
+- Cross-platform (npm): `npm install -g omnikey-cli`
+- One-line macOS: `curl -fsSL https://omnikeyai.ca/install.sh | bash`
+- One-line Windows: `iwr -useb https://omnikeyai.ca/install.ps1 | iex`
+
+Then: `omnikey onboard` to configure a provider, `omnikey daemon` to run it persistently.
+
+## Key capabilities
+
+- Multiple LLM providers: OpenAI, Anthropic, Google Gemini, OpenAI-compatible open models.
+- MCP servers over stdio, HTTP, or SSE. The agent discovers and calls tools automatically.
+- Web search via DuckDuckGo, Serper, Brave Search, Tavily, or SearXNG.
+- Authenticated browser sessions so the agent can read logged-in pages.
+- Telegram bridge for running tasks and receiving results from any device.
+- Scheduled jobs for recurring prompt runs.
+- Works in every application: editors, browsers, mail clients, chat apps, terminals.
+
+## Comparisons
+
+- vs. Grammarly: OmniKey works in any app with any model you choose, is MIT licensed, and
+  sends text only to the provider you configure.
+- vs. Raycast AI: no subscription, available on Windows as well as macOS, fully inspectable source.
+- vs. ChatGPT desktop apps: no context switching into a chat tab; the rewrite happens in place.
+
+## Links
+
+- Website: https://omnikeyai.ca
+- Documentation: https://omnikeyai.ca/docs
+- Changelog: https://omnikeyai.ca/changelog
+- Source: https://github.com/GurinderRawala/OmniKey-AI
+- npm: https://www.npmjs.com/package/omnikey-cli
+- License: MIT
+
+## Platform support
+
+macOS 13+ (Apple Silicon and Intel), Windows 10/11 x64. Free to use.

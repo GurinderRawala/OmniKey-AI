@@ -7,3 +7,7 @@ Disallow: /macos/appcast
 Disallow: /windows/update
 
 Sitemap: https://omnikeyai.ca/sitemap.xml
+
+# AI assistants / LLM crawlers
+# Structured project summary: https://omnikeyai.ca/llms.txt
+# Release feed: https://omnikeyai.ca/changelog.xml

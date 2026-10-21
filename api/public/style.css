@@ -3927,3 +3927,120 @@ body.star-modal-open {
 .skip-link:focus {
   transform: translateY(0);
 }
+
+/* ---------- Changelog ---------- */
+.chg-latest {
+  margin-top: 18px;
+  font-size: 0.95rem;
+  color: var(--text-muted, #9aa3b2);
+}
+.chg-release {
+  display: grid;
+  grid-template-columns: 210px 1fr;
+  gap: 28px;
+  padding: 30px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+.chg-release:first-child {
+  border-top: none;
+  padding-top: 6px;
+}
+.chg-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+.chg-version {
+  font-family: 'Bricolage Grotesque', system-ui, sans-serif;
+  font-size: 1.45rem;
+  font-weight: 700;
+  color: #fff;
+  text-decoration: none;
+  letter-spacing: -0.02em;
+}
+.chg-version:hover {
+  opacity: 0.75;
+}
+.chg-meta time {
+  font-size: 0.85rem;
+  color: #8b94a3;
+}
+.chg-compare {
+  font-size: 0.8rem;
+  color: #7aa2ff;
+  text-decoration: none;
+}
+.chg-compare:hover {
+  text-decoration: underline;
+}
+.chg-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.chg-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  line-height: 1.55;
+}
+.chg-tag {
+  flex: 0 0 auto;
+  min-width: 84px;
+  text-align: center;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+.chg-add {
+  color: #4ade80;
+  background: rgba(74, 222, 128, 0.1);
+  border-color: rgba(74, 222, 128, 0.25);
+}
+.chg-fix {
+  color: #fbbf24;
+  background: rgba(251, 191, 36, 0.1);
+  border-color: rgba(251, 191, 36, 0.25);
+}
+.chg-imp {
+  color: #7aa2ff;
+  background: rgba(122, 162, 255, 0.1);
+  border-color: rgba(122, 162, 255, 0.25);
+}
+.chg-doc {
+  color: #c4b5fd;
+  background: rgba(196, 181, 253, 0.1);
+  border-color: rgba(196, 181, 253, 0.25);
+}
+.chg-text {
+  color: #c8cfdb;
+}
+.chg-text strong {
+  color: #fff;
+  font-weight: 600;
+}
+.chg-empty {
+  color: #76808f;
+  font-size: 0.92rem;
+  margin: 0;
+}
+@media (max-width: 760px) {
+  .chg-release {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+  .chg-meta {
+    flex-direction: row;
+    align-items: baseline;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+}

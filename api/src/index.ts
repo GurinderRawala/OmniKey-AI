@@ -47,8 +47,22 @@ app.get(['/docs', '/docs/'], (req, res) => {
   res.sendFile(path.join(process.cwd(), 'public', 'docs.html'));
 });
 
-app.get(['/index.html', '/docs.html'], (req, res) => {
-  res.redirect(301, req.path === '/docs.html' ? '/docs' : '/');
+app.get(['/changelog', '/changelog/'], (req, res) => {
+  if (req.path.endsWith('/')) {
+    res.redirect(301, '/changelog');
+    return;
+  }
+
+  res.sendFile(path.join(process.cwd(), 'public', 'changelog.html'));
+});
+
+app.get(['/index.html', '/docs.html', '/changelog.html'], (req, res) => {
+  if (req.path === '/docs.html') {
+    res.redirect(301, '/docs');
+    return;
+  }
+
+  res.redirect(301, req.path === '/changelog.html' ? '/changelog' : '/');
 });
 
 app.use(express.static(path.join(process.cwd(), 'public')));

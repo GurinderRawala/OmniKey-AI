@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Drawing;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -235,6 +236,17 @@ namespace OmniKey.Windows
 
             menu.Items.Add(new ToolStripSeparator());
 
+            var starItem = new ToolStripMenuItem("Star on GitHub");
+            starItem.Click += (_, _) => OpenExternalUrl("https://github.com/GurinderRawala/OmniKey-AI");
+            menu.Items.Add(starItem);
+
+            var feedbackItem = new ToolStripMenuItem("Share Feedback");
+            feedbackItem.Click += (_, _) =>
+                OpenExternalUrl("https://github.com/GurinderRawala/OmniKey-AI/discussions");
+            menu.Items.Add(feedbackItem);
+
+            menu.Items.Add(new ToolStripSeparator());
+
             var exitItem = new ToolStripMenuItem("Exit");
             exitItem.Click += (_, _) =>
             {
@@ -245,6 +257,26 @@ namespace OmniKey.Windows
             menu.Items.Add(exitItem);
 
             return menu;
+        }
+
+        /// <summary>
+        /// Opens a URL in the user's default browser. Failures are swallowed:
+        /// a missing browser handler must never take down the tray app.
+        /// </summary>
+        private static void OpenExternalUrl(string url)
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName        = url,
+                    UseShellExecute = true,
+                });
+            }
+            catch
+            {
+                // Nothing actionable: the menu item is purely informational.
+            }
         }
 
         // ─── Update checking ──────────────────────────────────────────

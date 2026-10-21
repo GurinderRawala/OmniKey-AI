@@ -17,6 +17,7 @@ import { decompressString } from './compression';
 import { SubscriptionTaskTemplate } from './models/subscriptionTaskTemplate';
 import { aiClient, AIMessage, getFixedHelperModel, modelSupportsTemperature } from './ai-client';
 import { recordTokenUsage, UsageMode } from './usageRecorder';
+import { recordEnhancement } from './engagementCounter';
 import { getAgentSettings, selectedAgentModelForProvider } from './agentSettingsStore';
 
 function parseImprovedTextResponse(logger: Logger, response: string): string {
@@ -291,6 +292,7 @@ async function enhanceText(
     const { rawResponse, usage, model } = result;
 
     await recordTokenUsage(logger, subscription, usage, model, usageModeForCommand(cmd));
+    recordEnhancement();
     const enhanced = rawResponse.trim();
 
     if (!enhanced) {
@@ -464,6 +466,7 @@ async function streamEnhanceResponse(
     const { usage, model } = result;
 
     await recordTokenUsage(logger, subscription, usage, model, usageModeForCommand(cmd));
+    recordEnhancement();
 
     if (!headersSent) {
       ensureHeadersSent();

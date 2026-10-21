@@ -300,6 +300,26 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         }
         menu.addItem(licenseItem)
         licenseMenuItem = licenseItem
+
+        menu.addItem(NSMenuItem.separator())
+
+        let starItem = NSMenuItem(
+            title: "Star on GitHub",
+            action: #selector(openGitHubRepoFromMenu),
+            keyEquivalent: ""
+        )
+        starItem.target = self
+        menu.addItem(starItem)
+
+        let feedbackItem = NSMenuItem(
+            title: "Share Feedback",
+            action: #selector(openDiscussionsFromMenu),
+            keyEquivalent: ""
+        )
+        feedbackItem.target = self
+        menu.addItem(feedbackItem)
+
+        menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q"))
 
         // Attach the menu to the status bar item so clicking the
@@ -331,6 +351,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         guard requireTermsAccepted() else { return }
         showChatWindow()
         ChatModel.shared.startNewChat()
+    }
+
+    @objc private func openGitHubRepoFromMenu() {
+        openExternalURL("https://github.com/GurinderRawala/OmniKey-AI")
+    }
+
+    @objc private func openDiscussionsFromMenu() {
+        openExternalURL("https://github.com/GurinderRawala/OmniKey-AI/discussions")
+    }
+
+    private func openExternalURL(_ string: String) {
+        guard let url = URL(string: string) else { return }
+        NSWorkspace.shared.open(url)
     }
 
     @objc func openHelpFromMainMenu() {
