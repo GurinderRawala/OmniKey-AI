@@ -1,5 +1,8 @@
 node_modules/
 dist/
+
+# SwiftPM build scratch (macOS/.build, and any stray root-level one)
+.build/
 .env
 .vscode
 custom_task.txt
