@@ -56,9 +56,8 @@ export async function selfHostedSubscription(): Promise<Subscription> {
 
 async function ensureSelfHostedDefaultsSeeded(subscription: Subscription): Promise<void> {
   try {
-    const { seedDefaultSelfHostedAgentAssetsForSubscription } = await import(
-      './agent/defaultSelfHostedSeeds'
-    );
+    const { seedDefaultSelfHostedAgentAssetsForSubscription } =
+      await import('./agent/defaultSelfHostedSeeds');
     await seedDefaultSelfHostedAgentAssetsForSubscription(subscription.id, logger);
   } catch (err) {
     logger.error('Error seeding default self-hosted agent assets.', { error: err });

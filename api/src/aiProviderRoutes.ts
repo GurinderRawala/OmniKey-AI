@@ -166,11 +166,7 @@ function readActiveProvider(cfg: Record<string, any>): AIProviderType {
 function scheduleDaemonRestart(reason: string): void {
   setTimeout(() => {
     const port = config.port;
-    const logFile = path.join(
-      process.env.HOME || os.homedir(),
-      '.omnikey',
-      'restart-daemon.log',
-    );
+    const logFile = path.join(process.env.HOME || os.homedir(), '.omnikey', 'restart-daemon.log');
     const omnikeyCli = path.resolve(__dirname, '../dist/index.js');
 
     logger.info(`Spawning detached \`omnikey restart-daemon --port ${port}\` (${reason})`);

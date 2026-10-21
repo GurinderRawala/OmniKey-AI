@@ -74,7 +74,8 @@ export async function onboard() {
       {
         type: 'input',
         name: 'openModelBaseUrl',
-        message: 'Enter the OpenAI-compatible /v1 base URL (press Enter for NVIDIA NIM public gateway):',
+        message:
+          'Enter the OpenAI-compatible /v1 base URL (press Enter for NVIDIA NIM public gateway):',
         default: DEFAULT_OPEN_MODEL_URL,
         validate: (input: string) => {
           const trimmed = input.trim();

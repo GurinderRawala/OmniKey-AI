@@ -1028,7 +1028,9 @@ describe('assign_session_groups handler', () => {
 
     await handler(
       {
-        groups: [{ groupName: 'My App', projectRoot: '/Users/me/MyApp', description: 'A cool app.' }],
+        groups: [
+          { groupName: 'My App', projectRoot: '/Users/me/MyApp', description: 'A cool app.' },
+        ],
         sessions: [{ sessionId: 's1', groupName: 'My App', summary: 'Did a thing.' }],
       },
       log,

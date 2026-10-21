@@ -37,7 +37,10 @@ export const ASSIGN_SESSION_GROUPS_TOOL: AITool = {
         items: {
           type: 'object',
           properties: {
-            groupName: { type: 'string', description: 'The exact group name (2-4 words, Title Case).' },
+            groupName: {
+              type: 'string',
+              description: 'The exact group name (2-4 words, Title Case).',
+            },
             projectRoot: {
               type: ['string', 'null'],
               description:
@@ -109,7 +112,11 @@ const argsSchema = z.object({
  * model omitted it entirely.
  */
 function normaliseDescription(description: string, projectRoot: string | null | undefined): string {
-  const cleaned = description.trim().replace(/\s*\n+\s*/g, ' ').replace(/\s{2,}/g, ' ').trim();
+  const cleaned = description
+    .trim()
+    .replace(/\s*\n+\s*/g, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
   if (!projectRoot) return cleaned;
 
   const existing = extractStoredProjectPath(cleaned);

@@ -67,10 +67,10 @@ async function ensureSystemMetaTable(): Promise<void> {
 }
 
 async function readMeta(key: string): Promise<string | null> {
-  const rows = (await sequelize.query(
-    'SELECT value FROM system_meta WHERE key = :key',
-    { replacements: { key }, type: QueryTypes.SELECT },
-  )) as Array<{ value: string | null }>;
+  const rows = (await sequelize.query('SELECT value FROM system_meta WHERE key = :key', {
+    replacements: { key },
+    type: QueryTypes.SELECT,
+  })) as Array<{ value: string | null }>;
   return rows.length ? rows[0].value : null;
 }
 
