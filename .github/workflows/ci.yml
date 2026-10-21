@@ -39,9 +39,11 @@ jobs:
 
   macos:
     name: Build and test (macOS app)
-    # Package.swift declares swift-tools-version:6.0, which macos-14 (Xcode 15 /
-    # Swift 5.10) cannot parse. macos-15 ships Xcode 16.
-    runs-on: macos-15
+    # macos-14 ships Swift 5.10, which cannot even parse swift-tools-version:6.0.
+    # macos-15 ships Swift 6.0, which rejects actor-isolation patterns that later
+    # 6.x compilers accept. macos-26 tracks the current toolchain the app is
+    # developed against.
+    runs-on: macos-26
 
     steps:
       - name: Checkout
