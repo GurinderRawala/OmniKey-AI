@@ -6,6 +6,13 @@
     <description>New features, fixes, and improvements in OmniKey AI.</description>
     <language>en</language>
     <item>
+      <title>OmniKey v1.8.11</title>
+      <link>https://omnikeyai.ca/changelog#v1.8.11</link>
+      <guid isPermaLink="false">omnikey-v1.8.11</guid>
+      <pubDate>Wed, 21 Oct 2026 00:00:00 +0000</pubDate>
+      <description><![CDATA[<ul><li>Build the macOS app on macos-26</li><li>Build the macOS app on macos-15</li><li>Run build, tests, and native builds on every pull request</li><li>Apply Prettier to the seven files that had drifted</li><li>Add contributor on-ramp and correct stale DEVELOPMENT claims</li><li>Regenerate the changelog during the release job</li><li>Regenerate changelog for v1.8.10</li></ul>]]></description>
+    </item>
+    <item>
       <title>OmniKey v1.8.10</title>
       <link>https://omnikeyai.ca/changelog#v1.8.10</link>
       <guid isPermaLink="false">omnikey-v1.8.10</guid>
@@ -137,13 +144,6 @@
       <guid isPermaLink="false">omnikey-v1.6.21</guid>
       <pubDate>Tue, 28 Jul 2026 00:00:00 +0000</pubDate>
       <description><![CDATA[<ul><li>Agent token optimization and macos app changes</li></ul>]]></description>
-    </item>
-    <item>
-      <title>OmniKey v1.6.20</title>
-      <link>https://omnikeyai.ca/changelog#v1.6.20</link>
-      <guid isPermaLink="false">omnikey-v1.6.20</guid>
-      <pubDate>Mon, 27 Jul 2026 00:00:00 +0000</pubDate>
-      <description><![CDATA[<ul><li>New build</li><li>Bump macOS to 1.4.0 (build 50), Windows to 1.19.0</li><li>Bump macOS to 1.3.0 (build 49), Windows to 1.18.0</li><li>Usage feature and terminal fixes</li></ul>]]></description>
     </item>
   </channel>
 </rss>

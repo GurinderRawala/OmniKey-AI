@@ -1,18 +1,18 @@
 class OmnikeyCli < Formula
   desc "CLI tool for Omnikey AI - keyboard shortcut AI assistant"
   homepage "https://github.com/GurinderRawala/OmniKey-AI"
-  version "1.8.10"
+  version "1.8.11"
   license "MIT"
 
   on_macos do
     on_arm do
       url "https://github.com/GurinderRawala/OmniKey-AI/releases/download/v#{version}/omnikey-cli-#{version}-darwin-arm64.tar.gz"
-      sha256 "f695413b321c11b81f3d9530ed659b0e52ba0495b71426ed940a5c0a773a202b"
+      sha256 "6c78195e46487399855ef4d548318e64bc8b5804ea230837cebb58125232d8be"
     end
 
     on_intel do
       url "https://github.com/GurinderRawala/OmniKey-AI/releases/download/v#{version}/omnikey-cli-#{version}-darwin-x86_64.tar.gz"
-      sha256 "2d5b79d9584b75e6afbe20b5810318bd010ab316e22c17e23875369bdb19675f"
+      sha256 "32c7c5e7ebd1757dfc67bf97fffaa31bccedfa31621bcf97fb38dcbe71a45886"
     end
   end
 
