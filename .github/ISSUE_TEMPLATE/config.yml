@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Question or idea
+    url: https://github.com/GurinderRawala/OmniKey-AI/discussions
+    about: Ask questions, share MCP recipes, or float an idea before filing an issue.
+  - name: Documentation
+    url: https://omnikeyai.ca/docs
+    about: Setup, CLI commands, providers, MCP, scheduled jobs, and the agent.
+  - name: Report a security vulnerability
+    url: https://github.com/GurinderRawala/OmniKey-AI/security/advisories/new
+    about: Please report privately, never in a public issue.

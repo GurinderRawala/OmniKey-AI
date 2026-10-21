@@ -16,7 +16,7 @@ The CLI ships **all three TypeScript services in one package**: at build time `c
 ## Prerequisites
 
 - Node.js **≥ 22** (the engines field allows ≥ 14, but CI uses 22).
-- **Yarn 1.22+** (`npm install -g yarn` if you don't have it). Yarn is the **only** supported package manager — there are no `package-lock.json` files in the repo.
+- **Yarn 1.22+** (`npm install -g yarn` if you don't have it). Yarn is the supported package manager for the monorepo; the only `package-lock.json` in the repo is `cli/package-lock.json`, which exists so the published npm package carries a lockfile.
 - For the native clients: Xcode 15+ (macOS) or .NET 8 SDK + Visual Studio 2022 (Windows). Neither is required to work on the TypeScript services.
 
 ## Getting started
@@ -76,7 +76,7 @@ Telegram needs `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `.env` — see [`t
 | `yarn build:api` / `:telegram` / `:cli` | Build a single workspace.                                                                                                   |
 | `yarn dev`                              | Start the API in watch mode.                                                                                                |
 | `yarn start`                            | Run the compiled API (`api/dist/index.js`).                                                                                 |
-| `yarn test`                             | Run vitest across every workspace (currently 67 tests in `api`; `cli`/`telegram` are no-ops).                               |
+| `yarn test`                             | Run vitest across every workspace (currently 332 tests in `api`; `cli`/`telegram` are no-ops).                              |
 | `yarn lint`                             | Stubbed in every workspace — wire a real linter here when adopted.                                                          |
 | `yarn format`                           | Run Prettier across every workspace's `src/**`.                                                                             |
 | `yarn clean`                            | Remove every `dist/`, `backend-dist/`, and `telegram-client-dist/`.                                                         |
@@ -131,9 +131,9 @@ Cloud Run picks this image up from the release branch automatically.
 Two GitHub Actions workflows ship the CLI:
 
 - **`.github/workflows/release.yml`** — fires on `v*` tags. Builds the whole monorepo with `yarn install --frozen-lockfile && yarn build`, stages a self-contained CLI bundle (re-resolves production-only deps inside the staging dir), uploads the tarball as a GitHub Release asset, and updates the Homebrew formula in `Formula/omnikey-cli.rb` plus the tap repo.
-- **`.github/workflows/publish-cli.yaml`** — fires on `main` when `api/`, `cli/`, or `telegram/` change. Builds the monorepo and runs `yarn publish` from `cli/`.
+- **`.github/workflows/publish-cli.yaml`** — fires on `main` when `cli/**` changes. Builds the monorepo and runs `npm publish` from `cli/`. Because any `cli/**` change publishes, the patch version in `cli/package.json` and `api/package.json` must be bumped in the same pull request; npm rejects republishing an existing version.
 
-Both workflows are 100% Yarn — there is no `npm ci` or `npm publish` anywhere.
+Installs and builds are Yarn throughout; only the final publish step uses `npm publish`, which needs the project-scoped `.npmrc` that `actions/setup-node` writes.
 
 ## Native clients
 

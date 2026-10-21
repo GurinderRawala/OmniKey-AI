@@ -1,0 +1,43 @@
+name: Feature request
+description: Suggest a capability or improvement.
+labels: ['enhancement']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        OmniKey runs entirely on the user's machine and sends no data to its maintainers.
+        Requests that would require telemetry or usage tracking will be declined.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you running into?
+      description: Describe the situation, not the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like OmniKey to do?
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part of OmniKey?
+      options:
+        - Shortcuts / text enhancement
+        - OmniAgent
+        - MCP integration
+        - Providers
+        - CLI
+        - macOS app
+        - Windows app
+        - Telegram bridge
+        - Docs
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Anything you have tried or considered instead?

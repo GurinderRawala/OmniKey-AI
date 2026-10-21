@@ -1,0 +1,44 @@
+name: Provider support
+description: Request or report an issue with an LLM, search, or MCP provider.
+labels: ['provider-adapter']
+body:
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind of provider
+      options:
+        - LLM provider
+        - Web search provider
+        - MCP server
+    validations:
+      required: true
+  - type: input
+    id: name
+    attributes:
+      label: Provider name
+      placeholder: 'e.g. Mistral, Groq, Ollama, Exa'
+    validations:
+      required: true
+  - type: input
+    id: docs
+    attributes:
+      label: Link to its API documentation
+    validations:
+      required: true
+  - type: dropdown
+    id: compat
+    attributes:
+      label: Is it OpenAI-compatible?
+      description: OmniKey already supports any OpenAI-compatible endpoint via the open-model option.
+      options:
+        - 'Yes — works via the OpenAI-compatible endpoint'
+        - 'Yes, but something is broken'
+        - 'No — needs a dedicated adapter'
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else worth knowing
+      description: Auth quirks, streaming differences, model naming, rate limits.

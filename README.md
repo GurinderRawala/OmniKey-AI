@@ -22,7 +22,8 @@
   <a href="https://omnikeyai.ca">Website</a> &nbsp;·&nbsp;
   <a href="https://omnikeyai.ca/docs">Docs</a> &nbsp;·&nbsp;
   <a href="https://omnikeyai.ca/changelog">Changelog</a> &nbsp;·&nbsp;
-  <a href="https://github.com/GurinderRawala/OmniKey-AI/discussions">Discussions</a>
+  <a href="https://github.com/GurinderRawala/OmniKey-AI/discussions">Discussions</a> &nbsp;·&nbsp;
+  <a href="https://bsky.app/profile/omnikeyai.bsky.social">Bluesky</a>
 </p>
 
 > Available on **macOS** (menu bar app) and **Windows** (system tray app).
@@ -104,6 +105,16 @@ Use `@omnikeyai` (without the agent prefix) for plain Q&A in the context of your
 ## Developers
 
 OmniKey AI is a Yarn monorepo with three TypeScript workspaces (`api`, `cli`, `telegram`) plus native desktop clients in Swift (macOS) and C# (Windows). For setup, build/test workflows, and a tour of the main commands, see **[DEVELOPMENT.md](./DEVELOPMENT.md)**.
+
+## Contributing
+
+Issues and pull requests are welcome. Start with
+[CONTRIBUTING.md](./CONTRIBUTING.md) and the
+[`good first issue`](https://github.com/GurinderRawala/OmniKey-AI/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
+label. Security reports go through [SECURITY.md](./SECURITY.md), never a public issue.
+
+One hard rule: **OmniKey never phones home.** No telemetry, no analytics, no usage
+counters. Everything runs on your machine and talks only to the providers you configured.
 
 ## License & Terms
 
