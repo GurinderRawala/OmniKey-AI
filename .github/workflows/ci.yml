@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build and test (TypeScript)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'yarn'
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Check formatting
+        run: npx prettier --check "api/src/**/*.ts" "cli/src/**/*.ts" "telegram/src/**/*.ts"
+
+      - name: Build all workspaces
+        run: yarn build
+
+      - name: Run tests
+        run: yarn test
+
+  macos:
+    name: Build and test (macOS app)
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build
+        run: swift build
+        working-directory: ./macOS
+
+      - name: Test
+        run: swift test
+        working-directory: ./macOS
+
+  windows:
+    name: Build (Windows app)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Build
+        run: dotnet build --nologo
+        working-directory: ./windows
