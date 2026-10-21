@@ -109,6 +109,8 @@ jobs:
         with:
           ref: ${{ github.event.inputs.tag || github.ref_name }}
           token: ${{ secrets.GITHUB_TOKEN }}
+          # The changelog generator walks every tag, so a shallow clone is not enough.
+          fetch-depth: 0
 
       - name: Get version from tag
         id: version
@@ -163,7 +165,7 @@ jobs:
             -e "/darwin-x86_64/,/sha256 \"/{s/sha256 \"[^\"]*\"/sha256 \"${X86_SHA}\"/}" \
             Formula/omnikey-cli.rb
 
-      - name: Commit updated formula
+      - name: Commit updated formula and changelog
         run: |
           UPDATED_FORMULA="$(mktemp)"
           cp Formula/omnikey-cli.rb "$UPDATED_FORMULA"
@@ -175,11 +177,16 @@ jobs:
           git checkout -B main origin/main
           cp "$UPDATED_FORMULA" Formula/omnikey-cli.rb
 
-          git add Formula/omnikey-cli.rb
+          # Regenerate the public changelog from the tag history now that the
+          # new tag exists. Runs on main so the generated page matches the nav
+          # and footer currently shipped in docs.html.
+          python3 scripts/generate-changelog.py
+
+          git add Formula/omnikey-cli.rb api/public/changelog.html api/public/changelog.xml
           if git diff --cached --quiet; then
-            echo "Homebrew formula is already up to date on main."
+            echo "Formula and changelog are already up to date on main."
           else
-            git commit -m "chore: update Homebrew formula to v${{ steps.version.outputs.VERSION }} [skip ci]"
+            git commit -m "chore: update Homebrew formula and changelog to v${{ steps.version.outputs.VERSION }} [skip ci]"
             git push origin HEAD:main
           fi
 
