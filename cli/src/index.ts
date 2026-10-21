@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
 import { onboard } from './onboard';
-import { maybeShowStarPrompt, renderWelcomeCta } from './engagement';
+import { renderWelcomeCta } from './engagement';
 
 import { startDaemon } from './daemon';
 import { killDaemon } from './killDaemon';
@@ -35,7 +35,8 @@ program
   .description('Onboard and configure your AI provider')
   .action(async () => {
     await onboard();
-    console.log(renderWelcomeCta());
+    const cta = renderWelcomeCta();
+    if (cta) console.log(cta);
   });
 
 program
@@ -270,7 +271,4 @@ telegramDaemonCmd
     uninstallTelegramDaemon();
   });
 
-program.parseAsync(process.argv).then(() => {
-  // Shown at most once per milestone, and never when OMNIKEY_NO_NAG is set.
-  maybeShowStarPrompt();
-});
+program.parseAsync(process.argv);

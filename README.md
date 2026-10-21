@@ -25,10 +25,6 @@
   <a href="https://github.com/GurinderRawala/OmniKey-AI/discussions">Discussions</a>
 </p>
 
-<p align="center">
-  <img src="docs/media/omnikey-demo.png" alt="OmniKey AI demo: selecting rough text and pressing Command-E rewrites it into a clear prompt in place" width="760" />
-</p>
-
 > Available on **macOS** (menu bar app) and **Windows** (system tray app).
 
 > 🌐 **Full documentation, downloads, and product details live at [omnikeyai.ca](https://omnikeyai.ca).** This README only covers the essentials.
