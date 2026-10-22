@@ -128,7 +128,7 @@ def render():
           <p class="section-label">Try it where you type</p>
           <h2>One shortcut. Any app.</h2>
           <p>Free, open source, and built for macOS and Windows. Bring your own model.</p>
-          <div><a href="/#download" class="btn btn-primary">Download OmniKey</a> <a href="https://github.com/GurinderRawala/OmniKey-AI" class="btn btn-secondary">View source</a></div>
+          <div class="blog-cta-actions"><a href="/#download" class="btn btn-primary">Download OmniKey</a><a href="https://github.com/GurinderRawala/OmniKey-AI" class="btn btn-secondary">View source</a></div>
         </aside>
       </article>
     </main>

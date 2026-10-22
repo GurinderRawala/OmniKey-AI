@@ -4201,3 +4201,20 @@ body.star-modal-open {
   .blog-prose { margin-top: 34px; font-size: 1rem; line-height: 1.75; }
   .blog-cta { padding: 24px; }
 }
+.blog-cta-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+@media (max-width: 640px) {
+  .blog-cta-actions {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 14px;
+  }
+  .blog-cta-actions .btn {
+    width: 100%;
+    justify-content: center;
+  }
+}
