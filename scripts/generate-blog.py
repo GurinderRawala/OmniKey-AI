@@ -117,7 +117,6 @@ def render():
       <article class="blog-article">
         <header class="blog-article-header">
           <a href="/blog" class="blog-back">&larr; All posts</a>
-          <p class="section-label">OmniKey Blog</p>
           <h1>{html.escape(post['title'])}</h1>
           <p class="blog-dek">{html.escape(post['description'])}</p>
           <div class="blog-byline"><time datetime="{post['date']}">{datetime.date.fromisoformat(post['date']).strftime('%B %-d, %Y')}</time><span>&middot;</span><span>{post['read_time']}</span></div>

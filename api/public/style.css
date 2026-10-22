@@ -4132,9 +4132,6 @@ body.star-modal-open {
   padding: 52px 0 45px;
   border-bottom: 1px solid var(--border);
 }
-.blog-article-header .section-label {
-  margin-top: 38px;
-}
 .blog-article-header h1 {
   font-size: clamp(2.5rem, 7vw, 4.8rem);
 }
