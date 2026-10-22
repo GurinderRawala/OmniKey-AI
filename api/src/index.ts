@@ -56,13 +56,41 @@ app.get(['/changelog', '/changelog/'], (req, res) => {
   res.sendFile(path.join(process.cwd(), 'public', 'changelog.html'));
 });
 
-app.get(['/index.html', '/docs.html', '/changelog.html'], (req, res) => {
+app.get(['/blog', '/blog/'], (req, res) => {
+  if (req.path.endsWith('/')) {
+    res.redirect(301, '/blog');
+    return;
+  }
+
+  res.sendFile(path.join(process.cwd(), 'public', 'blog.html'));
+});
+
+app.get('/blog/:slug', (req, res, next) => {
+  if (!/^[a-z0-9-]+$/.test(req.params.slug)) {
+    next();
+    return;
+  }
+
+  const articlePath = path.join(process.cwd(), 'public', 'blog', `${req.params.slug}.html`);
+  if (!fs.existsSync(articlePath)) {
+    next();
+    return;
+  }
+
+  res.sendFile(articlePath);
+});
+
+app.get(['/index.html', '/docs.html', '/changelog.html', '/blog.html'], (req, res) => {
   if (req.path === '/docs.html') {
     res.redirect(301, '/docs');
     return;
   }
+  if (req.path === '/changelog.html') {
+    res.redirect(301, '/changelog');
+    return;
+  }
 
-  res.redirect(301, req.path === '/changelog.html' ? '/changelog' : '/');
+  res.redirect(301, req.path === '/blog.html' ? '/blog' : '/');
 });
 
 app.use(express.static(path.join(process.cwd(), 'public')));

@@ -181,8 +181,10 @@ jobs:
           # new tag exists. Runs on main so the generated page matches the nav
           # and footer currently shipped in docs.html.
           python3 scripts/generate-changelog.py
+          python3 scripts/generate-blog.py
 
-          git add Formula/omnikey-cli.rb api/public/changelog.html api/public/changelog.xml
+          git add Formula/omnikey-cli.rb api/public/changelog.html api/public/changelog.xml \
+            api/public/blog.html api/public/blog/
           if git diff --cached --quiet; then
             echo "Formula and changelog are already up to date on main."
           else

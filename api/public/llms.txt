@@ -51,6 +51,7 @@ Then: `omnikey onboard` to configure a provider, `omnikey daemon` to run it pers
 
 - Website: https://omnikeyai.ca
 - Documentation: https://omnikeyai.ca/docs
+- Blog: https://omnikeyai.ca/blog
 - Changelog: https://omnikeyai.ca/changelog
 - Source: https://github.com/GurinderRawala/OmniKey-AI
 - npm: https://www.npmjs.com/package/omnikey-cli

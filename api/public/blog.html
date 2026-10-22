@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OmniKey AI Blog - Local AI, Desktop Workflows &amp; Agents</title>
+    <meta name="description" content="Practical notes on local AI, keyboard-first workflows, agents, MCP, and getting useful work done without another chat tab." />
+    <link rel="canonical" href="https://omnikeyai.ca/blog" />
+    <meta name="robots" content="index, follow" />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://omnikeyai.ca/blog" />
+    <meta property="og:title" content="OmniKey AI Blog - Local AI, Desktop Workflows &amp; Agents" />
+    <meta property="og:description" content="Practical notes on local AI, keyboard-first workflows, agents, MCP, and getting useful work done without another chat tab." />
+    <meta property="og:site_name" content="OmniKey AI" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="OmniKey AI Blog - Local AI, Desktop Workflows &amp; Agents" />
+    <meta name="twitter:description" content="Practical notes on local AI, keyboard-first workflows, agents, MCP, and getting useful work done without another chat tab." />
+    <script type="application/ld+json">
+      {"@context":"https://schema.org","@type":"CollectionPage","headline":"OmniKey AI Blog - Local AI, Desktop Workflows &amp; Agents","description":"Practical notes on local AI, keyboard-first workflows, agents, MCP, and getting useful work done without another chat tab.","url":"https://omnikeyai.ca/blog","publisher":{"@type":"Organization","name":"OmniKey AI","url":"https://omnikeyai.ca"}}
+    </script>
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" href="/icon-192.png" type="image/png" sizes="192x192" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
+    <meta name="theme-color" content="#111318" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;600;700;800&amp;family=Manrope:wght@400;500;600;700;800&amp;display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/style.css" />
+    <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Skip to main content</a>
+    <nav class="nav">
+      <div class="nav-inner">
+        <a href="/" class="nav-logo">
+          <img src="/icon-96.png" alt="" class="nav-icon" width="36" height="36" />
+          <span>OmniKey</span>
+        </a>
+        <div class="nav-links">
+          <a href="/#omniagent" class="nav-link-new">OmniAgent</a>
+          <a href="/docs">Docs</a>
+          <a href="/blog" class="nav-link-active">Blog</a>
+          <a href="/changelog">Changelog</a>
+          <a href="/#getting-started">Get started</a>
+        </div>
+        <div class="nav-actions">
+          <a
+            href="https://github.com/GurinderRawala/OmniKey-AI"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="nav-github"
+            aria-label="Star OmniKey on GitHub"
+          >
+            <svg viewBox="0 0 16 16" fill="currentColor" width="13" height="13" aria-hidden="true">
+              <path
+                d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.751.751 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z"
+              />
+            </svg>
+            <span class="nav-github-label">GitHub</span>
+          </a>
+          <a href="/#download" class="nav-download">Download</a>
+        </div>
+        <button
+          type="button"
+          class="nav-hamburger"
+          id="nav-hamburger"
+          aria-label="Open menu"
+          aria-expanded="false"
+          aria-controls="mobile-menu"
+        >
+          <span class="nav-hamburger-bar"></span>
+          <span class="nav-hamburger-bar"></span>
+          <span class="nav-hamburger-bar"></span>
+        </button>
+      </div>
+      <div class="mobile-menu" id="mobile-menu" hidden>
+        <nav class="mobile-menu-links" aria-label="Mobile">
+          <a href="/#omniagent" class="mobile-menu-link mobile-menu-link-new">OmniAgent</a>
+          <a href="/docs" class="mobile-menu-link">Docs</a>
+          <a href="/blog" class="mobile-menu-link mobile-menu-link-active">Blog</a>
+          <a href="/changelog" class="mobile-menu-link">Changelog</a>
+          <a href="/#getting-started" class="mobile-menu-link">Get started</a>
+        </nav>
+        <div class="mobile-menu-actions">
+          <a href="/#download" class="mobile-menu-download">Download for macOS / Windows</a>
+          <a
+            href="https://github.com/GurinderRawala/OmniKey-AI"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="mobile-menu-github"
+          >
+            <svg viewBox="0 0 16 16" fill="currentColor" width="15" height="15" aria-hidden="true">
+              <path
+                d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.751.751 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z"
+              />
+            </svg>
+            Star on GitHub
+          </a>
+        </div>
+      </div>
+    </nav>
+    <main class="blog-main" id="main-content">
+      <section class="blog-hero">
+        <p class="section-label">OmniKey Blog</p>
+        <h1>AI should work where you do.</h1>
+        <p>Practical notes on local models, keyboard-first workflows, MCP, and agents that can use real context.</p>
+      </section>
+      <section class="blog-grid" aria-label="Blog posts">
+        <article class="blog-card">
+          <p class="section-label">Workflow</p>
+          <h2><a href="/blog/your-ai-assistant-lives-in-the-wrong-place">Your AI Assistant Lives in the Wrong Place</a></h2>
+          <p>The model is not the bottleneck. The nine-step copy-paste loop between your work and a chat tab is.</p>
+          <div class="blog-card-meta"><time datetime="2026-10-21">October 21, 2026</time><span>&middot;</span><span>5 min read</span></div>
+          <a href="/blog/your-ai-assistant-lives-in-the-wrong-place" class="blog-read">Read the post <span aria-hidden="true">&rarr;</span></a>
+        </article>
+      </section>
+    </main>
+    <footer>
+      <p>
+        OmniKey &copy; <span id="year"></span> &nbsp;·&nbsp; <a href="/docs">Docs</a> &nbsp;·&nbsp; <a href="/blog">Blog</a> &nbsp;·&nbsp; <a href="/changelog">Changelog</a> &nbsp;·&nbsp;
+        <a
+          href="https://github.com/GurinderRawala/OmniKey-AI"
+          target="_blank"
+          rel="noopener noreferrer"
+          >GitHub</a
+        >
+      </p>
+    </footer>
+    <script src="/app.js" defer></script>
+  </body>
+</html>

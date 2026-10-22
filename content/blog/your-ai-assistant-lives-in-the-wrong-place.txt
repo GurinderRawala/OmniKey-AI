@@ -1,0 +1,77 @@
+title: Your AI Assistant Lives in the Wrong Place
+description: The model is not the bottleneck. The nine-step copy-paste loop between your work and a chat tab is.
+date: 2026-10-21
+read_time: 5 min read
+---
+Every AI tool you use has the same shape. You open a tab. You paste your text. You read the answer. You copy it back. You close the tab.
+
+That loop is so normal now that it stopped feeling like friction. But count it honestly: switch apps, paste, wait, read, select, copy, switch back, select the old text, paste over it. Nine steps to fix one paragraph. You do it twenty times a day.
+
+The model isn't the bottleneck. GPT-5, Claude, and Gemini can all rewrite your sentence beautifully. The bottleneck is that your AI lives somewhere other than where you work.
+
+WHAT THE CHAT TAB ACTUALLY COSTS
+
+Three things, none of which show up in a pricing page.
+
+Context. You paste a sentence into a chat window and the model sees a sentence. It doesn't see the Jira ticket above it, the function you're editing, the thread you're replying to. You end up writing a paragraph of setup before you can ask a one-line question. Half your prompt is reconstructing context the model would have had if it lived where you were.
+
+Momentum. Task-switching has a measurable cost, and the chat tab charges it every single time. Worse, the tab is a browser tab — which means it sits next to everything else in your browser. "Let me just fix this sentence" becomes eleven minutes later.
+
+Trust. The copy-paste loop means you're constantly moving your own text through someone else's interface. For a tweet, fine. For a client email, a legal paragraph, or a production incident summary, you start thinking about where that text is being logged.
+
+THE OTHER SHAPE
+
+There's a different design, and it predates AI by decades: the system-wide keyboard shortcut.
+
+Spell-check doesn't live in a tab. You don't paste a document into a spell-checker. It's just there, in every text field, and you invoke it where you already are. Text expanders work this way. Clipboard managers work this way. Screenshot tools work this way.
+
+OmniKey applies that shape to language models. You select text in any application and press a shortcut:
+
+  Command-E  enhance a rough prompt into a clear one
+  Command-G  fix grammar and readability without changing meaning
+  Command-T  run your own saved instructions, or hand off to an agent
+
+The result replaces your selection in place. No tab, no paste, no switch. It works in your editor, your mail client, your terminal, Slack, Notion, Jira, a GitHub comment box — anywhere you can select text.
+
+THE PART THAT SURPRISED US
+
+We expected prompt enhancement to be the headline feature. It's useful: Command-E turns "fix my code it's not working" into a prompt that actually specifies what you want, which gets you a dramatically better answer from whatever model you paste it into.
+
+What people actually reach for most is Command-G. Not because grammar is hard, but because the cost of fixing grammar was never the fixing — it was the interruption. When correcting a sentence takes one keystroke instead of nine steps, you do it on messages you'd previously have sent slightly wrong.
+
+That's the whole thesis, really. Lowering the cost of an action doesn't just make the action cheaper. It changes which actions you take at all.
+
+BRING YOUR OWN MODEL
+
+OmniKey doesn't host a model. You configure a provider during setup:
+
+  OpenAI
+  Anthropic
+  Google Gemini
+  Any OpenAI-compatible endpoint, including Ollama and LM Studio running locally
+
+Your text goes to the provider you chose, under the terms you already agreed to. Nothing is sent to us. There is no OmniKey server in the path, no telemetry, no analytics, no usage counter. The whole thing runs as a local daemon on your machine, and the source is MIT-licensed on GitHub if you want to confirm that rather than take our word for it.
+
+That last point matters more than it sounds. A tool that reads your selected text in every application is asking for real trust. The only honest answer to "what do you do with my text" is to make the code readable and keep the architecture boring: your machine, your model, your keys.
+
+WHEN IT ISN'T THE RIGHT TOOL
+
+Three cases where the chat tab is genuinely better.
+
+Long conversations. If you're iterating on an idea over twenty exchanges, you want a thread, not an in-place rewrite. OmniKey has an agent chat for this, but a dedicated chat app is a dedicated chat app.
+
+Work you need to review before accepting. OmniKey replaces your selection immediately. That's the point, but it means you're trusting the output. We're adding an opt-in preview mode for exactly this reason — it's an open issue on the repo.
+
+Anything needing deep project context. The agent can read your terminal and your logged-in browser tabs, which covers a lot. But a tool with a full index of your codebase will beat it on codebase questions.
+
+GETTING STARTED
+
+  brew install GurinderRawala/omnikey-ai/omnikey-cli
+  omnikey onboard
+  omnikey daemon
+
+Or `npm install -g omnikey-cli` on any platform. Then download the macOS menu bar app or the Windows tray app, select some text, and press Command-E.
+
+Free, open source, macOS and Windows. https://omnikeyai.ca
+
+If you try it and it doesn't fit your workflow, I'd genuinely like to hear why — that's more useful feedback than a star. Issues and Discussions are both open.

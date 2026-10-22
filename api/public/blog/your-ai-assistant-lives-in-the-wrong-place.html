@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Your AI Assistant Lives in the Wrong Place | OmniKey AI</title>
+    <meta name="description" content="The model is not the bottleneck. The nine-step copy-paste loop between your work and a chat tab is." />
+    <link rel="canonical" href="https://omnikeyai.ca/blog/your-ai-assistant-lives-in-the-wrong-place" />
+    <meta name="robots" content="index, follow" />
+    <meta property="og:type" content="article" />
+    <meta property="og:url" content="https://omnikeyai.ca/blog/your-ai-assistant-lives-in-the-wrong-place" />
+    <meta property="og:title" content="Your AI Assistant Lives in the Wrong Place | OmniKey AI" />
+    <meta property="og:description" content="The model is not the bottleneck. The nine-step copy-paste loop between your work and a chat tab is." />
+    <meta property="og:site_name" content="OmniKey AI" />
+    <meta property="article:published_time" content="2026-10-21" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="Your AI Assistant Lives in the Wrong Place | OmniKey AI" />
+    <meta name="twitter:description" content="The model is not the bottleneck. The nine-step copy-paste loop between your work and a chat tab is." />
+    <script type="application/ld+json">
+      {"@context":"https://schema.org","@type":"BlogPosting","headline":"Your AI Assistant Lives in the Wrong Place | OmniKey AI","description":"The model is not the bottleneck. The nine-step copy-paste loop between your work and a chat tab is.","url":"https://omnikeyai.ca/blog/your-ai-assistant-lives-in-the-wrong-place","publisher":{"@type":"Organization","name":"OmniKey AI","url":"https://omnikeyai.ca"}}
+    </script>
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" href="/icon-192.png" type="image/png" sizes="192x192" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
+    <meta name="theme-color" content="#111318" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;600;700;800&amp;family=Manrope:wght@400;500;600;700;800&amp;display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/style.css" />
+    <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Skip to main content</a>
+    <nav class="nav">
+      <div class="nav-inner">
+        <a href="/" class="nav-logo">
+          <img src="/icon-96.png" alt="" class="nav-icon" width="36" height="36" />
+          <span>OmniKey</span>
+        </a>
+        <div class="nav-links">
+          <a href="/#omniagent" class="nav-link-new">OmniAgent</a>
+          <a href="/docs">Docs</a>
+          <a href="/blog" class="nav-link-active">Blog</a>
+          <a href="/changelog">Changelog</a>
+          <a href="/#getting-started">Get started</a>
+        </div>
+        <div class="nav-actions">
+          <a
+            href="https://github.com/GurinderRawala/OmniKey-AI"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="nav-github"
+            aria-label="Star OmniKey on GitHub"
+          >
+            <svg viewBox="0 0 16 16" fill="currentColor" width="13" height="13" aria-hidden="true">
+              <path
+                d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.751.751 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z"
+              />
+            </svg>
+            <span class="nav-github-label">GitHub</span>
+          </a>
+          <a href="/#download" class="nav-download">Download</a>
+        </div>
+        <button
+          type="button"
+          class="nav-hamburger"
+          id="nav-hamburger"
+          aria-label="Open menu"
+          aria-expanded="false"
+          aria-controls="mobile-menu"
+        >
+          <span class="nav-hamburger-bar"></span>
+          <span class="nav-hamburger-bar"></span>
+          <span class="nav-hamburger-bar"></span>
+        </button>
+      </div>
+      <div class="mobile-menu" id="mobile-menu" hidden>
+        <nav class="mobile-menu-links" aria-label="Mobile">
+          <a href="/#omniagent" class="mobile-menu-link mobile-menu-link-new">OmniAgent</a>
+          <a href="/docs" class="mobile-menu-link">Docs</a>
+          <a href="/blog" class="mobile-menu-link mobile-menu-link-active">Blog</a>
+          <a href="/changelog" class="mobile-menu-link">Changelog</a>
+          <a href="/#getting-started" class="mobile-menu-link">Get started</a>
+        </nav>
+        <div class="mobile-menu-actions">
+          <a href="/#download" class="mobile-menu-download">Download for macOS / Windows</a>
+          <a
+            href="https://github.com/GurinderRawala/OmniKey-AI"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="mobile-menu-github"
+          >
+            <svg viewBox="0 0 16 16" fill="currentColor" width="15" height="15" aria-hidden="true">
+              <path
+                d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.751.751 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z"
+              />
+            </svg>
+            Star on GitHub
+          </a>
+        </div>
+      </div>
+    </nav>
+    <main class="blog-main" id="main-content">
+      <article class="blog-article">
+        <header class="blog-article-header">
+          <a href="/blog" class="blog-back">&larr; All posts</a>
+          <p class="section-label">OmniKey Blog</p>
+          <h1>Your AI Assistant Lives in the Wrong Place</h1>
+          <p class="blog-dek">The model is not the bottleneck. The nine-step copy-paste loop between your work and a chat tab is.</p>
+          <div class="blog-byline"><time datetime="2026-10-21">October 21, 2026</time><span>&middot;</span><span>5 min read</span></div>
+        </header>
+        <div class="blog-prose">
+<p>Every AI tool you use has the same shape. You open a tab. You paste your text. You read the answer. You copy it back. You close the tab.</p>
+<p>That loop is so normal now that it stopped feeling like friction. But count it honestly: switch apps, paste, wait, read, select, copy, switch back, select the old text, paste over it. Nine steps to fix one paragraph. You do it twenty times a day.</p>
+<p>The model isn&#x27;t the bottleneck. GPT-5, Claude, and Gemini can all rewrite your sentence beautifully. The bottleneck is that your AI lives somewhere other than where you work.</p>
+<h2>What The Chat Tab Actually Costs</h2>
+<p>Three things, none of which show up in a pricing page.</p>
+<p>Context. You paste a sentence into a chat window and the model sees a sentence. It doesn&#x27;t see the Jira ticket above it, the function you&#x27;re editing, the thread you&#x27;re replying to. You end up writing a paragraph of setup before you can ask a one-line question. Half your prompt is reconstructing context the model would have had if it lived where you were.</p>
+<p>Momentum. Task-switching has a measurable cost, and the chat tab charges it every single time. Worse, the tab is a browser tab — which means it sits next to everything else in your browser. &quot;Let me just fix this sentence&quot; becomes eleven minutes later.</p>
+<p>Trust. The copy-paste loop means you&#x27;re constantly moving your own text through someone else&#x27;s interface. For a tweet, fine. For a client email, a legal paragraph, or a production incident summary, you start thinking about where that text is being logged.</p>
+<h2>The Other Shape</h2>
+<p>There&#x27;s a different design, and it predates AI by decades: the system-wide keyboard shortcut.</p>
+<p>Spell-check doesn&#x27;t live in a tab. You don&#x27;t paste a document into a spell-checker. It&#x27;s just there, in every text field, and you invoke it where you already are. Text expanders work this way. Clipboard managers work this way. Screenshot tools work this way.</p>
+<p>OmniKey applies that shape to language models. You select text in any application and press a shortcut:</p>
+<pre><code>Command-E  enhance a rough prompt into a clear one
+Command-G  fix grammar and readability without changing meaning
+Command-T  run your own saved instructions, or hand off to an agent</code></pre>
+<p>The result replaces your selection in place. No tab, no paste, no switch. It works in your editor, your mail client, your terminal, Slack, Notion, Jira, a GitHub comment box — anywhere you can select text.</p>
+<h2>The Part That Surprised Us</h2>
+<p>We expected prompt enhancement to be the headline feature. It&#x27;s useful: Command-E turns &quot;fix my code it&#x27;s not working&quot; into a prompt that actually specifies what you want, which gets you a dramatically better answer from whatever model you paste it into.</p>
+<p>What people actually reach for most is Command-G. Not because grammar is hard, but because the cost of fixing grammar was never the fixing — it was the interruption. When correcting a sentence takes one keystroke instead of nine steps, you do it on messages you&#x27;d previously have sent slightly wrong.</p>
+<p>That&#x27;s the whole thesis, really. Lowering the cost of an action doesn&#x27;t just make the action cheaper. It changes which actions you take at all.</p>
+<h2>Bring Your Own Model</h2>
+<p>OmniKey doesn&#x27;t host a model. You configure a provider during setup:</p>
+<pre><code>OpenAI
+Anthropic
+Google Gemini
+Any OpenAI-compatible endpoint, including Ollama and LM Studio running locally</code></pre>
+<p>Your text goes to the provider you chose, under the terms you already agreed to. Nothing is sent to us. There is no OmniKey server in the path, no telemetry, no analytics, no usage counter. The whole thing runs as a local daemon on your machine, and the source is MIT-licensed on GitHub if you want to confirm that rather than take our word for it.</p>
+<p>That last point matters more than it sounds. A tool that reads your selected text in every application is asking for real trust. The only honest answer to &quot;what do you do with my text&quot; is to make the code readable and keep the architecture boring: your machine, your model, your keys.</p>
+<h2>When It Isn&#x27;T The Right Tool</h2>
+<p>Three cases where the chat tab is genuinely better.</p>
+<p>Long conversations. If you&#x27;re iterating on an idea over twenty exchanges, you want a thread, not an in-place rewrite. OmniKey has an agent chat for this, but a dedicated chat app is a dedicated chat app.</p>
+<p>Work you need to review before accepting. OmniKey replaces your selection immediately. That&#x27;s the point, but it means you&#x27;re trusting the output. We&#x27;re adding an opt-in preview mode for exactly this reason — it&#x27;s an open issue on the repo.</p>
+<p>Anything needing deep project context. The agent can read your terminal and your logged-in browser tabs, which covers a lot. But a tool with a full index of your codebase will beat it on codebase questions.</p>
+<h2>Getting Started</h2>
+<pre><code>brew install GurinderRawala/omnikey-ai/omnikey-cli
+omnikey onboard
+omnikey daemon</code></pre>
+<p>Or <code>npm install -g omnikey-cli</code> on any platform. Then download the macOS menu bar app or the Windows tray app, select some text, and press Command-E.</p>
+<p>Free, open source, macOS and Windows. <a href="https://omnikeyai.ca">https://omnikeyai.ca</a></p>
+<p>If you try it and it doesn&#x27;t fit your workflow, I&#x27;d genuinely like to hear why — that&#x27;s more useful feedback than a star. Issues and Discussions are both open.</p>
+        </div>
+        <aside class="blog-cta">
+          <p class="section-label">Try it where you type</p>
+          <h2>One shortcut. Any app.</h2>
+          <p>Free, open source, and built for macOS and Windows. Bring your own model.</p>
+          <div><a href="/#download" class="btn btn-primary">Download OmniKey</a> <a href="https://github.com/GurinderRawala/OmniKey-AI" class="btn btn-secondary">View source</a></div>
+        </aside>
+      </article>
+    </main>
+    <footer>
+      <p>
+        OmniKey &copy; <span id="year"></span> &nbsp;·&nbsp; <a href="/docs">Docs</a> &nbsp;·&nbsp; <a href="/blog">Blog</a> &nbsp;·&nbsp; <a href="/changelog">Changelog</a> &nbsp;·&nbsp;
+        <a
+          href="https://github.com/GurinderRawala/OmniKey-AI"
+          target="_blank"
+          rel="noopener noreferrer"
+          >GitHub</a
+        >
+      </p>
+    </footer>
+    <script src="/app.js" defer></script>
+  </body>
+</html>
