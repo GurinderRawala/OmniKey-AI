@@ -421,7 +421,7 @@ final class ChatModel: ObservableObject {
     @Published var activeAIProvider: String = "openai"
     @Published var activeAgentModel: String = "gpt-5.5"
     @Published var activeAgentModelOptions: [APIClient.AgentModelOptionDTO] = []
-    @Published var isUpdatingAgentModel: Bool = false
+    @Published private(set) var hasLoadedAgentModelOptions = false
 
     // ── Project group state ───────────────────────────────────────────────────
     /// Distinct project groups fetched from GET /api/agent/groups.
@@ -607,7 +607,55 @@ final class ChatModel: ObservableObject {
         sessionSearchQuery = ""
     }
 
-    private init() {}
+    private let modelDefaults: UserDefaults
+    private var sessionModels: [String: [String: String]]
+    private var defaultAgentModel: String = "gpt-5.5"
+
+    init(modelDefaults: UserDefaults = .standard) {
+        self.modelDefaults = modelDefaults
+        self.sessionModels = modelDefaults.dictionary(forKey: "chatSessionModels") as? [String: [String: String]] ?? [:]
+    }
+
+    private func restoreSessionModel() {
+        let key = activeStateKey
+        if let model = sessionModels[key]?[activeAIProvider] {
+            activeAgentModel = model
+        } else {
+            activeAgentModel = defaultAgentModel
+            if hasLoadedAgentModelOptions {
+                sessionModels[key, default: [:]][activeAIProvider] = activeAgentModel
+                persistSessionModels()
+            }
+        }
+    }
+
+    /// Until provider settings load, let the server choose its configured model.
+    /// The initial UI placeholder may belong to a different provider.
+    var modelForCurrentTurn: String? {
+        hasLoadedAgentModelOptions ? activeAgentModel : nil
+    }
+
+    func migratePendingSessionModel(to sessionId: String) {
+        guard hasLoadedAgentModelOptions else { return }
+        var models = sessionModels.removeValue(forKey: pendingNewChatKey) ?? [:]
+        models[activeAIProvider] = activeAgentModel
+        sessionModels[sessionId] = models
+        persistSessionModels()
+    }
+
+    private func persistSessionModels() {
+        var persisted = sessionModels
+        persisted.removeValue(forKey: pendingNewChatKey)
+        modelDefaults.set(persisted, forKey: "chatSessionModels")
+    }
+
+    func applyAgentModelOptions(provider: String, model: String, options: [APIClient.AgentModelOptionDTO]) {
+        activeAIProvider = provider
+        defaultAgentModel = model
+        activeAgentModelOptions = options
+        hasLoadedAgentModelOptions = true
+        restoreSessionModel()
+    }
 
     // MARK: - Per-session state store
 
@@ -638,6 +686,7 @@ final class ChatModel: ObservableObject {
 
     /// Load a session state into the published properties (driving the SwiftUI view).
     private func loadState(_ s: ChatSessionState) {
+        restoreSessionModel()
         historyPrependAnchorID = nil
         messages = s.messages
         isRunning = s.isRunning
@@ -695,6 +744,7 @@ final class ChatModel: ObservableObject {
         isLoadingSessionHistory = false
 
         // Replace the pending-new-chat state with a fresh, empty one.
+        sessionModels.removeValue(forKey: pendingNewChatKey)
         let fresh = ChatSessionState()
         states[pendingNewChatKey] = fresh
         loadState(fresh)
@@ -1324,6 +1374,8 @@ final class ChatModel: ObservableObject {
                 guard let self else { return }
                 if success {
                     self.states.removeValue(forKey: session.id)
+                    self.sessionModels.removeValue(forKey: session.id)
+                    self.persistSessionModels()
                     self.sessions.removeAll { $0.id == session.id }
                     if self.activeSessionId == session.id {
                         self.startNewChat()
@@ -1366,6 +1418,7 @@ final class ChatModel: ObservableObject {
             sessionSt = currentState
             states[sessionId] = sessionSt
             states.removeValue(forKey: pendingNewChatKey)
+            migratePendingSessionModel(to: sessionId)
         } else {
             sessionSt = currentState
         }
@@ -1423,6 +1476,7 @@ final class ChatModel: ObservableObject {
             sessionId: sessionId,
             userText: text,
             groupName: selectedGroup?.groupName,
+            model: modelForCurrentTurn,
             onBlock: { [weak self] block in
                 guard let self else { return }
                 self.appendBlock(block, toSession: sessionSt, messageID: capturedAssistantMessageID)
@@ -1821,9 +1875,11 @@ final class ChatModel: ObservableObject {
                     let options = response.modelOptions.isEmpty
                         ? self.fallbackAgentModelOptions(for: provider)
                         : response.modelOptions
-                    self.activeAIProvider = provider
-                    self.activeAgentModelOptions = options
-                    self.activeAgentModel = response.activeModel ?? options.first?.id ?? self.activeAgentModel
+                    self.applyAgentModelOptions(
+                        provider: provider,
+                        model: response.activeModel ?? options.first?.id ?? self.defaultAgentModel,
+                        options: options
+                    )
                 case .failure(let error):
                     self.lastErrorMessage = "Failed to load model options: \(error.localizedDescription)"
                 }
@@ -1832,30 +1888,16 @@ final class ChatModel: ObservableObject {
     }
 
     func setAgentModel(_ modelId: String) {
-        guard !modelId.isEmpty, modelId != activeAgentModel else { return }
-        guard !isUpdatingAgentModel else { return }
-
-        let provider = activeAIProvider
-        let previousModel = activeAgentModel
-        activeAgentModel = modelId
-        isUpdatingAgentModel = true
-
-        apiClient.updateProviderModel(provider: provider, model: modelId) { [weak self] result in
-            Task { @MainActor in
-                guard let self else { return }
-                self.isUpdatingAgentModel = false
-                switch result {
-                case .success(let response):
-                    self.activeAgentModel = response.activeModel ?? response.model ?? modelId
-                    if let options = response.modelOptions, !options.isEmpty {
-                        self.activeAgentModelOptions = options
-                    }
-                case .failure(let error):
-                    self.activeAgentModel = previousModel
-                    self.lastErrorMessage = "Failed to change model: \(error.localizedDescription)"
-                }
-            }
+        let model = modelId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard hasLoadedAgentModelOptions else { return }
+        guard !model.isEmpty, model.count <= 200,
+              model.rangeOfCharacter(from: .whitespacesAndNewlines.union(.controlCharacters)) == nil else {
+            lastErrorMessage = "Model names must be 1–200 characters without spaces or control characters."
+            return
         }
+        sessionModels[activeStateKey, default: [:]][activeAIProvider] = model
+        activeAgentModel = model
+        persistSessionModels()
     }
 
     // MARK: - Project groups

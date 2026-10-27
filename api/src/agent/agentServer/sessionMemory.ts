@@ -14,6 +14,7 @@ import type { SessionState } from '../types';
 import { pruneHistoryForContextLimit } from './contextPruning';
 
 const KEEP_RECENT_USER_TURNS = 2;
+const KEEP_RECENT_MESSAGES = 8;
 const MEMORY_TRIGGER_INPUT_RATIO = 0.5;
 const PROACTIVE_TRIM_RATIO = 0.9;
 const MIN_SUMMARIZE_TOKENS = 8_000;
@@ -90,7 +91,6 @@ function compactText(text: string, maxChars: number): string {
 function cleanModelText(text: string): string {
   return text
     .replace(/<stored_instructions>[\s\S]*?<\/stored_instructions>/gi, '')
-    .replace(/<project_context[^>]*>[\s\S]*?<\/project_context>/gi, '')
     .replace(/<user_input>([\s\S]*?)<\/user_input>/gi, '$1')
     .replace(/<final_answer>([\s\S]*?)<\/final_answer>/gi, '$1')
     .trim();
@@ -162,6 +162,19 @@ export function buildCompactedHistoryForRequest(session: SessionState): AIMessag
     });
   }
 
+  // Retain the original task and project identity verbatim, independently of
+  // lossy summaries. Short follow-ups often rely entirely on this context.
+  const firstUser = history.findIndex(isRealUserTurn);
+  let latestUser = -1;
+  for (let index = history.length - 1; index >= staticEnd; index--) {
+    if (isRealUserTurn(history[index])) {
+      latestUser = index;
+      break;
+    }
+  }
+  for (const index of new Set([firstUser, latestUser])) {
+    if (index >= staticEnd && index < compactedThrough) result.push(history[index]);
+  }
   result.push(...history.slice(compactedThrough));
   return result;
 }
@@ -193,7 +206,8 @@ export function trimHistoryToBudget(
 
   const scratchSession = { subscription: {} as any, history, turns: 0 };
   let guard = 0;
-  while (estimateHistoryTokens(scratchSession.history) > budget && guard < 200) {
+  const maxSteps = history.length * 2;
+  while (estimateHistoryTokens(scratchSession.history) > budget && guard < maxSteps) {
     guard++;
     if (!pruneHistoryForContextLimit(scratchSession, log ?? noopPruneLog)) break;
   }
@@ -236,15 +250,36 @@ export async function ensureSessionMemory(
   const staticEnd = staticPrefixEnd(history);
   const compactedThrough = clampMemoryHistoryLength(session, staticEnd);
   const recentStart = recentHistoryStart(history, staticEnd);
-  const summarizeEnd = Math.min(recentStart, history.length);
+  let summarizeEnd = Math.min(recentStart, history.length);
+  // Two user turns can contain hours of tool work. If keeping both would still
+  // overflow, summarize completed exchanges within them, retaining a raw tail.
+  // Move the cut before a tool-call message rather than orphaning its results.
+  const triggerTokens = memoryTriggerTokens(model);
+  if (estimateHistoryTokens(history.slice(summarizeEnd)) >= triggerTokens) {
+    let tailStart = Math.max(staticEnd, history.length - KEEP_RECENT_MESSAGES);
+    while (tailStart > staticEnd && history[tailStart]?.role === 'tool') tailStart--;
+    // A short first exchange followed by "continue" still needs memory.
+    let latestUser = -1;
+    for (let index = history.length - 1; index >= staticEnd; index--) {
+      if (isRealUserTurn(history[index])) {
+        latestUser = index;
+        break;
+      }
+    }
+    if (
+      latestUser > staticEnd &&
+      estimateHistoryTokens(history.slice(latestUser)) < triggerTokens
+    ) {
+      tailStart = Math.max(tailStart, latestUser);
+    }
+    summarizeEnd = Math.max(summarizeEnd, tailStart);
+  }
 
   if (summarizeEnd <= compactedThrough) return;
 
   const pendingMessages = history.slice(compactedThrough, summarizeEnd);
   const pendingTokens = estimateHistoryTokens(pendingMessages);
   const rawRequestTokens = estimateHistoryTokens(history);
-  const triggerTokens = memoryTriggerTokens(model);
-
   if (rawRequestTokens < triggerTokens || pendingTokens < MIN_SUMMARIZE_TOKENS) {
     return;
   }
@@ -261,7 +296,7 @@ export async function ensureSessionMemory(
       content: [
         'You maintain compact memory for an autonomous coding agent.',
         'Update the memory using only the transcript provided. Do not invent facts.',
-        'Preserve user requirements, decisions, files touched, commands/tools and outcomes, final answers, errors, artifacts, and open next steps.',
+        'Preserve project identity, repository paths, branch names, PR URLs, user requirements, decisions, files touched, commands/tools and outcomes, final answers, errors, artifacts, and open next steps.',
         'Write concise Markdown bullets under stable headings. Keep enough detail for the main agent to resume without replaying old raw transcript.',
       ].join(' '),
     },

@@ -105,7 +105,14 @@ describe('agent session memory compaction', () => {
 
     const compacted = buildCompactedHistoryForRequest(session);
     expect(buildHistoryForRequest(session, 'claude-haiku-4-5')).toEqual(compacted);
-    expect(compacted.map((m) => m.role)).toEqual(['system', 'user', 'user', 'assistant', 'user']);
+    expect(compacted.map((m) => m.role)).toEqual([
+      'system',
+      'user',
+      'user',
+      'user',
+      'assistant',
+      'user',
+    ]);
     expect(compacted[1].content).toContain('<session_memory>');
     expect(compacted.some((m) => m.content.includes(oldLargeResult.slice(0, 80)))).toBe(false);
     expect(compacted.map((m) => m.content).join('\n')).toContain('Second task to keep raw');
@@ -194,25 +201,96 @@ describe('agent session memory compaction', () => {
     );
   });
 
-  it('trims complete old user and assistant exchanges instead of stranding assistant turns', () => {
+  it('preserves task context even when the remaining instructions exceed the budget', () => {
     mocks.getInputTokenBudget.mockReturnValue(1_400);
-    mocks.estimateHistoryTokens.mockImplementation(
-      (history: unknown[]) => JSON.stringify(history).length,
-    );
-
     const session = makeSession([
       { role: 'system', content: 'system prompt' },
-      { role: 'user', content: `<user_input>${'older user detail '.repeat(65)}</user_input>` },
-      { role: 'assistant', content: 'old assistant answer that should be dropped with its user' },
-      { role: 'user', content: '<user_input>Current task that must stay</user_input>' },
+      { role: 'user', content: `<user_input>${'original requirements '.repeat(100)}</user_input>` },
+      { role: 'assistant', content: 'PR: https://example.com/pull/123' },
+      { role: 'user', content: '<user_input>Push it</user_input>' },
     ]);
+    const requestHistory = buildTrimmedHistoryForRequest(session, 'small-model');
+    expect(requestHistory).toEqual(session.history);
+  });
 
-    const requestHistory = buildTrimmedHistoryForRequest(session, 'claude-sonnet-4-5');
+  it.each([false, true])(
+    'retains the dashboard task on its first follow-up (summary fails: %s)',
+    async (fail) => {
+      const task =
+        '<user_input><project_context>Repository /work/mono</project_context>Update the built-in dashboard organization filters</user_input>';
+      const session = makeSession([
+        { role: 'system', content: 'system' },
+        { role: 'user', content: '<stored_instructions>Finish the PR</stored_instructions>' },
+        { role: 'user', content: task },
+        ...Array.from({ length: 30 }, (_, i): AIMessage[] => [
+          {
+            role: 'assistant',
+            content: '',
+            tool_calls: [{ id: `call-${i}`, name: 'shell_script', arguments: {} }],
+          },
+          { role: 'tool', content: 'build output '.repeat(600), tool_call_id: `call-${i}` },
+        ]).flat(),
+        {
+          role: 'assistant',
+          content: 'Changes are on branch dashboard-filters, PR https://example.com/pull/123',
+        },
+        { role: 'user', content: '<user_input>Continue and push it</user_input>' },
+      ]);
+      const raw = JSON.stringify(session.history);
+      mocks.complete.mockResolvedValueOnce({
+        content: 'Repo /work/mono, branch dashboard-filters, PR https://example.com/pull/123',
+      });
+      if (fail) mocks.complete.mockReset().mockRejectedValue(new Error('summary unavailable'));
+      await ensureSessionMemory(session, 'dashboard-session', 'small-model', mocks.log as any);
+      const request = buildTrimmedHistoryForRequest(session, 'small-model');
+      expect(mocks.complete).toHaveBeenCalledTimes(1);
+      const text = request.map((m) => m.content).join('\n');
+      expect(text).toContain(task);
+      expect(text).toContain('<stored_instructions>Finish the PR');
+      expect(text).toContain('https://example.com/pull/123');
+      expect(text).toContain('Continue and push it');
+      expect(mocks.estimateHistoryTokens(request)).toBeLessThanOrEqual(21_600);
+      expect(JSON.stringify(session.history)).toBe(raw);
+      for (const result of request.filter((m) => m.role === 'tool')) {
+        expect(
+          request.some((m) => m.tool_calls?.some((call) => call.id === result.tool_call_id)),
+        ).toBe(true);
+      }
+      if (!fail) {
+        expect(mocks.complete.mock.calls[0][1][1].content).toContain('/work/mono');
+        expect(text).toContain('<session_memory>');
+      }
+    },
+  );
 
-    expect(requestHistory.map((message) => message.role)).toEqual(['system', 'user']);
-    expect(requestHistory[1].content).toContain('Current task that must stay');
-    expect(requestHistory.some((message) => message.content.includes('old assistant answer'))).toBe(
-      false,
-    );
+  it('summarizes a long first task at a complete tool boundary', async () => {
+    const history: AIMessage[] = [
+      { role: 'system', content: 'system' },
+      { role: 'user', content: '<user_input>Work in /repo/one</user_input>' },
+      { role: 'assistant', content: 'Starting work' },
+      { role: 'user', content: '<user_input>Use branch fixed-filters</user_input>' },
+      ...Array.from({ length: 15 }, (_, i): AIMessage[] => [
+        {
+          role: 'assistant',
+          content: '',
+          tool_calls: [{ id: `call-${i}`, name: 'shell_script', arguments: {} }],
+        },
+        { role: 'tool', content: 'output'.repeat(2_000), tool_call_id: `call-${i}` },
+      ]).flat(),
+      { role: 'assistant', content: 'next step' },
+    ];
+    const session = makeSession(history);
+    await ensureSessionMemory(session, 'long-task', 'small-model', mocks.log as any);
+    expect(mocks.complete).toHaveBeenCalledTimes(1);
+    const cut = session.sessionMemoryHistoryLength!;
+    expect(cut).toBeGreaterThan(2);
+    expect(history[cut].role).toBe('assistant');
+    const request = buildTrimmedHistoryForRequest(session, 'small-model');
+    expect(request.some((m) => m.content.includes('/repo/one'))).toBe(true);
+    expect(
+      request.some((m) => m.content === '<user_input>Use branch fixed-filters</user_input>'),
+    ).toBe(true);
+    expect(request.some((m) => m.content.includes('<session_memory>'))).toBe(true);
+    expect(mocks.estimateHistoryTokens(request)).toBeLessThanOrEqual(21_600);
   });
 });

@@ -121,6 +121,7 @@ const COLUMN_MIGRATIONS: ColumnMigration[] = [
   // old raw history on every model call. history_json remains the full transcript
   // for UI/audit; these fields describe the compact prefix sent back to the model.
   { table: 'agent_sessions', column: 'session_memory', definition: 'TEXT' },
+  { table: 'agent_sessions', column: 'last_context_window_size', definition: 'INTEGER' },
   {
     table: 'agent_sessions',
     column: 'session_memory_history_length',

@@ -1,5 +1,16 @@
 import type { Logger } from 'winston';
 import type { SessionState } from '../types';
+import type { AIMessage } from '../../ai-client';
+import { isInjectedUserPrompt } from '../injectedUserPrompts';
+
+function isTaskContext(message: AIMessage): boolean {
+  if (message.role === 'system') return true;
+  if (message.role !== 'user') return false;
+  return (
+    !/^(TERMINAL OUTPUT|COMMAND ERROR):/i.test(message.content.trim()) &&
+    !isInjectedUserPrompt(message.content)
+  );
+}
 
 // Head/tail chars kept when a single oversized message is compacted.
 const OVERSIZED_MSG_HEAD = 4_000;
@@ -57,6 +68,7 @@ export function pruneHistoryForContextLimit(session: SessionState, log: Logger):
   let largestIdx = -1;
   let largestLen = 0;
   for (let i = systemEnd; i < history.length; i++) {
+    if (isTaskContext(history[i])) continue;
     const c = history[i].content;
     const len = typeof c === 'string' ? c.length : 0;
     if (len > largestLen) {
@@ -84,69 +96,34 @@ export function pruneHistoryForContextLimit(session: SessionState, log: Logger):
     return true;
   }
 
-  // Strategy 2: drop the oldest complete unit, preserving the final user turn.
-  let protectedStart = history.length;
+  // Remove one old assistant/tool exchange at a time. User requirements,
+  // project context, stored instructions and compact memory are never eviction
+  // candidates, even when the latest message is just "continue" or "push it".
+  // Keep the latest response/tool exchange available for the next model call.
+  let latestResponse = -1;
   for (let i = history.length - 1; i >= 0; i--) {
-    if (history[i].role === 'user') {
-      protectedStart = i;
+    if (history[i].role === 'assistant') {
+      latestResponse = i;
       break;
     }
   }
+  const start = history.findIndex(
+    (message, index) => index < latestResponse && !isTaskContext(message),
+  );
+  if (start < 0) return false;
 
-  if (systemEnd >= protectedStart) {
-    // Only system messages and the final user turn remain -- nothing droppable
-    // without breaking the request. The caller should surface the error.
-    log.warn('Cannot prune history further for context-length recovery', {
-      historyLength: history.length,
-      systemEnd,
-      protectedStart,
-    });
-    return false;
+  let end = start + 1;
+  if (history[start].role === 'assistant' && history[start].tool_calls?.length) {
+    // A tool-call message and all of its results must leave together.
+    while (end < history.length && history[end].role === 'tool') end++;
+  } else if (history[start].role === 'tool') {
+    while (end < history.length && history[end].role === 'tool') end++;
   }
-
-  // The oldest unit begins right after the system messages. When it starts with
-  // a user message, drop that complete user -> assistant/tool exchange so the
-  // retried provider history never starts with a stranded old assistant answer.
-  let unitEnd = systemEnd + 1;
-  if (history[systemEnd].role === 'user') {
-    while (unitEnd < protectedStart && history[unitEnd].role !== 'user') unitEnd++;
-  } else if (
-    history[systemEnd].role === 'assistant' &&
-    (history[systemEnd].tool_calls?.length ?? 0) > 0
-  ) {
-    while (unitEnd < protectedStart) {
-      if (history[unitEnd].role === 'tool') {
-        unitEnd++;
-        continue;
-      }
-      if (history[unitEnd].role === 'assistant' && (history[unitEnd].tool_calls?.length ?? 0) > 0) {
-        unitEnd++;
-        continue;
-      }
-      break;
-    }
-    if (unitEnd < protectedStart && history[unitEnd].role === 'assistant') unitEnd++;
-  } else if (history[systemEnd].role === 'tool') {
-    while (unitEnd < protectedStart) {
-      if (history[unitEnd].role === 'tool') {
-        unitEnd++;
-        continue;
-      }
-      if (history[unitEnd].role === 'assistant' && (history[unitEnd].tool_calls?.length ?? 0) > 0) {
-        unitEnd++;
-        continue;
-      }
-      break;
-    }
-    if (unitEnd < protectedStart && history[unitEnd].role === 'assistant') unitEnd++;
-  }
-  unitEnd = Math.min(unitEnd, protectedStart);
-
-  const removed = history.splice(systemEnd, unitEnd - systemEnd);
-  log.warn('Dropped oldest history unit after context-length error', {
+  const removed = history.splice(start, end - start);
+  log.warn('Dropped oldest history exchange after context-length error', {
     removedCount: removed.length,
-    removedRoles: removed.map((m) => m.role),
+    removedRoles: removed.map((message) => message.role),
     historyLength: history.length,
   });
-  return removed.length > 0;
+  return true;
 }

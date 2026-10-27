@@ -209,6 +209,7 @@ final class ChatSessionRunner {
         sessionId: String,
         userText: String,
         groupName: String? = nil,
+        model: String? = nil,
         onBlock: @escaping @MainActor @Sendable (ChatBlock) -> Void,
         onSteeringEvent: @escaping @MainActor @Sendable (SteeringServerEvent) -> Void,
         onFinal: @escaping @MainActor @Sendable (String) -> Void,
@@ -223,6 +224,7 @@ final class ChatSessionRunner {
                 jwt: token,
                 userText: userText,
                 groupName: groupName,
+                model: model,
                 allowReauth: true,
                 handle: handle,
                 onBlock: onBlock,
@@ -243,6 +245,7 @@ final class ChatSessionRunner {
                         jwt: jwt,
                         userText: userText,
                         groupName: groupName,
+                        model: model,
                         allowReauth: false,
                         handle: handle,
                         onBlock: onBlock,
@@ -317,6 +320,7 @@ final class ChatSessionRunner {
         jwt: String,
         userText: String,
         groupName: String?,
+        model: String? = nil,
         allowReauth: Bool,
         handle: ChatSessionRunHandle,
         onBlock: @escaping @MainActor @Sendable (ChatBlock) -> Void,
@@ -342,6 +346,7 @@ final class ChatSessionRunner {
             jwt: jwt,
             originalText: userText,
             groupName: groupName,
+            model: model,
             allowReauth: allowReauth,
             handle: handle,
             onBlock: onBlock,
@@ -371,6 +376,7 @@ final class ChatSessionRunner {
         let steeringPendingCount: Int?
         let platform: String?
         let groupName: String?
+        let model: String?
 
         init(
             sessionID: String,
@@ -388,7 +394,8 @@ final class ChatSessionRunner {
             steeringStatus: SteeringServerStatus? = nil,
             steeringPendingCount: Int? = nil,
             platform: String? = nil,
-            groupName: String? = nil
+            groupName: String? = nil,
+            model: String? = nil
         ) {
             self.sessionID = sessionID
             self.sender = sender
@@ -406,6 +413,7 @@ final class ChatSessionRunner {
             self.steeringPendingCount = steeringPendingCount
             self.platform = platform
             self.groupName = groupName
+            self.model = model
         }
 
         enum CodingKeys: String, CodingKey {
@@ -424,6 +432,7 @@ final class ChatSessionRunner {
             case steeringStatus = "steering_status"
             case steeringPendingCount = "steering_pending_count"
             case platform
+            case model
             case groupName = "group_name"
         }
     }
@@ -469,6 +478,7 @@ final class ChatSessionRunner {
         jwt: String,
         originalText: String,
         groupName: String?,
+        model: String? = nil,
         allowReauth: Bool,
         handle: ChatSessionRunHandle,
         onBlock: @escaping @MainActor @Sendable (ChatBlock) -> Void,
@@ -681,7 +691,8 @@ final class ChatSessionRunner {
                                 content: output,
                                 isTerminalOutput: true,
                                 isError: status != 0,
-                                platform: "macos"
+                                platform: "macos",
+                                model: model
                             )
 
                             guard let jsonData = try? encoder.encode(reply),
@@ -747,7 +758,8 @@ final class ChatSessionRunner {
             isTerminalOutput: false,
             isError: false,
             platform: "macos",
-            groupName: groupName
+            groupName: groupName,
+            model: model
         )
 
         guard let data = try? encoder.encode(initial),

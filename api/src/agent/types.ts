@@ -46,6 +46,8 @@ export interface AgentMessage {
   steering_pending_count?: number;
   platform?: string;
   group_name?: string;
+  // Per-turn model override; never updates the shared provider settings.
+  model?: string;
 }
 
 export type AgentSendFn = (msg: AgentMessage) => void;
