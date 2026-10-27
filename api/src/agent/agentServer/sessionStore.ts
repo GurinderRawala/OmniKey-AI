@@ -4,7 +4,8 @@ import { logger } from '../../logger';
 import { AgentSession } from '../../models/agentSession';
 import { Subscription } from '../../models/subscription';
 import { getDefaultTaskTemplateSnapshot } from '../../featureRoutes';
-import { estimateHistoryTokens } from '../../ai-client';
+import { estimateHistoryTokens, getContextWindowSize } from '../../ai-client';
+import { config } from '../../config';
 import { getAgentPrompt } from '../agentPrompts';
 import { getPromptMcpsForSubscription } from '../mcpPromptCache';
 import { getAgentSettings } from '../../agentSettingsStore';
@@ -37,6 +38,9 @@ export async function persistSessionToDB(sessionId: string, state: SessionState)
         // model call will use: full raw history when it fits, compact memory
         // when enabled, and proactive request-local trimming when necessary.
         lastPromptTokens: Math.max(estimatedPromptTokens, state.lastModelPromptTokens ?? 0),
+        lastContextWindowSize: state.activeModel
+          ? getContextWindowSize(config.aiProvider, state.activeModel)
+          : null,
       },
       { where: { id: sessionId } },
     );

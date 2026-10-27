@@ -206,11 +206,20 @@ export async function recoverOutputLengthResult(
 
 export function removeInjectedUserPromptsFromHistory(session: SessionState, log: Logger): number {
   const before = session.history.length;
-  session.history = session.history.filter((message) => {
+  let removedFromMemory = 0;
+  session.history = session.history.filter((message, index) => {
     if (message.role !== 'user' || typeof message.content !== 'string') return true;
-    return !isInjectedUserPrompt(message.content);
+    const remove = isInjectedUserPrompt(message.content);
+    if (remove && index < (session.sessionMemoryHistoryLength ?? 0)) removedFromMemory++;
+    return !remove;
   });
 
+  if (removedFromMemory) {
+    session.sessionMemoryHistoryLength = Math.max(
+      0,
+      (session.sessionMemoryHistoryLength ?? 0) - removedFromMemory,
+    );
+  }
   const removed = before - session.history.length;
   if (removed > 0) {
     log.info('Removed stale injected recovery prompts before real user follow-up', { removed });

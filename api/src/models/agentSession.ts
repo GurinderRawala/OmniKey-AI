@@ -16,6 +16,7 @@ export interface AgentSessionAttributes {
   completionTokensUsed: number;
   totalTokensUsed: number;
   lastPromptTokens: number;
+  lastContextWindowSize?: number | null;
   groupName?: string | null;
   groupDescription?: string | null;
   groupDescriptionUpdatedAt?: Date | null;
@@ -85,6 +86,7 @@ export class AgentSession
   public completionTokensUsed!: number;
   public totalTokensUsed!: number;
   public lastPromptTokens!: number;
+  public lastContextWindowSize?: number | null;
   public groupName?: string | null;
   public groupDescription?: string | null;
   public groupDescriptionUpdatedAt?: Date | null;
@@ -173,6 +175,11 @@ AgentSession.init(
       allowNull: false,
       defaultValue: 0,
       field: 'last_prompt_tokens',
+    },
+    lastContextWindowSize: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      field: 'last_context_window_size',
     },
     groupName: {
       type: DataTypes.STRING,

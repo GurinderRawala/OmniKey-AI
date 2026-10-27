@@ -205,6 +205,92 @@ describe('agent session persistence checkpoints', () => {
     sessionSteeringMessages.clear();
   });
 
+  it('keeps concurrent sessions on their own models and histories', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    mocks.complete.mockImplementation(async (model, history) => {
+      if (model === 'model-a') await gate;
+      const text = JSON.stringify(history);
+      expect(text).toContain(model === 'model-a' ? '/repo/a' : '/repo/b');
+      expect(text).not.toContain(model === 'model-a' ? '/repo/b' : '/repo/a');
+      const content = `<final_answer>Done with ${model}</final_answer>`;
+      return {
+        content,
+        model,
+        finish_reason: 'stop',
+        assistantMessage: { role: 'assistant', content },
+      };
+    });
+    const sendA = vi.fn();
+    const sendB = vi.fn();
+    const a = runAgentTurn(
+      'session-a',
+      { id: 'subscription-1' } as any,
+      {
+        sender: 'client',
+        session_id: 'session-a',
+        content: 'Work in /repo/a',
+        model: 'model-a',
+      },
+      sendA,
+      mocks.log as any,
+      { skipGrouping: true },
+    );
+    await waitForCondition(() => mocks.complete.mock.calls.length === 1);
+    await runAgentTurn(
+      'session-b',
+      { id: 'subscription-1' } as any,
+      {
+        sender: 'client',
+        session_id: 'session-b',
+        content: 'Work in /repo/b',
+        model: 'model-b',
+      },
+      sendB,
+      mocks.log as any,
+      { skipGrouping: true },
+    );
+    release();
+    await a;
+    expect(mocks.complete.mock.calls.map(([model]) => model)).toEqual(['model-a', 'model-b']);
+    expect(
+      sendA.mock.calls.some(([message]) => message.content.includes('Done with model-a')),
+    ).toBe(true);
+    expect(
+      sendB.mock.calls.some(([message]) => message.content.includes('Done with model-b')),
+    ).toBe(true);
+    for (const [values, options] of historyUpdateCalls()) {
+      expect(values.historyJson).not.toContain(
+        options.where.id === 'session-a' ? '/repo/b' : '/repo/a',
+      );
+    }
+  });
+
+  it.each(['', 'bad model', 'x'.repeat(201), 123])(
+    'rejects invalid per-turn model %s before loading a session',
+    async (model) => {
+      const send = vi.fn();
+      await runAgentTurn(
+        'session-1',
+        { id: 'subscription-1' } as any,
+        {
+          sender: 'client',
+          session_id: 'session-1',
+          content: 'Task',
+          model: model as string,
+        },
+        send,
+        mocks.log as any,
+      );
+      expect(send).toHaveBeenCalledWith(
+        expect.objectContaining({ is_error: true, content: 'Invalid model name.' }),
+      );
+      expect(mocks.agentSession.findOne).not.toHaveBeenCalled();
+    },
+  );
+
   it('persists the first user turn before calling the model', async () => {
     mocks.complete.mockRejectedValueOnce(new Error('provider unavailable'));
 
@@ -981,6 +1067,8 @@ describe('agent session persistence checkpoints', () => {
         },
       ]),
       turns: 3,
+      sessionMemory: 'Original task in repo, through first recovery prompt',
+      sessionMemoryHistoryLength: 4,
       groupName: null,
       groupLocked: false,
     });
@@ -1009,6 +1097,7 @@ describe('agent session persistence checkpoints', () => {
       { skipGrouping: true },
     );
 
+    expect(historyUpdateCalls()[0][0].sessionMemoryHistoryLength).toBe(3);
     const history = parsedHistoryFromCall(historyUpdateCalls()[0]);
     expect(history.some((msg) => msg.content.startsWith('Web research is complete'))).toBe(false);
     expect(
@@ -1334,6 +1423,7 @@ describe('agent session persistence checkpoints', () => {
         session_id: 'session-1',
         sender: 'client',
         content: 'Keep searching during outage.',
+        model: 'session-specific-model',
         platform: 'macos',
       },
       send,
@@ -1350,6 +1440,9 @@ describe('agent session persistence checkpoints', () => {
 
     expect(mocks.executeTool).toHaveBeenCalledTimes(1);
     expect(mocks.complete).toHaveBeenCalledTimes(3);
+    expect(mocks.complete.mock.calls.map(([model]) => model)).toEqual(
+      Array(3).fill('session-specific-model'),
+    );
     expect(
       send.mock.calls.some(([msg]) => String(msg.content).includes('Recovered through shell.')),
     ).toBe(true);
@@ -1473,6 +1566,7 @@ describe('agent session persistence checkpoints', () => {
         session_id: 'session-1',
         sender: 'client',
         content: 'Keep searching during outage.',
+        model: 'session-specific-model',
         platform: 'macos',
       },
       send,

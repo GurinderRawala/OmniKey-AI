@@ -2601,7 +2601,7 @@ private struct AgentModelMenu: View {
                 }
             } label: {
                 ComposerPillLabel(
-                    icon: model.isUpdatingAgentModel ? "hourglass" : "cpu",
+                    icon: !model.hasLoadedAgentModelOptions ? "hourglass" : "cpu",
                     title: model.activeAgentModelLabel,
                     isActive: true,
                     activeColor: NordTheme.accentPurple(colorScheme),
@@ -2610,7 +2610,7 @@ private struct AgentModelMenu: View {
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
-            .disabled(model.isRunning || model.isUpdatingAgentModel)
+            .disabled(model.isRunning || !model.hasLoadedAgentModelOptions)
             .help(model.isRunning ? "Model is locked while a turn is running" : "Choose agent model")
             .popover(isPresented: $showsCustomModelPopover) {
                 VStack(alignment: .leading, spacing: 12) {

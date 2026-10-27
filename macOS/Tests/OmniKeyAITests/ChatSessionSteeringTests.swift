@@ -228,17 +228,38 @@ final class ChatSessionSteeringTests: XCTestCase {
     }
 
     @MainActor
+    func testModelSnapshotIsIncludedInInitialSendAndTerminalFeedback() async {
+        let shell = SuspendedShell()
+        defer { shell.release() }
+        let terminal = expectation(description: "terminal response")
+        let socket = TestSocket(onSend: { message in
+            XCTAssertEqual(message.model, "session-model")
+            if message.isTerminalOutput == true { terminal.fulfill() }
+        })
+        let final = expectation(description: "finished")
+        start(socket, shell: shell, model: "session-model", onFinal: { _ in final.fulfill() })
+        socket.deliver(shellMessage)
+        await fulfillment(of: [shell.started], timeout: 2)
+        shell.release()
+        await fulfillment(of: [terminal], timeout: 2)
+        XCTAssertEqual(socket.sentMessages.count, 2)
+        socket.deliver(finalMessage)
+        await fulfillment(of: [final], timeout: 2)
+    }
+
+    @MainActor
     private func start(
         _ socket: TestSocket,
         shell: SuspendedShell,
         handle: ChatSessionRunHandle = ChatSessionRunHandle(),
+        model: String? = nil,
         onSteering: @escaping @MainActor @Sendable (SteeringServerEvent) -> Void = { _ in },
         onFinal: @escaping @MainActor @Sendable (String) -> Void = { _ in },
         onError: @escaping @MainActor @Sendable (Error) -> Void = { XCTFail("Unexpected error: \($0)") }
     ) {
         ChatSessionRunner.shared.startAgentWebSocketSession(
             url: URL(string: "ws://localhost/unused")!, sessionID: "session", jwt: "",
-            originalText: "Start", groupName: nil, allowReauth: false, handle: handle,
+            originalText: "Start", groupName: nil, model: model, allowReauth: false, handle: handle,
             onBlock: { _ in }, onSteeringEvent: onSteering, onFinal: onFinal, onError: onError,
             socket: socket, executeShell: { _, _ in shell.run() }
         )

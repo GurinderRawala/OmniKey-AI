@@ -46,6 +46,27 @@ function app() {
 describe('agent session metadata routes', () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it('reports each session context window independently of the shared default', async () => {
+    const sessions = [
+      { id: 'a', lastPromptTokens: 10_000, lastContextWindowSize: 1_000_000 },
+      { id: 'b', lastPromptTokens: 20_000, lastContextWindowSize: 88_000 },
+      { id: 'legacy', lastPromptTokens: 5_000 },
+    ];
+    mocks.findAll.mockResolvedValue(sessions);
+    const list = await request(app()).get('/api/agent/sessions');
+    expect(list.status).toBe(200);
+    expect(list.body.map((s: any) => [s.contextBudget, s.remainingContextTokens])).toEqual([
+      [1_000_000, 990_000],
+      [88_000, 68_000],
+      [128_000, 123_000],
+    ]);
+    mocks.findOne.mockResolvedValue(sessions[1]);
+    const context = await request(app()).get('/api/agent/sessions/b/context');
+    expect(context.status).toBe(200);
+    expect(context.body.contextBudget).toBe(88_000);
+    expect(context.body.remainingContextTokens).toBe(68_000);
+  });
+
   it('trims and persists a renamed title without changing identity', async () => {
     const session = {
       id: 'session-1',

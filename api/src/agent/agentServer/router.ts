@@ -111,6 +111,7 @@ export function createAgentRouter(): express.Router {
             'promptTokensUsed',
             'completionTokensUsed',
             'lastPromptTokens',
+            'lastContextWindowSize',
             'groupName',
             'groupDescription',
             'taskInstructionId',
@@ -132,8 +133,11 @@ export function createAgentRouter(): express.Router {
           totalTokensUsed: Number(s.totalTokensUsed),
           promptTokensUsed: Number(s.promptTokensUsed),
           completionTokensUsed: Number(s.completionTokensUsed),
-          remainingContextTokens: Math.max(0, contextWindowSize - Number(s.lastPromptTokens)),
-          contextBudget: contextWindowSize,
+          remainingContextTokens: Math.max(
+            0,
+            (s.lastContextWindowSize ?? contextWindowSize) - Number(s.lastPromptTokens),
+          ),
+          contextBudget: s.lastContextWindowSize ?? contextWindowSize,
           groupName: s.groupName ?? null,
           groupDescription: s.groupDescription ?? null,
           taskInstructionId: s.taskInstructionId ?? null,
@@ -333,6 +337,7 @@ export function createAgentRouter(): express.Router {
             'promptTokensUsed',
             'completionTokensUsed',
             'lastPromptTokens',
+            'lastContextWindowSize',
             'lastActiveAt',
           ],
         }),
@@ -350,8 +355,11 @@ export function createAgentRouter(): express.Router {
         totalTokensUsed: Number(session.totalTokensUsed),
         promptTokensUsed: Number(session.promptTokensUsed),
         completionTokensUsed: Number(session.completionTokensUsed),
-        remainingContextTokens: Math.max(0, contextWindowSize - Number(session.lastPromptTokens)),
-        contextBudget: contextWindowSize,
+        remainingContextTokens: Math.max(
+          0,
+          (session.lastContextWindowSize ?? contextWindowSize) - Number(session.lastPromptTokens),
+        ),
+        contextBudget: session.lastContextWindowSize ?? contextWindowSize,
         lastActiveAt: session.lastActiveAt,
       });
     } catch (err) {

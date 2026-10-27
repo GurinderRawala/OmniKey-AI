@@ -87,7 +87,9 @@ async function runAgentTurnInternal(
   // Count this call as one agent iteration.
   session.turns += 1;
   const agentSettings = await getAgentSettings();
-  const agentModel = selectedAgentModelForProvider(agentSettings, config.aiProvider);
+  const requestedModel = typeof clientMessage.model === 'string' ? clientMessage.model.trim() : '';
+  const agentModel =
+    requestedModel || selectedAgentModelForProvider(agentSettings, config.aiProvider);
   session.activeModel = agentModel;
 
   log.info('Starting agent turn', {
@@ -349,6 +351,8 @@ async function runAgentTurnInternal(
         session_id: sessionId,
         content: '',
         is_web_call: true,
+        model: agentModel,
+        platform: clientMessage.platform,
       },
       send,
       logger,
@@ -553,6 +557,8 @@ async function runAgentTurnInternal(
             session_id: sessionId,
             content: '',
             is_web_call: true,
+            model: agentModel,
+            platform: clientMessage.platform,
           },
           send,
           logger,
@@ -668,6 +674,8 @@ async function runAgentTurnInternal(
           session_id: sessionId,
           content: '',
           is_web_call: true,
+          model: agentModel,
+          platform: clientMessage.platform,
         },
         send,
         logger,
@@ -706,6 +714,22 @@ export async function runAgentTurn(
   log: Logger,
   options?: AgentTurnOptions,
 ): Promise<void> {
+  // Custom provider models are supported, with the same bounds as provider settings.
+  if (
+    clientMessage.model !== undefined &&
+    (typeof clientMessage.model !== 'string' ||
+      !clientMessage.model.trim() ||
+      clientMessage.model.length > 200 ||
+      /[\u0000-\u001f\u007f\s]/.test(clientMessage.model.trim()))
+  ) {
+    send({
+      session_id: sessionId,
+      sender: 'agent',
+      content: 'Invalid model name.',
+      is_error: true,
+    });
+    return;
+  }
   // untaggedDepth always starts at 0 for external callers; it is only threaded
   // through the internal recursive path.
   return runAgentTurnInternal(sessionId, subscription, clientMessage, send, log, options);

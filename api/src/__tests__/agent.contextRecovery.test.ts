@@ -69,7 +69,7 @@ describe('pruneHistoryForContextLimit', () => {
     expect(session.history[3].content).toBe('follow up');
   });
 
-  it('drops the oldest user exchange together with its assistant and tool results', () => {
+  it('drops an old tool exchange while retaining the task and latest answer', () => {
     const session = makeSession([
       { role: 'system', content: 'sys' },
       { role: 'user', content: 'first turn' },
@@ -86,7 +86,12 @@ describe('pruneHistoryForContextLimit', () => {
     const changed = pruneHistoryForContextLimit(session, noopLog);
 
     expect(changed).toBe(true);
-    expect(session.history.map((m) => m.content)).toEqual(['sys', 'latest question']);
+    expect(session.history.map((m) => m.content)).toEqual([
+      'sys',
+      'first turn',
+      'done',
+      'latest question',
+    ]);
     expect(session.history.some((m) => m.role === 'tool')).toBe(false);
   });
 
@@ -106,7 +111,7 @@ describe('pruneHistoryForContextLimit', () => {
     const changed = pruneHistoryForContextLimit(session, noopLog);
 
     expect(changed).toBe(true);
-    expect(session.history.map((m) => m.role)).toEqual(['system', 'user']);
+    expect(session.history.map((m) => m.role)).toEqual(['system', 'assistant', 'user']);
     expect(session.history.some((m) => m.role === 'tool')).toBe(false);
   });
 
@@ -132,7 +137,9 @@ describe('pruneHistoryForContextLimit', () => {
     const changed = pruneHistoryForContextLimit(session, noopLog);
 
     expect(changed).toBe(true);
-    expect(session.history.map((m) => m.content)).toEqual(['sys', 'latest question']);
+    expect(session.history.some((m) => m.tool_call_id === 't1')).toBe(false);
+    expect(pruneHistoryForContextLimit(session, noopLog)).toBe(true);
+    expect(session.history.map((m) => m.content)).toEqual(['sys', 'done', 'latest question']);
     expect(session.history.some((m) => m.role === 'tool')).toBe(false);
   });
 
