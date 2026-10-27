@@ -6,6 +6,13 @@
     <description>New features, fixes, and improvements in OmniKey AI.</description>
     <language>en</language>
     <item>
+      <title>OmniKey v1.8.12</title>
+      <link>https://omnikeyai.ca/changelog#v1.8.12</link>
+      <guid isPermaLink="false">omnikey-v1.8.12</guid>
+      <pubDate>Tue, 27 Oct 2026 00:00:00 +0000</pubDate>
+      <description><![CDATA[<ul><li>Fix per-session model selection and lost context in long chats (#46)</li><li>Separate blog CTA buttons on mobile</li><li>Remove the redundant article eyebrow</li><li>Add the blog and publish the first article</li><li>Ignore SwiftPM .build scratch dirs at any level</li><li>Add a code of conduct</li></ul>]]></description>
+    </item>
+    <item>
       <title>OmniKey v1.8.11</title>
       <link>https://omnikeyai.ca/changelog#v1.8.11</link>
       <guid isPermaLink="false">omnikey-v1.8.11</guid>
@@ -137,13 +144,6 @@
       <guid isPermaLink="false">omnikey-v1.6.22</guid>
       <pubDate>Tue, 28 Jul 2026 00:00:00 +0000</pubDate>
       <description><![CDATA[<ul><li>Bump version</li><li>Changes</li><li>Fixes</li><li>Usage dashboard, chat model switcher, DB-backed settings</li></ul>]]></description>
-    </item>
-    <item>
-      <title>OmniKey v1.6.21</title>
-      <link>https://omnikeyai.ca/changelog#v1.6.21</link>
-      <guid isPermaLink="false">omnikey-v1.6.21</guid>
-      <pubDate>Tue, 28 Jul 2026 00:00:00 +0000</pubDate>
-      <description><![CDATA[<ul><li>Agent token optimization and macos app changes</li></ul>]]></description>
     </item>
   </channel>
 </rss>
