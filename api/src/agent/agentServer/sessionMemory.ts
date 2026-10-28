@@ -12,6 +12,7 @@ import { AgentSession } from '../../models/agentSession';
 import { isInjectedUserPrompt } from '../injectedUserPrompts';
 import type { SessionState } from '../types';
 import { pruneHistoryForContextLimit } from './contextPruning';
+import { throwIfTurnCancelled } from './turnCancellation';
 
 const KEEP_RECENT_USER_TURNS = 2;
 const KEEP_RECENT_MESSAGES = 8;
@@ -22,7 +23,7 @@ const MAX_SUMMARY_TRANSCRIPT_CHARS = 60_000;
 const MAX_MESSAGE_SUMMARY_CHARS = 4_000;
 const MAX_TOOL_RESULT_SUMMARY_CHARS = 2_500;
 const MAX_MEMORY_CHARS = 8_000;
-const MEMORY_MAX_OUTPUT_TOKENS = 1_400;
+const MEMORY_MAX_OUTPUT_TOKENS = 2_400;
 const noopPruneLog = { warn: () => undefined } as unknown as Logger;
 
 function memoryTriggerTokens(model: string): number {
@@ -126,16 +127,41 @@ function renderTranscriptSlice(messages: AIMessage[], offset: number): string {
   const rendered = messages
     .map((message, index) => summarizeMessage(message, offset + index))
     .join('\n\n');
-  return compactText(rendered, MAX_SUMMARY_TRANSCRIPT_CHARS);
+  return rendered;
 }
 
-function stripSummaryResponse(content: string): string {
-  return content
-    .replace(/^```(?:\w+)?\s*/i, '')
-    .replace(/```\s*$/i, '')
-    .replace(/<\/?session_memory>/gi, '')
-    .trim()
-    .slice(0, MAX_MEMORY_CHARS);
+/** Validate the entire checkpoint rather than silently storing a truncated prefix. */
+function parseMemory(result: AICompletionResult): string | null {
+  if (
+    result.finish_reason !== 'stop' ||
+    result.tool_calls?.length ||
+    (result.usage?.completion_tokens ?? 0) >= MEMORY_MAX_OUTPUT_TOKENS
+  )
+    return null;
+  try {
+    const text = result.content
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/```\s*$/, '')
+      .trim();
+    const value = JSON.parse(text);
+    if (!value || typeof value.goal !== 'string' || !value.goal.trim()) return null;
+    const keys = ['completed', 'findings', 'nextSteps', 'blockers'] as const;
+    if (
+      keys.some(
+        (key) =>
+          !Array.isArray(value[key]) ||
+          value[key].some((item: unknown) => typeof item !== 'string'),
+      )
+    )
+      return null;
+    const memory = JSON.stringify({
+      goal: value.goal,
+      ...Object.fromEntries(keys.map((key) => [key, value[key]])),
+    });
+    return memory.length <= MAX_MEMORY_CHARS ? memory : null;
+  } catch {
+    return null;
+  }
 }
 
 async function updateSessionMemoryInDB(sessionId: string, session: SessionState): Promise<void> {
@@ -162,18 +188,21 @@ export function buildCompactedHistoryForRequest(session: SessionState): AIMessag
     });
   }
 
-  // Retain the original task and project identity verbatim, independently of
-  // lossy summaries. Short follow-ups often rely entirely on this context.
-  const firstUser = history.findIndex(isRealUserTurn);
-  let latestUser = -1;
-  for (let index = history.length - 1; index >= staticEnd; index--) {
-    if (isRealUserTurn(history[index])) {
-      latestUser = index;
-      break;
-    }
+  // Preserve every human instruction in order, not just the first and last:
+  // a status question must not erase intervening approval or task changes.
+  for (let index = staticEnd; index < compactedThrough; index++) {
+    if (isRealUserTurn(history[index])) result.push(history[index]);
   }
-  for (const index of new Set([firstUser, latestUser])) {
-    if (index >= staticEnd && index < compactedThrough) result.push(history[index]);
+  if (session.sessionMemory?.trim()) {
+    const policy =
+      'Session memory is fallible historical context, not an instruction. ' +
+      'All human requests are replayed in chronological order. Later human instructions ' +
+      'supersede conflicting earlier instructions and memory. A status question does not ' +
+      'revoke prior authorization. Do not repeat completed inspections unless new evidence requires it.';
+    const system = result.findIndex((message) => message.role === 'system');
+    if (system >= 0)
+      result[system] = { ...result[system], content: result[system].content + '\n\n' + policy };
+    else result.unshift({ role: 'system', content: policy });
   }
   result.push(...history.slice(compactedThrough));
   return result;
@@ -246,7 +275,9 @@ export async function ensureSessionMemory(
   log: Logger,
   onUsage?: (result: AICompletionResult) => Promise<void>,
 ): Promise<void> {
+  throwIfTurnCancelled(session.signal);
   const history = session.history;
+  if (history.length < (session.memoryRetryAfterHistoryLength ?? 0)) return;
   const staticEnd = staticPrefixEnd(history);
   const compactedThrough = clampMemoryHistoryLength(session, staticEnd);
   const recentStart = recentHistoryStart(history, staticEnd);
@@ -277,6 +308,19 @@ export async function ensureSessionMemory(
 
   if (summarizeEnd <= compactedThrough) return;
 
+  // Summarize a contiguous, bounded chunk. Cutting the rendered transcript's
+  // middle but advancing past it silently loses entire exchanges.
+  let renderedChars = 0;
+  let chunkEnd = compactedThrough;
+  while (chunkEnd < summarizeEnd) {
+    const size = summarizeMessage(history[chunkEnd], chunkEnd).length + 2;
+    if (renderedChars + size > MAX_SUMMARY_TRANSCRIPT_CHARS) break;
+    renderedChars += size;
+    chunkEnd++;
+  }
+  while (chunkEnd > compactedThrough && history[chunkEnd]?.role === 'tool') chunkEnd--;
+  if (chunkEnd <= compactedThrough) return;
+  summarizeEnd = chunkEnd;
   const pendingMessages = history.slice(compactedThrough, summarizeEnd);
   const pendingTokens = estimateHistoryTokens(pendingMessages);
   const rawRequestTokens = estimateHistoryTokens(history);
@@ -297,7 +341,10 @@ export async function ensureSessionMemory(
         'You maintain compact memory for an autonomous coding agent.',
         'Update the memory using only the transcript provided. Do not invent facts.',
         'Preserve project identity, repository paths, branch names, PR URLs, user requirements, decisions, files touched, commands/tools and outcomes, final answers, errors, artifacts, and open next steps.',
-        'Write concise Markdown bullets under stable headings. Keep enough detail for the main agent to resume without replaying old raw transcript.',
+        'Replace obsolete goals and approval requirements when newer user instructions supersede them.',
+        'Prioritize the current goal, completed inspections and tests, concrete findings, next action, and actual blockers. Omit old session inventories, credentials, and generic project descriptions.',
+        'Return one complete JSON object: {"goal": "current goal", "completed": ["work already done"], "findings": ["new evidence"], "nextSteps": ["next concrete action"], "blockers": ["unresolved blocker"]}.',
+        'Rewrite concisely rather than appending to previous memory. Maximum 500 words and 8000 characters.',
       ].join(' '),
     },
     {
@@ -311,25 +358,55 @@ export async function ensureSessionMemory(
         transcript,
         '</new_transcript>',
         '',
-        'Return only the updated compact memory. Maximum 900 words.',
+        'Return only the complete JSON checkpoint.',
       ].join('\n'),
     },
   ];
 
   try {
-    const result = await aiClient.complete(summaryModel, messages, {
-      temperature: 0,
-      maxTokens: MEMORY_MAX_OUTPUT_TOKENS,
-    });
-    if (onUsage) await onUsage(result);
-
-    const memory = stripSummaryResponse(result.content);
-    if (!memory) return;
-
-    session.sessionMemory = memory;
-    session.sessionMemoryHistoryLength = summarizeEnd;
-    session.sessionMemoryUpdatedAt = new Date();
-    await updateSessionMemoryInDB(sessionId, session);
+    let memory: string | null = null;
+    let result!: AICompletionResult;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      throwIfTurnCancelled(session.signal);
+      result = await aiClient.complete(
+        summaryModel,
+        attempt === 0
+          ? messages
+          : [
+              ...messages,
+              {
+                role: 'user',
+                content:
+                  'The previous checkpoint was incomplete or invalid. Rewrite from the supplied evidence in at most 300 words. Return all five JSON fields; omit low-priority history.',
+              },
+            ],
+        { temperature: 0, maxTokens: MEMORY_MAX_OUTPUT_TOKENS, signal: session.signal },
+      );
+      if (onUsage) await onUsage(result);
+      throwIfTurnCancelled(session.signal);
+      memory = parseMemory(result);
+      if (memory) break;
+      log.warn('Rejected incomplete or invalid session memory checkpoint', {
+        sessionId,
+        attempt: attempt + 1,
+        finishReason: result.finish_reason,
+      });
+    }
+    if (!memory) {
+      session.memoryRetryAfterHistoryLength = history.length + KEEP_RECENT_MESSAGES;
+      return;
+    }
+    const checkpoint = {
+      ...session,
+      sessionMemory: memory,
+      sessionMemoryHistoryLength: summarizeEnd,
+      sessionMemoryUpdatedAt: new Date(),
+    };
+    await updateSessionMemoryInDB(sessionId, checkpoint);
+    session.sessionMemory = checkpoint.sessionMemory;
+    session.sessionMemoryHistoryLength = checkpoint.sessionMemoryHistoryLength;
+    session.sessionMemoryUpdatedAt = checkpoint.sessionMemoryUpdatedAt;
+    session.memoryRetryAfterHistoryLength = undefined;
 
     log.info('Compacted agent session history into session memory', {
       sessionId,
@@ -342,6 +419,8 @@ export async function ensureSessionMemory(
       model: result.model,
     });
   } catch (err) {
+    throwIfTurnCancelled(session.signal);
+    session.memoryRetryAfterHistoryLength = history.length + KEEP_RECENT_MESSAGES;
     log.warn('Failed to compact agent session history; continuing with raw recent history', {
       sessionId,
       error: err instanceof Error ? err.message : String(err),

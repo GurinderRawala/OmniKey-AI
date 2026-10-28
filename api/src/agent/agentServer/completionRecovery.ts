@@ -12,6 +12,7 @@ import { pushToSessionHistory } from '../utils';
 import { isInjectedUserPrompt } from '../injectedUserPrompts';
 import type { SessionState } from '../types';
 import { persistSessionToDB } from './sessionStore';
+import { throwIfTurnCancelled } from './turnCancellation';
 import { isContextLengthError, pruneHistoryForContextLimit } from './contextPruning';
 import { buildTrimmedHistoryForRequest, ensureSessionMemory } from './sessionMemory';
 
@@ -94,15 +95,20 @@ export async function completeWithContextRecovery(
   log: Logger,
   onUsage?: (result: AICompletionResult) => Promise<void>,
 ): Promise<AICompletionResult> {
+  throwIfTurnCancelled(session.signal);
   await ensureSessionMemory(session, sessionId, model, log, onUsage);
   let requestHistory = buildTrimmedHistoryForRequest(session, model, sessionId, log);
-  const requestOptions = cacheableOptions(session, model, options);
+  const requestOptions = cacheableOptions(session, model, { ...options, signal: session.signal });
 
   let attempt = 0;
   for (;;) {
     try {
-      return await aiClient.complete(model, requestHistory, requestOptions);
+      throwIfTurnCancelled(session.signal);
+      const result = await aiClient.complete(model, requestHistory, requestOptions);
+      throwIfTurnCancelled(session.signal);
+      return result;
     } catch (err) {
+      throwIfTurnCancelled(session.signal);
       if (!isContextLengthError(err) || attempt >= MAX_CONTEXT_RECOVERY_ATTEMPTS) throw err;
       attempt++;
       const scratchSession = {

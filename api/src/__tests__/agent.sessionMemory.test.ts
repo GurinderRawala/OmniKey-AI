@@ -50,6 +50,7 @@ function makeSession(history: AIMessage[]): SessionState {
 describe('agent session memory compaction', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.complete.mockReset();
     mocks.estimateHistoryTokens.mockImplementation(
       (history: unknown[]) => JSON.stringify(history).length,
     );
@@ -57,12 +58,13 @@ describe('agent session memory compaction', () => {
     mocks.getFixedHelperModel.mockReturnValue('fast-summary-model');
     mocks.update.mockResolvedValue([1]);
     mocks.complete.mockResolvedValue({
-      content: [
-        '## Goal',
-        '- Preserve the earlier repo audit and findings.',
-        '## Completed',
-        '- Inspected agentServer and identified raw history replay as the main cost driver.',
-      ].join('\n'),
+      content: JSON.stringify({
+        goal: 'Preserve the earlier repo audit and findings.',
+        completed: ['Inspected agentServer'],
+        findings: ['raw history replay is the main cost driver'],
+        nextSteps: [],
+        blockers: [],
+      }),
       finish_reason: 'stop',
       model: 'fast-summary-model',
       assistantMessage: { role: 'assistant', content: 'summary' },
@@ -88,7 +90,7 @@ describe('agent session memory compaction', () => {
     expect(mocks.complete.mock.calls[0][0]).toBe('fast-summary-model');
     expect(mocks.getFixedHelperModel).toHaveBeenCalledWith('anthropic');
     expect(mocks.complete.mock.calls[0][2]).toEqual(
-      expect.objectContaining({ maxTokens: 1400, temperature: 0 }),
+      expect.objectContaining({ maxTokens: 2400, temperature: 0 }),
     );
     expect(onUsage).toHaveBeenCalledWith(expect.objectContaining({ model: 'fast-summary-model' }));
 
@@ -238,7 +240,14 @@ describe('agent session memory compaction', () => {
       ]);
       const raw = JSON.stringify(session.history);
       mocks.complete.mockResolvedValueOnce({
-        content: 'Repo /work/mono, branch dashboard-filters, PR https://example.com/pull/123',
+        content: JSON.stringify({
+          goal: 'Repo /work/mono',
+          completed: ['branch dashboard-filters, PR https://example.com/pull/123'],
+          findings: [],
+          nextSteps: [],
+          blockers: [],
+        }),
+        finish_reason: 'stop',
       });
       if (fail) mocks.complete.mockReset().mockRejectedValue(new Error('summary unavailable'));
       await ensureSessionMemory(session, 'dashboard-session', 'small-model', mocks.log as any);
@@ -292,5 +301,151 @@ describe('agent session memory compaction', () => {
     ).toBe(true);
     expect(request.some((m) => m.content.includes('<session_memory>'))).toBe(true);
     expect(mocks.estimateHistoryTokens(request)).toBeLessThanOrEqual(21_600);
+  });
+  it('replays intervening authorization and changed requirements despite stale memory', () => {
+    const human = [
+      'Investigate only; wait for approval',
+      'Approved: implement the fix',
+      'Use a separate branch',
+      'What is done so far?',
+    ];
+    const session = makeSession([
+      { role: 'system', content: 'system' },
+      ...human.flatMap(
+        (content) =>
+          [
+            { role: 'user', content },
+            { role: 'assistant', content: 'old work' },
+          ] as AIMessage[],
+      ),
+    ]);
+    session.sessionMemory = 'Implementation remains pending approval.';
+    session.sessionMemoryHistoryLength = 7;
+    const raw = JSON.stringify(session.history);
+    const request = buildCompactedHistoryForRequest(session);
+    expect(
+      request
+        .filter((m) => m.role === 'user' && !m.content.includes('<session_memory>'))
+        .map((m) => m.content),
+    ).toEqual(human);
+    expect(request[0].content).toContain('does not revoke prior authorization');
+    expect(JSON.stringify(session.history)).toBe(raw);
+  });
+
+  it.each(['length', 'invalid-json', 'missing-fields', 'token-cap'])(
+    'rejects %s checkpoints without advancing the cursor and backs off',
+    async (failure) => {
+      const session = makeSession([
+        { role: 'system', content: 'system' },
+        { role: 'user', content: 'Implement the fix' },
+        { role: 'assistant', content: 'evidence '.repeat(2000) },
+        { role: 'user', content: 'continue' },
+        { role: 'assistant', content: 'working' },
+        { role: 'user', content: 'status?' },
+      ]);
+      session.sessionMemory = 'last valid checkpoint';
+      session.sessionMemoryHistoryLength = 1;
+      const valid = JSON.stringify({
+        goal: 'Implement',
+        completed: [],
+        findings: [],
+        nextSteps: [],
+        blockers: [],
+      });
+      mocks.complete.mockResolvedValue({
+        content:
+          failure === 'invalid-json'
+            ? '{'
+            : failure === 'missing-fields'
+              ? '{"goal":"Implement"}'
+              : valid,
+        finish_reason: failure === 'length' ? 'length' : 'stop',
+        usage: { completion_tokens: failure === 'token-cap' ? 2400 : 10 },
+      });
+      await ensureSessionMemory(session, 'session', 'model', mocks.log as any);
+      await ensureSessionMemory(session, 'session', 'model', mocks.log as any);
+      expect(mocks.complete).toHaveBeenCalledTimes(2);
+      expect(mocks.update).not.toHaveBeenCalled();
+      expect(session.sessionMemoryHistoryLength).toBe(1);
+      expect(session.sessionMemory).toBe('last valid checkpoint');
+      expect(
+        buildCompactedHistoryForRequest(session).some((m) => m.content === 'Implement the fix'),
+      ).toBe(true);
+    },
+  );
+
+  it('does not skip exchanges when a summary input exceeds its chunk budget', async () => {
+    const history: AIMessage[] = [
+      { role: 'system', content: 'system' },
+      { role: 'user', content: 'Implement' },
+    ];
+    for (let i = 0; i < 80; i++)
+      history.push(
+        {
+          role: 'assistant',
+          content: '',
+          tool_calls: [
+            { id: `c${i}`, name: 'shell_script', arguments: { script: `inspect-${i}` } },
+          ],
+        },
+        { role: 'tool', tool_call_id: `c${i}`, content: `evidence-${i}: ` + 'x'.repeat(3000) },
+      );
+    const session = makeSession(history);
+    await ensureSessionMemory(session, 'session', 'model', mocks.log as any);
+    const cut = session.sessionMemoryHistoryLength!;
+    expect(cut).toBeLessThan(history.length - 8);
+    expect(history[cut].role).toBe('assistant');
+    const transcript = mocks.complete.mock.calls[0][1][1].content;
+    for (let i = 1; i < cut; i++) expect(transcript).toContain(`#${i} `);
+    expect(transcript.length).toBeLessThan(62000);
+    await ensureSessionMemory(session, 'session', 'model', mocks.log as any);
+    expect(mocks.complete.mock.calls[1][1][1].content).toContain(`#${cut} `);
+    expect(session.sessionMemoryHistoryLength).toBeGreaterThan(cut);
+  });
+
+  it('keeps the prior checkpoint if its database write fails', async () => {
+    const session = makeSession([
+      { role: 'system', content: 'system' },
+      { role: 'user', content: 'Implement' },
+      { role: 'assistant', content: 'evidence '.repeat(2000) },
+      { role: 'user', content: 'next' },
+      { role: 'assistant', content: 'working' },
+      { role: 'user', content: 'status?' },
+    ]);
+    mocks.update.mockRejectedValueOnce(new Error('disk unavailable'));
+    await ensureSessionMemory(session, 'session', 'model', mocks.log as any);
+    expect(session.sessionMemory).toBeNull();
+    expect(session.sessionMemoryHistoryLength).toBe(0);
+  });
+  it('does not commit a summary delivered after cancellation', async () => {
+    const controller = new AbortController();
+    const session = makeSession([
+      { role: 'system', content: 'system' },
+      { role: 'user', content: 'Implement' },
+      { role: 'assistant', content: 'evidence '.repeat(2000) },
+      { role: 'user', content: 'next' },
+      { role: 'assistant', content: 'working' },
+      { role: 'user', content: 'status?' },
+    ]);
+    session.signal = controller.signal;
+    mocks.complete.mockImplementationOnce(async () => {
+      controller.abort();
+      return {
+        content: JSON.stringify({
+          goal: 'Implement',
+          completed: [],
+          findings: [],
+          nextSteps: [],
+          blockers: [],
+        }),
+        finish_reason: 'stop',
+      };
+    });
+    await expect(
+      ensureSessionMemory(session, 'session', 'model', mocks.log as any),
+    ).rejects.toThrow('cancelled');
+    expect(mocks.update).not.toHaveBeenCalled();
+    expect(session.sessionMemoryHistoryLength).toBe(0);
+    expect(mocks.complete.mock.calls[0][2].signal).toBe(controller.signal);
   });
 });

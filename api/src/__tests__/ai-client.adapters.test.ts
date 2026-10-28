@@ -495,3 +495,55 @@ describe('GeminiAdapter temperature handling', () => {
     );
   });
 });
+
+describe('completion cancellation', () => {
+  it.each(['openai', 'anthropic', 'gemini', 'nemotron'] as const)(
+    'forwards cancellation to %s and keeps the output budget',
+    async (provider) => {
+      mocks.responsesCreate.mockResolvedValue({ output: [], status: 'completed' });
+      mocks.openaiCreate.mockResolvedValue({
+        choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }],
+      });
+      mocks.anthropicCreate.mockResolvedValue({
+        content: [{ type: 'text', text: 'ok' }],
+        stop_reason: 'end_turn',
+        usage: { input_tokens: 1, output_tokens: 1 },
+      });
+      mocks.geminiGenerate.mockResolvedValue({
+        candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }],
+      });
+      const controller = new AbortController();
+      const client = new AIClient(provider, 'test');
+      await client.complete('test-model', messages, { signal: controller.signal, maxTokens: 2400 });
+      const calls =
+        provider === 'anthropic'
+          ? mocks.anthropicCreate.mock.calls
+          : provider === 'gemini'
+            ? mocks.geminiGenerate.mock.calls
+            : mocks.responsesCreate.mock.calls.length
+              ? mocks.responsesCreate.mock.calls
+              : mocks.openaiCreate.mock.calls;
+      if (provider === 'gemini') {
+        expect(calls[0][0].config.abortSignal).toBe(controller.signal);
+        expect(calls[0][0].config.maxOutputTokens).toBe(2400);
+      } else {
+        expect(calls[0][1].signal).toBe(controller.signal);
+        expect(calls[0][0].max_tokens ?? calls[0][0].max_output_tokens).toBe(2400);
+      }
+    },
+  );
+
+  it('does not downgrade or retry a cancelled Nemotron Responses request', async () => {
+    const controller = new AbortController();
+    const error = new Error('aborted');
+    mocks.responsesCreate.mockImplementation(async () => {
+      controller.abort();
+      throw error;
+    });
+    const client = new AIClient('nemotron', 'test', { nemotronResponsesApiEnabled: true });
+    await expect(client.complete('model', messages, { signal: controller.signal })).rejects.toBe(
+      error,
+    );
+    expect(mocks.openaiCreate).not.toHaveBeenCalled();
+  });
+});
