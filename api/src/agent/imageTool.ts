@@ -108,9 +108,26 @@ function formatFromMime(mimeType: string | undefined, fallback: ImageFormat): Im
  * @param outputPath - Absolute path to write to.
  * @param imageBuffer - Binary image contents.
  */
-async function writeImageFile(outputPath: string, imageBuffer: Buffer): Promise<void> {
+async function writeImageFile(
+  outputPath: string,
+  imageBuffer: Buffer,
+  signal?: AbortSignal,
+): Promise<void> {
+  const checkCancellation = () => {
+    if (signal?.aborted) throw new Error('Image generation cancelled before saving.');
+  };
   await fs.mkdir(path.dirname(outputPath), { recursive: true });
-  await fs.writeFile(outputPath, imageBuffer);
+  checkCancellation();
+  // Keep an existing destination intact if cancellation interrupts the write.
+  // A sibling file also keeps the final rename on the same filesystem.
+  const stagedPath = `${outputPath}.${cuid()}.tmp`;
+  try {
+    await fs.writeFile(stagedPath, imageBuffer, { signal, flag: 'wx' });
+    checkCancellation();
+    await fs.rename(stagedPath, outputPath);
+  } finally {
+    await fs.rm(stagedPath, { force: true });
+  }
 }
 
 /**
@@ -165,7 +182,7 @@ export async function executeImageGenerationTool(
     if (signal?.aborted) return 'Error: Image generation cancelled before saving.';
     const actualFormat = formatFromMime(generated.mimeType, format);
     const outputPath = resolveOutputPath(filePathArg, actualFormat);
-    await writeImageFile(outputPath, Buffer.from(generated.imageBase64, 'base64'));
+    await writeImageFile(outputPath, Buffer.from(generated.imageBase64, 'base64'), signal);
 
     log.info('Image generated and saved', {
       provider: generated.provider,
