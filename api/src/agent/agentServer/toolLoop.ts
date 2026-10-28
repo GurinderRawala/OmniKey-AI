@@ -25,6 +25,8 @@ import {
 import { buildShellToolResult, collectShellOutputFilterKeywords } from './terminalOutput';
 import { completeWithContextRecovery } from './completionRecovery';
 import { extractProgressSummary } from './progressSummary';
+import { ToolProgressGuard } from './toolProgressGuard';
+import { throwIfTurnCancelled } from './turnCancellation';
 
 export { extractProgressSummary } from './progressSummary';
 
@@ -98,6 +100,7 @@ export async function runToolLoop(
   hasStoredPrompt: boolean,
   steeringRestartBudget: SteeringRestartBudget,
   toolHandlers?: Map<string, CustomToolHandler>,
+  progressGuard = new ToolProgressGuard(),
 ): Promise<AICompletionResult> {
   // Tools the model is allowed to invoke on this turn. Built from the same
   // list we hand to the AI client, so flipping WEB_SEARCH_ENABLED (or any
@@ -108,6 +111,9 @@ export async function runToolLoop(
   let result = initialResult;
 
   while (result.finish_reason === 'tool_calls') {
+    throwIfTurnCancelled(session.signal);
+    const limit = progressGuard.beforeRound();
+    if (limit) return toolLoopLimitResult(model, limit);
     toolIterations++;
 
     const preToolSteeringMessages = drainSteeringMessagesIntoHistory(
@@ -187,6 +193,13 @@ export async function runToolLoop(
     const executeOneToolCall = async (
       tc: NonNullable<AICompletionResult['tool_calls']>[number],
     ): Promise<{ id: string; name: string; result: string }> => {
+      if (session.signal?.aborted) {
+        return {
+          id: tc.id,
+          name: tc.name,
+          result: 'COMMAND ERROR: Turn cancelled before tool execution.',
+        };
+      }
       const args = tc.arguments as Record<string, unknown>;
 
       // If the tool is not in the per-turn allowed list (e.g. the user
@@ -324,7 +337,7 @@ export async function runToolLoop(
           activity_phase: 'started',
         });
 
-        const toolResult = await executeImageGenerationTool(args, log);
+        const toolResult = await executeImageGenerationTool(args, log, session.signal);
         const imageResult = imageActivityResult(toolResult);
         log.info('Tool call completed', {
           sessionId,
@@ -380,17 +393,34 @@ export async function runToolLoop(
           scriptLength: script.length,
           filterKeywords,
         });
-        send({
-          session_id: sessionId,
-          sender: 'agent',
-          content: `<shell_script>\n${script}\n</shell_script>`,
-          is_terminal_output: false,
-          is_error: false,
-          activity_id: tc.id,
-          activity_phase: 'started',
-        });
         const terminalOutput = await new Promise<string>((resolve) => {
-          pendingShellScripts.set(sessionId, { resolve, filterKeywords });
+          const finish = (output: string) => {
+            session.signal?.removeEventListener('abort', cancel);
+            if (pendingShellScripts.get(sessionId)?.resolve === finish) {
+              pendingShellScripts.delete(sessionId);
+            }
+            resolve(output);
+          };
+          const cancel = () =>
+            finish(
+              'COMMAND ERROR: Connection closed before script output was received; execution outcome is unknown. Inspect the current state before retrying.',
+            );
+          // Register before sending: a fast client can return output immediately.
+          pendingShellScripts.set(sessionId, { resolve: finish, filterKeywords });
+          session.signal?.addEventListener('abort', cancel, { once: true });
+          if (session.signal?.aborted) {
+            cancel();
+            return;
+          }
+          send({
+            session_id: sessionId,
+            sender: 'agent',
+            content: `<shell_script>\n${script}\n</shell_script>`,
+            is_terminal_output: false,
+            is_error: false,
+            activity_id: tc.id,
+            activity_phase: 'started',
+          });
         });
         return { id: tc.id, name: tc.name, result: terminalOutput };
       }
@@ -474,6 +504,12 @@ export async function runToolLoop(
     // provider history on resume, but waiting until final answer means a user
     // stop can lose all completed work from this turn.
     await persistSessionToDB(sessionId, session);
+    throwIfTurnCancelled(session.signal);
+    const repeated = progressGuard.afterRound(toolCalls, toolResults);
+    if (repeated) {
+      log.warn('Stopped repeated agent tool results', { sessionId, toolIterations });
+      return toolLoopLimitResult(model, repeated);
+    }
 
     const steeringMessages = drainSteeringMessagesIntoHistory(
       sessionId,

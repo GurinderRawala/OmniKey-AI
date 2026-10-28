@@ -14,6 +14,7 @@ export type CustomToolHandler = (args: Record<string, unknown>, log: Logger) => 
 // sessions. `skipGrouping` disables the end-of-turn group classification for
 // runs that are not real user sessions.
 export interface AgentTurnOptions {
+  signal?: AbortSignal;
   isCronJob?: boolean;
   skipGrouping?: boolean;
   disableWebTools?: boolean;
@@ -22,6 +23,7 @@ export interface AgentTurnOptions {
 }
 
 export interface QueuedMessage {
+  signal?: AbortSignal;
   message: AgentMessage;
   send: AgentSendFn;
   subscription: Subscription;

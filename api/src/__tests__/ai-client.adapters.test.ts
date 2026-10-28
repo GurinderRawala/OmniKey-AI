@@ -13,6 +13,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   openaiCreate: vi.fn(),
+  openaiImage: vi.fn(),
+  geminiImage: vi.fn(),
   responsesCreate: vi.fn(),
   responsesStream: vi.fn(),
   anthropicCreate: vi.fn(),
@@ -25,7 +27,7 @@ vi.mock('openai', () => ({
   default: class MockOpenAI {
     chat = { completions: { create: mocks.openaiCreate } };
     responses = { create: mocks.responsesCreate, stream: mocks.responsesStream };
-    images = { generate: vi.fn() };
+    images = { generate: mocks.openaiImage };
     constructor(_opts: unknown) {}
   },
 }));
@@ -42,7 +44,7 @@ vi.mock('@google/genai', () => ({
     models = {
       generateContent: mocks.geminiGenerate,
       generateContentStream: mocks.geminiGenerateStream,
-      generateImages: vi.fn(),
+      generateImages: mocks.geminiImage,
     };
     constructor(_opts: unknown) {}
   },
@@ -64,6 +66,8 @@ function asAsyncIterable<T>(chunks: T[]): AsyncIterable<T> {
 }
 
 beforeEach(() => {
+  mocks.openaiImage.mockReset();
+  mocks.geminiImage.mockReset();
   mocks.openaiCreate.mockReset();
   mocks.responsesCreate.mockReset();
   mocks.responsesStream.mockReset();
@@ -493,5 +497,74 @@ describe('GeminiAdapter temperature handling', () => {
         }),
       ]),
     );
+  });
+});
+
+describe('completion cancellation', () => {
+  it.each(['openai', 'anthropic', 'gemini', 'nemotron'] as const)(
+    'forwards cancellation to %s and keeps the output budget',
+    async (provider) => {
+      mocks.responsesCreate.mockResolvedValue({ output: [], status: 'completed' });
+      mocks.openaiCreate.mockResolvedValue({
+        choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }],
+      });
+      mocks.anthropicCreate.mockResolvedValue({
+        content: [{ type: 'text', text: 'ok' }],
+        stop_reason: 'end_turn',
+        usage: { input_tokens: 1, output_tokens: 1 },
+      });
+      mocks.geminiGenerate.mockResolvedValue({
+        candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }],
+      });
+      const controller = new AbortController();
+      const client = new AIClient(provider, 'test');
+      await client.complete('test-model', messages, { signal: controller.signal, maxTokens: 2400 });
+      const calls =
+        provider === 'anthropic'
+          ? mocks.anthropicCreate.mock.calls
+          : provider === 'gemini'
+            ? mocks.geminiGenerate.mock.calls
+            : mocks.responsesCreate.mock.calls.length
+              ? mocks.responsesCreate.mock.calls
+              : mocks.openaiCreate.mock.calls;
+      if (provider === 'gemini') {
+        expect(calls[0][0].config.abortSignal).toBe(controller.signal);
+        expect(calls[0][0].config.maxOutputTokens).toBe(2400);
+      } else {
+        expect(calls[0][1].signal).toBe(controller.signal);
+        expect(calls[0][0].max_tokens ?? calls[0][0].max_output_tokens).toBe(2400);
+      }
+    },
+  );
+
+  it('does not downgrade or retry a cancelled Nemotron Responses request', async () => {
+    const controller = new AbortController();
+    const error = new Error('aborted');
+    mocks.responsesCreate.mockImplementation(async () => {
+      controller.abort();
+      throw error;
+    });
+    const client = new AIClient('nemotron', 'test', { nemotronResponsesApiEnabled: true });
+    await expect(client.complete('model', messages, { signal: controller.signal })).rejects.toBe(
+      error,
+    );
+    expect(mocks.openaiCreate).not.toHaveBeenCalled();
+  });
+});
+
+describe('image generation cancellation', () => {
+  it.each(['openai', 'gemini'] as const)('forwards image cancellation to %s', async (provider) => {
+    mocks.openaiImage.mockResolvedValue({ data: [{ b64_json: 'aW1hZ2U=' }] });
+    mocks.geminiImage.mockResolvedValue({
+      generatedImages: [{ image: { imageBytes: 'aW1hZ2U=', mimeType: 'image/png' } }],
+    });
+    const controller = new AbortController();
+    await new AIClient(provider, 'test').generateImage({
+      prompt: 'Test image',
+      signal: controller.signal,
+    });
+    if (provider === 'openai')
+      expect(mocks.openaiImage.mock.calls[0][1].signal).toBe(controller.signal);
+    else expect(mocks.geminiImage.mock.calls[0][0].config.abortSignal).toBe(controller.signal);
   });
 });

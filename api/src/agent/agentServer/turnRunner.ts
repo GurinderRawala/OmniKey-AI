@@ -37,8 +37,11 @@ import {
 } from './steering';
 import { buildShellToolResult } from './terminalOutput';
 import { runToolLoop } from './toolLoop';
+import { ToolProgressGuard } from './toolProgressGuard';
+import { throwIfTurnCancelled } from './turnCancellation';
 
 type InternalAgentTurnOptions = AgentTurnOptions & {
+  progressGuard?: ToolProgressGuard;
   untaggedDepth?: number;
   webFallbackDepth?: number;
   steeringRestartCount?: number;
@@ -70,6 +73,7 @@ async function runAgentTurnInternal(
   log: Logger,
   options?: InternalAgentTurnOptions,
 ): Promise<void> {
+  throwIfTurnCancelled(options?.signal);
   const {
     sessionState: session,
     hasStoredPrompt,
@@ -83,6 +87,9 @@ async function runAgentTurnInternal(
     options?.isCronJob,
     clientMessage.group_name,
   );
+
+  session.signal = options?.signal;
+  throwIfTurnCancelled(session.signal);
 
   // Count this call as one agent iteration.
   session.turns += 1;
@@ -423,6 +430,7 @@ async function runAgentTurnInternal(
         hasStoredPrompt,
         steeringRestartBudget,
         options?.toolHandlers,
+        options?.progressGuard,
       );
 
       for (;;) {
@@ -459,6 +467,7 @@ async function runAgentTurnInternal(
             hasStoredPrompt,
             steeringRestartBudget,
             options?.toolHandlers,
+            options?.progressGuard,
           );
           continue;
         }
@@ -692,6 +701,10 @@ async function runAgentTurnInternal(
       await persistAndSendFailure('The agent returned an empty response. Please try again.');
     }
   } catch (err) {
+    if (session.signal?.aborted) {
+      log.info('Agent turn cancelled after saving completed tool results', { sessionId });
+      return;
+    }
     log.error('Agent LLM call failed', {
       error: {
         message: err instanceof Error ? err.message : String(err),
@@ -732,5 +745,8 @@ export async function runAgentTurn(
   }
   // untaggedDepth always starts at 0 for external callers; it is only threaded
   // through the internal recursive path.
-  return runAgentTurnInternal(sessionId, subscription, clientMessage, send, log, options);
+  return runAgentTurnInternal(sessionId, subscription, clientMessage, send, log, {
+    ...options,
+    progressGuard: new ToolProgressGuard(),
+  });
 }

@@ -3,6 +3,7 @@ import type { PendingShellScript, PendingSteeringMessage, QueuedMessage } from '
 // Per-session queuing so user messages sent during an active turn are processed
 // in order after the current turn completes rather than running concurrently.
 export const activeSessions = new Set<string>();
+export const sessionOwners = new Map<string, AbortSignal>();
 export const sessionQueues = new Map<string, QueuedMessage[]>();
 export const sessionSteeringMessages = new Map<string, PendingSteeringMessage[]>();
 

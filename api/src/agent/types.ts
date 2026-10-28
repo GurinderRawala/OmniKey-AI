@@ -24,6 +24,9 @@ export interface SessionState {
   // Model selected from agent_settings for the active turn. Helpers use this
   // to derive hot-reloaded context and per-message budgets.
   activeModel?: string;
+  // Invocation-local cancellation and summary backoff; never persisted.
+  signal?: AbortSignal;
+  memoryRetryAfterHistoryLength?: number;
   // True when the user explicitly chose this session's group. Locked sessions
   // are never (re)classified — we only ever attach them to the chosen group.
   groupLocked?: boolean;

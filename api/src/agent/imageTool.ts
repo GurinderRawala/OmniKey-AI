@@ -108,9 +108,46 @@ function formatFromMime(mimeType: string | undefined, fallback: ImageFormat): Im
  * @param outputPath - Absolute path to write to.
  * @param imageBuffer - Binary image contents.
  */
-async function writeImageFile(outputPath: string, imageBuffer: Buffer): Promise<void> {
+async function writeImageFile(
+  outputPath: string,
+  imageBuffer: Buffer,
+  signal?: AbortSignal,
+): Promise<void> {
+  const checkCancellation = () => {
+    if (signal?.aborted) throw new Error('Image generation cancelled before saving.');
+  };
   await fs.mkdir(path.dirname(outputPath), { recursive: true });
-  await fs.writeFile(outputPath, imageBuffer);
+  checkCancellation();
+  // Keep an existing destination intact if cancellation interrupts the write.
+  // A sibling file also keeps the final rename on the same filesystem.
+  const destinationMode = await fs.stat(outputPath).then(
+    (stat) => stat.mode & 0o777,
+    (error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return undefined;
+      throw error;
+    },
+  );
+  checkCancellation();
+  const stagedPath = `${outputPath}.${cuid()}.tmp`;
+  // Open exclusively before the cleanup scope so a name collision never
+  // removes somebody else's file. New images stay private by default.
+  const stagedFile = await fs.open(stagedPath, 'wx', 0o600);
+  try {
+    try {
+      checkCancellation();
+      await stagedFile.writeFile(imageBuffer);
+      checkCancellation();
+      if (destinationMode !== undefined) await stagedFile.chmod(destinationMode);
+    } finally {
+      await stagedFile.close();
+    }
+    checkCancellation();
+    await fs.rename(stagedPath, outputPath);
+  } finally {
+    await fs.unlink(stagedPath).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== 'ENOENT') throw error;
+    });
+  }
 }
 
 /**
@@ -127,7 +164,9 @@ async function writeImageFile(outputPath: string, imageBuffer: Buffer): Promise<
 export async function executeImageGenerationTool(
   args: Record<string, unknown>,
   log: typeof logger,
+  signal?: AbortSignal,
 ): Promise<string> {
+  if (signal?.aborted) return 'Error: Image generation cancelled.';
   const prompt = readStringArg(args, 'prompt');
   if (!prompt) {
     return 'Error: prompt parameter is required.';
@@ -152,6 +191,7 @@ export async function executeImageGenerationTool(
 
   try {
     const generated = await aiClient.generateImage({
+      signal,
       prompt,
       format,
       size,
@@ -159,9 +199,10 @@ export async function executeImageGenerationTool(
       background,
     });
 
+    if (signal?.aborted) return 'Error: Image generation cancelled before saving.';
     const actualFormat = formatFromMime(generated.mimeType, format);
     const outputPath = resolveOutputPath(filePathArg, actualFormat);
-    await writeImageFile(outputPath, Buffer.from(generated.imageBase64, 'base64'));
+    await writeImageFile(outputPath, Buffer.from(generated.imageBase64, 'base64'), signal);
 
     log.info('Image generated and saved', {
       provider: generated.provider,

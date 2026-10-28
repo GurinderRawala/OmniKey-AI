@@ -1816,4 +1816,146 @@ describe('agent session persistence checkpoints', () => {
       send.mock.calls.some(([msg]) => String(msg.content).includes('Image tool unavailable.')),
     ).toBe(true);
   });
+  it('cancels a waiting shell, checkpoints every call, and never starts the next script', async () => {
+    const controller = new AbortController();
+    const calls = ['first', 'second'].map((id) => ({
+      id,
+      name: 'shell_script',
+      arguments: { script: `echo ${id}` },
+    }));
+    mocks.complete.mockReset().mockResolvedValue({
+      content: '',
+      finish_reason: 'tool_calls',
+      model: 'test-model',
+      tool_calls: calls,
+      assistantMessage: { role: 'assistant', content: '', tool_calls: calls },
+    });
+    const send = vi.fn();
+    const turn = runAgentTurn(
+      'session-1',
+      { id: 'subscription-1' } as any,
+      { session_id: 'session-1', sender: 'client', content: 'Run checks', platform: 'macos' },
+      send,
+      mocks.log as any,
+      { skipGrouping: true, signal: controller.signal },
+    );
+    await waitForCondition(() => pendingShellScripts.has('session-1'));
+    controller.abort();
+    await turn;
+    expect(pendingShellScripts.has('session-1')).toBe(false);
+    expect(mocks.complete).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls.some(([m]) => String(m.content).includes('echo second'))).toBe(false);
+    const history = parsedHistoryFromCall(historyUpdateCalls().at(-1)!);
+    expect(history.filter((m) => m.role === 'tool').map((m) => m.content)).toEqual([
+      expect.stringContaining('execution outcome is unknown'),
+      expect.stringContaining('cancelled before tool execution'),
+    ]);
+    expect(history.some((m) => m.content.includes('failed to call language model'))).toBe(false);
+  });
+
+  it('ignores a completion delivered after cancellation', async () => {
+    const controller = new AbortController();
+    let resolve!: (result: unknown) => void;
+    mocks.complete.mockReset().mockImplementation(
+      () =>
+        new Promise((r) => {
+          resolve = r;
+        }),
+    );
+    const send = vi.fn();
+    const turn = runAgentTurn(
+      'session-1',
+      { id: 'subscription-1' } as any,
+      { session_id: 'session-1', sender: 'client', content: 'Inspect', platform: 'macos' },
+      send,
+      mocks.log as any,
+      { skipGrouping: true, signal: controller.signal },
+    );
+    await waitForCondition(() => mocks.complete.mock.calls.length === 1);
+    expect(mocks.complete.mock.calls[0][2].signal).toBe(controller.signal);
+    controller.abort();
+    const calls = [{ id: 'late', name: 'web_search', arguments: { query: 'should not execute' } }];
+    resolve({
+      content: '',
+      finish_reason: 'tool_calls',
+      model: 'test-model',
+      tool_calls: calls,
+      assistantMessage: { role: 'assistant', content: '', tool_calls: calls },
+    });
+    await turn;
+    expect(mocks.executeTool).not.toHaveBeenCalled();
+    expect(mocks.complete).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls.some(([m]) => m.is_error)).toBe(false);
+  });
+
+  it('checkpoints repeated results and emits a resumable pause instead of looping forever', async () => {
+    const send = vi.fn();
+    mocks.complete.mockReset().mockImplementation(async () => {
+      const calls = [
+        {
+          id: `repeat-${mocks.complete.mock.calls.length}`,
+          name: 'web_search',
+          arguments: { query: 'unchanged' },
+        },
+      ];
+      return {
+        content: '',
+        finish_reason: 'tool_calls',
+        model: 'test-model',
+        tool_calls: calls,
+        assistantMessage: { role: 'assistant', content: '', tool_calls: calls },
+      };
+    });
+    await runAgentTurn(
+      'session-1',
+      { id: 'subscription-1' } as any,
+      { session_id: 'session-1', sender: 'client', content: 'Investigate', platform: 'macos' },
+      send,
+      mocks.log as any,
+      { skipGrouping: true },
+    );
+    expect(mocks.executeTool).toHaveBeenCalledTimes(9);
+    expect(mocks.complete).toHaveBeenCalledTimes(9);
+    const history = parsedHistoryFromCall(historyUpdateCalls().at(-1)!);
+    expect(history.filter((m) => m.role === 'tool')).toHaveLength(9);
+    expect(send.mock.calls.some(([m]) => String(m.content).includes('evidence already seen'))).toBe(
+      true,
+    );
+  });
+  it('keeps the repetition budget across output-length recovery', async () => {
+    const send = vi.fn();
+    mocks.complete.mockReset().mockImplementation(async () => {
+      const step = mocks.complete.mock.calls.length;
+      if (step === 5)
+        return {
+          content: 'truncated',
+          finish_reason: 'length',
+          model: 'test-model',
+          assistantMessage: { role: 'assistant', content: 'truncated' },
+        };
+      const calls = [
+        { id: `repeat-${step}`, name: 'web_search', arguments: { query: 'unchanged' } },
+      ];
+      return {
+        content: '',
+        finish_reason: 'tool_calls',
+        model: 'test-model',
+        tool_calls: calls,
+        assistantMessage: { role: 'assistant', content: '', tool_calls: calls },
+      };
+    });
+    await runAgentTurn(
+      'session-1',
+      { id: 'subscription-1' } as any,
+      { session_id: 'session-1', sender: 'client', content: 'Investigate', platform: 'macos' },
+      send,
+      mocks.log as any,
+      { skipGrouping: true },
+    );
+    expect(mocks.executeTool).toHaveBeenCalledTimes(9);
+    expect(mocks.complete).toHaveBeenCalledTimes(10);
+    expect(send.mock.calls.some(([m]) => String(m.content).includes('evidence already seen'))).toBe(
+      true,
+    );
+  });
 });

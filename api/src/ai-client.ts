@@ -57,6 +57,7 @@ export interface AICompletionResult {
 }
 
 export interface CompletionOptions {
+  signal?: AbortSignal;
   temperature?: number;
   tools?: AITool[];
   maxTokens?: number;
@@ -70,6 +71,7 @@ export interface CompletionOptions {
  * Normalized options for image generation across supported providers.
  */
 export interface AIImageGenerateOptions {
+  signal?: AbortSignal;
   prompt: string;
   format?: 'png' | 'webp' | 'jpeg';
   size?: '1024x1024' | '1024x1536' | '1536x1024';
@@ -394,14 +396,17 @@ class OpenAIAdapter {
     const oaiMessages = toOpenAIMessages(messages);
     const tools = options.tools?.length ? toOpenAITools(options.tools) : undefined;
 
-    const completion = await this.client.chat.completions.create({
-      model,
-      messages: oaiMessages,
-      tools: tools?.length ? tools : undefined,
-      ...(modelSupportsTemperature(model) ? { temperature: options.temperature ?? 0.2 } : {}),
-      max_tokens: options.maxTokens,
-      ...openAICacheRequestOptions(options),
-    } as any);
+    const completion = await this.client.chat.completions.create(
+      {
+        model,
+        messages: oaiMessages,
+        tools: tools?.length ? tools : undefined,
+        ...(modelSupportsTemperature(model) ? { temperature: options.temperature ?? 0.2 } : {}),
+        max_tokens: options.maxTokens,
+        ...openAICacheRequestOptions(options),
+      } as any,
+      { signal: options.signal },
+    );
 
     const choice = completion.choices[0];
     const msg = choice.message;
@@ -484,14 +489,17 @@ class OpenAIAdapter {
     const quality = options.quality ?? 'medium';
     const background = options.background ?? 'auto';
 
-    const response: any = await this.client.images.generate({
-      model: 'gpt-image-1',
-      prompt: options.prompt,
-      size,
-      quality,
-      background,
-      output_format: format,
-    });
+    const response: any = await this.client.images.generate(
+      {
+        model: 'gpt-image-1',
+        prompt: options.prompt,
+        size,
+        quality,
+        background,
+        output_format: format,
+      },
+      { signal: options.signal },
+    );
 
     const b64 = response?.data?.[0]?.b64_json;
     if (!b64 || typeof b64 !== 'string') {
@@ -523,15 +531,18 @@ class AnthropicAdapter {
     const { system, messages: anthropicMessages } = toAnthropicMessages(messages);
     const tools = options.tools?.length ? toAnthropicTools(options.tools) : undefined;
 
-    const response = await this.client.messages.create({
-      model,
-      max_tokens: options.maxTokens ?? 8192,
-      ...(system ? { system } : {}),
-      messages: anthropicMessages,
-      ...(tools?.length ? { tools } : {}),
-      ...(modelSupportsTemperature(model) ? { temperature: options.temperature ?? 0.2 } : {}),
-      ...(options.enablePromptCache ? { cache_control: { type: 'ephemeral' } } : {}),
-    } as any);
+    const response = await this.client.messages.create(
+      {
+        model,
+        max_tokens: options.maxTokens ?? 8192,
+        ...(system ? { system } : {}),
+        messages: anthropicMessages,
+        ...(tools?.length ? { tools } : {}),
+        ...(modelSupportsTemperature(model) ? { temperature: options.temperature ?? 0.2 } : {}),
+        ...(options.enablePromptCache ? { cache_control: { type: 'ephemeral' } } : {}),
+      } as any,
+      { signal: options.signal },
+    );
 
     const textContent = response.content
       .filter((b) => b.type === 'text')
@@ -879,15 +890,18 @@ class OpenAIResponsesAdapter {
     const { instructions, input } = toResponsesInput(messages);
     const tools = options.tools?.length ? toResponsesTools(options.tools) : [];
 
-    const response = await (this.client.responses as any).create({
-      model,
-      ...(instructions ? { instructions } : {}),
-      input,
-      tools,
-      ...(modelSupportsTemperature(model) ? { temperature: options.temperature ?? 0.2 } : {}),
-      ...(options.maxTokens ? { max_output_tokens: options.maxTokens } : {}),
-      ...openAICacheRequestOptions(options),
-    });
+    const response = await (this.client.responses as any).create(
+      {
+        model,
+        ...(instructions ? { instructions } : {}),
+        input,
+        tools,
+        ...(modelSupportsTemperature(model) ? { temperature: options.temperature ?? 0.2 } : {}),
+        ...(options.maxTokens ? { max_output_tokens: options.maxTokens } : {}),
+        ...openAICacheRequestOptions(options),
+      },
+      { signal: options.signal },
+    );
     return fromResponsesOutput(response, model);
   }
 
@@ -970,16 +984,20 @@ class NemotronAdapter {
         const { instructions, input } = toResponsesInput(messages);
         const tools = options.tools?.length ? toResponsesTools(options.tools) : [];
 
-        const response = await (this.client.responses as any).create({
-          model,
-          ...(instructions ? { instructions } : {}),
-          input,
-          tools,
-          ...(modelSupportsTemperature(model) ? { temperature: options.temperature ?? 0.2 } : {}),
-          ...(options.maxTokens ? { max_output_tokens: options.maxTokens } : {}),
-        });
+        const response = await (this.client.responses as any).create(
+          {
+            model,
+            ...(instructions ? { instructions } : {}),
+            input,
+            tools,
+            ...(modelSupportsTemperature(model) ? { temperature: options.temperature ?? 0.2 } : {}),
+            ...(options.maxTokens ? { max_output_tokens: options.maxTokens } : {}),
+          },
+          { signal: options.signal },
+        );
         return fromResponsesOutput(response, model);
-      } catch {
+      } catch (error) {
+        if (options.signal?.aborted) throw error;
         this.useResponsesApi = false;
       }
     }
@@ -987,13 +1005,16 @@ class NemotronAdapter {
     const oaiMessages = toOpenAIMessages(messages);
     const tools = options.tools?.length ? toOpenAITools(options.tools) : undefined;
 
-    const completion = await this.client.chat.completions.create({
-      model,
-      messages: oaiMessages,
-      tools: tools?.length ? tools : undefined,
-      ...(modelSupportsTemperature(model) ? { temperature: options.temperature ?? 0.2 } : {}),
-      max_tokens: options.maxTokens,
-    } as any);
+    const completion = await this.client.chat.completions.create(
+      {
+        model,
+        messages: oaiMessages,
+        tools: tools?.length ? tools : undefined,
+        ...(modelSupportsTemperature(model) ? { temperature: options.temperature ?? 0.2 } : {}),
+        max_tokens: options.maxTokens,
+      } as any,
+      { signal: options.signal },
+    );
 
     const choice = completion.choices[0];
     const msg = choice.message;
@@ -1147,6 +1168,8 @@ class GeminiAdapter {
       model,
       contents,
       config: {
+        abortSignal: options.signal,
+        maxOutputTokens: options.maxTokens,
         ...(systemInstruction ? { systemInstruction } : {}),
         ...(tools?.length ? { tools } : {}),
         ...(modelSupportsTemperature(model) ? { temperature: options.temperature ?? 0.2 } : {}),
@@ -1248,6 +1271,7 @@ class GeminiAdapter {
       model: 'imagen-4.0-generate-001',
       prompt: options.prompt,
       config: {
+        abortSignal: options.signal,
         numberOfImages: 1,
         aspectRatio,
         outputMimeType,

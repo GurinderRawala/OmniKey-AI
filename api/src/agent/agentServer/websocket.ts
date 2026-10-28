@@ -5,13 +5,8 @@ import { logger } from '../../logger';
 import { createLazyAuthContext } from '../agentAuth';
 import type { AgentMessage, AgentSendFn } from '../types';
 import type { Logger } from 'winston';
-import { activeSessions, pendingShellScripts, sessionQueues } from './runtimeState';
-import {
-  clearSteeringMessages,
-  enqueueSteeringMessage,
-  getPendingSteeringMessageCount,
-  takePendingSteeringMessages,
-} from './steering';
+import { activeSessions, pendingShellScripts, sessionQueues, sessionOwners } from './runtimeState';
+import { enqueueSteeringMessage, takePendingSteeringMessages } from './steering';
 import { buildShellToolResult } from './terminalOutput';
 import { runAgentTurn } from './turnRunner';
 
@@ -46,19 +41,28 @@ export function rejectPendingSteeringAtTurnEnd(
 }
 
 async function processNextInQueue(sessionId: string): Promise<void> {
+  if (activeSessions.has(sessionId)) return;
   const queue = sessionQueues.get(sessionId);
   if (!queue?.length) return;
 
   const next = queue.shift()!;
   if (!queue.length) sessionQueues.delete(sessionId);
 
+  if (next.signal?.aborted) {
+    void processNextInQueue(sessionId);
+    return;
+  }
   activeSessions.add(sessionId);
+  if (next.signal) sessionOwners.set(sessionId, next.signal);
   try {
-    await runAgentTurn(sessionId, next.subscription, next.message, next.send, next.log);
+    await runAgentTurn(sessionId, next.subscription, next.message, next.send, next.log, {
+      signal: next.signal,
+    });
   } catch (err) {
     next.log.error('Queued agent turn failed', { sessionId, error: err });
   } finally {
     rejectPendingSteeringAtTurnEnd(sessionId, next.send, next.log);
+    sessionOwners.delete(sessionId);
     activeSessions.delete(sessionId);
     void processNextInQueue(sessionId);
   }
@@ -68,6 +72,7 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
   const wss = new WebSocketServer({ server, path: '/ws/omni-agent' });
 
   wss.on('connection', (ws: WebSocket, req) => {
+    const connection = new AbortController();
     const traceId = cuid();
     const log = logger.child({ traceId });
 
@@ -79,6 +84,7 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
     const { ensureAuthenticated, getSubscription } = createLazyAuthContext(authHeader, log);
 
     const send: AgentSendFn = (msg) => {
+      if (ws.readyState !== WebSocket.OPEN) return;
       try {
         ws.send(JSON.stringify(msg));
       } catch (err) {
@@ -93,6 +99,7 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
       void (async () => {
         const ok = await ensureAuthenticated();
         const subscription = getSubscription();
+        if (connection.signal.aborted) return;
 
         if (!ok || !subscription) {
           if (ws.readyState === WebSocket.OPEN) {
@@ -131,14 +138,14 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
           isError: message.is_error,
         });
 
-        // Terminal feedback (shell output / errors) and internal recursive calls
-        // always bypass the queue — they are part of the currently active turn.
+        // Only terminal feedback can resolve work within an active turn. All
+        // other wire messages share the session queue, including web callbacks.
         const isTerminalFeedback = Boolean(message.is_terminal_output) || Boolean(message.is_error);
         const isInternalCall = Boolean(message.is_web_call);
         const isSteeringMessage = Boolean(message.is_steering);
 
         if (isSteeringMessage && !isTerminalFeedback && !isInternalCall) {
-          if (!activeSessions.has(sessionId)) {
+          if (!activeSessions.has(sessionId) || sessionOwners.get(sessionId)?.aborted) {
             send({
               session_id: sessionId,
               sender: 'agent',
@@ -193,11 +200,11 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
           return;
         }
 
-        if (!isTerminalFeedback && !isInternalCall && activeSessions.has(sessionId)) {
+        if (!isTerminalFeedback && activeSessions.has(sessionId)) {
           // A turn is already running for this session. Queue the message so it
           // is processed in order once the current turn completes.
           const queue = sessionQueues.get(sessionId) ?? [];
-          queue.push({ message, send, subscription, log });
+          queue.push({ message, send, subscription, log, signal: connection.signal });
           sessionQueues.set(sessionId, queue);
           log.info('Queued user message for active session', {
             sessionId,
@@ -209,6 +216,16 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
         // If the tool loop is awaiting shell_script terminal output, resolve
         // the pending promise instead of starting a new agent turn.
         const pendingShell = pendingShellScripts.get(sessionId);
+        if (
+          isTerminalFeedback &&
+          activeSessions.has(sessionId) &&
+          sessionOwners.get(sessionId) !== connection.signal
+        ) {
+          log.warn('Ignored terminal feedback from a connection that does not own the turn', {
+            sessionId,
+          });
+          return;
+        }
         if (pendingShell && isTerminalFeedback) {
           pendingShellScripts.delete(sessionId);
           const content = buildShellToolResult(
@@ -226,16 +243,12 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
           return;
         }
 
-        activeSessions.add(sessionId);
-        try {
-          await runAgentTurn(sessionId, subscription, message, send, log);
-        } catch (err) {
-          log.error('Agent turn failed', { sessionId, error: err });
-        } finally {
-          rejectPendingSteeringAtTurnEnd(sessionId, send, log);
-          activeSessions.delete(sessionId);
-          void processNextInQueue(sessionId);
-        }
+        // Late feedback must not start another turn while its owner is running.
+        if (isTerminalFeedback && activeSessions.has(sessionId)) return;
+        const queue = sessionQueues.get(sessionId) ?? [];
+        queue.push({ message, send, subscription, log, signal: connection.signal });
+        sessionQueues.set(sessionId, queue);
+        await processNextInQueue(sessionId);
       })();
     });
 
@@ -248,45 +261,14 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
         hadAuthenticatedSubscription: Boolean(getSubscription()),
       });
 
-      // When the client disconnects, resolve any shell_script tool call that
-      // is suspended waiting for terminal output — otherwise runToolLoop hangs
-      // indefinitely. Deliver a COMMAND ERROR so the model can conclude gracefully.
+      // Cancellation settles an owned shell wait and aborts provider requests.
+      // Keep the active lock until the turn has saved its checkpoint and exited;
+      // otherwise a reconnect can race an old turn's writes.
+      connection.abort();
       for (const sid of connectionSessionIds) {
-        const pendingShell = pendingShellScripts.get(sid);
-        if (pendingShell) {
-          pendingShellScripts.delete(sid);
-          pendingShell.resolve(
-            buildShellToolResult(
-              'WebSocket connection closed before script output was received.',
-              true,
-              pendingShell.filterKeywords,
-            ),
-          );
-          log.info('Resolved pending shell_script with disconnect error', { sessionId: sid });
-        }
-      }
-
-      // A turn suspended inside runToolLoop waiting for shell_script terminal
-      // output leaves the session in activeSessions until that turn unwinds,
-      // which would make follow-up messages queue forever. Clean them up so a
-      // reconnecting client can resume without being stuck.
-      for (const sid of connectionSessionIds) {
-        const wasActive = activeSessions.has(sid);
-        const queueLength = sessionQueues.get(sid)?.length ?? 0;
-        const steeringLength = getPendingSteeringMessageCount(sid);
-        const drainedSteeringLength = wasActive ? 0 : clearSteeringMessages(sid);
-
-        if (wasActive || queueLength > 0 || steeringLength > 0) {
-          activeSessions.delete(sid);
-          sessionQueues.delete(sid);
-          log.info('Cleaned up stuck session state after WebSocket disconnect', {
-            sessionId: sid,
-            wasActive,
-            drainedQueueLength: queueLength,
-            drainedSteeringLength,
-            retainedSteeringLength: wasActive ? steeringLength : 0,
-          });
-        }
+        const queue = sessionQueues.get(sid)?.filter((item) => item.signal !== connection.signal);
+        if (queue?.length) sessionQueues.set(sid, queue);
+        else sessionQueues.delete(sid);
       }
 
       // Per-session summaries and group descriptions are (re)generated by the
