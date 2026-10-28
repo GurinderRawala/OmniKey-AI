@@ -127,7 +127,9 @@ async function writeImageFile(outputPath: string, imageBuffer: Buffer): Promise<
 export async function executeImageGenerationTool(
   args: Record<string, unknown>,
   log: typeof logger,
+  signal?: AbortSignal,
 ): Promise<string> {
+  if (signal?.aborted) return 'Error: Image generation cancelled.';
   const prompt = readStringArg(args, 'prompt');
   if (!prompt) {
     return 'Error: prompt parameter is required.';
@@ -152,6 +154,7 @@ export async function executeImageGenerationTool(
 
   try {
     const generated = await aiClient.generateImage({
+      signal,
       prompt,
       format,
       size,
@@ -159,6 +162,7 @@ export async function executeImageGenerationTool(
       background,
     });
 
+    if (signal?.aborted) return 'Error: Image generation cancelled before saving.';
     const actualFormat = formatFromMime(generated.mimeType, format);
     const outputPath = resolveOutputPath(filePathArg, actualFormat);
     await writeImageFile(outputPath, Buffer.from(generated.imageBase64, 'base64'));

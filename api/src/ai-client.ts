@@ -71,6 +71,7 @@ export interface CompletionOptions {
  * Normalized options for image generation across supported providers.
  */
 export interface AIImageGenerateOptions {
+  signal?: AbortSignal;
   prompt: string;
   format?: 'png' | 'webp' | 'jpeg';
   size?: '1024x1024' | '1024x1536' | '1536x1024';
@@ -488,14 +489,17 @@ class OpenAIAdapter {
     const quality = options.quality ?? 'medium';
     const background = options.background ?? 'auto';
 
-    const response: any = await this.client.images.generate({
-      model: 'gpt-image-1',
-      prompt: options.prompt,
-      size,
-      quality,
-      background,
-      output_format: format,
-    });
+    const response: any = await this.client.images.generate(
+      {
+        model: 'gpt-image-1',
+        prompt: options.prompt,
+        size,
+        quality,
+        background,
+        output_format: format,
+      },
+      { signal: options.signal },
+    );
 
     const b64 = response?.data?.[0]?.b64_json;
     if (!b64 || typeof b64 !== 'string') {
@@ -1267,6 +1271,7 @@ class GeminiAdapter {
       model: 'imagen-4.0-generate-001',
       prompt: options.prompt,
       config: {
+        abortSignal: options.signal,
         numberOfImages: 1,
         aspectRatio,
         outputMimeType,

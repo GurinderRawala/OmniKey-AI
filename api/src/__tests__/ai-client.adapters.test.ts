@@ -13,6 +13,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   openaiCreate: vi.fn(),
+  openaiImage: vi.fn(),
+  geminiImage: vi.fn(),
   responsesCreate: vi.fn(),
   responsesStream: vi.fn(),
   anthropicCreate: vi.fn(),
@@ -25,7 +27,7 @@ vi.mock('openai', () => ({
   default: class MockOpenAI {
     chat = { completions: { create: mocks.openaiCreate } };
     responses = { create: mocks.responsesCreate, stream: mocks.responsesStream };
-    images = { generate: vi.fn() };
+    images = { generate: mocks.openaiImage };
     constructor(_opts: unknown) {}
   },
 }));
@@ -42,7 +44,7 @@ vi.mock('@google/genai', () => ({
     models = {
       generateContent: mocks.geminiGenerate,
       generateContentStream: mocks.geminiGenerateStream,
-      generateImages: vi.fn(),
+      generateImages: mocks.geminiImage,
     };
     constructor(_opts: unknown) {}
   },
@@ -64,6 +66,8 @@ function asAsyncIterable<T>(chunks: T[]): AsyncIterable<T> {
 }
 
 beforeEach(() => {
+  mocks.openaiImage.mockReset();
+  mocks.geminiImage.mockReset();
   mocks.openaiCreate.mockReset();
   mocks.responsesCreate.mockReset();
   mocks.responsesStream.mockReset();
@@ -545,5 +549,22 @@ describe('completion cancellation', () => {
       error,
     );
     expect(mocks.openaiCreate).not.toHaveBeenCalled();
+  });
+});
+
+describe('image generation cancellation', () => {
+  it.each(['openai', 'gemini'] as const)('forwards image cancellation to %s', async (provider) => {
+    mocks.openaiImage.mockResolvedValue({ data: [{ b64_json: 'aW1hZ2U=' }] });
+    mocks.geminiImage.mockResolvedValue({
+      generatedImages: [{ image: { imageBytes: 'aW1hZ2U=', mimeType: 'image/png' } }],
+    });
+    const controller = new AbortController();
+    await new AIClient(provider, 'test').generateImage({
+      prompt: 'Test image',
+      signal: controller.signal,
+    });
+    if (provider === 'openai')
+      expect(mocks.openaiImage.mock.calls[0][1].signal).toBe(controller.signal);
+    else expect(mocks.geminiImage.mock.calls[0][0].config.abortSignal).toBe(controller.signal);
   });
 });

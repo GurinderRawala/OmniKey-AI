@@ -337,7 +337,7 @@ export async function runToolLoop(
           activity_phase: 'started',
         });
 
-        const toolResult = await executeImageGenerationTool(args, log);
+        const toolResult = await executeImageGenerationTool(args, log, session.signal);
         const imageResult = imageActivityResult(toolResult);
         log.info('Tool call completed', {
           sessionId,
