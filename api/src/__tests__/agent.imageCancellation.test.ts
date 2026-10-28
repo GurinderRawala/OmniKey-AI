@@ -4,7 +4,11 @@ const mocks = vi.hoisted(() => ({
   mkdir: vi.fn(),
   writeFile: vi.fn(),
   rename: vi.fn(),
-  rm: vi.fn(),
+  unlink: vi.fn(),
+  stat: vi.fn(),
+  open: vi.fn(),
+  chmod: vi.fn(),
+  close: vi.fn(),
   log: { info: vi.fn(), warn: vi.fn() },
 }));
 vi.mock('../ai-client', () => ({
@@ -12,11 +16,26 @@ vi.mock('../ai-client', () => ({
 }));
 vi.mock('../logger', () => ({ logger: mocks.log }));
 vi.mock('fs/promises', () => ({
-  default: { mkdir: mocks.mkdir, writeFile: mocks.writeFile, rename: mocks.rename, rm: mocks.rm },
+  default: {
+    mkdir: mocks.mkdir,
+    stat: mocks.stat,
+    open: mocks.open,
+    rename: mocks.rename,
+    unlink: mocks.unlink,
+  },
 }));
 import { executeImageGenerationTool } from '../agent/imageTool';
 
-beforeEach(() => vi.resetAllMocks());
+beforeEach(() => {
+  vi.resetAllMocks();
+  mocks.unlink.mockResolvedValue(undefined);
+  mocks.stat.mockRejectedValue(Object.assign(new Error('not found'), { code: 'ENOENT' }));
+  mocks.open.mockResolvedValue({
+    writeFile: mocks.writeFile,
+    chmod: mocks.chmod,
+    close: mocks.close,
+  });
+});
 describe('image tool cancellation', () => {
   it('does not start a cancelled image request', async () => {
     const controller = new AbortController();
@@ -87,11 +106,11 @@ describe('image tool cancellation', () => {
       controller.signal,
     );
     expect(result).toContain('cancelled');
-    const staged = mocks.writeFile.mock.calls[0][0];
+    const staged = mocks.open.mock.calls[0][0];
     expect(staged).toMatch(/^\/tmp\/existing\.png\..+\.tmp$/);
-    expect(mocks.writeFile.mock.calls[0][2]).toEqual({ signal: controller.signal, flag: 'wx' });
+    expect(mocks.open).toHaveBeenCalledWith(staged, 'wx', 0o600);
     expect(mocks.rename).not.toHaveBeenCalled();
-    expect(mocks.rm).toHaveBeenCalledWith(staged, { force: true });
+    expect(mocks.unlink).toHaveBeenCalledWith(staged);
   });
   it('atomically installs a completed image and cleans the staging path', async () => {
     const controller = new AbortController();
@@ -106,8 +125,59 @@ describe('image tool cancellation', () => {
       controller.signal,
     );
     expect(result).toContain('Saved to: /tmp/existing.png');
-    const staged = mocks.writeFile.mock.calls[0][0];
+    const staged = mocks.open.mock.calls[0][0];
     expect(mocks.rename).toHaveBeenCalledWith(staged, '/tmp/existing.png');
-    expect(mocks.rm).toHaveBeenCalledWith(staged, { force: true });
+    expect(mocks.unlink).toHaveBeenCalledWith(staged);
+  });
+  it('preserves restricted destination permissions when installing an image', async () => {
+    mocks.stat.mockResolvedValue({ mode: 0o100600 });
+    mocks.generate.mockResolvedValue({
+      imageBase64: 'aW1hZ2U=',
+      mimeType: 'image/png',
+      provider: 'openai',
+    });
+    const result = await executeImageGenerationTool(
+      { prompt: 'Test', file_path: '/tmp/private.png' },
+      mocks.log as any,
+    );
+    expect(result).toContain('Saved to: /tmp/private.png');
+    expect(mocks.open).toHaveBeenCalledWith(expect.any(String), 'wx', 0o600);
+    expect(mocks.chmod).toHaveBeenCalledWith(0o600);
+    expect(mocks.close).toHaveBeenCalledTimes(1);
+    expect(mocks.chmod.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.rename.mock.invocationCallOrder[0],
+    );
+  });
+  it('ignores an already absent staging file after a successful rename', async () => {
+    mocks.generate.mockResolvedValue({
+      imageBase64: 'aW1hZ2U=',
+      mimeType: 'image/png',
+      provider: 'openai',
+    });
+    mocks.unlink.mockRejectedValue(Object.assign(new Error('not found'), { code: 'ENOENT' }));
+    expect(
+      await executeImageGenerationTool(
+        { prompt: 'Test', file_path: '/tmp/new.png' },
+        mocks.log as any,
+      ),
+    ).toContain('Saved to: /tmp/new.png');
+    expect(mocks.open).toHaveBeenCalledWith(expect.any(String), 'wx', 0o600);
+    expect(mocks.chmod).not.toHaveBeenCalled();
+  });
+  it('never removes a colliding staging file owned by another operation', async () => {
+    mocks.generate.mockResolvedValue({
+      imageBase64: 'aW1hZ2U=',
+      mimeType: 'image/png',
+      provider: 'openai',
+    });
+    mocks.open.mockRejectedValue(Object.assign(new Error('already exists'), { code: 'EEXIST' }));
+    expect(
+      await executeImageGenerationTool(
+        { prompt: 'Test', file_path: '/tmp/new.png' },
+        mocks.log as any,
+      ),
+    ).toContain('already exists');
+    expect(mocks.unlink).not.toHaveBeenCalled();
+    expect(mocks.writeFile).not.toHaveBeenCalled();
   });
 });

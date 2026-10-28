@@ -120,13 +120,33 @@ async function writeImageFile(
   checkCancellation();
   // Keep an existing destination intact if cancellation interrupts the write.
   // A sibling file also keeps the final rename on the same filesystem.
+  const destinationMode = await fs.stat(outputPath).then(
+    (stat) => stat.mode & 0o777,
+    (error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return undefined;
+      throw error;
+    },
+  );
+  checkCancellation();
   const stagedPath = `${outputPath}.${cuid()}.tmp`;
+  // Open exclusively before the cleanup scope so a name collision never
+  // removes somebody else's file. New images stay private by default.
+  const stagedFile = await fs.open(stagedPath, 'wx', 0o600);
   try {
-    await fs.writeFile(stagedPath, imageBuffer, { signal, flag: 'wx' });
+    try {
+      checkCancellation();
+      await stagedFile.writeFile(imageBuffer);
+      checkCancellation();
+      if (destinationMode !== undefined) await stagedFile.chmod(destinationMode);
+    } finally {
+      await stagedFile.close();
+    }
     checkCancellation();
     await fs.rename(stagedPath, outputPath);
   } finally {
-    await fs.rm(stagedPath, { force: true });
+    await fs.unlink(stagedPath).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== 'ENOENT') throw error;
+    });
   }
 }
 
