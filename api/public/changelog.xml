@@ -10,7 +10,7 @@
       <link>https://omnikeyai.ca/changelog#v1.8.13</link>
       <guid isPermaLink="false">omnikey-v1.8.13</guid>
       <pubDate>Wed, 28 Oct 2026 00:00:00 +0000</pubDate>
-      <description><![CDATA[<ul><li>Preserve task intent and bound stalled turns</li></ul>]]></description>
+      <description><![CDATA[<ul><li>Prevent reinspection loops and release v1.8.13 (#47)</li></ul>]]></description>
     </item>
     <item>
       <title>OmniKey v1.8.12</title>
