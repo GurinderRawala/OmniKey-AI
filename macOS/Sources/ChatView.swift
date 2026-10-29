@@ -1572,8 +1572,8 @@ struct ChatConversationView: View {
     @ObservedObject var model: ChatModel
     var onToggleSidebar: () -> Void
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var isNearConversationBottom = true
+    @State private var hasContentBelow = false
+    @State private var jumpToLatestRequest = 0
 
     /// The "landing" layout — Codex-style centered composer with
     /// quick-access tiles — is shown for a brand-new chat (no active
@@ -1631,239 +1631,81 @@ struct ChatConversationView: View {
 
     @ViewBuilder
     private var conversationContent: some View {
-        // Switching from `LazyVStack` to `VStack` here is intentional. History
-        // arrives in bounded pages, so eager rendering remains predictable and
-        // fixes two
-        // bugs in the previous implementation:
-        //   1. With the lazy stack nested in a centred 980-pt frame inside
-        //      a ScrollView, SwiftUI sometimes failed to materialize rows
-        //      until the user scrolled, leaving the view blank.
-        //   2. `proxy.scrollTo("bottom")` ran *before* lazy rows had been
-        //      laid out, so the animated scroll-on-load fired against
-        //      stale geometry and produced a jarring jump.
-        //
-        // We also drop the `withAnimation { proxy.scrollTo }` cascade and
-        // rely on `defaultScrollAnchor(.bottom)`. The scroll view sticks
-        // to the bottom as new content streams in, and lands at the
-        // bottom immediately when an existing chat is opened — no
-        // animated jump, no flash of "top-then-jump-to-bottom".
-        ScrollViewReader { proxy in
-            ScrollView {
-                VStack(spacing: 0) {
-                    if model.messages.isEmpty, !model.isLoadingSessionHistory {
-                        ChatEmptyStateView()
-                    }
-                    if (model.hasMoreHistory || model.isLoadingOlderHistory || model.olderHistoryError != nil),
-                       !model.messages.isEmpty
-                    {
-                        ChatHistoryTopLoader(
-                            visibleCount: model.messages.count,
-                            isLoading: model.isLoadingOlderHistory,
-                            error: model.olderHistoryError,
-                            action: model.loadOlderMessages
-                        )
-                            .padding(.vertical, 8)
-                    }
-                    ForEach(Array(model.messages.enumerated()), id: \.element.id) { index, message in
-                        ChatMessageView(
-                            message: message,
-                            isStreaming: model.isRunning && message.id == model.messages.last?.id
-                        )
-                        // `.equatable()` lets SwiftUI short-circuit body
-                        // evaluation for messages whose content + streaming
-                        // state are unchanged. This avoids re-parsing markdown
-                        // and re-laying out historical rows on every token
-                        // streamed into the current turn.
-                        .equatable()
-                        .id(message.id)
-                        .padding(.top, index == 0 ? 8 : 18)
-                        .padding(.bottom, index == model.messages.count - 1 ? 8 : 0)
-                    }
-                    Color.clear.frame(height: 1).id("bottom")
+        let readingAnchors = ChatReadingIdentity.anchors(for: model.messages)
+        ScrollView {
+            VStack(spacing: 0) {
+                if model.messages.isEmpty, !model.isLoadingSessionHistory {
+                    ChatEmptyStateView()
                 }
-                .padding(.horizontal, 32)
-                .padding(.top, 12)
-                .padding(.bottom, 16)
-                .frame(maxWidth: 820, alignment: .leading)
-                .frame(maxWidth: .infinity, alignment: .center)
+                if (model.hasMoreHistory || model.isLoadingOlderHistory || model.olderHistoryError != nil),
+                   !model.messages.isEmpty
+                {
+                    ChatHistoryTopLoader(
+                        visibleCount: model.messages.count,
+                        isLoading: model.isLoadingOlderHistory,
+                        error: model.olderHistoryError,
+                        action: model.loadOlderMessages
+                    )
+                        .padding(.vertical, 8)
+                }
+                ForEach(Array(model.messages.enumerated()), id: \.element.id) { index, message in
+                    ChatMessageView(
+                        message: message,
+                        isStreaming: model.isRunning && message.id == model.messages.last?.id
+                    )
+                    // `.equatable()` lets SwiftUI short-circuit body
+                    // evaluation for messages whose content + streaming
+                    // state are unchanged. This avoids re-parsing markdown
+                    // and re-laying out historical rows on every token
+                    // streamed into the current turn.
+                    .equatable()
+                    .id(message.id)
+                    .background(ChatReadingAnchor(id: readingAnchors[message.id] ?? message.id))
+                    .padding(.top, index == 0 ? 8 : 18)
+                    .padding(.bottom, index == model.messages.count - 1 ? 8 : 0)
+                }
+                Color.clear.frame(height: 1).id("bottom")
             }
+            .padding(.horizontal, 32)
+            .padding(.top, 12)
+            .padding(.bottom, 16)
+            .frame(maxWidth: 820, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .center)
             .background(
-                ConversationScrollPositionObserver { nearBottom, nearTop in
-                    isNearConversationBottom = nearBottom
-                    if nearTop { model.loadOlderMessages() }
-                }
-            )
-            .defaultScrollAnchor(.bottom)
-            .onChange(of: model.activeSessionId) { previousSessionID, sessionID in
-                guard
-                    ChatSessionScrollPolicy.shouldResetForSessionChange(
-                        previousSessionID: previousSessionID,
-                        sessionID: sessionID
-                    )
-                else { return }
-                isNearConversationBottom = true
-                scrollToConversationBottom(proxy)
-            }
-            .onChange(of: model.isLoadingSessionHistory) { wasLoading, isLoading in
-                guard
-                    ChatSessionScrollPolicy.shouldResetAfterHydration(
-                        wasLoading: wasLoading,
-                        isLoading: isLoading,
-                        sessionID: model.activeSessionId
-                    )
-                else { return }
-                isNearConversationBottom = true
-                scrollToConversationBottom(proxy)
-            }
-            // Only animate scroll-to-bottom for *live* turn activity. New
-            // assistant blocks and the user's own sends should glide into
-            // view, but opening an existing chat (where messages.count
-            // jumps from 0 to N in a single hydration step) must not —
-            // that's the "auto-scroll disrupts loading" bug. The
-            // `isRunning` guard keeps the animation scoped to the
-            // active turn.
-            .onChange(of: model.messages.last?.blocks.count ?? 0) { _, _ in
-                guard
-                    ChatAutoScrollPolicy.shouldFollow(
-                        wasNearBottom: isNearConversationBottom,
-                        isLiveUpdate: model.isRunning
-                    )
-                else { return }
-                followLiveScroll(proxy)
-            }
-            .onChange(of: model.messages.count) { oldCount, newCount in
-                // Animate when the user adds a turn (count increments by
-                // 1 or 2 during an active run). Skip the initial hydration
-                // jump from 0 → N, which is handled by
-                // `defaultScrollAnchor(.bottom)`.
-                guard newCount > oldCount,
-                    oldCount > 0,
-                    model.historyPrependAnchorID == nil,
-                    ChatAutoScrollPolicy.shouldFollow(
-                        wasNearBottom: isNearConversationBottom,
-                        isLiveUpdate: model.isRunning
-                    )
-                else { return }
-                followLiveScroll(proxy)
-            }
-            .onChange(of: model.historyPrependAnchorID) { _, anchor in
-                guard let anchor else { return }
-                DispatchQueue.main.async {
-                    var transaction = Transaction()
-                    transaction.animation = nil
-                    withTransaction(transaction) {
-                        proxy.scrollTo(anchor, anchor: .top)
+                ChatReadingViewport(
+                    session: model.activeSessionId ?? "__pending_new__",
+                    ready: !model.isLoadingSessionHistory && !model.isLoadingOlderHistory,
+                    revision: model.messages.reduce(0) { $0 + $1.blocks.count },
+                    restorationPaginationPaused: model.olderHistoryError != nil,
+                    jumpRequest: jumpToLatestRequest,
+                    store: .shared,
+                    onPosition: { below in
+                        if hasContentBelow != below { hasContentBelow = below }
+                    },
+                    onMissingAnchor: {
+                        guard model.hasMoreHistory else { return false }
+                        model.loadOlderMessages()
+                        return true
                     }
-                    model.clearHistoryPrependAnchor()
-                }
-            }
-        }
-    }
-
-    private func scrollToConversationBottom(_ proxy: ScrollViewProxy) {
-        // Wait one main-loop turn so cached, hydrated, and background-running
-        // transcripts have installed their rows. Suppressing animation prevents
-        // the previous session's retained offset from visibly sweeping downward.
-        DispatchQueue.main.async {
-            var transaction = Transaction()
-            transaction.animation = nil
-            withTransaction(transaction) {
-                proxy.scrollTo("bottom", anchor: .bottom)
-            }
-        }
-    }
-
-    private func followLiveScroll(_ proxy: ScrollViewProxy) {
-        if ChatAutoScrollPolicy.shouldAnimate(reduceMotion: reduceMotion) {
-            withAnimation(.easeOut(duration: 0.2)) {
-                proxy.scrollTo("bottom", anchor: .bottom)
-            }
-        } else {
-            proxy.scrollTo("bottom", anchor: .bottom)
-        }
-    }
-}
-
-/// Reports whether the user is currently close enough to the end of the
-/// transcript to follow streaming updates. It observes user scrolling only;
-/// content growth therefore cannot flip the flag to false before the update's
-/// `scrollTo` decision is made.
-@MainActor
-private struct ConversationScrollPositionObserver: NSViewRepresentable {
-    let onChange: (Bool, Bool) -> Void
-
-    func makeCoordinator() -> Coordinator { Coordinator(onChange: onChange) }
-
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView(frame: .zero)
-        DispatchQueue.main.async { context.coordinator.attach(from: view) }
-        return view
-    }
-
-    func updateNSView(_ view: NSView, context: Context) {
-        context.coordinator.onChange = onChange
-        DispatchQueue.main.async { context.coordinator.attach(from: view) }
-    }
-
-    @MainActor
-    final class Coordinator: NSObject {
-        var onChange: (Bool, Bool) -> Void
-        private weak var scrollView: NSScrollView?
-
-        init(onChange: @escaping (Bool, Bool) -> Void) {
-            self.onChange = onChange
-            super.init()
-        }
-
-        deinit {
-            NotificationCenter.default.removeObserver(self)
-        }
-
-        func attach(from view: NSView) {
-            guard let candidate = enclosingScrollView(from: view) else { return }
-            if candidate === scrollView {
-                publishPosition()
-                return
-            }
-            NotificationCenter.default.removeObserver(self)
-            scrollView = candidate
-            candidate.contentView.postsBoundsChangedNotifications = true
-            NotificationCenter.default.addObserver(
-                self,
-                selector: #selector(scrollBoundsDidChange),
-                name: NSView.boundsDidChangeNotification,
-                object: candidate.contentView
-            )
-            publishPosition()
-        }
-
-        @objc private func scrollBoundsDidChange(_ notification: Notification) {
-            publishPosition()
-        }
-
-        private func enclosingScrollView(from view: NSView) -> NSScrollView? {
-            var ancestor: NSView? = view
-            while let current = ancestor {
-                if let scrollView = current as? NSScrollView { return scrollView }
-                if let enclosing = current.enclosingScrollView { return enclosing }
-                ancestor = current.superview
-            }
-            return nil
-        }
-
-        private func publishPosition() {
-            guard let scrollView, let documentView = scrollView.documentView else { return }
-            let visibleBottom = scrollView.contentView.bounds.maxY
-            let contentBottom = documentView.bounds.maxY
-            onChange(
-                ConversationScrollGeometry.isNearBottom(
-                    visibleBottom: visibleBottom,
-                    contentBottom: contentBottom
-                ),
-                ConversationScrollGeometry.isNearTop(
-                    visibleTop: scrollView.contentView.bounds.minY
                 )
             )
+        }
+        .overlay(alignment: .bottomTrailing) {
+            if hasContentBelow {
+                Button {
+                    jumpToLatestRequest += 1
+                } label: {
+                    Label("Jump to latest", systemImage: "arrow.down")
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .clipShape(Capsule())
+                .padding(12)
+                .accessibilityLabel("Jump to latest chat updates")
+                .accessibilityHint("Moves to the newest content. Updates never scroll automatically.")
+                .help("Jump to latest updates")
+            }
         }
     }
 }
@@ -2280,6 +2122,7 @@ private struct LandingInputComposer: View {
                 }
                 ChatMarkdownInput(
                     text: $model.inputText,
+                    sessionKey: model.activeSessionId ?? "__pending_new__",
                     isFocused: $isFocused,
                     colorScheme: colorScheme,
                     onSend: {
@@ -4339,11 +4182,13 @@ private enum ComposerMarkdownPalette {
 /// blocks directly in the editable surface.
 private struct ChatMarkdownInput: View {
     @Binding var text: String
+    let sessionKey: String
     @Binding var isFocused: Bool
     var colorScheme: ColorScheme
     var onSend: () -> Void
     var onRecallHistory: () -> Bool
 
+    @StateObject private var draftSelection = ChatDraftSelectionTracker()
     @State private var textView: NSTextView?
     @State private var monitoredTextViewId: ObjectIdentifier?
     @State private var keyMonitor: Any?
@@ -4397,11 +4242,12 @@ private struct ChatMarkdownInput: View {
             text: $text,
             configuration: Self.configuration,
             fontSize: ChatComposerMetrics.fontSize,
-            documentId: "chat-composer",
+            documentId: sessionKey,
             isEditable: true
         )
         .background(
             MarkdownEditorIntrospector { resolvedTextView in
+                draftSelection.attach(resolvedTextView, session: sessionKey)
                 guard textView !== resolvedTextView else { return }
                 configure(resolvedTextView)
                 renderedBlockStyler.attach(to: resolvedTextView)
@@ -4409,16 +4255,16 @@ private struct ChatMarkdownInput: View {
                 installKeyMonitor(for: resolvedTextView)
             }
         )
-        .onChange(of: isFocused) { _, focused in
-            guard focused, let textView else { return }
-            DispatchQueue.main.async {
-                textView.window?.makeFirstResponder(textView)
-            }
+        .onChange(of: sessionKey) { _, session in
+            if let textView { draftSelection.attach(textView, session: session) }
         }
         .onChange(of: colorScheme) { _, _ in
             if let textView { configure(textView) }
         }
-        .onDisappear { removeKeyMonitor() }
+        .onDisappear {
+            removeKeyMonitor()
+            draftSelection.detach()
+        }
         .accessibilityLabel("Message")
         .accessibilityHint("Type a message. Press Return to send or Shift-Return for a new line.")
     }

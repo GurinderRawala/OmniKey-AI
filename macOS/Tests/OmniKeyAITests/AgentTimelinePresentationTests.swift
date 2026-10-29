@@ -895,35 +895,6 @@ final class AgentTimelinePresentationTests: XCTestCase {
         )
     }
 
-    func testSessionChangesAndHydrationResetTheConversationToBottom() {
-        XCTAssertTrue(
-            ChatSessionScrollPolicy.shouldResetForSessionChange(
-                previousSessionID: "cached-a",
-                sessionID: "cached-b"
-            )
-        )
-        XCTAssertTrue(
-            ChatSessionScrollPolicy.shouldResetForSessionChange(
-                previousSessionID: "idle",
-                sessionID: "background-running"
-            )
-        )
-        XCTAssertTrue(
-            ChatSessionScrollPolicy.shouldResetAfterHydration(
-                wasLoading: true,
-                isLoading: false,
-                sessionID: "uncached"
-            )
-        )
-        XCTAssertFalse(
-            ChatSessionScrollPolicy.shouldResetAfterHydration(
-                wasLoading: false,
-                isLoading: false,
-                sessionID: "cached"
-            )
-        )
-    }
-
     func testLargeActivityPreviewTruncatesWithoutChangingFullText() {
         let full = String(
             repeating: "x", count: AgentActivityDetailContent.previewCharacterLimit + 500)
@@ -941,25 +912,6 @@ final class AgentTimelinePresentationTests: XCTestCase {
             ChatComposerMetrics.height(for: "one line"), ChatComposerMetrics.minimumHeight)
         XCTAssertGreaterThan(
             ChatComposerMetrics.height(for: "1\n2\n3\n4"), ChatComposerMetrics.minimumHeight)
-    }
-
-    func testAutoScrollOnlyFollowsLiveUpdatesNearBottom() {
-        XCTAssertTrue(ChatAutoScrollPolicy.shouldFollow(wasNearBottom: true, isLiveUpdate: true))
-        XCTAssertFalse(ChatAutoScrollPolicy.shouldFollow(wasNearBottom: false, isLiveUpdate: true))
-        XCTAssertFalse(ChatAutoScrollPolicy.shouldFollow(wasNearBottom: true, isLiveUpdate: false))
-        XCTAssertFalse(ChatAutoScrollPolicy.shouldAnimate(reduceMotion: true))
-        XCTAssertTrue(ChatAutoScrollPolicy.shouldAnimate(reduceMotion: false))
-    }
-
-    func testScrollObserverGeometryUsesTheLiveNearBottomThreshold() {
-        XCTAssertTrue(
-            ConversationScrollGeometry.isNearBottom(visibleBottom: 880, contentBottom: 1_000)
-        )
-        XCTAssertFalse(
-            ConversationScrollGeometry.isNearBottom(visibleBottom: 879, contentBottom: 1_000)
-        )
-        XCTAssertTrue(ConversationScrollGeometry.isNearTop(visibleTop: 120))
-        XCTAssertFalse(ConversationScrollGeometry.isNearTop(visibleTop: 121))
     }
 
     func testCompletedTimelineCollapsesAndFormatsElapsedTime() {

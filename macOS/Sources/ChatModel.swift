@@ -349,7 +349,13 @@ final class ChatModel: ObservableObject {
     /// The session the user is currently chatting in.
     /// `nil` means a brand-new session that has not been persisted yet —
     /// the backend will assign an ID on first turn.
-    @Published var activeSessionId: String? = nil
+    @Published var activeSessionId: String? = nil {
+        didSet {
+            guard oldValue != activeSessionId else { return }
+            let draft = readingStore.draft(for: activeSessionId ?? pendingNewChatKey)
+            inputText = draft.text
+        }
+    }
     @Published var activeSessionTitle: String = "New Chat"
 
     /// True when the user has tapped "New Chat" but has not yet sent
@@ -375,7 +381,6 @@ final class ChatModel: ObservableObject {
     @Published private(set) var hasMoreHistory: Bool = false
     @Published private(set) var isLoadingOlderHistory: Bool = false
     @Published private(set) var olderHistoryError: String? = nil
-    @Published private(set) var historyPrependAnchorID: String? = nil
     @Published private(set) var fullContentLoadingIDs: Set<String> = []
 
     /// True while a turn is in flight (WebSocket open, awaiting final answer).
@@ -391,7 +396,13 @@ final class ChatModel: ObservableObject {
     @Published var lastErrorMessage: String? = nil
 
     /// The text in the bottom input box. Bound from the view.
-    @Published var inputText: String = ""
+    @Published var inputText: String = "" {
+        didSet {
+            var draft = readingStore.draft(for: activeStateKey)
+            draft.text = inputText
+            readingStore.save(draft, for: activeStateKey)
+        }
+    }
 
     /// The user's default task instruction template, if any. Surfaced
     /// in the dropdown beneath the chat input so the user can see which
@@ -607,13 +618,16 @@ final class ChatModel: ObservableObject {
         sessionSearchQuery = ""
     }
 
+    let readingStore: ChatReadingStore
     private let modelDefaults: UserDefaults
     private var sessionModels: [String: [String: String]]
     private var defaultAgentModel: String = "gpt-5.5"
 
     init(modelDefaults: UserDefaults = .standard) {
+        self.readingStore = ChatReadingStore(defaults: modelDefaults)
         self.modelDefaults = modelDefaults
         self.sessionModels = modelDefaults.dictionary(forKey: "chatSessionModels") as? [String: [String: String]] ?? [:]
+        self.inputText = readingStore.draft(for: pendingNewChatKey).text
     }
 
     private func restoreSessionModel() {
@@ -687,7 +701,6 @@ final class ChatModel: ObservableObject {
     /// Load a session state into the published properties (driving the SwiftUI view).
     private func loadState(_ s: ChatSessionState) {
         restoreSessionModel()
-        historyPrependAnchorID = nil
         messages = s.messages
         isRunning = s.isRunning
         hasMoreHistory = s.hasMoreBefore
@@ -968,7 +981,6 @@ final class ChatModel: ObservableObject {
                 guard self.olderHistoryLoadGeneration[sessionId] == generation,
                       self.states[sessionId] === state,
                       state.oldestCursor == cursor else { return }
-                let anchor = state.messages.first?.id
                 let newMessages = hydrated.filter { !state.loadedMessageIDs.contains($0.id) }
                 state.messages = ChatHistoryMergePolicy.prepend(existing: state.messages, older: newMessages)
                 state.loadedMessageIDs.formUnion(newMessages.map(\.id))
@@ -982,7 +994,6 @@ final class ChatModel: ObservableObject {
                 self.hasMoreHistory = state.hasMoreBefore
                 self.isLoadingOlderHistory = false
                 self.olderHistoryError = nil
-                self.historyPrependAnchorID = anchor
             }
         }
         olderHistoryTasks[sessionId] = task
@@ -1000,9 +1011,6 @@ final class ChatModel: ObservableObject {
         olderHistoryError = message
     }
 
-    func clearHistoryPrependAnchor() {
-        historyPrependAnchorID = nil
-    }
 
     func loadFullBlockContent(
         _ block: ChatBlock,
@@ -1373,6 +1381,7 @@ final class ChatModel: ObservableObject {
             DispatchQueue.main.async {
                 guard let self else { return }
                 if success {
+                    self.readingStore.removeSession(session.id)
                     self.states.removeValue(forKey: session.id)
                     self.sessionModels.removeValue(forKey: session.id)
                     self.persistSessionModels()
