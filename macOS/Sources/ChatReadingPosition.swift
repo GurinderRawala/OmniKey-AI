@@ -73,6 +73,7 @@ struct ChatReadingViewport: NSViewRepresentable {
     let session: String
     let ready: Bool
     var revision: Int = 0
+    var restorationPaginationPaused: Bool = false
     let jumpRequest: Int
     let store: ChatReadingStore
     var onPosition: (Bool) -> Void
@@ -133,7 +134,7 @@ struct ChatReadingViewport: NSViewRepresentable {
                         guard let self, self.session == self.configuration?.session else { return }
                         // User intent wins even if a streaming layout reconciliation is queued.
                         self.needsRestore = false
-                        self.capture()
+                        self.capture(userInitiated: true)
                     }
                 })
             }
@@ -198,6 +199,9 @@ struct ChatReadingViewport: NSViewRepresentable {
                 } else if needsRestore {
                     // The saved anchor may be in an older history page. Keep it
                     // until hydration/pagination installs it rather than overwriting it.
+                    // Keep the saved anchor on failure; only an explicit retry
+                    // may clear the error and resume restoration pagination.
+                    if configuration.restorationPaginationPaused { return }
                     if configuration.onMissingAnchor() { return }
                     // Deleted/expired anchors fall back to the available transcript.
                     self.position = nil
@@ -216,8 +220,12 @@ struct ChatReadingViewport: NSViewRepresentable {
             restoring = false
         }
 
-        private func capture() {
-            guard let configuration, configuration.ready, let scroll, let document = scroll.documentView else { return }
+        private func capture(userInitiated: Bool = false) {
+            guard let configuration, configuration.ready || userInitiated,
+                  let scroll, let document = scroll.documentView else { return }
+            // Explicit user intent supersedes a pending hydration restore, even
+            // if loading has not installed any usable anchors yet.
+            if userInitiated { position = nil }
             let top = scroll.contentView.bounds.minY
             let markers = anchors(in: document).sorted { $0.1 < $1.1 }
             if let anchor = markers.last(where: { $0.1 <= top + 1 }) ?? markers.first {

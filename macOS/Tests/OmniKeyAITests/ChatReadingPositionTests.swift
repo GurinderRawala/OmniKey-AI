@@ -231,3 +231,78 @@ extension ChatReadingPositionTests {
         XCTAssertEqual(scroll.contentView.bounds.minY, 455, accuracy: 1)
     }
 }
+
+
+extension ChatReadingPositionTests {
+    func testUserScrollDuringHistoryLoadingWinsAndStillCompensatesForPrepending() {
+        let suite = "ChatReadingTests.\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = ChatReadingStore(defaults: defaults)
+        store.save(ChatReadingPosition(anchorID: "message-stable-id", offset: 27), for: "a")
+        let (scroll, document, anchor) = fixture()
+        let coordinator = ChatReadingViewport.Coordinator()
+        defer { coordinator.detach() }
+        func configure(_ ready: Bool) {
+            coordinator.configuration = ChatReadingViewport(session: "a", ready: ready, jumpRequest: 0,
+                                                            store: store, onPosition: { _ in }, onMissingAnchor: { false })
+            coordinator.attach(to: scroll)
+            settle()
+        }
+        configure(true)
+        XCTAssertEqual(scroll.contentView.bounds.minY, 427, accuracy: 1)
+        configure(false)
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: 700))
+        NotificationCenter.default.post(name: NSScrollView.didLiveScrollNotification, object: scroll)
+        configure(true)
+        XCTAssertEqual(scroll.contentView.bounds.minY, 700, accuracy: 1)
+        XCTAssertEqual(store.position(for: "a")?.offset, 300)
+
+        // Preserve the newly chosen content, not the old saved position, when older rows arrive.
+        configure(false)
+        anchor.setFrameOrigin(NSPoint(x: 0, y: 650))
+        document.setFrameSize(NSSize(width: 600, height: 1750))
+        configure(true)
+        XCTAssertEqual(scroll.contentView.bounds.minY, 950, accuracy: 1)
+    }
+}
+
+
+extension ChatReadingPositionTests {
+    func testFailedRestorationPaginationPausesUntilExplicitRetry() {
+        let suite = "ChatReadingTests.\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = ChatReadingStore(defaults: defaults)
+        let saved = ChatReadingPosition(anchorID: "older-message", offset: 17)
+        store.save(saved, for: "a")
+        let (scroll, document, _) = fixture()
+        let coordinator = ChatReadingViewport.Coordinator()
+        defer { coordinator.detach() }
+        var requests = 0
+        func configure(ready: Bool = true, failed: Bool = false) {
+            coordinator.configuration = ChatReadingViewport(
+                session: "a", ready: ready, restorationPaginationPaused: failed,
+                jumpRequest: 0, store: store, onPosition: { _ in },
+                onMissingAnchor: { requests += 1; return true })
+            coordinator.attach(to: scroll)
+            settle()
+        }
+        configure()
+        XCTAssertEqual(requests, 1)
+        configure(ready: false)
+        // Request completion exposes an error while more history is still available.
+        for _ in 0..<10 { configure(failed: true) }
+        XCTAssertEqual(requests, 1, "Layout/streaming updates must not retry failed pagination")
+        XCTAssertEqual(store.position(for: "a"), saved)
+        // Explicit retry clears the error and enters loading, without an automatic duplicate.
+        requests += 1
+        configure(ready: false)
+        let older = ChatReadingAnchorView(frame: NSRect(x: 0, y: 100, width: 600, height: 80))
+        older.anchorID = "older-message"
+        document.addSubview(older)
+        configure()
+        XCTAssertEqual(requests, 2)
+        XCTAssertEqual(scroll.contentView.bounds.minY, 117, accuracy: 1)
+    }
+}

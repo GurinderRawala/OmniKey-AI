@@ -1675,6 +1675,7 @@ struct ChatConversationView: View {
                     session: model.activeSessionId ?? "__pending_new__",
                     ready: !model.isLoadingSessionHistory && !model.isLoadingOlderHistory,
                     revision: model.messages.reduce(0) { $0 + $1.blocks.count },
+                    restorationPaginationPaused: model.olderHistoryError != nil,
                     jumpRequest: jumpToLatestRequest,
                     store: .shared,
                     onPosition: { below in
