@@ -63,7 +63,7 @@ final class ChatReadingPositionTests: XCTestCase {
         coordinator.attach(to: scroll)
         settle()
         XCTAssertEqual(scroll.contentView.bounds.maxY, 2500, accuracy: 1)
-        XCTAssertTrue(below)
+        XCTAssertFalse(below, "One viewport or less of new content must not show the control")
     }
 
     func testAnchorCompensatesForPrependingAndRestoresAcrossSessionsAndReload() {
@@ -375,5 +375,122 @@ extension ChatReadingPositionTests {
         coordinator.attach(to: scroll)
         settle()
         XCTAssertEqual(scroll.contentView.bounds.maxY, document.bounds.maxY, accuracy: 1)
+    }
+}
+
+extension ChatReadingPositionTests {
+    func testJumpToLatestAppearsOnlyMoreThanOneViewportBehind() {
+        XCTAssertFalse(ChatLatestVisibilityPolicy.shouldShow(documentBottom: 1500, visibleBottom: 1500, viewportHeight: 300))
+        XCTAssertFalse(ChatLatestVisibilityPolicy.shouldShow(documentBottom: 1500, visibleBottom: 1490, viewportHeight: 300))
+        XCTAssertFalse(ChatLatestVisibilityPolicy.shouldShow(documentBottom: 1500, visibleBottom: 1200, viewportHeight: 300))
+        XCTAssertTrue(ChatLatestVisibilityPolicy.shouldShow(documentBottom: 1500, visibleBottom: 1199, viewportHeight: 300))
+        XCTAssertFalse(ChatLatestVisibilityPolicy.shouldShow(documentBottom: 1500, visibleBottom: 500, viewportHeight: 0))
+    }
+
+    func testSentMessageNavigatesOnceThenStreamingPreservesReadingPosition() {
+        let suite = "ChatReadingTests.\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = ChatReadingStore(defaults: defaults)
+        store.save(ChatReadingPosition(anchorID: "message-stable-id", offset: 27), for: "a")
+        let (scroll, document, _) = fixture()
+        let coordinator = ChatReadingViewport.Coordinator()
+        defer { coordinator.detach() }
+        func configure(sent: String? = nil, ready: Bool = true) {
+            coordinator.configuration = ChatReadingViewport(session: "a", ready: ready, jumpRequest: 0,
+                                                            sentMessageAnchorID: sent, store: store,
+                                                            onPosition: { _ in }, onMissingAnchor: { false })
+            coordinator.attach(to: scroll)
+            settle()
+        }
+        configure()
+        XCTAssertEqual(scroll.contentView.bounds.minY, 427, accuracy: 1)
+        // A send can arrive before layout installs its native anchor.
+        configure(sent: "sent-message")
+        XCTAssertEqual(scroll.contentView.bounds.minY, 427, accuracy: 1)
+        let sent = ChatReadingAnchorView(frame: NSRect(x: 0, y: 1300, width: 600, height: 60))
+        sent.anchorID = "sent-message"
+        document.addSubview(sent)
+        configure(sent: "sent-message")
+        XCTAssertEqual(scroll.contentView.bounds.maxY, document.bounds.maxY, accuracy: 1)
+        document.setFrameSize(NSSize(width: 600, height: 2400))
+        configure(sent: "sent-message")
+        XCTAssertEqual(scroll.contentView.bounds.maxY, 1500, accuracy: 1, "Streaming must not repeat send navigation")
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: 500))
+        NotificationCenter.default.post(name: NSScrollView.didLiveScrollNotification, object: scroll)
+        configure(sent: "sent-message")
+        XCTAssertEqual(scroll.contentView.bounds.minY, 500, accuracy: 1)
+        let steering = ChatReadingAnchorView(frame: NSRect(x: 0, y: 2200, width: 600, height: 60))
+        steering.anchorID = "steering-message"
+        document.addSubview(steering)
+        configure(sent: "steering-message")
+        XCTAssertEqual(scroll.contentView.bounds.maxY, document.bounds.maxY, accuracy: 1)
+    }
+}
+
+extension ChatReadingPositionTests {
+    func testSentMessageNavigatesOnceAfterLayoutWithoutFollowingIncomingUpdates() {
+        let suite = "ChatReadingTests.\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = ChatReadingStore(defaults: defaults)
+        store.save(ChatReadingPosition(anchorID: "message-stable-id", offset: 27), for: "a")
+        let (scroll, document, _) = fixture()
+        let coordinator = ChatReadingViewport.Coordinator()
+        defer { coordinator.detach() }
+        coordinator.configuration = ChatReadingViewport(session: "a", ready: true, jumpRequest: 0,
+                                                        sentMessageAnchorID: "sent-message", store: store,
+                                                        onPosition: { _ in }, onMissingAnchor: { false })
+        coordinator.attach(to: scroll)
+        settle()
+        XCTAssertEqual(scroll.contentView.bounds.minY, 427, accuracy: 1)
+        let sent = ChatReadingAnchorView(frame: NSRect(x: 0, y: 1300, width: 600, height: 100))
+        sent.anchorID = "sent-message"
+        document.addSubview(sent)
+        coordinator.attach(to: scroll)
+        settle()
+        XCTAssertEqual(scroll.contentView.bounds.minY, 1200, accuracy: 1)
+        document.setFrameSize(NSSize(width: 600, height: 2000))
+        coordinator.attach(to: scroll)
+        settle()
+        XCTAssertEqual(scroll.contentView.bounds.minY, 1200, accuracy: 1)
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: 500))
+        NotificationCenter.default.post(name: NSScrollView.didLiveScrollNotification, object: scroll)
+        coordinator.attach(to: scroll)
+        settle()
+        XCTAssertEqual(scroll.contentView.bounds.minY, 500, accuracy: 1)
+    }
+}
+
+extension ChatReadingPositionTests {
+    func testRepeatedPromptUsesSendRequestIdentityAndAcknowledgesOnlyOnce() {
+        let suite = "ChatReadingTests.\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = ChatReadingStore(defaults: defaults)
+        let (scroll, _, _) = fixture()
+        let coordinator = ChatReadingViewport.Coordinator()
+        defer { coordinator.detach() }
+        var acknowledgements = 0
+        func configure(request: String) {
+            coordinator.configuration = ChatReadingViewport(
+                session: "a", ready: true, jumpRequest: 0,
+                sentMessageAnchorID: "message-stable-id", sentMessageRequestID: request,
+                onSentMessageRevealed: { acknowledgements += 1 }, store: store,
+                onPosition: { _ in }, onMissingAnchor: { false })
+            coordinator.attach(to: scroll)
+            settle()
+        }
+        configure(request: "first-send")
+        XCTAssertEqual(scroll.contentView.bounds.minY, 400, accuracy: 1)
+        XCTAssertEqual(acknowledgements, 1)
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: 100))
+        NotificationCenter.default.post(name: NSScrollView.didLiveScrollNotification, object: scroll)
+        configure(request: "first-send")
+        XCTAssertEqual(scroll.contentView.bounds.minY, 100, accuracy: 1)
+        XCTAssertEqual(acknowledgements, 1)
+        configure(request: "second-send")
+        XCTAssertEqual(scroll.contentView.bounds.minY, 400, accuracy: 1)
+        XCTAssertEqual(acknowledgements, 2)
     }
 }

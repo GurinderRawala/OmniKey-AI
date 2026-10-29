@@ -6,6 +6,13 @@
     <description>New features, fixes, and improvements in OmniKey AI.</description>
     <language>en</language>
     <item>
+      <title>OmniKey macOS v1.9.12</title>
+      <link>https://omnikeyai.ca/changelog#macos-v1.9.12</link>
+      <guid isPermaLink="false">omnikey-macos-v1.9.12</guid>
+      <pubDate>Thu, 29 Oct 2026 00:00:00 +0000</pubDate>
+      <description><![CDATA[<ul><li>Show Jump to latest only when more than one screen behind the latest chat content.</li><li>Reveal sent messages and steering updates once without following subsequent agent output.</li><li>Ship macOS 1.9.12 (build 72) with matching backend update metadata and a signed, notarized universal installer.</li></ul>]]></description>
+    </item>
+    <item>
       <title>OmniKey v1.8.14</title>
       <link>https://omnikeyai.ca/changelog#v1.8.14</link>
       <guid isPermaLink="false">omnikey-v1.8.14</guid>

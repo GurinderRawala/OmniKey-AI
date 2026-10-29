@@ -352,6 +352,7 @@ final class ChatModel: ObservableObject {
     @Published var activeSessionId: String? = nil {
         didSet {
             guard oldValue != activeSessionId else { return }
+            sentMessageID = nil
             let draft = readingStore.draft(for: activeSessionId ?? pendingNewChatKey)
             inputText = draft.text
         }
@@ -375,6 +376,8 @@ final class ChatModel: ObservableObject {
 
     /// Messages rendered in the conversation view.
     @Published var messages: [ChatMessage] = []
+    /// One-shot explicit navigation for accepted normal and steering sends only.
+    @Published private(set) var sentMessageID: String? = nil
 
     /// True while an existing session transcript is being hydrated.
     @Published var isLoadingSessionHistory: Bool = false
@@ -1400,6 +1403,11 @@ final class ChatModel: ObservableObject {
     /// WebSocket via `ChatSessionRunner` and streams the assistant
     /// response into the session's own `ChatSessionState`. Switching to
     /// another chat while this turn runs does **not** cancel it.
+    func acknowledgeSentMessageNavigation(_ messageID: String?) {
+        guard sentMessageID == messageID else { return }
+        sentMessageID = nil
+    }
+
     func sendCurrentInput() {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
@@ -1480,6 +1488,8 @@ final class ChatModel: ObservableObject {
             activeSessionTitle = placeholder.title
             hasPendingNewChat = false
         }
+
+        sentMessageID = sessionSt.messages.last(where: { $0.role == .user })?.id
 
         let handle = ChatSessionRunner.shared.run(
             sessionId: sessionId,
@@ -1604,6 +1614,7 @@ final class ChatModel: ObservableObject {
         )
         if states[activeStateKey] === sessionSt {
             messages = sessionSt.messages
+            sentMessageID = steeringMessage.id
         }
 
         ChatSessionRunner.shared.sendSteeringMessage(

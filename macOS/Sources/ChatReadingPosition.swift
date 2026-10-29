@@ -86,6 +86,12 @@ enum ChatReadingIdentity {
     }
 }
 
+enum ChatLatestVisibilityPolicy {
+    static func shouldShow(documentBottom: CGFloat, visibleBottom: CGFloat, viewportHeight: CGFloat) -> Bool {
+        viewportHeight > 0 && documentBottom - visibleBottom > viewportHeight
+    }
+}
+
 /// An AppKit marker avoids publishing geometry into SwiftUI during layout.
 struct ChatReadingAnchor: NSViewRepresentable {
     let id: String
@@ -107,6 +113,9 @@ struct ChatReadingViewport: NSViewRepresentable {
     var revision: Int = 0
     var restorationPaginationPaused: Bool = false
     let jumpRequest: Int
+    var sentMessageAnchorID: String? = nil
+    var sentMessageRequestID: String? = nil
+    var onSentMessageRevealed: () -> Void = {}
     let store: ChatReadingStore
     var onPosition: (Bool) -> Void
     var onMissingAnchor: () -> Bool
@@ -130,6 +139,7 @@ struct ChatReadingViewport: NSViewRepresentable {
         private var session: String?
         private var position: ChatReadingPosition?
         private var jumpRequest = 0
+        private var lastSentMessageAnchorID: String?
         private var restoring = false
         private var scheduled = false
         private var needsRestore = true
@@ -178,6 +188,7 @@ struct ChatReadingViewport: NSViewRepresentable {
                 jumpRequest = configuration.jumpRequest
                 needsRestore = true
                 restorationPagesRequested = 0
+                lastSentMessageAnchorID = nil
             }
             if jumpRequest != configuration.jumpRequest {
                 jumpRequest = configuration.jumpRequest
@@ -222,6 +233,18 @@ struct ChatReadingViewport: NSViewRepresentable {
 
         private func reconcile() {
             guard let configuration, configuration.ready, let scroll, let document = scroll.documentView else { return }
+            let sendRequest = configuration.sentMessageRequestID ?? configuration.sentMessageAnchorID
+            if let sentID = configuration.sentMessageAnchorID, sendRequest != lastSentMessageAnchorID,
+               let anchor = anchors(in: document).first(where: { $0.0 == sentID }) {
+                lastSentMessageAnchorID = sendRequest
+                // Sending is explicit navigation, not a request to follow later updates.
+                position = ChatReadingPosition(anchorID: sentID, offset: 0)
+                needsRestore = false
+                move(to: min(anchor.1, max(0, document.bounds.height - scroll.contentView.bounds.height)))
+                capture()
+                DispatchQueue.main.async { configuration.onSentMessageRevealed() }
+                return
+            }
             if let position {
                 if let anchor = anchors(in: document).first(where: { $0.0 == position.anchorID }) {
                     move(to: position.origin(anchorTop: anchor.1, documentHeight: document.bounds.height,
@@ -278,7 +301,11 @@ struct ChatReadingViewport: NSViewRepresentable {
                                                fallbackOffset: message.map { top - $0.1 })
                 if let position { configuration.store.save(position, for: configuration.session) }
             }
-            let below = document.bounds.maxY - scroll.contentView.bounds.maxY > 2
+            let below = ChatLatestVisibilityPolicy.shouldShow(
+                documentBottom: document.bounds.maxY,
+                visibleBottom: scroll.contentView.bounds.maxY,
+                viewportHeight: scroll.contentView.bounds.height
+            )
             // Leave the AppKit notification/layout stack before publishing UI state.
             DispatchQueue.main.async { [weak self] in
                 guard self?.session == configuration.session else { return }

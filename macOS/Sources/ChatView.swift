@@ -1632,6 +1632,7 @@ struct ChatConversationView: View {
     @ViewBuilder
     private var conversationContent: some View {
         let readingAnchors = ChatReadingIdentity.anchors(for: model.messages)
+        let sentMessageID = model.sentMessageID
         ScrollView {
             VStack(spacing: 0) {
                 if model.messages.isEmpty, !model.isLoadingSessionHistory {
@@ -1678,6 +1679,9 @@ struct ChatConversationView: View {
                     revision: model.messages.reduce(0) { $0 + $1.blocks.count },
                     restorationPaginationPaused: model.olderHistoryError != nil,
                     jumpRequest: jumpToLatestRequest,
+                    sentMessageAnchorID: sentMessageID.flatMap { readingAnchors[$0] },
+                    sentMessageRequestID: sentMessageID,
+                    onSentMessageRevealed: { model.acknowledgeSentMessageNavigation(sentMessageID) },
                     store: .shared,
                     onPosition: { below in
                         if hasContentBelow != below { hasContentBelow = below }
