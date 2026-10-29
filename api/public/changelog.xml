@@ -6,6 +6,13 @@
     <description>New features, fixes, and improvements in OmniKey AI.</description>
     <language>en</language>
     <item>
+      <title>OmniKey v1.8.14</title>
+      <link>https://omnikeyai.ca/changelog#v1.8.14</link>
+      <guid isPermaLink="false">omnikey-v1.8.14</guid>
+      <pubDate>Thu, 29 Oct 2026 00:00:00 +0000</pubDate>
+      <description><![CDATA[<ul><li>Bump API and CLI to 1.8.14</li><li>Ground fallback progress in execution status</li><li>Validate auth budgets and constrain fallback progress claims</li><li>Restore chat progress and address review feedback</li><li>Preserve working context and recover stalled inspections</li></ul>]]></description>
+    </item>
+    <item>
       <title>OmniKey v1.8.13</title>
       <link>https://omnikeyai.ca/changelog#v1.8.13</link>
       <guid isPermaLink="false">omnikey-v1.8.13</guid>
@@ -137,13 +144,6 @@
       <guid isPermaLink="false">omnikey-v1.6.24</guid>
       <pubDate>Mon, 03 Aug 2026 00:00:00 +0000</pubDate>
       <description><![CDATA[<ul><li>Sync changelog from GitHub releases</li><li>New build</li><li>Bump macOS to 1.4.3 (build 53), Windows to 1.19.3</li><li>Version bump</li><li>Open providers support</li><li>Fix formula branch switch in release workflow</li><li>Make CLI release workflow retryable for tags</li></ul>]]></description>
-    </item>
-    <item>
-      <title>OmniKey v1.6.23</title>
-      <link>https://omnikeyai.ca/changelog#v1.6.23</link>
-      <guid isPermaLink="false">omnikey-v1.6.23</guid>
-      <pubDate>Sun, 02 Aug 2026 00:00:00 +0000</pubDate>
-      <description><![CDATA[<ul><li>Removed some unknown script</li><li>New build</li><li>Update Windows release notes</li><li>Address CodeRabbit steering and seed comments</li><li>Add Windows chat steering support</li><li>Address live steering follow-up issues</li><li>Changes</li><li>Fix live steering edge cases</li><li>Add live steering for running agent sessions</li><li>Suggested fix</li><li>Seed self-hosted coding agent defaults</li><li>Version bump</li><li>Fixes</li><li>Limit tool-loop fallback recursion consistently</li><li>Macos app changes</li><li>Remove agent tool iteration hard stop</li><li>Avoid web failure tool-loop hard stops</li><li>Address CodeRabbit review feedback</li><li>Harden OmniKey agent and Telegram flows</li></ul>]]></description>
     </item>
   </channel>
 </rss>
