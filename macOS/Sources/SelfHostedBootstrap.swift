@@ -1,3 +1,4 @@
+import CoreFoundation
 import Darwin
 import Foundation
 
@@ -72,44 +73,40 @@ enum SelfHostedBootstrap {
         FileManager.default.fileExists(atPath: configURL.path)
     }
 
-    static func shouldShowFirstRunOnboarding(completion: @escaping @Sendable (Bool) -> Void) {
+    static func shouldShowFirstRunOnboarding(
+        configuredPort: @escaping @Sendable () -> Int? = { configuredDaemonPort() },
+        completion: @escaping @Sendable (Bool) -> Void
+    ) {
         DispatchQueue.global(qos: .userInitiated).async {
-            guard configExists() else {
-                DispatchQueue.main.async { completion(true) }
-                return
-            }
-
-            guard let port = configuredDaemonPort() else {
-                DispatchQueue.main.async { completion(true) }
-                return
-            }
-
-            let configuredDaemonRunning = probeHealth(port: port, timeout: 1.0)
-            DispatchQueue.main.async {
-                completion(!configuredDaemonRunning)
-            }
+            // Configuration and availability are separate: a slow, restarting,
+            // or temporarily stopped daemon must not send existing users through setup.
+            let needsSetup = configuredPort() == nil
+            DispatchQueue.main.async { completion(needsSetup) }
         }
     }
 
     static func configuredDaemonPort() -> Int? {
-        guard let data = try? Data(contentsOf: configURL),
-              let json = try? JSONSerialization.jsonObject(with: data, options: []) as? [String: Any]
-        else {
+        guard let data = try? Data(contentsOf: configURL) else { return nil }
+        return configuredDaemonPort(in: data)
+    }
+
+    static func configuredDaemonPort(in data: Data) -> Int? {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return nil
         }
-
-        if let port = json["OMNIKEY_PORT"] as? Int, port > 0 {
-            return port
+        let port: Int?
+        if let raw = json["OMNIKEY_PORT"] as? String {
+            port = Int(raw.trimmingCharacters(in: .whitespacesAndNewlines))
+        } else if let number = json["OMNIKEY_PORT"] as? NSNumber,
+                  CFGetTypeID(number) != CFBooleanGetTypeID(),
+                  number.doubleValue.rounded() == number.doubleValue,
+                  (1...65535).contains(number.doubleValue) {
+            port = number.intValue
+        } else {
+            port = nil
         }
-
-        if let raw = json["OMNIKEY_PORT"] as? String,
-           let port = Int(raw.trimmingCharacters(in: .whitespacesAndNewlines)),
-           port > 0
-        {
-            return port
-        }
-
-        return nil
+        guard let port, (1...65535).contains(port) else { return nil }
+        return port
     }
 
     static func checkCLIUpdate(completion: @escaping @Sendable (Result<CLIUpdateStatus, Error>) -> Void) {

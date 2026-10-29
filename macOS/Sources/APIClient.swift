@@ -1,36 +1,9 @@
 import Foundation
 
 final class APIClient: @unchecked Sendable {
-    /// Indicates if the self-hosted OmniKey config is detected.
-    /// Reads the self-hosted config and returns the port if present, else nil
+    /// Share configuration detection with onboarding; never log provider credentials.
     private static func selfHostedPort() -> String? {
-        // Use FileManager and NSHomeDirectory to resolve the config path reliably
-        let homeDir = NSHomeDirectory()
-        let configPath = (homeDir as NSString).appendingPathComponent(".omnikey/config.json")
-        let fileManager = FileManager.default
-        print("[OmniKey] Checking for self-hosted config at path: \(configPath)")
-        if fileManager.fileExists(atPath: configPath) {
-            print("[OmniKey] Config file exists at path: \(configPath)")
-            do {
-                let data = try Data(contentsOf: URL(fileURLWithPath: configPath))
-                if let json = try JSONSerialization.jsonObject(with: data, options: []) as? [String: Any] {
-                    print("[OmniKey] Config JSON: \(json)")
-                    if let port = json["OMNIKEY_PORT"] as? String {
-                        print("[OmniKey] Found OMNIKEY_PORT as String: \(port)")
-                        return port
-                    } else if let portNum = json["OMNIKEY_PORT"] as? Int {
-                        let portStr = String(portNum)
-                        print("[OmniKey] Found OMNIKEY_PORT as Int: \(portNum), returning as String: \(portStr)")
-                        return portStr
-                    } else {
-                        print("[OmniKey] OMNIKEY_PORT key not found or not a string/int")
-                    }
-                }
-            } catch {
-                print("[OmniKey] Error reading or parsing config: \(error)")
-            }
-        }
-        return nil
+        SelfHostedBootstrap.configuredDaemonPort().map(String.init)
     }
 
     static var isSelfHosted: Bool {
