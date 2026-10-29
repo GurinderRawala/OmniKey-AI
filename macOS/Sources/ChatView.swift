@@ -1694,13 +1694,12 @@ struct ChatConversationView: View {
                     jumpToLatestRequest += 1
                 } label: {
                     Label("Jump to latest", systemImage: "arrow.down")
-                        .font(.system(size: 12, weight: .medium))
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
+                        .font(.system(size: 11, weight: .medium))
                 }
                 .buttonStyle(.borderedProminent)
+                .controlSize(.small)
                 .clipShape(Capsule())
-                .padding(16)
+                .padding(12)
                 .accessibilityLabel("Jump to latest chat updates")
                 .accessibilityHint("Moves to the newest content. Updates never scroll automatically.")
                 .help("Jump to latest updates")
