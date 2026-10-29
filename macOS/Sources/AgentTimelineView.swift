@@ -98,6 +98,7 @@ struct AgentExecutionHistoryView: View {
                             isLast: index == milestoneSteps.count - 1
                         )
                         .equatable()
+                        .background(ChatReadingAnchor(id: "step-\(step.id)"))
                     }
                 }
             }
@@ -371,6 +372,7 @@ struct AgentCommandActivityPanel: View {
                             activity: activity,
                             isLast: index == visibleActivities.count - 1
                         )
+                        .background(ChatReadingAnchor(id: "activity-\(activity.id)"))
                     }
                 }
                 .padding(9)

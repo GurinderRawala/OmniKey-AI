@@ -716,47 +716,6 @@ enum AgentActivityPagination {
     }
 }
 
-enum ChatAutoScrollPolicy {
-    static let nearBottomThreshold: CGFloat = 120
-
-    static func shouldFollow(wasNearBottom: Bool, isLiveUpdate: Bool) -> Bool {
-        wasNearBottom && isLiveUpdate
-    }
-
-    static func shouldAnimate(reduceMotion: Bool) -> Bool {
-        !reduceMotion
-    }
-}
-
-enum ConversationScrollGeometry {
-    static func isNearBottom(
-        visibleBottom: CGFloat,
-        contentBottom: CGFloat,
-        threshold: CGFloat = ChatAutoScrollPolicy.nearBottomThreshold
-    ) -> Bool {
-        max(0, contentBottom - visibleBottom) <= threshold
-    }
-
-    static func isNearTop(visibleTop: CGFloat, threshold: CGFloat = 120) -> Bool {
-        visibleTop <= threshold
-    }
-}
-
-enum ChatSessionScrollPolicy {
-    static func shouldResetForSessionChange(previousSessionID: String?, sessionID: String?) -> Bool
-    {
-        previousSessionID != sessionID
-    }
-
-    static func shouldResetAfterHydration(
-        wasLoading: Bool,
-        isLoading: Bool,
-        sessionID: String?
-    ) -> Bool {
-        wasLoading && !isLoading && sessionID != nil
-    }
-}
-
 enum AgentCommandDisclosurePolicy {
     static let initiallyExpanded = false
 
