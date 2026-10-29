@@ -25,7 +25,7 @@ import {
 import { buildShellToolResult, collectShellOutputFilterKeywords } from './terminalOutput';
 import { completeWithContextRecovery } from './completionRecovery';
 import { extractProgressSummary } from './progressSummary';
-import { ProgressReporter } from './progressReporter';
+import { ProgressReporter, type ToolCompletion } from './progressReporter';
 import { ToolProgressGuard } from './toolProgressGuard';
 import { throwIfTurnCancelled } from './turnCancellation';
 
@@ -109,7 +109,6 @@ export async function runToolLoop(
   // future capability toggle) actually disables the tool at the execution
   // boundary, not just at registration.
   const allowedToolNames = new Set(tools.map((tool) => tool.name));
-  progressReporter.begin(session.history.length);
   let toolIterations = 0;
   let result = initialResult;
 
@@ -174,7 +173,7 @@ export async function runToolLoop(
 
     const progressSummary = extractProgressSummary(result.content ?? '');
     if (progressSummary && !isCronJob) {
-      progressReporter.noteSummary(session.history.length, progressSummary);
+      progressReporter.noteSummary();
       log.info('Sending agent progress summary', { sessionId, source: 'model' });
       send({
         session_id: sessionId,
@@ -195,7 +194,7 @@ export async function runToolLoop(
 
     const executeOneToolCall = async (
       tc: NonNullable<AICompletionResult['tool_calls']>[number],
-    ): Promise<{ id: string; name: string; result: string }> => {
+    ): Promise<{ id: string; name: string; result: string; completion?: ToolCompletion }> => {
       if (session.signal?.aborted) {
         return {
           id: tc.id,
@@ -387,7 +386,12 @@ export async function runToolLoop(
             outputLength: output.length,
             resultLength: result.length,
           });
-          return { id: tc.id, name: tc.name, result };
+          return {
+            id: tc.id,
+            name: tc.name,
+            result,
+            completion: { kind: 'command', outcome: isError ? 'failed' : 'succeeded' },
+          };
         }
 
         log.info('Agent invoking shell_script tool; forwarding to frontend', {
@@ -396,36 +400,52 @@ export async function runToolLoop(
           scriptLength: script.length,
           filterKeywords,
         });
-        const terminalOutput = await new Promise<string>((resolve) => {
-          const finish = (output: string) => {
-            session.signal?.removeEventListener('abort', cancel);
-            if (pendingShellScripts.get(sessionId)?.resolve === finish) {
-              pendingShellScripts.delete(sessionId);
+        const terminalResult = await new Promise<{ output: string; isError: boolean | undefined }>(
+          (resolve) => {
+            const finish = (output: string, isError: boolean | undefined) => {
+              session.signal?.removeEventListener('abort', cancel);
+              if (pendingShellScripts.get(sessionId)?.resolve === finish) {
+                pendingShellScripts.delete(sessionId);
+              }
+              resolve({ output, isError });
+            };
+            const cancel = () =>
+              finish(
+                'COMMAND ERROR: Connection closed before script output was received; execution outcome is unknown. Inspect the current state before retrying.',
+                undefined,
+              );
+            // Register before sending: a fast client can return output immediately.
+            pendingShellScripts.set(sessionId, { resolve: finish, filterKeywords });
+            session.signal?.addEventListener('abort', cancel, { once: true });
+            if (session.signal?.aborted) {
+              cancel();
+              return;
             }
-            resolve(output);
-          };
-          const cancel = () =>
-            finish(
-              'COMMAND ERROR: Connection closed before script output was received; execution outcome is unknown. Inspect the current state before retrying.',
-            );
-          // Register before sending: a fast client can return output immediately.
-          pendingShellScripts.set(sessionId, { resolve: finish, filterKeywords });
-          session.signal?.addEventListener('abort', cancel, { once: true });
-          if (session.signal?.aborted) {
-            cancel();
-            return;
-          }
-          send({
-            session_id: sessionId,
-            sender: 'agent',
-            content: `<shell_script>\n${script}\n</shell_script>`,
-            is_terminal_output: false,
-            is_error: false,
-            activity_id: tc.id,
-            activity_phase: 'started',
-          });
-        });
-        return { id: tc.id, name: tc.name, result: terminalOutput };
+            send({
+              session_id: sessionId,
+              sender: 'agent',
+              content: `<shell_script>\n${script}\n</shell_script>`,
+              is_terminal_output: false,
+              is_error: false,
+              activity_id: tc.id,
+              activity_phase: 'started',
+            });
+          },
+        );
+        return {
+          id: tc.id,
+          name: tc.name,
+          result: terminalResult.output,
+          completion: {
+            kind: 'command',
+            outcome:
+              terminalResult.isError === undefined
+                ? 'unknown'
+                : terminalResult.isError
+                  ? 'failed'
+                  : 'succeeded',
+          },
+        };
       }
 
       // Notify the frontend that a web tool call is about to execute.
@@ -463,6 +483,11 @@ export async function runToolLoop(
       return { id: tc.id, name: tc.name, result: toolResult };
     };
 
+    const executeAndRecord = async (tc: NonNullable<AICompletionResult['tool_calls']>[number]) => {
+      const toolResult = await executeOneToolCall(tc);
+      progressReporter.noteToolCompletion(toolResult.completion ?? { kind: 'tool' });
+      return toolResult;
+    };
     const toolResults = new Array<{ id: string; name: string; result: string }>(toolCalls.length);
     let callIndex = 0;
     while (callIndex < toolCalls.length) {
@@ -472,7 +497,7 @@ export async function runToolLoop(
       // stops before either tool; handling both here also guarantees the
       // cursor advances instead of repeatedly processing an empty batch.
       if (tc.name === 'shell_script' || tc.name === CONNECT_MCP_TOOL_NAME) {
-        toolResults[callIndex] = await executeOneToolCall(tc);
+        toolResults[callIndex] = await executeAndRecord(tc);
         callIndex++;
         continue;
       }
@@ -487,7 +512,7 @@ export async function runToolLoop(
         batch.push(toolCalls[callIndex]);
         callIndex++;
       }
-      const batchResults = await Promise.all(batch.map(executeOneToolCall));
+      const batchResults = await Promise.all(batch.map(executeAndRecord));
       batchResults.forEach((toolResult, offset) => {
         toolResults[batchStart + offset] = toolResult;
       });
@@ -554,7 +579,7 @@ export async function runToolLoop(
     }
 
     if (!isCronJob) {
-      const summary = await progressReporter.reportIfDue(session, log, onUsage);
+      const summary = progressReporter.reportIfDue(session.signal);
       if (summary) {
         pushToSessionHistory(logger, session, {
           role: 'assistant',

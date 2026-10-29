@@ -1303,12 +1303,12 @@ describe('agent session persistence checkpoints', () => {
       send.mock.calls.some(([msg]) => String(msg.content).includes('echo one')),
     );
     expect(send.mock.calls.some(([msg]) => String(msg.content).includes('echo two'))).toBe(false);
-    pendingShellScripts.get('session-1')?.resolve('TERMINAL OUTPUT:\none');
+    pendingShellScripts.get('session-1')?.resolve('TERMINAL OUTPUT:\none', false);
 
     await waitForCondition(() =>
       send.mock.calls.some(([msg]) => String(msg.content).includes('echo two')),
     );
-    pendingShellScripts.get('session-1')?.resolve('TERMINAL OUTPUT:\ntwo');
+    pendingShellScripts.get('session-1')?.resolve('TERMINAL OUTPUT:\ntwo', false);
 
     await turn;
 
@@ -1435,7 +1435,7 @@ describe('agent session persistence checkpoints', () => {
     await waitForCondition(() =>
       send.mock.calls.some(([msg]) => String(msg.content).includes('curl -fsSL')),
     );
-    pendingShellScripts.get('session-1')?.resolve('TERMINAL OUTPUT:\nfallback data');
+    pendingShellScripts.get('session-1')?.resolve('TERMINAL OUTPUT:\nfallback data', false);
 
     await turn;
 
@@ -1995,6 +1995,78 @@ describe('agent session persistence checkpoints', () => {
       true,
     );
   });
+  it('reports a successful shell retry from execution status despite long output containing old failures', async () => {
+    let now = 100_000;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    let mainCalls = 0;
+    let shellCalls = 0;
+    const send = vi.fn((message) => {
+      if (!String(message.content).startsWith('<shell_script>')) return;
+      const failed = ++shellCalls === 1;
+      now += 90_000;
+      pendingShellScripts
+        .get('session-1')!
+        .resolve(
+          failed
+            ? 'COMMAND ERROR:\nTypecheck failed.'
+            : 'TERMINAL OUTPUT:\n' +
+                'Source fixture: tests failing; credentials expired.\n'.repeat(200) +
+                '55 tasks successful.',
+          failed,
+        );
+    });
+    mocks.complete.mockReset().mockImplementation(async (model) => {
+      if (++mainCalls <= 2) {
+        const calls = [
+          {
+            id: `check-${mainCalls}`,
+            name: 'shell_script',
+            arguments: { script: `check-${mainCalls}` },
+          },
+        ];
+        return {
+          content: '',
+          finish_reason: 'tool_calls',
+          model,
+          tool_calls: calls,
+          assistantMessage: { role: 'assistant', content: '', tool_calls: calls },
+        };
+      }
+      return {
+        content: '<final_answer>Done</final_answer>',
+        finish_reason: 'stop',
+        model,
+        assistantMessage: { role: 'assistant', content: '<final_answer>Done</final_answer>' },
+      };
+    });
+    try {
+      await runAgentTurn(
+        'session-1',
+        { id: 'subscription-1' } as any,
+        { session_id: 'session-1', sender: 'client', content: 'Fix it', platform: 'macos' },
+        send,
+        mocks.log as any,
+        { skipGrouping: true },
+      );
+      const summaries = parsedHistoryFromCall(historyUpdateCalls().at(-1)!)
+        .filter(
+          (message) =>
+            message.role === 'assistant' && message.content.startsWith('<progress_summary>'),
+        )
+        .map((message) => message.content);
+      expect(summaries).toEqual([
+        '<progress_summary>Received 1 tool result since the last update. The latest command reported an error. Work is continuing.</progress_summary>',
+        '<progress_summary>Received 1 tool result since the last update. The latest command reported success. Work is continuing.</progress_summary>',
+      ]);
+      expect(send.mock.calls.map(([message]) => message.content)).toContain(
+        'Received 1 tool result since the last update. The latest command reported success. Work is continuing.',
+      );
+      expect(mocks.complete).toHaveBeenCalledTimes(3);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it('sends and persists a progress update when native tool responses remain silent', async () => {
     let now = 100_000;
     const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
@@ -2005,12 +2077,6 @@ describe('agent session persistence checkpoints', () => {
       return 'Validation: 79 tests passed.';
     });
     mocks.complete.mockReset().mockImplementation(async (model) => {
-      if (model === 'summary-model')
-        return {
-          content: '{"summary":"The test run passed; review remains pending."}',
-          finish_reason: 'stop',
-          model,
-        };
       if (++mainCalls === 1) {
         const calls = [
           { id: 'work', name: 'web_search', arguments: { query: 'validation result' } },
@@ -2041,7 +2107,7 @@ describe('agent session persistence checkpoints', () => {
       );
       expect(send.mock.calls.map(([msg]) => msg)).toContainEqual(
         expect.objectContaining({
-          content: 'The test run passed; review remains pending.',
+          content: 'Received 1 tool result since the last update. Work is continuing.',
           is_error: false,
           is_terminal_output: false,
         }),
@@ -2051,10 +2117,11 @@ describe('agent session persistence checkpoints', () => {
         history.some(
           (m) =>
             m.content ===
-            '<progress_summary>The test run passed; review remains pending.</progress_summary>',
+            '<progress_summary>Received 1 tool result since the last update. Work is continuing.</progress_summary>',
         ),
       ).toBe(true);
       expect(mainCalls).toBe(2);
+      expect(mocks.complete).toHaveBeenCalledTimes(2);
       const mainRequest = mocks.complete.mock.calls
         .filter(([model]) => model === 'test-model')
         .at(-1)![1];

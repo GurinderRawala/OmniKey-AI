@@ -126,6 +126,28 @@ describe('WebSocket turn ownership', () => {
     owner.close();
   });
 
+  it.each([false, true, undefined])(
+    'passes shell completion status separately from output: %s',
+    async (isError) => {
+      const checkpoint = deferred();
+      mocks.run.mockImplementationOnce(async () => checkpoint.promise);
+      const server = attachAgentWebSocketServer({} as any);
+      const owner = connect(server);
+      owner.message('new task');
+      await vi.waitFor(() => expect(mocks.run).toHaveBeenCalledTimes(1));
+      const resolve = vi.fn();
+      pendingShellScripts.set('session', { resolve, filterKeywords: [] });
+      owner.message('COMMAND ERROR: old failure in source text', {
+        is_terminal_output: true,
+        ...(isError === undefined ? {} : { is_error: isError }),
+      });
+      await vi.waitFor(() => expect(resolve).toHaveBeenCalledWith(expect.any(String), isError));
+      checkpoint.resolve();
+      await vi.waitFor(() => expect(activeSessions.has('session')).toBe(false));
+      owner.close();
+    },
+  );
+
   it('drops disconnected queued messages and late authentication', async () => {
     const auth = deferred();
     mocks.auth.mockImplementationOnce(async () => {
