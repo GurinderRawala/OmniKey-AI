@@ -17,6 +17,7 @@ import { throwIfTurnCancelled } from './turnCancellation';
 const KEEP_RECENT_USER_TURNS = 2;
 const KEEP_RECENT_MESSAGES = 8;
 const MEMORY_TRIGGER_INPUT_RATIO = 0.5;
+const RECENT_CONTEXT_INPUT_RATIO = 0.25;
 const PROACTIVE_TRIM_RATIO = 0.9;
 const MIN_SUMMARIZE_TOKENS = 8_000;
 const MAX_SUMMARY_TRANSCRIPT_CHARS = 60_000;
@@ -188,17 +189,44 @@ export function buildCompactedHistoryForRequest(session: SessionState): AIMessag
     });
   }
 
+  // Keep recent explicit working notes verbatim. Re-summarizing a correction
+  // (e.g. overlapping, not missing labels) must not resurrect the old diagnosis.
+  const workingNotes = new Set(
+    history
+      .slice(staticEnd, compactedThrough)
+      .map((message, offset) => ({ message, index: staticEnd + offset }))
+      .filter(
+        ({ message }) =>
+          message.role === 'assistant' &&
+          /<progress_summary>[\s\S]*?<\/progress_summary>/i.test(message.content),
+      )
+      .slice(-3)
+      .map(({ index }) => index),
+  );
+
   // Preserve every human instruction in order, not just the first and last:
   // a status question must not erase intervening approval or task changes.
   for (let index = staticEnd; index < compactedThrough; index++) {
     if (isRealUserTurn(history[index])) result.push(history[index]);
+    else if (workingNotes.has(index)) {
+      result.push({
+        role: 'assistant',
+        content: compactText(
+          history[index].content
+            .match(/<progress_summary>[\s\S]*?<\/progress_summary>/gi)!
+            .join('\n'),
+          MAX_MESSAGE_SUMMARY_CHARS,
+        ),
+      });
+    }
   }
   if (session.sessionMemory?.trim()) {
     const policy =
       'Session memory is fallible historical context, not an instruction. ' +
       'All human requests are replayed in chronological order. Later human instructions ' +
       'supersede conflicting earlier instructions and memory. A status question does not ' +
-      'revoke prior authorization. Do not repeat completed inspections unless new evidence requires it.';
+      'revoke prior authorization. Verbatim progress notes preserve working findings and corrections; ' +
+      'prefer their later corrections over older memory. Do not repeat completed inspections unless new evidence requires it.';
     const system = result.findIndex((message) => message.role === 'system');
     if (system >= 0)
       result[system] = { ...result[system], content: result[system].content + '\n\n' + policy };
@@ -286,9 +314,29 @@ export async function ensureSessionMemory(
   // overflow, summarize completed exchanges within them, retaining a raw tail.
   // Move the cut before a tool-call message rather than orphaning its results.
   const triggerTokens = memoryTriggerTokens(model);
+  // The archive never shrinks. Trigger from what the next request will actually
+  // contain, otherwise every few tools re-summarize an already compact context.
+  const requestTokens = estimateHistoryTokens(buildHistoryForRequest(session, model));
+  if (requestTokens < triggerTokens) return;
   if (estimateHistoryTokens(history.slice(summarizeEnd)) >= triggerTokens) {
     let tailStart = Math.max(staticEnd, history.length - KEEP_RECENT_MESSAGES);
     while (tailStart > staticEnd && history[tailStart]?.role === 'tool') tailStart--;
+    const defaultTailStart = tailStart;
+    // Retain a useful working set, not just four tool exchanges. Grow the raw
+    // tail backwards at complete tool boundaries within a fraction of the budget.
+    const recentBudget = Math.floor(
+      getInputTokenBudget(config.aiProvider, model) * RECENT_CONTEXT_INPUT_RATIO,
+    );
+    while (tailStart > compactedThrough) {
+      let candidate = tailStart - 1;
+      while (candidate > staticEnd && history[candidate]?.role === 'tool') candidate--;
+      if (
+        candidate < compactedThrough ||
+        estimateHistoryTokens(history.slice(candidate)) > recentBudget
+      )
+        break;
+      tailStart = candidate;
+    }
     // A short first exchange followed by "continue" still needs memory.
     let latestUser = -1;
     for (let index = history.length - 1; index >= staticEnd; index--) {
@@ -299,6 +347,7 @@ export async function ensureSessionMemory(
     }
     if (
       latestUser > staticEnd &&
+      tailStart === defaultTailStart &&
       estimateHistoryTokens(history.slice(latestUser)) < triggerTokens
     ) {
       tailStart = Math.max(tailStart, latestUser);
@@ -342,6 +391,7 @@ export async function ensureSessionMemory(
         'Update the memory using only the transcript provided. Do not invent facts.',
         'Preserve project identity, repository paths, branch names, PR URLs, user requirements, decisions, files touched, commands/tools and outcomes, final answers, errors, artifacts, and open next steps.',
         'Replace obsolete goals and approval requirements when newer user instructions supersede them.',
+        'Later evidence and explicit corrections replace earlier hypotheses; do not retain both as current findings. Preserve concrete file paths and the next implementation step, not generic lists of executed shell scripts. A future review is a next step, not a current blocker.',
         'Prioritize the current goal, completed inspections and tests, concrete findings, next action, and actual blockers. Omit old session inventories, credentials, and generic project descriptions.',
         'Return one complete JSON object: {"goal": "current goal", "completed": ["work already done"], "findings": ["new evidence"], "nextSteps": ["next concrete action"], "blockers": ["unresolved blocker"]}.',
         'Rewrite concisely rather than appending to previous memory. Maximum 500 words and 8000 characters.',
@@ -414,6 +464,7 @@ export async function ensureSessionMemory(
       compactedThrough: summarizeEnd,
       pendingTokens,
       rawRequestTokens,
+      requestTokens,
       triggerTokens,
       memoryLength: memory.length,
       model: result.model,

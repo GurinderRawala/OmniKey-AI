@@ -239,7 +239,10 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
             rawContentLength: (message.content ?? '').length,
             refinedContentLength: content.length,
           });
-          pendingShell.resolve(content);
+          pendingShell.resolve(
+            content,
+            typeof message.is_error === 'boolean' ? message.is_error : undefined,
+          );
           return;
         }
 

@@ -38,10 +38,12 @@ import {
 import { buildShellToolResult } from './terminalOutput';
 import { runToolLoop } from './toolLoop';
 import { ToolProgressGuard } from './toolProgressGuard';
+import { ProgressReporter } from './progressReporter';
 import { throwIfTurnCancelled } from './turnCancellation';
 
 type InternalAgentTurnOptions = AgentTurnOptions & {
   progressGuard?: ToolProgressGuard;
+  progressReporter?: ProgressReporter;
   untaggedDepth?: number;
   webFallbackDepth?: number;
   steeringRestartCount?: number;
@@ -431,6 +433,7 @@ async function runAgentTurnInternal(
         steeringRestartBudget,
         options?.toolHandlers,
         options?.progressGuard,
+        options?.progressReporter,
       );
 
       for (;;) {
@@ -468,6 +471,7 @@ async function runAgentTurnInternal(
             steeringRestartBudget,
             options?.toolHandlers,
             options?.progressGuard,
+            options?.progressReporter,
           );
           continue;
         }
@@ -489,6 +493,15 @@ async function runAgentTurnInternal(
           // hard-stop answers directly so web-failure recovery cannot bypass the
           // tool-iteration cap.
           log.info('Tool loop produced final answer; processing inline', { sessionId });
+          content = toolLoopContent;
+          result = recoveredToolLoopResult;
+          break;
+        }
+
+        // Match the direct-completion path: a successful textual answer needs
+        // no second agent turn merely to add presentation tags. Keep actual web
+        // failures on the existing retrieval recovery path.
+        if (!webToolFailed && recoveredToolLoopResult.finish_reason === 'stop' && toolLoopContent) {
           content = toolLoopContent;
           result = recoveredToolLoopResult;
           break;
@@ -748,5 +761,6 @@ export async function runAgentTurn(
   return runAgentTurnInternal(sessionId, subscription, clientMessage, send, log, {
     ...options,
     progressGuard: new ToolProgressGuard(),
+    progressReporter: new ProgressReporter(),
   });
 }

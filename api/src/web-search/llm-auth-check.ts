@@ -125,10 +125,10 @@ export async function isPageAuthenticated(
     { role: 'user', content: `URL: ${url}\n\nPage content:\n${content}` },
   ];
   try {
-    const result = await aiClient.complete(model, messages, { temperature: 0, maxTokens: 1 });
+    const result = await aiClient.complete(model, messages, { temperature: 0, maxTokens: 16 });
     const answer = result.content.trim().toLowerCase();
     log.info('llm-auth-check: LLM response', { url, answer });
-    return answer === 'yes';
+    return result.finish_reason === 'stop' && !result.tool_calls?.length && answer === 'yes';
   } catch (err) {
     log.error('llm-auth-check: LLM call failed', { url, error: String(err) });
     // If LLM call fails, default to not authorized

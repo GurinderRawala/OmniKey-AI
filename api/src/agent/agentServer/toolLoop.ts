@@ -25,6 +25,7 @@ import {
 import { buildShellToolResult, collectShellOutputFilterKeywords } from './terminalOutput';
 import { completeWithContextRecovery } from './completionRecovery';
 import { extractProgressSummary } from './progressSummary';
+import { ProgressReporter, type ToolCompletion } from './progressReporter';
 import { ToolProgressGuard } from './toolProgressGuard';
 import { throwIfTurnCancelled } from './turnCancellation';
 
@@ -101,6 +102,7 @@ export async function runToolLoop(
   steeringRestartBudget: SteeringRestartBudget,
   toolHandlers?: Map<string, CustomToolHandler>,
   progressGuard = new ToolProgressGuard(),
+  progressReporter = new ProgressReporter(),
 ): Promise<AICompletionResult> {
   // Tools the model is allowed to invoke on this turn. Built from the same
   // list we hand to the AI client, so flipping WEB_SEARCH_ENABLED (or any
@@ -112,8 +114,6 @@ export async function runToolLoop(
 
   while (result.finish_reason === 'tool_calls') {
     throwIfTurnCancelled(session.signal);
-    const limit = progressGuard.beforeRound();
-    if (limit) return toolLoopLimitResult(model, limit);
     toolIterations++;
 
     const preToolSteeringMessages = drainSteeringMessagesIntoHistory(
@@ -173,6 +173,8 @@ export async function runToolLoop(
 
     const progressSummary = extractProgressSummary(result.content ?? '');
     if (progressSummary && !isCronJob) {
+      progressReporter.noteSummary();
+      log.info('Sending agent progress summary', { sessionId, source: 'model' });
       send({
         session_id: sessionId,
         sender: 'agent',
@@ -192,7 +194,7 @@ export async function runToolLoop(
 
     const executeOneToolCall = async (
       tc: NonNullable<AICompletionResult['tool_calls']>[number],
-    ): Promise<{ id: string; name: string; result: string }> => {
+    ): Promise<{ id: string; name: string; result: string; completion?: ToolCompletion }> => {
       if (session.signal?.aborted) {
         return {
           id: tc.id,
@@ -384,7 +386,12 @@ export async function runToolLoop(
             outputLength: output.length,
             resultLength: result.length,
           });
-          return { id: tc.id, name: tc.name, result };
+          return {
+            id: tc.id,
+            name: tc.name,
+            result,
+            completion: { kind: 'command', outcome: isError ? 'failed' : 'succeeded' },
+          };
         }
 
         log.info('Agent invoking shell_script tool; forwarding to frontend', {
@@ -393,36 +400,52 @@ export async function runToolLoop(
           scriptLength: script.length,
           filterKeywords,
         });
-        const terminalOutput = await new Promise<string>((resolve) => {
-          const finish = (output: string) => {
-            session.signal?.removeEventListener('abort', cancel);
-            if (pendingShellScripts.get(sessionId)?.resolve === finish) {
-              pendingShellScripts.delete(sessionId);
+        const terminalResult = await new Promise<{ output: string; isError: boolean | undefined }>(
+          (resolve) => {
+            const finish = (output: string, isError: boolean | undefined) => {
+              session.signal?.removeEventListener('abort', cancel);
+              if (pendingShellScripts.get(sessionId)?.resolve === finish) {
+                pendingShellScripts.delete(sessionId);
+              }
+              resolve({ output, isError });
+            };
+            const cancel = () =>
+              finish(
+                'COMMAND ERROR: Connection closed before script output was received; execution outcome is unknown. Inspect the current state before retrying.',
+                undefined,
+              );
+            // Register before sending: a fast client can return output immediately.
+            pendingShellScripts.set(sessionId, { resolve: finish, filterKeywords });
+            session.signal?.addEventListener('abort', cancel, { once: true });
+            if (session.signal?.aborted) {
+              cancel();
+              return;
             }
-            resolve(output);
-          };
-          const cancel = () =>
-            finish(
-              'COMMAND ERROR: Connection closed before script output was received; execution outcome is unknown. Inspect the current state before retrying.',
-            );
-          // Register before sending: a fast client can return output immediately.
-          pendingShellScripts.set(sessionId, { resolve: finish, filterKeywords });
-          session.signal?.addEventListener('abort', cancel, { once: true });
-          if (session.signal?.aborted) {
-            cancel();
-            return;
-          }
-          send({
-            session_id: sessionId,
-            sender: 'agent',
-            content: `<shell_script>\n${script}\n</shell_script>`,
-            is_terminal_output: false,
-            is_error: false,
-            activity_id: tc.id,
-            activity_phase: 'started',
-          });
-        });
-        return { id: tc.id, name: tc.name, result: terminalOutput };
+            send({
+              session_id: sessionId,
+              sender: 'agent',
+              content: `<shell_script>\n${script}\n</shell_script>`,
+              is_terminal_output: false,
+              is_error: false,
+              activity_id: tc.id,
+              activity_phase: 'started',
+            });
+          },
+        );
+        return {
+          id: tc.id,
+          name: tc.name,
+          result: terminalResult.output,
+          completion: {
+            kind: 'command',
+            outcome:
+              terminalResult.isError === undefined
+                ? 'unknown'
+                : terminalResult.isError
+                  ? 'failed'
+                  : 'succeeded',
+          },
+        };
       }
 
       // Notify the frontend that a web tool call is about to execute.
@@ -460,6 +483,11 @@ export async function runToolLoop(
       return { id: tc.id, name: tc.name, result: toolResult };
     };
 
+    const executeAndRecord = async (tc: NonNullable<AICompletionResult['tool_calls']>[number]) => {
+      const toolResult = await executeOneToolCall(tc);
+      progressReporter.noteToolCompletion(toolResult.completion ?? { kind: 'tool' });
+      return toolResult;
+    };
     const toolResults = new Array<{ id: string; name: string; result: string }>(toolCalls.length);
     let callIndex = 0;
     while (callIndex < toolCalls.length) {
@@ -469,7 +497,7 @@ export async function runToolLoop(
       // stops before either tool; handling both here also guarantees the
       // cursor advances instead of repeatedly processing an empty batch.
       if (tc.name === 'shell_script' || tc.name === CONNECT_MCP_TOOL_NAME) {
-        toolResults[callIndex] = await executeOneToolCall(tc);
+        toolResults[callIndex] = await executeAndRecord(tc);
         callIndex++;
         continue;
       }
@@ -484,7 +512,7 @@ export async function runToolLoop(
         batch.push(toolCalls[callIndex]);
         callIndex++;
       }
-      const batchResults = await Promise.all(batch.map(executeOneToolCall));
+      const batchResults = await Promise.all(batch.map(executeAndRecord));
       batchResults.forEach((toolResult, offset) => {
         toolResults[batchStart + offset] = toolResult;
       });
@@ -541,6 +569,40 @@ export async function runToolLoop(
           .map((toolResult) => toolResult.name),
       });
       return webToolFailureInterruptResult(model);
+    }
+
+    const recoveryPrompt = progressGuard.takeRecoveryPrompt();
+    if (recoveryPrompt) {
+      pushToSessionHistory(logger, session, { role: 'user', content: recoveryPrompt });
+      await persistSessionToDB(sessionId, session);
+      log.info('Added agent progress recovery checkpoint', { sessionId, toolIterations });
+    }
+
+    if (!isCronJob) {
+      const summary = progressReporter.reportIfDue(session.signal);
+      if (summary) {
+        pushToSessionHistory(logger, session, {
+          role: 'assistant',
+          content: `<progress_summary>${summary}</progress_summary>`,
+        });
+        // Avoid assistant-prefill requests on providers that reject a trailing
+        // assistant message. This is server control text, not a human request.
+        pushToSessionHistory(logger, session, {
+          role: 'user',
+          content:
+            'Progress update delivered. Continue the authorized task from the latest tool results; do not repeat completed work.',
+        });
+        await persistSessionToDB(sessionId, session);
+        throwIfTurnCancelled(session.signal);
+        send({
+          session_id: sessionId,
+          sender: 'agent',
+          content: summary,
+          is_terminal_output: false,
+          is_error: false,
+        });
+        log.info('Sending agent progress summary', { sessionId, source: 'silence-recovery' });
+      }
     }
 
     // Call the AI again with the tool results in history to get the next response.

@@ -67,6 +67,7 @@ function runCronJob(
   sessionId: string,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
+    const abortController = new AbortController();
     let agentErrorRecoveryAttempts = 0;
     let settled = false;
     const settle = (err?: Error) => {
@@ -76,11 +77,10 @@ function runCronJob(
       err ? reject(err) : resolve();
     };
 
-    const timeoutHandle = setTimeout(
-      () =>
-        settle(new Error(`Cron job ${job.id} timed out after ${JOB_TIMEOUT_MS / 60_000} minutes`)),
-      JOB_TIMEOUT_MS,
-    );
+    const timeoutHandle = setTimeout(() => {
+      abortController.abort();
+      settle(new Error(`Cron job ${job.id} timed out after ${JOB_TIMEOUT_MS / 60_000} minutes`));
+    }, JOB_TIMEOUT_MS);
 
     const send: AgentSendFn = (msg) => {
       if (settled) return;
@@ -120,7 +120,7 @@ function runCronJob(
             },
             send,
             logger,
-            { isCronJob: true },
+            { isCronJob: true, signal: abortController.signal },
           ).catch((err) => settle(err instanceof Error ? err : new Error(String(err))));
           return;
         }
@@ -169,7 +169,7 @@ function runCronJob(
       },
       send,
       logger,
-      { isCronJob: true },
+      { isCronJob: true, signal: abortController.signal },
     ).catch((err) => settle(err instanceof Error ? err : new Error(String(err))));
   });
 }

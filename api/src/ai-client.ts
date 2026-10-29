@@ -186,6 +186,10 @@ export function modelSupportsTemperature(model: string): boolean {
 function contextWindowForModel(model: string, provider: AIProvider): number {
   const m = model.toLowerCase();
 
+  // API windows, not the smaller default used by Codex/ChatGPT Work.
+  // https://developers.openai.com/api/docs/models/gpt-6.1-sol
+  // https://developers.openai.com/api/docs/models/gpt-6.1-terra
+  if (/^gpt-6\.1-(?:sol|terra)(?:$|[._-])/.test(m)) return 1_050_000;
   // OpenAI
   if (/^gpt-6-astra(?:$|[._-])/.test(m)) return 1_050_000;
   if (/^gpt-5\.[456]/.test(m)) return 1_000_000;

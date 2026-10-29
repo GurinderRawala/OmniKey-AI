@@ -39,6 +39,6 @@ export interface PendingSteeringMessage {
 }
 
 export type PendingShellScript = {
-  resolve: (output: string) => void;
+  resolve: (output: string, isError: boolean | undefined) => void;
   filterKeywords: string[];
 };
