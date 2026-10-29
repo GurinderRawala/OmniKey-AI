@@ -531,4 +531,30 @@ describe('agent session memory compaction', () => {
     );
     expect(request.some((m) => m.tool_call_id === 'old' || m.tool_calls?.length)).toBe(false);
   });
+  it('keeps the budgeted working set before a short Continue request', async () => {
+    mocks.getInputTokenBudget.mockReturnValue(100_000);
+    const session = makeSession([
+      { role: 'system', content: 'system' },
+      { role: 'user', content: 'Implement the chart fix' },
+      ...Array.from({ length: 30 }, (_, i): AIMessage[] => [
+        {
+          role: 'assistant',
+          content: '',
+          tool_calls: [{ id: `c${i}`, name: 'shell_script', arguments: {} }],
+        },
+        {
+          role: 'tool',
+          tool_call_id: `c${i}`,
+          content: `working evidence ${i}: ` + 'x'.repeat(1800),
+        },
+      ]).flat(),
+      { role: 'user', content: 'Continue' },
+    ]);
+    await ensureSessionMemory(session, 'session', 'model', mocks.log as any);
+    const cursor = session.sessionMemoryHistoryLength!;
+    expect(cursor).toBeLessThan(session.history.length - 8);
+    const request = buildCompactedHistoryForRequest(session);
+    expect(request.some((m) => m.content.startsWith('working evidence 25:'))).toBe(true);
+    expect(request.at(-1)?.content).toBe('Continue');
+  });
 });

@@ -38,10 +38,12 @@ import {
 import { buildShellToolResult } from './terminalOutput';
 import { runToolLoop } from './toolLoop';
 import { ToolProgressGuard } from './toolProgressGuard';
+import { ProgressReporter } from './progressReporter';
 import { throwIfTurnCancelled } from './turnCancellation';
 
 type InternalAgentTurnOptions = AgentTurnOptions & {
   progressGuard?: ToolProgressGuard;
+  progressReporter?: ProgressReporter;
   untaggedDepth?: number;
   webFallbackDepth?: number;
   steeringRestartCount?: number;
@@ -431,6 +433,7 @@ async function runAgentTurnInternal(
         steeringRestartBudget,
         options?.toolHandlers,
         options?.progressGuard,
+        options?.progressReporter,
       );
 
       for (;;) {
@@ -468,6 +471,7 @@ async function runAgentTurnInternal(
             steeringRestartBudget,
             options?.toolHandlers,
             options?.progressGuard,
+            options?.progressReporter,
           );
           continue;
         }
@@ -757,5 +761,6 @@ export async function runAgentTurn(
   return runAgentTurnInternal(sessionId, subscription, clientMessage, send, log, {
     ...options,
     progressGuard: new ToolProgressGuard(),
+    progressReporter: new ProgressReporter(),
   });
 }

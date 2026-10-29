@@ -25,6 +25,7 @@ import {
 import { buildShellToolResult, collectShellOutputFilterKeywords } from './terminalOutput';
 import { completeWithContextRecovery } from './completionRecovery';
 import { extractProgressSummary } from './progressSummary';
+import { ProgressReporter } from './progressReporter';
 import { ToolProgressGuard } from './toolProgressGuard';
 import { throwIfTurnCancelled } from './turnCancellation';
 
@@ -101,12 +102,14 @@ export async function runToolLoop(
   steeringRestartBudget: SteeringRestartBudget,
   toolHandlers?: Map<string, CustomToolHandler>,
   progressGuard = new ToolProgressGuard(),
+  progressReporter = new ProgressReporter(),
 ): Promise<AICompletionResult> {
   // Tools the model is allowed to invoke on this turn. Built from the same
   // list we hand to the AI client, so flipping WEB_SEARCH_ENABLED (or any
   // future capability toggle) actually disables the tool at the execution
   // boundary, not just at registration.
   const allowedToolNames = new Set(tools.map((tool) => tool.name));
+  progressReporter.begin(session.history.length);
   let toolIterations = 0;
   let result = initialResult;
 
@@ -171,6 +174,8 @@ export async function runToolLoop(
 
     const progressSummary = extractProgressSummary(result.content ?? '');
     if (progressSummary && !isCronJob) {
+      progressReporter.noteSummary(session.history.length, progressSummary);
+      log.info('Sending agent progress summary', { sessionId, source: 'model' });
       send({
         session_id: sessionId,
         sender: 'agent',
@@ -546,6 +551,33 @@ export async function runToolLoop(
       pushToSessionHistory(logger, session, { role: 'user', content: recoveryPrompt });
       await persistSessionToDB(sessionId, session);
       log.info('Added agent progress recovery checkpoint', { sessionId, toolIterations });
+    }
+
+    if (!isCronJob) {
+      const summary = await progressReporter.reportIfDue(session, log, onUsage);
+      if (summary) {
+        pushToSessionHistory(logger, session, {
+          role: 'assistant',
+          content: `<progress_summary>${summary}</progress_summary>`,
+        });
+        // Avoid assistant-prefill requests on providers that reject a trailing
+        // assistant message. This is server control text, not a human request.
+        pushToSessionHistory(logger, session, {
+          role: 'user',
+          content:
+            'Progress update delivered. Continue the authorized task from the latest tool results; do not repeat completed work.',
+        });
+        await persistSessionToDB(sessionId, session);
+        throwIfTurnCancelled(session.signal);
+        send({
+          session_id: sessionId,
+          sender: 'agent',
+          content: summary,
+          is_terminal_output: false,
+          is_error: false,
+        });
+        log.info('Sending agent progress summary', { sessionId, source: 'silence-recovery' });
+      }
     }
 
     // Call the AI again with the tool results in history to get the next response.

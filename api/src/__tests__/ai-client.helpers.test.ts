@@ -153,10 +153,10 @@ describe('getFixedHelperModel', () => {
 
 describe('getContextWindowSize', () => {
   it.each(['gpt-6.1-sol', 'gpt-6.1-terra', 'GPT-6.1-SOL', 'gpt-6.1-sol-2026-10-29'])(
-    'uses the advertised 500K context budget for %s',
+    'uses the 1.05M API context budget for %s',
     (model) => {
-      expect(getContextWindowSize('openai', model)).toBe(500_000);
-      expect(getInputTokenBudget('openai', model)).toBe(460_000);
+      expect(getContextWindowSize('openai', model)).toBe(1_050_000);
+      expect(getInputTokenBudget('openai', model)).toBe(1_010_000);
     },
   );
   it('does not assign the Sol/Terra window to unknown GPT-6.1 models', () => {

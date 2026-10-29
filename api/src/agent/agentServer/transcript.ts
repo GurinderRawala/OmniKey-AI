@@ -583,6 +583,11 @@ export function buildTranscript(raw: RawHistoryMessage[]): TranscriptMessage[] {
       }
       return;
     }
+    const standaloneProgress = extractProgressSummary(content);
+    if (standaloneProgress) {
+      appendAssistantBlock('agentReasoning', standaloneProgress);
+      return;
+    }
     const visible = cleanAssistantTranscriptText(content);
     if (!visible) return;
     appendAssistantBlock('finalAnswer', visible);

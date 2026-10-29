@@ -123,6 +123,7 @@ vi.mock('../ai-client', () => ({
   estimateHistoryTokens: vi.fn((history: unknown[]) => JSON.stringify(history).length),
   getContextWindowSize: vi.fn(() => 128_000),
   getDefaultModel: vi.fn(() => 'test-model'),
+  getFixedHelperModel: vi.fn(() => 'summary-model'),
   getInputTokenBudget: vi.fn(() => 100_000),
   getMaxMessageContentLength: vi.fn(() => 1_000_000),
   providerSupportsImageGeneration: vi.fn(() => false),
@@ -1993,5 +1994,76 @@ describe('agent session persistence checkpoints', () => {
     expect(send.mock.calls.some(([m]) => String(m.content).includes('evidence already seen'))).toBe(
       true,
     );
+  });
+  it('sends and persists a progress update when native tool responses remain silent', async () => {
+    let now = 100_000;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const send = vi.fn();
+    let mainCalls = 0;
+    mocks.executeTool.mockImplementation(async () => {
+      now += 90_000;
+      return 'Validation: 79 tests passed.';
+    });
+    mocks.complete.mockReset().mockImplementation(async (model) => {
+      if (model === 'summary-model')
+        return {
+          content: '{"summary":"The fix passed 79 tests; review remains pending."}',
+          finish_reason: 'stop',
+          model,
+        };
+      if (++mainCalls === 1) {
+        const calls = [
+          { id: 'work', name: 'web_search', arguments: { query: 'validation result' } },
+        ];
+        return {
+          content: '',
+          finish_reason: 'tool_calls',
+          model,
+          tool_calls: calls,
+          assistantMessage: { role: 'assistant', content: '', tool_calls: calls },
+        };
+      }
+      return {
+        content: '<final_answer>Done</final_answer>',
+        finish_reason: 'stop',
+        model,
+        assistantMessage: { role: 'assistant', content: '<final_answer>Done</final_answer>' },
+      };
+    });
+    try {
+      await runAgentTurn(
+        'session-1',
+        { id: 'subscription-1' } as any,
+        { session_id: 'session-1', sender: 'client', content: 'Fix it', platform: 'macos' },
+        send,
+        mocks.log as any,
+        { skipGrouping: true },
+      );
+      expect(send.mock.calls.map(([msg]) => msg)).toContainEqual(
+        expect.objectContaining({
+          content: 'The fix passed 79 tests; review remains pending.',
+          is_error: false,
+          is_terminal_output: false,
+        }),
+      );
+      const history = parsedHistoryFromCall(historyUpdateCalls().at(-1)!);
+      expect(
+        history.some(
+          (m) =>
+            m.content ===
+            '<progress_summary>The fix passed 79 tests; review remains pending.</progress_summary>',
+        ),
+      ).toBe(true);
+      expect(mainCalls).toBe(2);
+      const mainRequest = mocks.complete.mock.calls
+        .filter(([model]) => model === 'test-model')
+        .at(-1)![1];
+      expect(mainRequest.at(-1)).toMatchObject({
+        role: 'user',
+        content: expect.stringContaining('Progress update delivered.'),
+      });
+    } finally {
+      clock.mockRestore();
+    }
   });
 });

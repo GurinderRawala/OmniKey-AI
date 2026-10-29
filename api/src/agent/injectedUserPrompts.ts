@@ -24,6 +24,7 @@
  */
 const INJECTED_USER_PROMPT_PREFIXES: readonly string[] = [
   'Agent progress checkpoint:',
+  'Progress update delivered.',
   // agentServer.ts — web tool loop resolution (both branches share these
   // opening lines depending on whether the web call failed).
   'IMPORTANT: The web search tool failed',

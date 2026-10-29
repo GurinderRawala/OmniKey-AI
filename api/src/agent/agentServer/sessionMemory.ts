@@ -321,6 +321,7 @@ export async function ensureSessionMemory(
   if (estimateHistoryTokens(history.slice(summarizeEnd)) >= triggerTokens) {
     let tailStart = Math.max(staticEnd, history.length - KEEP_RECENT_MESSAGES);
     while (tailStart > staticEnd && history[tailStart]?.role === 'tool') tailStart--;
+    const defaultTailStart = tailStart;
     // Retain a useful working set, not just four tool exchanges. Grow the raw
     // tail backwards at complete tool boundaries within a fraction of the budget.
     const recentBudget = Math.floor(
@@ -346,6 +347,7 @@ export async function ensureSessionMemory(
     }
     if (
       latestUser > staticEnd &&
+      tailStart === defaultTailStart &&
       estimateHistoryTokens(history.slice(latestUser)) < triggerTokens
     ) {
       tailStart = Math.max(tailStart, latestUser);
