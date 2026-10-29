@@ -152,6 +152,18 @@ describe('getFixedHelperModel', () => {
 });
 
 describe('getContextWindowSize', () => {
+  it.each(['gpt-6.1-sol', 'gpt-6.1-terra', 'GPT-6.1-SOL', 'gpt-6.1-sol-2026-10-29'])(
+    'uses the advertised 500K context budget for %s',
+    (model) => {
+      expect(getContextWindowSize('openai', model)).toBe(500_000);
+      expect(getInputTokenBudget('openai', model)).toBe(460_000);
+    },
+  );
+  it('does not assign the Sol/Terra window to unknown GPT-6.1 models', () => {
+    expect(getContextWindowSize('openai', 'gpt-6.1-other')).toBe(128_000);
+    expect(getContextWindowSize('openai', 'gpt-6.1-solar')).toBe(128_000);
+  });
+
   it('returns realistic per-model windows for the configured smart tiers', () => {
     // The window is resolved from each provider's active smart-tier model.
     expect(getContextWindowSize('openai', 'gpt-5.5')).toBe(1_000_000);

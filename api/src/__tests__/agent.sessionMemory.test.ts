@@ -448,4 +448,87 @@ describe('agent session memory compaction', () => {
     expect(session.sessionMemoryHistoryLength).toBe(0);
     expect(mocks.complete.mock.calls[0][2].signal).toBe(controller.signal);
   });
+  it('does not recompact a small effective context just because the archive is large', async () => {
+    mocks.getInputTokenBudget.mockReturnValue(88_000);
+    const session = makeSession([
+      { role: 'system', content: 'system' },
+      { role: 'user', content: 'Fix the chart' },
+      { role: 'assistant', content: 'archived evidence '.repeat(10_000) },
+      ...Array.from(
+        { length: 12 },
+        (_, i): AIMessage => ({
+          role: 'assistant',
+          content: `new inspection ${i}: ` + 'x'.repeat(900),
+        }),
+      ),
+    ]);
+    session.sessionMemory = 'Root cause established; edit the chart renderer.';
+    session.sessionMemoryHistoryLength = 3;
+    const cursor = session.sessionMemoryHistoryLength;
+    await ensureSessionMemory(session, 'session', 'model', mocks.log as any);
+    await ensureSessionMemory(session, 'session', 'model', mocks.log as any);
+    expect(mocks.complete).not.toHaveBeenCalled();
+    expect(session.sessionMemoryHistoryLength).toBe(cursor);
+    // A genuinely full effective request should still compact.
+    for (let i = 0; i < 10; i++)
+      session.history.push({ role: 'assistant', content: 'fresh evidence '.repeat(500) });
+    await ensureSessionMemory(session, 'session', 'model', mocks.log as any);
+    expect(mocks.complete).toHaveBeenCalledTimes(1);
+    expect(session.sessionMemoryHistoryLength).toBeGreaterThan(cursor);
+  });
+
+  it('retains a token-budgeted working set at complete tool boundaries', async () => {
+    mocks.getInputTokenBudget.mockReturnValue(100_000);
+    const session = makeSession([
+      { role: 'system', content: 'system' },
+      { role: 'user', content: 'Fix the chart' },
+      ...Array.from({ length: 60 }, (_, i): AIMessage[] => [
+        {
+          role: 'assistant',
+          content: '',
+          tool_calls: [{ id: `c${i}`, name: 'shell_script', arguments: {} }],
+        },
+        { role: 'tool', tool_call_id: `c${i}`, content: `inspection ${i}: ` + 'x'.repeat(1800) },
+      ]).flat(),
+    ]);
+    // Several contiguous chunks may be needed for a very large archive.
+    for (let i = 0; i < 5; i++)
+      await ensureSessionMemory(session, 'session', 'model', mocks.log as any);
+    const tail = session.history.slice(session.sessionMemoryHistoryLength!);
+    expect(tail.length).toBeGreaterThan(8);
+    expect(tail[0].role).toBe('assistant');
+    expect(
+      buildCompactedHistoryForRequest(session).some((m) => m.content.includes('inspection 59:')),
+    ).toBe(true);
+    const calls = mocks.complete.mock.calls.length;
+    await ensureSessionMemory(session, 'session', 'model', mocks.log as any);
+    expect(mocks.complete).toHaveBeenCalledTimes(calls);
+  });
+
+  it('preserves explicit corrected findings and next actions verbatim after compaction', () => {
+    const correction =
+      '<progress_summary>The labels exist and overlap. interval={0} forces every tick. Next edit KnowledgeBasePanelBody.tsx.</progress_summary>';
+    const session = makeSession([
+      { role: 'system', content: 'system' },
+      { role: 'user', content: 'Fix the chart' },
+      {
+        role: 'assistant',
+        content: correction,
+        tool_calls: [{ id: 'old', name: 'shell_script', arguments: {} }],
+      },
+      { role: 'tool', tool_call_id: 'old', content: 'old output' },
+      { role: 'user', content: 'Continue' },
+      { role: 'assistant', content: 'recent work' },
+    ]);
+    session.sessionMemory = 'Tick labels are missing.';
+    session.sessionMemoryHistoryLength = 4;
+    const request = buildCompactedHistoryForRequest(session);
+    const note = request.find((m) => m.content === correction);
+    expect(note).toEqual({ role: 'assistant', content: correction });
+    expect(request[0].content).toContain('prefer their later corrections');
+    expect(request.findIndex((m) => m.content === correction)).toBeLessThan(
+      request.findIndex((m) => m.content === 'Continue'),
+    );
+    expect(request.some((m) => m.tool_call_id === 'old' || m.tool_calls?.length)).toBe(false);
+  });
 });

@@ -1584,80 +1584,40 @@ describe('agent session persistence checkpoints', () => {
     ).toBe(false);
   });
 
-  it('stops recursive tool-loop fallback after one retry even without web failure', async () => {
-    const firstToolCall = {
-      id: 'call-first',
-      name: 'web_search',
-      arguments: { query: 'first successful lookup' },
-    };
-    const retryToolCall = {
-      id: 'call-retry',
-      name: 'web_search',
-      arguments: { query: 'retry successful lookup' },
-    };
+  it('accepts plain text after successful tools without restarting investigation', async () => {
+    const calls = [{ id: 'status', name: 'web_search', arguments: { query: 'PR status' } }];
     const send = vi.fn();
-
-    mocks.executeTool
-      .mockResolvedValueOnce('first successful result')
-      .mockResolvedValueOnce('retry successful result');
+    mocks.executeTool.mockResolvedValueOnce('No PR found.');
     mocks.complete
       .mockResolvedValueOnce({
-        assistantMessage: { role: 'assistant', content: '', tool_calls: [firstToolCall] },
+        assistantMessage: { role: 'assistant', content: '', tool_calls: calls },
         content: '',
         finish_reason: 'tool_calls',
         model: 'test-model',
-        tool_calls: [firstToolCall],
+        tool_calls: calls,
       })
       .mockResolvedValueOnce({
-        assistantMessage: { role: 'assistant', content: 'Plain text after successful tool.' },
-        content: 'Plain text after successful tool.',
-        finish_reason: 'stop',
-        model: 'test-model',
-      })
-      .mockResolvedValueOnce({
-        assistantMessage: { role: 'assistant', content: '', tool_calls: [retryToolCall] },
-        content: '',
-        finish_reason: 'tool_calls',
-        model: 'test-model',
-        tool_calls: [retryToolCall],
-      })
-      .mockResolvedValueOnce({
-        assistantMessage: { role: 'assistant', content: 'Still plain after retry.' },
-        content: 'Still plain after retry.',
+        assistantMessage: { role: 'assistant', content: 'No PR has been raised yet.' },
+        content: 'No PR has been raised yet.',
         finish_reason: 'stop',
         model: 'test-model',
       });
-
     await runAgentTurn(
       'session-1',
       { id: 'subscription-1' } as any,
-      {
-        session_id: 'session-1',
-        sender: 'client',
-        content: 'Search and then answer.',
-        platform: 'macos',
-      },
+      { session_id: 'session-1', sender: 'client', content: 'Where is the PR?', platform: 'macos' },
       send,
       mocks.log as any,
       { skipGrouping: true },
     );
-
-    expect(mocks.executeTool).toHaveBeenCalledTimes(2);
-    expect(mocks.complete).toHaveBeenCalledTimes(4);
+    expect(mocks.executeTool).toHaveBeenCalledTimes(1);
+    expect(mocks.complete).toHaveBeenCalledTimes(2);
     expect(
-      send.mock.calls.some(([msg]) =>
-        String(msg.content).includes(
-          'did not produce a structured response after the fallback retry',
-        ),
-      ),
+      send.mock.calls.some(([msg]) => String(msg.content).includes('No PR has been raised yet.')),
     ).toBe(true);
-    expect(
-      historyUpdateCalls()
-        .map(parsedHistoryFromCall)
-        .filter((history) =>
-          history.some((msg) => msg.content.startsWith('Web research is complete')),
-        ),
-    ).toHaveLength(1);
+    const history = parsedHistoryFromCall(historyUpdateCalls().at(-1)!);
+    expect(history.some((msg) => msg.content.startsWith('Web research is complete'))).toBe(false);
+    expect(history.at(-1)?.content).toContain('<final_answer>');
   });
 
   it('ignores old web-tool failures when the current tool loop succeeds', async () => {
@@ -1922,6 +1882,82 @@ describe('agent session persistence checkpoints', () => {
       true,
     );
   });
+  it('lets the agent recover at the progress checkpoint before the repetition stop', async () => {
+    const send = vi.fn();
+    mocks.complete.mockReset().mockImplementation(async (_model, history) => {
+      if (history.some((m: any) => m.content.startsWith('Agent progress checkpoint:'))) {
+        return {
+          content: 'Completed the next action.',
+          finish_reason: 'stop',
+          model: 'test-model',
+          assistantMessage: { role: 'assistant', content: 'Completed the next action.' },
+        };
+      }
+      const calls = [
+        {
+          id: `r${mocks.complete.mock.calls.length}`,
+          name: 'web_search',
+          arguments: { query: 'same evidence' },
+        },
+      ];
+      return {
+        content: '',
+        finish_reason: 'tool_calls',
+        model: 'test-model',
+        tool_calls: calls,
+        assistantMessage: { role: 'assistant', content: '', tool_calls: calls },
+      };
+    });
+    await runAgentTurn(
+      'session-1',
+      { id: 'subscription-1' } as any,
+      { session_id: 'session-1', sender: 'client', content: 'Investigate', platform: 'macos' },
+      send,
+      mocks.log as any,
+      { skipGrouping: true },
+    );
+    expect(mocks.executeTool).toHaveBeenCalledTimes(5);
+    expect(
+      send.mock.calls.some(([m]) => String(m.content).includes('Completed the next action.')),
+    ).toBe(true);
+    expect(send.mock.calls.some(([m]) => String(m.content).includes('Paused'))).toBe(false);
+  });
+
+  it('finishes productive work beyond 120 tool rounds', async () => {
+    const send = vi.fn();
+    mocks.executeTool.mockImplementation(async (_name, args) => `New evidence: ${args.query}`);
+    mocks.complete.mockReset().mockImplementation(async () => {
+      const step = mocks.complete.mock.calls.length;
+      if (step > 125)
+        return {
+          content: 'Done after 125 tools.',
+          finish_reason: 'stop',
+          model: 'test-model',
+          assistantMessage: { role: 'assistant', content: 'Done after 125 tools.' },
+        };
+      const calls = [{ id: `c${step}`, name: 'web_search', arguments: { query: `item ${step}` } }];
+      return {
+        content: '',
+        finish_reason: 'tool_calls',
+        model: 'test-model',
+        tool_calls: calls,
+        assistantMessage: { role: 'assistant', content: '', tool_calls: calls },
+      };
+    });
+    await runAgentTurn(
+      'session-1',
+      { id: 'subscription-1' } as any,
+      { session_id: 'session-1', sender: 'client', content: 'Investigate', platform: 'macos' },
+      send,
+      mocks.log as any,
+      { skipGrouping: true },
+    );
+    expect(mocks.executeTool).toHaveBeenCalledTimes(125);
+    expect(send.mock.calls.some(([m]) => String(m.content).includes('Done after 125 tools.'))).toBe(
+      true,
+    );
+  });
+
   it('keeps the repetition budget across output-length recovery', async () => {
     const send = vi.fn();
     mocks.complete.mockReset().mockImplementation(async () => {

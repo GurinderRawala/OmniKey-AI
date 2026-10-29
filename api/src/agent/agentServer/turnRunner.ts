@@ -494,6 +494,15 @@ async function runAgentTurnInternal(
           break;
         }
 
+        // Match the direct-completion path: a successful textual answer needs
+        // no second agent turn merely to add presentation tags. Keep actual web
+        // failures on the existing retrieval recovery path.
+        if (!webToolFailed && recoveredToolLoopResult.finish_reason === 'stop' && toolLoopContent) {
+          content = toolLoopContent;
+          result = recoveredToolLoopResult;
+          break;
+        }
+
         const webFallbackDepth = options?.webFallbackDepth ?? 0;
         if (webFallbackDepth >= 1) {
           const message = webToolFailed

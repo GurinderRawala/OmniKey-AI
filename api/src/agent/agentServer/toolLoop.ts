@@ -112,8 +112,6 @@ export async function runToolLoop(
 
   while (result.finish_reason === 'tool_calls') {
     throwIfTurnCancelled(session.signal);
-    const limit = progressGuard.beforeRound();
-    if (limit) return toolLoopLimitResult(model, limit);
     toolIterations++;
 
     const preToolSteeringMessages = drainSteeringMessagesIntoHistory(
@@ -541,6 +539,13 @@ export async function runToolLoop(
           .map((toolResult) => toolResult.name),
       });
       return webToolFailureInterruptResult(model);
+    }
+
+    const recoveryPrompt = progressGuard.takeRecoveryPrompt();
+    if (recoveryPrompt) {
+      pushToSessionHistory(logger, session, { role: 'user', content: recoveryPrompt });
+      await persistSessionToDB(sessionId, session);
+      log.info('Added agent progress recovery checkpoint', { sessionId, toolIterations });
     }
 
     // Call the AI again with the tool results in history to get the next response.

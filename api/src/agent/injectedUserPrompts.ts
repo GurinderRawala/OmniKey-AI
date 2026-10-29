@@ -23,6 +23,7 @@
  * terminal-output rendering, so they are intentionally NOT included.
  */
 const INJECTED_USER_PROMPT_PREFIXES: readonly string[] = [
+  'Agent progress checkpoint:',
   // agentServer.ts — web tool loop resolution (both branches share these
   // opening lines depending on whether the web call failed).
   'IMPORTANT: The web search tool failed',

@@ -186,6 +186,9 @@ export function modelSupportsTemperature(model: string): boolean {
 function contextWindowForModel(model: string, provider: AIProvider): number {
   const m = model.toLowerCase();
 
+  // GPT-6.1 Sol/Terra advertise 500K in the runtime model capability
+  // catalog (October 2026). Keep unknown families on the conservative fallback.
+  if (/^gpt-6\.1-(?:sol|terra)(?:$|[._-])/.test(m)) return 500_000;
   // OpenAI
   if (/^gpt-6-astra(?:$|[._-])/.test(m)) return 1_050_000;
   if (/^gpt-5\.[456]/.test(m)) return 1_000_000;
