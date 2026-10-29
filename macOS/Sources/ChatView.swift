@@ -1631,6 +1631,7 @@ struct ChatConversationView: View {
 
     @ViewBuilder
     private var conversationContent: some View {
+        let readingAnchors = ChatReadingIdentity.anchors(for: model.messages)
         ScrollView {
             VStack(spacing: 0) {
                 if model.messages.isEmpty, !model.isLoadingSessionHistory {
@@ -1659,7 +1660,7 @@ struct ChatConversationView: View {
                     // streamed into the current turn.
                     .equatable()
                     .id(message.id)
-                    .background(ChatReadingAnchor(id: message.id))
+                    .background(ChatReadingAnchor(id: readingAnchors[message.id] ?? message.id))
                     .padding(.top, index == 0 ? 8 : 18)
                     .padding(.bottom, index == model.messages.count - 1 ? 8 : 0)
                 }

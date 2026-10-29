@@ -1381,6 +1381,7 @@ final class ChatModel: ObservableObject {
             DispatchQueue.main.async {
                 guard let self else { return }
                 if success {
+                    self.readingStore.removeSession(session.id)
                     self.states.removeValue(forKey: session.id)
                     self.sessionModels.removeValue(forKey: session.id)
                     self.persistSessionModels()

@@ -306,3 +306,74 @@ extension ChatReadingPositionTests {
         XCTAssertEqual(scroll.contentView.bounds.minY, 117, accuracy: 1)
     }
 }
+
+extension ChatReadingPositionTests {
+    func testSessionDeletionRemovesDraftAndReadingPositionOnlyForDeletedSession() {
+        let suite = "ChatReadingTests.\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = ChatReadingStore(defaults: defaults)
+        for session in ["deleted", "kept"] {
+            store.save(ChatDraft(text: "private draft", location: 3, length: 2), for: session)
+            store.save(ChatReadingPosition(anchorID: "server:message", offset: 10), for: session)
+        }
+        store.removeSession("deleted")
+        XCTAssertNil(defaults.data(forKey: "chatDraft.deleted"))
+        XCTAssertNil(store.position(for: "deleted"))
+        XCTAssertEqual(store.draft(for: "kept").text, "private draft")
+        XCTAssertNotNil(store.position(for: "kept"))
+    }
+
+    func testReadingIdentitySurvivesLocalToServerHydrationAndPrepending() {
+        let local = [ChatMessage.user("same prompt", id: "local:message:u"),
+                     ChatMessage.assistant(id: "local:message:a")]
+        let hydrated = [ChatMessage.user("same prompt", id: "server:u"),
+                        ChatMessage.assistant(id: "server:a")]
+        let localIDs = ChatReadingIdentity.anchors(for: local)
+        let hydratedIDs = ChatReadingIdentity.anchors(for: hydrated)
+        XCTAssertEqual(localIDs["local:message:u"], hydratedIDs["server:u"])
+        XCTAssertEqual(localIDs["local:message:a"], hydratedIDs["server:a"])
+        let older = [ChatMessage.user("same prompt", id: "server:older-u"),
+                     ChatMessage.assistant(id: "server:older-a")]
+        let prependedIDs = ChatReadingIdentity.anchors(for: older + hydrated)
+        XCTAssertEqual(hydratedIDs["server:u"], prependedIDs["server:u"])
+        XCTAssertEqual(hydratedIDs["server:a"], prependedIDs["server:a"])
+        XCTAssertNotEqual(prependedIDs["server:older-u"], prependedIDs["server:u"])
+    }
+
+    func testMissingAnchorPaginationIsBoundedAndFallsBackToLatest() {
+        let suite = "ChatReadingTests.\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = ChatReadingStore(defaults: defaults)
+        store.save(ChatReadingPosition(anchorID: "local:message:expired", offset: 27), for: "a")
+        let (scroll, document, _) = fixture()
+        let coordinator = ChatReadingViewport.Coordinator()
+        defer { coordinator.detach() }
+        var requests = 0
+        coordinator.configuration = ChatReadingViewport(session: "a", ready: true, jumpRequest: 0, store: store,
+                                                        onPosition: { _ in }, onMissingAnchor: { requests += 1; return true })
+        for _ in 0..<10 {
+            coordinator.attach(to: scroll)
+            settle()
+        }
+        XCTAssertEqual(requests, ChatReadingViewport.Coordinator.maximumRestorationPages)
+        XCTAssertEqual(scroll.contentView.bounds.maxY, document.bounds.maxY, accuracy: 1)
+    }
+
+    func testExhaustedHistoryFallsBackToLatestInsteadOfTop() {
+        let suite = "ChatReadingTests.\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = ChatReadingStore(defaults: defaults)
+        store.save(ChatReadingPosition(anchorID: "deleted-message", offset: 10), for: "a")
+        let (scroll, document, _) = fixture()
+        let coordinator = ChatReadingViewport.Coordinator()
+        defer { coordinator.detach() }
+        coordinator.configuration = ChatReadingViewport(session: "a", ready: true, jumpRequest: 0, store: store,
+                                                        onPosition: { _ in }, onMissingAnchor: { false })
+        coordinator.attach(to: scroll)
+        settle()
+        XCTAssertEqual(scroll.contentView.bounds.maxY, document.bounds.maxY, accuracy: 1)
+    }
+}

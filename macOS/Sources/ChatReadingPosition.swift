@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import SwiftUI
 
 struct ChatReadingPosition: Codable, Equatable {
@@ -40,6 +41,11 @@ final class ChatReadingStore {
         defaults.set(try? JSONEncoder().encode(position), forKey: "chatReadingPosition.\(session)")
     }
 
+    func removeSession(_ session: String) {
+        defaults.removeObject(forKey: "chatDraft.\(session)")
+        defaults.removeObject(forKey: "chatReadingPosition.\(session)")
+    }
+
     func draft(for session: String) -> ChatDraft {
         decode(ChatDraft.self, key: "chatDraft.\(session)") ?? ChatDraft()
     }
@@ -51,6 +57,32 @@ final class ChatReadingStore {
     private func decode<T: Decodable>(_ type: T.Type, key: String) -> T? {
         guard let data = defaults.data(forKey: key) else { return nil }
         return try? JSONDecoder().decode(type, from: data)
+    }
+}
+
+/// User prompt content is unchanged by hydration, unlike local/server message IDs.
+/// Number identical prompts from the tail so prepending older pages keeps IDs stable.
+enum ChatReadingIdentity {
+    static func anchors(for messages: [ChatMessage]) -> [String: String] {
+        var occurrences: [String: Int] = [:]
+        var result: [String: String] = [:]
+        var pendingAssistantIDs: [String] = []
+        for message in messages.reversed() {
+            if message.role == .assistant {
+                pendingAssistantIDs.append(message.id)
+            } else if message.role == .user {
+                let hash = SHA256.hash(data: Data(message.text.utf8)).map { String(format: "%02x", $0) }.joined()
+                let occurrence = occurrences[hash, default: 0]
+                occurrences[hash] = occurrence + 1
+                let turn = "turn:\(hash):\(occurrence)"
+                result[message.id] = "\(turn):user"
+                for (index, id) in pendingAssistantIDs.reversed().enumerated() {
+                    result[id] = "\(turn):assistant:\(index)"
+                }
+                pendingAssistantIDs = []
+            }
+        }
+        return result
     }
 }
 
@@ -101,6 +133,8 @@ struct ChatReadingViewport: NSViewRepresentable {
         private var restoring = false
         private var scheduled = false
         private var needsRestore = true
+        private var restorationPagesRequested = 0
+        static let maximumRestorationPages = 3
         private var observers: [NSObjectProtocol] = []
 
         func detach() {
@@ -143,6 +177,7 @@ struct ChatReadingViewport: NSViewRepresentable {
                 position = configuration.store.position(for: configuration.session)
                 jumpRequest = configuration.jumpRequest
                 needsRestore = true
+                restorationPagesRequested = 0
             }
             if jumpRequest != configuration.jumpRequest {
                 jumpRequest = configuration.jumpRequest
@@ -202,9 +237,15 @@ struct ChatReadingViewport: NSViewRepresentable {
                     // Keep the saved anchor on failure; only an explicit retry
                     // may clear the error and resume restoration pagination.
                     if configuration.restorationPaginationPaused { return }
-                    if configuration.onMissingAnchor() { return }
-                    // Deleted/expired anchors fall back to the available transcript.
+                    if restorationPagesRequested < Self.maximumRestorationPages {
+                        restorationPagesRequested += 1
+                        if configuration.onMissingAnchor() { return }
+                    }
+                    // Expired/local-only anchors must not crawl the entire history
+                    // or drop readers at the beginning of an unrelated page.
                     self.position = nil
+                    move(to: max(0, document.bounds.height - scroll.contentView.bounds.height))
+                    needsRestore = false
                 }
             }
             if needsRestore && position == nil { move(to: 0) }

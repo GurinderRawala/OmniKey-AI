@@ -409,6 +409,7 @@ final class AgentThinkingModel: ObservableObject {
             let success = (response as? HTTPURLResponse)?.statusCode == 200
             DispatchQueue.main.async {
                 if success {
+                    ChatReadingStore.shared.removeSession(id)
                     self?.availableSessions.removeAll { $0.id == id }
                     // If the user had this session selected, clear the selection.
                     if self?.selectedSessionId == id {
