@@ -21,7 +21,7 @@ function session(): SessionState {
 beforeEach(() => {
   vi.useFakeTimers();
   mocks.complete.mockReset().mockResolvedValue({
-    content: '{"summary":"The chart changes passed 79 tests. Review is still pending."}',
+    content: '{"summary":"The test run passed. Review is still pending."}',
     finish_reason: 'stop',
   });
 });
@@ -34,7 +34,7 @@ describe('progress reporting during silent runs', () => {
     expect(await reporter.reportIfDue(s, log, usage)).toBeNull();
     await vi.advanceTimersByTimeAsync(90_000);
     const summary = await reporter.reportIfDue(s, log, usage);
-    expect(summary).toContain('79 tests');
+    expect(summary).toContain('test run passed');
     expect(mocks.complete.mock.calls[0][1][1].content).toContain('79 tests passed.');
     expect(mocks.complete.mock.calls[0][2].signal).toBeInstanceOf(AbortSignal);
     expect(usage).toHaveBeenCalledTimes(1);
@@ -50,7 +50,7 @@ describe('progress reporting during silent runs', () => {
     await vi.advanceTimersByTimeAsync(20_000);
     expect(await reporter.reportIfDue(s, log, vi.fn())).toBeNull();
     await vi.advanceTimersByTimeAsync(70_000);
-    expect(await reporter.reportIfDue(s, log, vi.fn())).toContain('79 tests');
+    expect(await reporter.reportIfDue(s, log, vi.fn())).toContain('test run passed');
     expect(mocks.complete.mock.calls[0][1][1].content).toContain('Found the chart bug.');
   });
   it.each(['unavailable', 'invalid', 'truncated'])(
@@ -65,7 +65,7 @@ describe('progress reporting during silent runs', () => {
         });
       await vi.advanceTimersByTimeAsync(90_000);
       const summary = await reporter.reportIfDue(session(), log, vi.fn());
-      expect(summary).toContain('Received 1 tool results');
+      expect(summary).toContain('Received 1 tool result');
       expect(summary).not.toContain('Done');
     },
   );
@@ -120,5 +120,67 @@ describe('progress reporting during silent runs', () => {
     const input = mocks.complete.mock.calls[0][1][1].content;
     expect(input).toContain('compile succeeded');
     expect(input).not.toContain('79 tests passed');
+  });
+  it.each([
+    'Fetching active-user rows takes 5.6 seconds.',
+    'Fetching active-user rows takes five point six seconds.',
+    'The active-user query returned ten rows.',
+    'The active-user query is twice as fast: ５０ percent faster.',
+  ])('rejects quantitative fallback claims: %s', async (claim) => {
+    const reporter = new ProgressReporter();
+    const s = session();
+    s.history.push({
+      role: 'tool',
+      content: JSON.stringify([
+        { panelId: 'tool-findings', responseStart: 5616, rows: 0 },
+        { panelId: 'active-users', responseStart: 11808, rows: 10 },
+      ]),
+    });
+    mocks.complete.mockResolvedValue({
+      content: JSON.stringify({ summary: claim }),
+      finish_reason: 'stop',
+    });
+    await vi.advanceTimersByTimeAsync(90_000);
+    const summary = await reporter.reportIfDue(s, log, vi.fn());
+    expect(summary).toBe(
+      'Received 2 tool results since the last update. The task is still running; a final outcome has not been reported yet.',
+    );
+  });
+
+  it('keeps source excerpts contiguous and explicitly marks truncation', async () => {
+    const reporter = new ProgressReporter();
+    const s = session();
+    s.history.push({
+      role: 'tool',
+      tool_name: 'shell_script',
+      content:
+        'panelId: tool-findings\n' +
+        'context '.repeat(300) +
+        'panelId: active-users; responseStart: 11808',
+    });
+    await vi.advanceTimersByTimeAsync(90_000);
+    await reporter.reportIfDue(s, log, vi.fn());
+    const input = JSON.parse(mocks.complete.mock.calls[0][1][1].content);
+    expect(input.results[1].truncated).toBe(true);
+    expect(input.results[1].result).toBe(s.history.at(-1)!.content.slice(0, 1500));
+    expect(input.results[1].result).not.toContain('11808');
+    expect(input.results[0].truncated).toBe(false);
+  });
+
+  it('still permits grounded qualitative blockers', async () => {
+    const reporter = new ProgressReporter();
+    const s = session();
+    s.history.push({
+      role: 'tool',
+      content: 'COMMAND ERROR: gcloud credentials expired; reauthentication required.',
+    });
+    const text =
+      'Production profiling is blocked by expired cloud credentials. Source inspection is continuing.';
+    mocks.complete.mockResolvedValue({
+      content: JSON.stringify({ summary: text }),
+      finish_reason: 'stop',
+    });
+    await vi.advanceTimersByTimeAsync(90_000);
+    expect(await reporter.reportIfDue(s, log, vi.fn())).toBe(text);
   });
 });

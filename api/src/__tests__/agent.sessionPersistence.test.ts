@@ -2007,7 +2007,7 @@ describe('agent session persistence checkpoints', () => {
     mocks.complete.mockReset().mockImplementation(async (model) => {
       if (model === 'summary-model')
         return {
-          content: '{"summary":"The fix passed 79 tests; review remains pending."}',
+          content: '{"summary":"The test run passed; review remains pending."}',
           finish_reason: 'stop',
           model,
         };
@@ -2041,7 +2041,7 @@ describe('agent session persistence checkpoints', () => {
       );
       expect(send.mock.calls.map(([msg]) => msg)).toContainEqual(
         expect.objectContaining({
-          content: 'The fix passed 79 tests; review remains pending.',
+          content: 'The test run passed; review remains pending.',
           is_error: false,
           is_terminal_output: false,
         }),
@@ -2051,7 +2051,7 @@ describe('agent session persistence checkpoints', () => {
         history.some(
           (m) =>
             m.content ===
-            '<progress_summary>The fix passed 79 tests; review remains pending.</progress_summary>',
+            '<progress_summary>The test run passed; review remains pending.</progress_summary>',
         ),
       ).toBe(true);
       expect(mainCalls).toBe(2);
