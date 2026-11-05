@@ -15,7 +15,7 @@ The CLI ships **all three TypeScript services in one package**: at build time `c
 
 ## Prerequisites
 
-- Node.js **≥ 22** (the engines field allows ≥ 14, but CI uses 22).
+- Node.js **22.13+ (22.x line) or 24+** is the project baseline for installing the full development dependencies and monorepo work, including lint. Published API/CLI runtime metadata remains ≥14.
 - **Yarn 1.22+** (`npm install -g yarn` if you don't have it). Yarn is the supported package manager for the monorepo; the only `package-lock.json` in the repo is `cli/package-lock.json`, which exists so the published npm package carries a lockfile.
 - For the native clients: Xcode 15+ (macOS) or .NET 8 SDK + Visual Studio 2022 (Windows). Neither is required to work on the TypeScript services.
 
@@ -81,7 +81,7 @@ Telegram needs `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `.env` — see [`t
 | `yarn format`                           | Run Prettier across every workspace's `src/**`.                                                                             |
 | `yarn clean`                            | Remove every `dist/`, `backend-dist/`, and `telegram-client-dist/`.                                                         |
 
-Running `yarn lint` requires Node >=22.13 because ESLint 10.14 requires it.
+The lint toolchain requires the Node.js development baseline listed in the prerequisites above. This does not change the existing Node.js engine declarations of the published API/CLI packages.
 
 After fixing the simple baseline findings, ESLint reports 252 warnings and no errors across the three TypeScript workspaces: API has 208 `no-explicit-any`, 8 `no-empty-object-type`, 6 `no-control-regex`, and 6 `no-useless-escape`; CLI has 18 `no-explicit-any`, 4 `preserve-caught-error`, and 1 `no-require-imports`; Telegram has 1 `no-control-regex`. These rules remain warnings while the existing findings are addressed. Type-aware checks such as `no-floating-promises` are deferred; ESLint currently uses the recommended non-type-aware rule sets.
 
