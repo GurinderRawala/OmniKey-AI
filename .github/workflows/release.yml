@@ -17,10 +17,10 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: macos-14
+          - os: macos-15
             arch: arm64
             npm_arch: arm64
-          - os: macos-14
+          - os: macos-15-intel
             arch: x86_64
             npm_arch: x64
     runs-on: ${{ matrix.os }}
@@ -74,6 +74,14 @@ jobs:
           cd "$STAGE"
           yarn install --production --no-lockfile
           echo "STAGE=$STAGE" >> "$GITHUB_ENV"
+
+      - name: Verify staged CLI and native dependencies
+        env:
+          EXPECTED_ARCH: ${{ matrix.npm_arch }}
+        run: |
+          cd "$STAGE"
+          node -e 'if (process.arch !== process.env.EXPECTED_ARCH) throw new Error("Unexpected runner architecture: " + process.arch); require("sqlite3");'
+          node dist/index.js --version
 
       - name: Create release tarball
         run: |
