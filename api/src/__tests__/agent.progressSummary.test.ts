@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { isProgressOnlyResponse } from '../agent/agentServer/progressSummary';
 
 import {
   extractProgressSummary,
@@ -351,5 +352,43 @@ describe('Agent transcript pagination', () => {
         ]),
       ),
     ).toBe(false);
+  });
+});
+
+describe('progress-only response classification', () => {
+  it.each([
+    '<progress_summary>Work is continuing.</progress_summary>',
+    '<final_answer>\n<progress_summary>Work is continuing.</progress_summary>\n</final_answer>',
+    '<FINAL_ANSWER><PROGRESS_SUMMARY source="model">Working.</PROGRESS_SUMMARY></FINAL_ANSWER>',
+    '<progress_summary>First.</progress_summary> <progress_summary>Next.</progress_summary>',
+    '<progress_summary></progress_summary>',
+    '<progress_summary>Working',
+  ])('does not accept a progress-only response as completion: %s', (content) => {
+    expect(isProgressOnlyResponse(content)).toBe(true);
+  });
+
+  it.each([
+    'Done. The checks passed.',
+    '<final_answer>Done. The checks passed.</final_answer>',
+    '<progress_summary>Checked the fix.</progress_summary><final_answer>Done.</final_answer>',
+    '<final_answer><progress_summary>Checked the fix.</progress_summary>Done.</final_answer>',
+    '<progress_summary>Inspecting.</progress_summary><shell_script>pwd</shell_script>',
+    'Example markup: `<progress_summary>Working</progress_summary>`',
+  ])('preserves substantive results and actions: %s', (content) => {
+    expect(isProgressOnlyResponse(content)).toBe(false);
+  });
+
+  it('replays a legacy nested progress final as progress instead of a final answer', () => {
+    const transcript = buildTranscript([
+      { role: 'user', content: 'Continue the task' },
+      {
+        role: 'assistant',
+        content:
+          '<final_answer><progress_summary>Work is continuing.</progress_summary></final_answer>',
+      },
+    ]);
+    expect(transcript[1].blocks).toEqual([
+      expect.objectContaining({ kind: 'agentReasoning', text: 'Work is continuing.' }),
+    ]);
   });
 });
