@@ -1,5 +1,4 @@
 import axios from 'axios';
-import * as crypto from 'crypto';
 import { execFileSync, execSync } from 'child_process';
 import { Browser, Page } from 'playwright-core';
 import * as fs from 'fs';
@@ -144,15 +143,6 @@ const WINDOWS_BROWSER_CATALOGUE: WindowsBrowserEntry[] = [
     userDataDir: path.join(home, 'AppData', 'Local', 'BraveSoftware', 'Brave-Browser', 'User Data'),
   },
 ];
-
-function resolveExistingExecutablePath(paths: string[]): string | null {
-  for (const p of paths) {
-    try {
-      if (fs.existsSync(p)) return p;
-    } catch {}
-  }
-  return null;
-}
 
 // ─── Running browser detection ────────────────────────────────────────────────
 

@@ -1070,7 +1070,7 @@ async function handleCallbackQuery(logger: Logger, query: TelegramBot.CallbackQu
     }
 
     await answerTelegramCallback(logger, query.id, { text: 'Updating model...' });
-    let updatedLabel: string | null = null;
+    let updatedLabel: string;
     try {
       const response = await updateProviderModel(logger, state.activeProvider, option.id);
       const activeModel = response.activeModel ?? response.model ?? option.id;
