@@ -38,12 +38,11 @@ import {
 import { buildShellToolResult } from './terminalOutput';
 import { runToolLoop } from './toolLoop';
 import { ToolProgressGuard } from './toolProgressGuard';
-import { ProgressReporter } from './progressReporter';
+import { extractProgressSummary, isProgressOnlyResponse } from './progressSummary';
 import { throwIfTurnCancelled } from './turnCancellation';
 
 type InternalAgentTurnOptions = AgentTurnOptions & {
   progressGuard?: ToolProgressGuard;
-  progressReporter?: ProgressReporter;
   untaggedDepth?: number;
   webFallbackDepth?: number;
   steeringRestartCount?: number;
@@ -370,6 +369,73 @@ async function runAgentTurnInternal(
     return true;
   };
 
+  // A provider's "stop" means it finished a response, not necessarily the task.
+  // Handle progress before either the direct or tool-loop final-answer path.
+  // Progress does not consume a retry budget: keep the same task running until
+  // it acts, concludes, fails for another reason, or the user cancels.
+  const recoverNonFinalResponse = async (
+    initial: AICompletionResult,
+  ): Promise<AICompletionResult | null> => {
+    let current = initial;
+    for (;;) {
+      const recovered = await recoverOutputLengthResult(
+        current,
+        session,
+        sessionId,
+        agentModel,
+        tools,
+        log,
+        recordUsage,
+      );
+      if (!recovered) {
+        await persistAndSendFailure(OUTPUT_LENGTH_FAILURE_MESSAGE);
+        return null;
+      }
+      current = recovered;
+      if (
+        current.finish_reason !== 'stop' ||
+        current.tool_calls?.length ||
+        current.assistantMessage?.tool_calls?.length ||
+        !isProgressOnlyResponse(current.content)
+      )
+        return current;
+
+      throwIfTurnCancelled(session.signal);
+      const summary = extractProgressSummary(current.content);
+      if (summary) {
+        // Persist only progress markup, never an enclosing final-answer tag.
+        pushToSessionHistory(logger, session, {
+          role: 'assistant',
+          content: `<progress_summary>${summary}</progress_summary>`,
+        });
+      }
+      pushToSessionHistory(logger, session, {
+        role: 'user',
+        content:
+          'Progress-only response recovery: Your last response was only a progress update, not a final result. ' +
+          'Continue the authorized task from the existing history and latest tool results. Do not restart completed work or echo prior progress updates. ' +
+          'Call a tool for the next unfinished action, or provide a substantive final answer if the task is complete or requires user input. ' +
+          'Do not put a progress_summary inside final_answer.',
+      });
+      await persistSessionToDB(sessionId, session);
+      throwIfTurnCancelled(session.signal);
+      if (summary && !options?.isCronJob) {
+        send({
+          session_id: sessionId,
+          sender: 'agent',
+          content: summary,
+          is_terminal_output: false,
+          is_error: false,
+        });
+      }
+      log.info('Continuing after progress-only model response', {
+        sessionId,
+      });
+      // Reuses context/usage/cancellation and drains steering before continuing.
+      current = await completeWithSteeringRecovery();
+    }
+  };
+
   try {
     log.debug('Calling AI provider for agent turn', {
       sessionId,
@@ -381,19 +447,8 @@ async function runAgentTurnInternal(
 
     let result = await completeWithSteeringRecovery();
 
-    const recoveredInitialResult = await recoverOutputLengthResult(
-      result,
-      session,
-      sessionId,
-      agentModel,
-      tools,
-      log,
-      recordUsage,
-    );
-    if (!recoveredInitialResult) {
-      await persistAndSendFailure(OUTPUT_LENGTH_FAILURE_MESSAGE);
-      return;
-    }
+    const recoveredInitialResult = await recoverNonFinalResponse(result);
+    if (!recoveredInitialResult) return;
     result = recoveredInitialResult;
 
     if (await restartAfterPendingSteering()) return;
@@ -433,26 +488,14 @@ async function runAgentTurnInternal(
         steeringRestartBudget,
         options?.toolHandlers,
         options?.progressGuard,
-        options?.progressReporter,
       );
 
       for (;;) {
-        const recoveredToolLoopResult = await recoverOutputLengthResult(
-          toolLoopResult,
-          session,
-          sessionId,
-          agentModel,
-          tools,
-          log,
-          recordUsage,
-        );
-        if (!recoveredToolLoopResult) {
-          await persistAndSendFailure(OUTPUT_LENGTH_FAILURE_MESSAGE);
-          return;
-        }
+        const recoveredToolLoopResult = await recoverNonFinalResponse(toolLoopResult);
+        if (!recoveredToolLoopResult) return;
 
         if (recoveredToolLoopResult.finish_reason === 'tool_calls') {
-          log.info('Output-length recovery requested more tools; continuing tool loop', {
+          log.info('Response recovery requested more tools; continuing tool loop', {
             sessionId,
           });
           toolLoopResult = await runToolLoop(
@@ -471,7 +514,6 @@ async function runAgentTurnInternal(
             steeringRestartBudget,
             options?.toolHandlers,
             options?.progressGuard,
-            options?.progressReporter,
           );
           continue;
         }
@@ -761,6 +803,5 @@ export async function runAgentTurn(
   return runAgentTurnInternal(sessionId, subscription, clientMessage, send, log, {
     ...options,
     progressGuard: new ToolProgressGuard(),
-    progressReporter: new ProgressReporter(),
   });
 }
