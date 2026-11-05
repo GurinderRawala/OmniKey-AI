@@ -38,13 +38,11 @@ import {
 import { buildShellToolResult } from './terminalOutput';
 import { runToolLoop } from './toolLoop';
 import { ToolProgressGuard } from './toolProgressGuard';
-import { ProgressReporter } from './progressReporter';
 import { extractProgressSummary, isProgressOnlyResponse } from './progressSummary';
 import { throwIfTurnCancelled } from './turnCancellation';
 
 type InternalAgentTurnOptions = AgentTurnOptions & {
   progressGuard?: ToolProgressGuard;
-  progressReporter?: ProgressReporter;
   untaggedDepth?: number;
   webFallbackDepth?: number;
   steeringRestartCount?: number;
@@ -373,11 +371,12 @@ async function runAgentTurnInternal(
 
   // A provider's "stop" means it finished a response, not necessarily the task.
   // Handle progress before either the direct or tool-loop final-answer path.
+  // Progress does not consume a retry budget: keep the same task running until
+  // it acts, concludes, fails for another reason, or the user cancels.
   const recoverNonFinalResponse = async (
     initial: AICompletionResult,
   ): Promise<AICompletionResult | null> => {
     let current = initial;
-    let progressOnlyAttempts = 0;
     for (;;) {
       const recovered = await recoverOutputLengthResult(
         current,
@@ -409,16 +408,7 @@ async function runAgentTurnInternal(
           role: 'assistant',
           content: `<progress_summary>${summary}</progress_summary>`,
         });
-        options?.progressReporter?.noteSummary();
       }
-      if (progressOnlyAttempts >= 3) {
-        log.warn('Agent progress-only recovery exhausted', { sessionId, progressOnlyAttempts });
-        await persistAndSendFailure(
-          'The agent repeatedly returned progress updates without a next action or final result. The work so far has been saved; send a follow-up to continue from that checkpoint.',
-        );
-        return null;
-      }
-      progressOnlyAttempts++;
       pushToSessionHistory(logger, session, {
         role: 'user',
         content:
@@ -440,7 +430,6 @@ async function runAgentTurnInternal(
       }
       log.info('Continuing after progress-only model response', {
         sessionId,
-        progressOnlyAttempts,
       });
       // Reuses context/usage/cancellation and drains steering before continuing.
       current = await completeWithSteeringRecovery();
@@ -499,7 +488,6 @@ async function runAgentTurnInternal(
         steeringRestartBudget,
         options?.toolHandlers,
         options?.progressGuard,
-        options?.progressReporter,
       );
 
       for (;;) {
@@ -526,7 +514,6 @@ async function runAgentTurnInternal(
             steeringRestartBudget,
             options?.toolHandlers,
             options?.progressGuard,
-            options?.progressReporter,
           );
           continue;
         }
@@ -816,6 +803,5 @@ export async function runAgentTurn(
   return runAgentTurnInternal(sessionId, subscription, clientMessage, send, log, {
     ...options,
     progressGuard: new ToolProgressGuard(),
-    progressReporter: new ProgressReporter(),
   });
 }

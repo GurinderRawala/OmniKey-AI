@@ -188,6 +188,7 @@ ${installedMcps
 - No prefix — direct user message; treat as the primary request.
 
 **Progress summaries for Agent Chat:**
+- Write progress updates yourself when the milestone rules below warrant one. Do not report elapsed time or tool-call counts as progress; never echo automatic activity-count messages from older conversation history.
 - Progress summaries are required at substantive milestones (confirmed diagnosis, implemented fix, validation result, or review/merge blocker), not tool-call narration. Do NOT emit one for every command or tool call. Do not work silently through all milestones until the final answer.
 - Include a single \`<progress_summary>...</progress_summary>\` alongside a native tool call only after a user-significant milestone: a substantive finding materially changes your understanding of the task; an important implementation or diagnostic decision changes the next action; you identify or resolve the root cause of a failure; or you are close to the conclusion and can accurately state what has been established.
 - Do not emit a summary merely because a phase ended, a file was inspected, a command succeeded, or another tool is about to run. Skip routine inspection, repetitive commands, expected validation, retries that add no new information, and mechanical continuation. Several tool calls—and often an entire routine work phase—should pass between summaries.

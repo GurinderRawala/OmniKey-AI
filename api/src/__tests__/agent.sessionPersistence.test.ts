@@ -1997,7 +1997,7 @@ describe('agent session persistence checkpoints', () => {
       true,
     );
   });
-  it('reports a successful shell retry from execution status despite long output containing old failures', async () => {
+  it('does not generate activity-count messages after long-running shell calls', async () => {
     let now = 100_000;
     const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
     let mainCalls = 0;
@@ -2056,20 +2056,17 @@ describe('agent session persistence checkpoints', () => {
             message.role === 'assistant' && message.content.startsWith('<progress_summary>'),
         )
         .map((message) => message.content);
-      expect(summaries).toEqual([
-        '<progress_summary>Received 1 tool result since the last update. The latest command reported an error. Work is continuing.</progress_summary>',
-        '<progress_summary>Received 1 tool result since the last update. The latest command reported success. Work is continuing.</progress_summary>',
-      ]);
-      expect(send.mock.calls.map(([message]) => message.content)).toContain(
-        'Received 1 tool result since the last update. The latest command reported success. Work is continuing.',
-      );
+      expect(summaries).toEqual([]);
+      const history = parsedHistoryFromCall(historyUpdateCalls().at(-1)!);
+      expect(history.some((m) => m.content.startsWith('Progress update delivered.'))).toBe(false);
+      expect(send.mock.calls.some(([m]) => m.content.startsWith('Received '))).toBe(false);
       expect(mocks.complete).toHaveBeenCalledTimes(3);
     } finally {
       clock.mockRestore();
     }
   });
 
-  it('sends and persists a progress update when native tool responses remain silent', async () => {
+  it('sends and persists only the model milestone during long-running tools', async () => {
     let now = 100_000;
     const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
     const send = vi.fn();
@@ -2084,11 +2081,17 @@ describe('agent session persistence checkpoints', () => {
           { id: 'work', name: 'web_search', arguments: { query: 'validation result' } },
         ];
         return {
-          content: '',
+          content:
+            '<progress_summary>The diagnosis is confirmed; I am verifying the fix.</progress_summary>',
           finish_reason: 'tool_calls',
           model,
           tool_calls: calls,
-          assistantMessage: { role: 'assistant', content: '', tool_calls: calls },
+          assistantMessage: {
+            role: 'assistant',
+            content:
+              '<progress_summary>The diagnosis is confirmed; I am verifying the fix.</progress_summary>',
+            tool_calls: calls,
+          },
         };
       }
       return {
@@ -2109,7 +2112,7 @@ describe('agent session persistence checkpoints', () => {
       );
       expect(send.mock.calls.map(([msg]) => msg)).toContainEqual(
         expect.objectContaining({
-          content: 'Received 1 tool result since the last update. Work is continuing.',
+          content: 'The diagnosis is confirmed; I am verifying the fix.',
           is_error: false,
           is_terminal_output: false,
         }),
@@ -2119,17 +2122,19 @@ describe('agent session persistence checkpoints', () => {
         history.some(
           (m) =>
             m.content ===
-            '<progress_summary>Received 1 tool result since the last update. Work is continuing.</progress_summary>',
+            '<progress_summary>The diagnosis is confirmed; I am verifying the fix.</progress_summary>',
         ),
       ).toBe(true);
+      expect(history.some((m) => m.content.startsWith('Progress update delivered.'))).toBe(false);
+      expect(send.mock.calls.some(([m]) => m.content.startsWith('Received '))).toBe(false);
       expect(mainCalls).toBe(2);
       expect(mocks.complete).toHaveBeenCalledTimes(2);
       const mainRequest = mocks.complete.mock.calls
         .filter(([model]) => model === 'test-model')
         .at(-1)![1];
       expect(mainRequest.at(-1)).toMatchObject({
-        role: 'user',
-        content: expect.stringContaining('Progress update delivered.'),
+        role: 'tool',
+        content: 'Validation: 79 tests passed.',
       });
     } finally {
       clock.mockRestore();
@@ -2207,39 +2212,43 @@ describe('agent session persistence checkpoints', () => {
       expect(JSON.stringify(transcript)).not.toContain('Progress-only response recovery:');
     });
 
-    it('stops a repeated progress-only loop with a durable error after three recovery requests', async () => {
+    it('keeps running through repeated progress updates until tools and a real final answer', async () => {
+      mocks.complete.mockReset();
+      for (let i = 0; i < 8; i++) {
+        mocks.complete.mockResolvedValueOnce(
+          completion(`<final_answer>${progress}</final_answer>`),
+        );
+      }
       mocks.complete
-        .mockReset()
-        .mockResolvedValue(completion(`<final_answer>${progress}</final_answer>`));
+        .mockResolvedValueOnce(toolCompletion('next-action'))
+        .mockResolvedValueOnce(completion('<final_answer>Fixed and verified.</final_answer>'));
       const send = vi.fn();
       await run(send);
-      expect(mocks.complete).toHaveBeenCalledTimes(4);
-      expect(mocks.executeTool).not.toHaveBeenCalled();
-      const final = send.mock.calls
-        .map(([m]) => m)
-        .find((m) => m.content.includes('<final_answer>'));
-      expect(final).toMatchObject({
-        is_error: true,
-        content: expect.stringContaining('work so far has been saved'),
-      });
-      expect(final.content).not.toContain('<progress_summary>');
-      const history = parsedHistoryFromCall(historyUpdateCalls().at(-1)!);
-      expect(history.at(-1)?.content).toBe(final.content);
+      expect(mocks.complete).toHaveBeenCalledTimes(10);
+      expect(mocks.executeTool).toHaveBeenCalledTimes(1);
+      expect(send.mock.calls.some(([m]) => m.is_error)).toBe(false);
+      expect(
+        send.mock.calls.map(([m]) => m.content).filter((c) => c.includes('<final_answer>')),
+      ).toEqual(['<final_answer>Fixed and verified.</final_answer>']);
+      expect(
+        mocks.log.info.mock.calls.filter(([message]) => message === 'Starting agent turn'),
+      ).toHaveLength(1);
     });
 
-    it('keeps cancellation effective during the continuation request', async () => {
+    it('honors cancellation after many progress-only continuations without fabricating a final answer', async () => {
       const controller = new AbortController();
-      mocks.complete
-        .mockReset()
-        .mockResolvedValueOnce(completion(progress))
-        .mockImplementationOnce(async () => {
+      let responses = 0;
+      mocks.complete.mockReset().mockImplementation(async () => {
+        if (++responses === 9) {
           controller.abort();
           return toolCompletion('must-not-run');
-        });
+        }
+        return completion(progress);
+      });
       const send = vi.fn();
       await run(send, { signal: controller.signal });
-      expect(mocks.complete).toHaveBeenCalledTimes(2);
-      expect(mocks.complete.mock.calls[1][2].signal).toBe(controller.signal);
+      expect(mocks.complete).toHaveBeenCalledTimes(9);
+      expect(mocks.complete.mock.calls[8][2].signal).toBe(controller.signal);
       expect(mocks.executeTool).not.toHaveBeenCalled();
       expect(send.mock.calls.some(([m]) => m.content.includes('<final_answer>'))).toBe(false);
     });
