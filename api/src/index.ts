@@ -18,7 +18,7 @@ import { spawnWorker, type ManagedWorker } from './workers/spawn';
 import { setScheduledJobWorker } from './workers/scheduledJobWorkerClient';
 import { config } from './config';
 import { attachAgentWebSocketServer, createAgentRouter } from './agent/agentServer';
-import { AppDownload } from './models/appDownload';
+import './models/appDownload';
 // Importing models ensures they are registered with Sequelize before initDatabase().
 import './models/agentSession';
 import './models/agentTranscriptMessage';
@@ -124,7 +124,7 @@ app.get('/macos/download', (_req, res) => {
   let fileSize = 0;
   try {
     fileSize = fs.statSync(dmgPath).size;
-  } catch (_) {}
+  } catch {}
 
   res.set({
     'Content-Type': 'application/octet-stream',

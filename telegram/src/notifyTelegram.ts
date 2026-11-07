@@ -82,6 +82,7 @@ function stripHtmlTags(text: string): string {
 }
 
 function withoutParseMode<T extends { parse_mode?: unknown }>(options: T): Omit<T, 'parse_mode'> {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- The binding intentionally evaluates parse_mode before the rest copy.
   const { parse_mode: _parseMode, ...plainOptions } = options;
   return plainOptions;
 }
@@ -1070,7 +1071,7 @@ async function handleCallbackQuery(logger: Logger, query: TelegramBot.CallbackQu
     }
 
     await answerTelegramCallback(logger, query.id, { text: 'Updating model...' });
-    let updatedLabel: string | null = null;
+    let updatedLabel: string;
     try {
       const response = await updateProviderModel(logger, state.activeProvider, option.id);
       const activeModel = response.activeModel ?? response.model ?? option.id;

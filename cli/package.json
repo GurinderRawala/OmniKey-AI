@@ -21,7 +21,7 @@
     "clean": "rm -rf dist backend-dist telegram-client-dist",
     "format": "prettier --write \"src/**/*.ts\"",
     "test": "echo \"(no tests in this workspace)\" && exit 0",
-    "lint": "echo \"(no lint in this workspace)\" && exit 0"
+    "lint": "eslint --config ../eslint.config.mjs \"src/**/*.ts\""
   },
   "keywords": [
     "cli",

@@ -1,13 +1,7 @@
 import type { Logger } from 'winston';
 import { config } from '../../config';
 import { logger } from '../../logger';
-import {
-  aiClient,
-  AIMessage,
-  AITool,
-  AICompletionResult,
-  CompletionOptions,
-} from '../../ai-client';
+import { aiClient, AITool, AICompletionResult, CompletionOptions } from '../../ai-client';
 import { pushToSessionHistory } from '../utils';
 import { isInjectedUserPrompt } from '../injectedUserPrompts';
 import type { SessionState } from '../types';

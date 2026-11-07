@@ -253,7 +253,6 @@ export async function runEnhancementModel(
   const messages = createMessagesParams(cmd, trimmed, prompt);
 
   let rawResponse = '';
-  let usage: CompletionUsage | undefined;
 
   // Smart-tier models (used by the custom-task command) include OpenAI's
   // GPT-5 family, which rejects any non-default `temperature`. Even on
@@ -268,9 +267,7 @@ export async function runEnhancementModel(
     if (onDelta) onDelta(delta);
   });
 
-  usage = result.usage;
-
-  return { rawResponse, usage, model };
+  return { rawResponse, usage: result.usage, model };
 }
 
 async function enhanceText(
