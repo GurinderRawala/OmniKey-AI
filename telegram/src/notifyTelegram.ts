@@ -82,6 +82,7 @@ function stripHtmlTags(text: string): string {
 }
 
 function withoutParseMode<T extends { parse_mode?: unknown }>(options: T): Omit<T, 'parse_mode'> {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- The binding intentionally evaluates parse_mode before the rest copy.
   const { parse_mode: _parseMode, ...plainOptions } = options;
   return plainOptions;
 }

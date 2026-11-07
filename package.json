@@ -10,7 +10,7 @@
     "telegram"
   ],
   "engines": {
-    "node": "^22.13.0 || >=24",
+    "node": ">=14.0.0",
     "yarn": ">=1.22.0"
   },
   "scripts": {
@@ -26,10 +26,10 @@
     "clean": "yarn workspaces run clean"
   },
   "devDependencies": {
-    "@eslint/js": "^10.0.1",
-    "eslint": "^10.14.0",
+    "@eslint/js": "9.39.5",
+    "eslint": "9.39.5",
     "prettier": "^3.3.3",
     "typescript": "^5.7.2",
-    "typescript-eslint": "^8.72.1"
+    "typescript-eslint": "8.55.0"
   }
 }
