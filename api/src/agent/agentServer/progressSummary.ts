@@ -30,3 +30,16 @@ export function extractProgressSummary(content: string): string | null {
   const match = content.match(/<progress_summary[^>]*>([\s\S]*?)<\/progress_summary>/i);
   return match?.[1] ? sanitizeProgressSummary(match[1]) : null;
 }
+
+/** A progress-only response is never a task result, even inside final_answer. */
+export function isProgressOnlyResponse(content: string): boolean {
+  let found = false;
+  const remainder = content.replace(
+    /<progress_summary\b[^>]*>[\s\S]*?(?:<\/progress_summary\s*>|$)/gi,
+    () => {
+      found = true;
+      return '';
+    },
+  );
+  return found && !remainder.replace(/<\/?final_answer\b[^>]*>/gi, '').trim();
+}

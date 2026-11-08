@@ -2,7 +2,7 @@ import { createHash } from 'crypto';
 import { MCP_TOOL_PREFIX } from '../mcpRuntime';
 import { isInjectedUserPrompt } from '../injectedUserPrompts';
 import type { SessionState } from '../types';
-import { extractProgressSummary } from './progressSummary';
+import { extractProgressSummary, isProgressOnlyResponse } from './progressSummary';
 
 export type HistoryBlockKind =
   | 'agentReasoning'
@@ -555,6 +555,13 @@ export function buildTranscript(raw: RawHistoryMessage[]): TranscriptMessage[] {
     }
 
     if (entry.role !== 'assistant') return;
+
+    // Older daemons persisted progress updates inside final_answer. Replay
+    // those as progress too, without changing the stored conversation.
+    if (!entry.tool_calls?.length && isProgressOnlyResponse(content)) {
+      appendAssistantBlock('agentReasoning', extractProgressSummary(content) ?? '');
+      return;
+    }
 
     const finalAnswer = extractTaggedBlock(content, 'final_answer');
     if (finalAnswer) {

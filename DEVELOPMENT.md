@@ -134,8 +134,14 @@ Cloud Run picks this image up from the release branch automatically.
 
 Two GitHub Actions workflows ship the CLI:
 
-- **`.github/workflows/release.yml`** — fires on `v*` tags. Builds the whole monorepo with `yarn install --frozen-lockfile && yarn build`, stages a self-contained CLI bundle (re-resolves production-only deps inside the staging dir), uploads the tarball as a GitHub Release asset, and updates the Homebrew formula in `Formula/omnikey-cli.rb` plus the tap repo.
+- **`.github/workflows/release.yml`** — fires on `v*` tags. Builds the whole monorepo with `yarn install --frozen-lockfile && yarn build`, stages a self-contained CLI bundle (re-resolves production-only deps inside the staging dir), uploads the tarball as a GitHub Release asset, and opens reviewable PRs for the Homebrew formula and generated changelog/blog pages in this repo and for the formula in the tap repo. Release-specific `automation/release-v<version>` branches are updated on retries; neither PR is auto-merged.
 - **`.github/workflows/publish-cli.yaml`** — fires on `main` when `cli/**` changes. Builds the monorepo and runs `npm publish` from `cli/`. Because any `cli/**` change publishes, the patch version in `cli/package.json` and `api/package.json` must be bumped in the same pull request; npm rejects republishing an existing version.
+
+Release automation never pushes directly to `main`. Enable **Settings → Actions → General → Allow GitHub Actions to create and approve pull requests** so the default `GITHUB_TOKEN` can open the repository PR; the workflow does not approve PRs. The release job requests `contents: write` and `pull-requests: write`.
+
+Optionally configure `RELEASE_PR_TOKEN` with repository Contents and Pull requests write access if release-metadata PRs must trigger normal PR/push CI: events created using `GITHUB_TOKEN` do not trigger those workflows automatically. This token is used for checkout/push and PR creation. Do not add automation to the protected-branch bypass list; generated updates still require manual review/merge.
+
+`HOMEBREW_TAP_PAT` must grant Contents and Pull requests write access to `GurinderRawala/homebrew-omnikey`; the repository's `GITHUB_TOKEN` cannot write to that separate repository. Both release PRs must be merged before the corresponding formula/page changes become live.
 
 Installs and builds are Yarn throughout; only the final publish step uses `npm publish`, which needs the project-scoped `.npmrc` that `actions/setup-node` writes.
 

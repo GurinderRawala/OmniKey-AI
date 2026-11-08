@@ -24,7 +24,9 @@
  */
 const INJECTED_USER_PROMPT_PREFIXES: readonly string[] = [
   'Agent progress checkpoint:',
+  // Legacy automatic updates: keep their control messages hidden on replay.
   'Progress update delivered.',
+  'Progress-only response recovery:',
   // agentServer.ts — web tool loop resolution (both branches share these
   // opening lines depending on whether the web call failed).
   'IMPORTANT: The web search tool failed',
