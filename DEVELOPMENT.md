@@ -76,14 +76,14 @@ Telegram needs `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `.env` — see [`t
 | `yarn build:api` / `:telegram` / `:cli` | Build a single workspace.                                                                                                   |
 | `yarn dev`                              | Start the API in watch mode.                                                                                                |
 | `yarn start`                            | Run the compiled API (`api/dist/index.js`).                                                                                 |
-| `yarn test`                             | Run vitest across every workspace (currently 332 tests in `api`; `cli`/`telegram` are no-ops).                              |
+| `yarn test`                             | Run vitest across every workspace (currently 431 tests in `api`; `cli`/`telegram` are no-ops).                              |
 | `yarn lint`                             | Run ESLint across all three TypeScript workspaces; typed rules are deferred.                                                |
 | `yarn format`                           | Run Prettier across every workspace's `src/**`.                                                                             |
 | `yarn clean`                            | Remove every `dist/`, `backend-dist/`, and `telegram-client-dist/`.                                                         |
 
 The lint toolchain is pinned to ESLint 9.39.5, @eslint/js 9.39.5, and typescript-eslint 8.55.0, which support the Node 22 development baseline above. The published API/CLI runtime metadata remains Node ≥14; it does not imply that the full development toolchain supports Node 14.
 
-After fixing the simple baseline findings, ESLint reports 252 warnings and no errors across the three TypeScript workspaces: API has 208 `no-explicit-any`, 8 `no-empty-object-type`, 6 `no-control-regex`, and 6 `no-useless-escape`; CLI has 18 `no-explicit-any`, 4 `preserve-caught-error`, and 1 `no-require-imports`; Telegram has 1 `no-control-regex`. These rules remain warnings while the existing findings are addressed. Type-aware checks such as `no-floating-promises` are deferred; ESLint currently uses the recommended non-type-aware rule sets.
+After fixing the simple baseline findings, ESLint reports 257 warnings and no errors across the three TypeScript workspaces: API has 213 `no-explicit-any`, 8 `no-empty-object-type`, 6 `no-control-regex`, and 6 `no-useless-escape`; CLI has 18 `no-explicit-any`, 4 `preserve-caught-error`, and 1 `no-require-imports`; Telegram has 1 `no-control-regex`. These rules remain warnings while the existing findings are addressed. Type-aware checks such as `no-floating-promises` are deferred; ESLint currently uses the recommended non-type-aware rule sets.
 
 To run a script in just one workspace, use `yarn workspace <name> run <script>` where `<name>` is `omnikey-ai-api`, `omnikey-cli`, or `telegram`. List them with `yarn workspaces info`.
 
