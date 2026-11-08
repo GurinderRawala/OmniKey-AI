@@ -1,6 +1,6 @@
 {
   "name": "omnikey-ai-api",
-  "version": "1.8.15",
+  "version": "1.8.16",
   "main": "dist/index.js",
   "description": "Omnikey AI backend API. Use Yarn for install/build/start.",
   "scripts": {
@@ -12,7 +12,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "clean": "rm -rf dist",
-    "lint": "echo \"(no lint configured)\" && exit 0"
+    "lint": "eslint --config ../eslint.config.mjs \"src/**/*.ts\""
   },
   "engines": {
     "node": ">=14.0.0",

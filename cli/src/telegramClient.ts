@@ -60,7 +60,7 @@ function verifyToken(token: string): Promise<string> {
               return;
             }
             resolve(parsed.result?.username || 'bot');
-          } catch (err) {
+          } catch {
             reject(new Error(`Invalid JSON from Telegram: ${body}`));
           }
         });

@@ -74,7 +74,8 @@ function runCronJob(
       if (settled) return;
       settled = true;
       clearTimeout(timeoutHandle);
-      err ? reject(err) : resolve();
+      if (err) reject(err);
+      else resolve();
     };
 
     const timeoutHandle = setTimeout(() => {

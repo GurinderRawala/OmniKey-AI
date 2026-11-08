@@ -34,6 +34,9 @@ jobs:
       - name: Check formatting
         run: npx prettier --check "api/src/**/*.ts" "cli/src/**/*.ts" "telegram/src/**/*.ts"
 
+      - name: Lint
+        run: yarn lint
+
       - name: Build all workspaces
         run: yarn build
 

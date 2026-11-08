@@ -187,7 +187,6 @@ async function fetchPlainHttp(
   url: string,
   log: typeof logger,
   browserSessionEnabled: boolean,
-  settings: Awaited<ReturnType<typeof getAgentSettings>>,
 ): Promise<{ html: string | null; authBlocked: boolean; finalUrl: string }> {
   try {
     const response = await axios.get<string>(url, {
@@ -251,12 +250,7 @@ async function executeWebFetch(url: string, log: typeof logger): Promise<string>
     config.isSelfHosted && settings.browserAccessEnabled && settings.browserAccessMethod !== null;
 
   // ── Step 1: plain HTTP request ────────────────────────────────────────────
-  const { html, authBlocked, finalUrl } = await fetchPlainHttp(
-    url,
-    log,
-    browserSessionEnabled,
-    settings,
-  );
+  const { html, authBlocked, finalUrl } = await fetchPlainHttp(url, log, browserSessionEnabled);
 
   const plainText = html ? stripHtml(html) : '';
 
