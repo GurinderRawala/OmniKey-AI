@@ -16,6 +16,38 @@ final class TaskInstructionsLayoutTests: XCTestCase {
         view.layoutSubtreeIfNeeded()
     }
 
+    override func setUp() {
+        super.setUp()
+        _ = NSApplication.shared
+    }
+
+    func testProductionInitializerCreatesWindow() throws {
+        // Match AppDelegate's exact call without showing it or fetching templates.
+        let controller = TaskInstructionsWindowController()
+        let window = try XCTUnwrap(controller.window)
+        defer { window.close() }
+        XCTAssertEqual(window.title, "OmniKey AI · Task Instructions")
+        XCTAssertNotNil(window.contentViewController)
+    }
+
+    func testWindowShowsAndReopens() throws {
+        // Exercise presentation offline; the production-init test covers construction.
+        let controller = TaskInstructionsWindowController(loadTemplatesOnAppear: false)
+        let window = try XCTUnwrap(controller.window)
+        defer { window.close() }
+        controller.showWindow(nil)
+        settle(try XCTUnwrap(window.contentView))
+        XCTAssertTrue(window.isVisible)
+        XCTAssertEqual(window.title, "OmniKey AI · Task Instructions")
+        XCTAssertNotNil(textView(in: try XCTUnwrap(window.contentView)))
+        window.close()
+        XCTAssertFalse(window.isVisible)
+        controller.showWindow(nil)
+        settle(try XCTUnwrap(window.contentView))
+        XCTAssertTrue(window.isVisible)
+        XCTAssertTrue(controller.window === window)
+    }
+
     func testWindowSupportsResizingAndNativeFullScreen() throws {
         let controller = TaskInstructionsWindowController(loadTemplatesOnAppear: false)
         let window = try XCTUnwrap(controller.window)
