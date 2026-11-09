@@ -64,7 +64,13 @@ final class TaskInstructionsWindow: NSWindow {
 
 /// A thin NSWindowController wrapper that hosts the SwiftUI task instructions UI.
 final class TaskInstructionsWindowController: NSWindowController {
-    convenience init(loadTemplatesOnAppear: Bool = true) {
+    // Keep an explicit zero-argument initializer. Otherwise Swift selects the
+    // inherited NSWindowController.init(), leaving window nil at production call sites.
+    convenience init() {
+        self.init(loadTemplatesOnAppear: true)
+    }
+
+    convenience init(loadTemplatesOnAppear: Bool) {
         let rootView = TaskInstructionsView(loadTemplatesOnAppear: loadTemplatesOnAppear)
         let hostingController = NSHostingController(rootView: rootView)
         hostingController.sizingOptions = []
