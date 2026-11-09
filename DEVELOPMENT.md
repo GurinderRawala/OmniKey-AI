@@ -15,7 +15,7 @@ The CLI ships **all three TypeScript services in one package**: at build time `c
 
 ## Prerequisites
 
-- Node.js **≥ 22** (the engines field allows ≥ 14, but CI uses 22).
+- Node.js **22.12.0+ within the 22.x line, or 24.0.0+** (`^22.12.0 || >=24.0.0`) is the project baseline for installing the full development dependencies and monorepo work, including lint. The published API/CLI package metadata still declares Node ≥14 for runtime compatibility; that does not describe the development toolchain.
 - **Yarn 1.22+** (`npm install -g yarn` if you don't have it). Yarn is the supported package manager for the monorepo; the only `package-lock.json` in the repo is `cli/package-lock.json`, which exists so the published npm package carries a lockfile.
 - For the native clients: Xcode 15+ (macOS) or .NET 8 SDK + Visual Studio 2022 (Windows). Neither is required to work on the TypeScript services.
 
@@ -76,10 +76,14 @@ Telegram needs `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `.env` — see [`t
 | `yarn build:api` / `:telegram` / `:cli` | Build a single workspace.                                                                                                   |
 | `yarn dev`                              | Start the API in watch mode.                                                                                                |
 | `yarn start`                            | Run the compiled API (`api/dist/index.js`).                                                                                 |
-| `yarn test`                             | Run vitest across every workspace (currently 332 tests in `api`; `cli`/`telegram` are no-ops).                              |
-| `yarn lint`                             | Stubbed in every workspace — wire a real linter here when adopted.                                                          |
+| `yarn test`                             | Run vitest across every workspace (currently 431 tests in `api`; `cli`/`telegram` are no-ops).                              |
+| `yarn lint`                             | Run ESLint across all three TypeScript workspaces; typed rules are deferred.                                                |
 | `yarn format`                           | Run Prettier across every workspace's `src/**`.                                                                             |
 | `yarn clean`                            | Remove every `dist/`, `backend-dist/`, and `telegram-client-dist/`.                                                         |
+
+The lint toolchain is pinned to ESLint 9.39.5, @eslint/js 9.39.5, and typescript-eslint 8.55.0, which support the Node 22 development baseline above. The published API/CLI runtime metadata remains Node ≥14; it does not imply that the full development toolchain supports Node 14.
+
+After fixing the simple baseline findings, ESLint reports 257 warnings and no errors across the three TypeScript workspaces: API has 213 `no-explicit-any`, 8 `no-empty-object-type`, 6 `no-control-regex`, and 6 `no-useless-escape`; CLI has 18 `no-explicit-any`, 4 `preserve-caught-error`, and 1 `no-require-imports`; Telegram has 1 `no-control-regex`. These rules remain warnings while the existing findings are addressed. Type-aware checks such as `no-floating-promises` are deferred; ESLint currently uses the recommended non-type-aware rule sets.
 
 To run a script in just one workspace, use `yarn workspace <name> run <script>` where `<name>` is `omnikey-ai-api`, `omnikey-cli`, or `telegram`. List them with `yarn workspaces info`.
 
@@ -130,8 +134,14 @@ Cloud Run picks this image up from the release branch automatically.
 
 Two GitHub Actions workflows ship the CLI:
 
-- **`.github/workflows/release.yml`** — fires on `v*` tags. Builds the whole monorepo with `yarn install --frozen-lockfile && yarn build`, stages a self-contained CLI bundle (re-resolves production-only deps inside the staging dir), uploads the tarball as a GitHub Release asset, and updates the Homebrew formula in `Formula/omnikey-cli.rb` plus the tap repo.
+- **`.github/workflows/release.yml`** — fires on `v*` tags. Builds the whole monorepo with `yarn install --frozen-lockfile && yarn build`, stages a self-contained CLI bundle (re-resolves production-only deps inside the staging dir), uploads the tarball as a GitHub Release asset, and opens reviewable PRs for the Homebrew formula and generated changelog/blog pages in this repo and for the formula in the tap repo. Release-specific `automation/release-v<version>` branches are updated on retries; neither PR is auto-merged.
 - **`.github/workflows/publish-cli.yaml`** — fires on `main` when `cli/**` changes. Builds the monorepo and runs `npm publish` from `cli/`. Because any `cli/**` change publishes, the patch version in `cli/package.json` and `api/package.json` must be bumped in the same pull request; npm rejects republishing an existing version.
+
+Release automation never pushes directly to `main`. Enable **Settings → Actions → General → Allow GitHub Actions to create and approve pull requests** so the default `GITHUB_TOKEN` can open the repository PR; the workflow does not approve PRs. The release job requests `contents: write` and `pull-requests: write`.
+
+Optionally configure `RELEASE_PR_TOKEN` with repository Contents and Pull requests write access if release-metadata PRs must trigger normal PR/push CI: events created using `GITHUB_TOKEN` do not trigger those workflows automatically. This token is used for checkout/push and PR creation. Do not add automation to the protected-branch bypass list; generated updates still require manual review/merge.
+
+`HOMEBREW_TAP_PAT` must grant Contents and Pull requests write access to `GurinderRawala/homebrew-omnikey`; the repository's `GITHUB_TOKEN` cannot write to that separate repository. Both release PRs must be merged before the corresponding formula/page changes become live.
 
 Installs and builds are Yarn throughout; only the final publish step uses `npm publish`, which needs the project-scoped `.npmrc` that `actions/setup-node` writes.
 

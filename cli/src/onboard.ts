@@ -81,7 +81,6 @@ export async function onboard() {
           const trimmed = input.trim();
           if (trimmed === '') return 'URL cannot be empty';
           try {
-            // eslint-disable-next-line no-new
             new URL(trimmed);
             return true;
           } catch {

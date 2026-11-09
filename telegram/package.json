@@ -9,7 +9,7 @@
     "format": "prettier --write \"src/**/*.ts\"",
     "clean": "rm -rf dist",
     "test": "echo \"(no tests in this workspace)\" && exit 0",
-    "lint": "echo \"(no lint in this workspace)\" && exit 0"
+    "lint": "eslint --config ../eslint.config.mjs \"src/**/*.ts\""
   },
   "dependencies": {
     "axios": "^1.16.1",

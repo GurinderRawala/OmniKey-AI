@@ -19,6 +19,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Test release PR automation
+        run: python3 -B -m unittest discover -s scripts/tests -v
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -30,6 +33,9 @@ jobs:
 
       - name: Check formatting
         run: npx prettier --check "api/src/**/*.ts" "cli/src/**/*.ts" "telegram/src/**/*.ts"
+
+      - name: Lint
+        run: yarn lint
 
       - name: Build all workspaces
         run: yarn build

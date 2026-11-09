@@ -18,7 +18,7 @@ import { spawnWorker, type ManagedWorker } from './workers/spawn';
 import { setScheduledJobWorker } from './workers/scheduledJobWorkerClient';
 import { config } from './config';
 import { attachAgentWebSocketServer, createAgentRouter } from './agent/agentServer';
-import { AppDownload } from './models/appDownload';
+import './models/appDownload';
 // Importing models ensures they are registered with Sequelize before initDatabase().
 import './models/agentSession';
 import './models/agentTranscriptMessage';
@@ -124,7 +124,7 @@ app.get('/macos/download', (_req, res) => {
   let fileSize = 0;
   try {
     fileSize = fs.statSync(dmgPath).size;
-  } catch (_) {}
+  } catch {}
 
   res.set({
     'Content-Type': 'application/octet-stream',
@@ -167,8 +167,8 @@ app.get('/macos/appcast', (req, res) => {
 
   // These should match the values embedded into the macOS app
   // Info.plist in macOS/build_release_dmg.sh.
-  const bundleVersion = '72';
-  const shortVersion = '1.9.12';
+  const bundleVersion = '73';
+  const shortVersion = '1.9.13';
 
   const xml = `<?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0"

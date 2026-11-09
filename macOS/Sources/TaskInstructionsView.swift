@@ -11,6 +11,11 @@ struct TaskInstructionsView: View {
     @State private var templateInstructionsInput: String = ""
     @State private var selectedExampleIndex: Int = -1
 
+    // Disable initial loading in hosted layout tests so they never contact a real backend.
+    var loadTemplatesOnAppear = true
+    @State private var editorSessionKey = UUID().uuidString
+    @State private var editorTemplateId: String?
+
     private let apiClient = APIClient()
     private let exampleTemplates: [TaskTemplate] = [
         EditorPolishTemplate.template,
@@ -71,6 +76,7 @@ struct TaskInstructionsView: View {
                             .labelsHidden()
                             .frame(maxWidth: 240)
                             .onChange(of: selectedTemplateId) { _ in
+                                guard editorTemplateId != selectedTemplateId else { return }
                                 loadSelectedTemplateIntoEditor()
                             }
                         }
@@ -106,6 +112,7 @@ struct TaskInstructionsView: View {
                     // Text editor
                     templateTextEditor()
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .padding(16)
                 .background(
                     ZStack {
@@ -208,11 +215,11 @@ struct TaskInstructionsView: View {
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 22)
-            .frame(maxWidth: 980, maxHeight: .infinity, alignment: .top)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
         .frame(minWidth: 900, minHeight: 640)
         .onAppear {
-            fetchTemplates()
+            if loadTemplatesOnAppear { fetchTemplates() }
         }
         .onChange(of: templateInstructionsInput) { _ in
             guard !isLoading else { return }
@@ -273,6 +280,8 @@ struct TaskInstructionsView: View {
     }
 
     private func newTemplate() {
+        editorSessionKey = UUID().uuidString
+        editorTemplateId = nil
         selectedTemplateId = nil
         templateHeadingInput = ""
         templateInstructionsInput = ""
@@ -306,6 +315,8 @@ struct TaskInstructionsView: View {
                     switch result {
                     case let .success(created):
                         self.savedTemplates.append(created)
+                        // Keep the same document and undo stack after the first save.
+                        self.editorTemplateId = created.id
                         self.selectedTemplateId = created.id
                         self.statusMessage = "Template created."
 
@@ -381,6 +392,8 @@ struct TaskInstructionsView: View {
     }
 
     private func loadSelectedTemplateIntoEditor() {
+        editorTemplateId = selectedTemplateId
+        editorSessionKey = UUID().uuidString
         if let id = selectedTemplateId,
            let template = savedTemplates.first(where: { $0.id == id })
         {
@@ -433,27 +446,22 @@ struct TaskInstructionsView: View {
         ZStack(alignment: .topLeading) {
             if templateInstructionsInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Text("Describe the role, context, and task this template should apply when you press Cmd+T...")
-                    .font(.system(size: 12))
+                    .font(.system(size: ChatComposerMetrics.fontSize))
                     .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.7))
                     .padding(.top, 10)
-                    .padding(.leading, 6)
+                    .padding(.leading, 12)
                     .allowsHitTesting(false)
             }
 
-            if #available(macOS 13.0, *) {
-                TextEditor(text: $templateInstructionsInput)
-                    .font(.system(size: 13, design: .monospaced))
-                    .scrollContentBackground(.hidden)
-                    .background(Color.clear)
-                    .padding(4)
-            } else {
-                TextEditor(text: $templateInstructionsInput)
-                    .font(.system(size: 13, design: .monospaced))
-                    .background(Color.clear)
-                    .padding(4)
-            }
+            MarkdownTextEditor(
+                text: $templateInstructionsInput,
+                sessionKey: editorSessionKey,
+                colorScheme: colorScheme,
+                editorLabel: "Task instructions"
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(minHeight: 280)
+        .frame(maxWidth: .infinity, minHeight: 280, maxHeight: .infinity)
         .background(
             RoundedRectangle(cornerRadius: 8)
                 .fill(NordTheme.editorBackground(colorScheme))
