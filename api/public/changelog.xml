@@ -6,6 +6,13 @@
     <description>New features, fixes, and improvements in OmniKey AI.</description>
     <language>en</language>
     <item>
+      <title>OmniKey v1.8.16</title>
+      <link>https://omnikeyai.ca/changelog#v1.8.16</link>
+      <guid isPermaLink="false">omnikey-v1.8.16</guid>
+      <pubDate>Sun, 08 Nov 2026 00:00:00 +0000</pubDate>
+      <description><![CDATA[<ul><li>Reserve v1.8.16 for lint adoption and refresh validation baseline</li><li>Correct development Node range for locked Vite and Vitest</li><li>Preserve the existing Node.js development baseline</li><li>Propose release metadata updates through pull requests</li><li>Use supported native macOS runners</li><li>Align development Node.js requirements with ESLint</li><li>Add ESLint across TypeScript workspaces</li></ul>]]></description>
+    </item>
+    <item>
       <title>OmniKey v1.8.15</title>
       <link>https://omnikeyai.ca/changelog#v1.8.15</link>
       <guid isPermaLink="false">omnikey-v1.8.15</guid>
@@ -137,13 +144,6 @@
       <guid isPermaLink="false">omnikey-v1.6.26</guid>
       <pubDate>Thu, 10 Sep 2026 00:00:00 +0000</pubDate>
       <description><![CDATA[<ul><li>Rebuild desktop bundles</li><li>Harden settings migration and browser access</li><li>Persist agent and browser access settings</li><li>Macos app markdown fix</li><li>Selected text fix macos app</li><li>Windows app fixes</li><li>Onboarding page added</li></ul>]]></description>
-    </item>
-    <item>
-      <title>OmniKey v1.6.25</title>
-      <link>https://omnikeyai.ca/changelog#v1.6.25</link>
-      <guid isPermaLink="false">omnikey-v1.6.25</guid>
-      <pubDate>Mon, 03 Aug 2026 00:00:00 +0000</pubDate>
-      <description><![CDATA[<ul><li>Bump version v1.6.25</li><li>Prompt fix</li><li>Remove OmniKey directive rules from output format prompt</li><li>Route OmniKey directives through dedicated handler</li><li>Add OmniKey directive middleware for shortcuts</li><li>Fix mobile docs browser setup overflow</li><li>Docs page update</li><li>Refresh website typography</li><li>Simplify website top nav</li></ul>]]></description>
     </item>
   </channel>
 </rss>
