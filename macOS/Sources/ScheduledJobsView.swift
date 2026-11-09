@@ -235,10 +235,10 @@ struct ScheduledJobsView: View {
                 }
             }
 
-            Text(job.prompt)
-                .font(.system(size: 12))
-                .foregroundColor(NordTheme.secondaryText(colorScheme))
-                .lineLimit(2)
+            ChatMarkdownView(text: job.prompt, baseFontSize: 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxHeight: 100, alignment: .topLeading)
+                .clipped()
 
             if let cron = job.cronExpression {
                 Text(cronDescription(cron))
@@ -305,9 +305,14 @@ struct ScheduledJobsView: View {
             // Prompt
             VStack(alignment: .leading, spacing: 4) {
                 fieldLabel("Prompt")
-                TextEditor(text: $promptInput)
-                    .font(.system(size: 13))
-                    .frame(height: 100)
+                MarkdownTextEditor(
+                    text: $promptInput,
+                    sessionKey: "scheduled-job-\(editingJobId ?? "new")",
+                    colorScheme: colorScheme,
+                    editorLabel: "Scheduled job prompt"
+                )
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 280)
                     .padding(6)
                     .background(NordTheme.editorBackground(colorScheme))
                     .cornerRadius(6)

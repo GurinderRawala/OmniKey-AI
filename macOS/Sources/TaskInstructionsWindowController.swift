@@ -64,16 +64,19 @@ final class TaskInstructionsWindow: NSWindow {
 
 /// A thin NSWindowController wrapper that hosts the SwiftUI task instructions UI.
 final class TaskInstructionsWindowController: NSWindowController {
-    convenience init() {
-        let rootView = TaskInstructionsView()
+    convenience init(loadTemplatesOnAppear: Bool = true) {
+        let rootView = TaskInstructionsView(loadTemplatesOnAppear: loadTemplatesOnAppear)
         let hostingController = NSHostingController(rootView: rootView)
+        hostingController.sizingOptions = []
 
         let window = TaskInstructionsWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1200, height: 820),
-            styleMask: [.titled, .closable, .miniaturizable],
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
+        window.collectionBehavior.insert(.fullScreenPrimary)
+        window.contentMinSize = NSSize(width: 900, height: 640)
         window.title = "OmniKey AI · Task Instructions"
         window.center()
         window.isReleasedWhenClosed = false
