@@ -22,6 +22,12 @@
     <priority>0.8</priority>
   </url>
   <url>
+    <loc>https://omnikeyai.ca/blog/i-gave-my-keyboard-shortcut-a-terminal-and-a-browser</loc>
+    <lastmod>2026-11-10</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
     <loc>https://omnikeyai.ca/changelog</loc>
     <changefreq>weekly</changefreq>
     <priority>0.7</priority>

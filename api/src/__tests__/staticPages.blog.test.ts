@@ -35,4 +35,35 @@ describe('static blog pages', () => {
       `<loc>${'https://omnikeyai.ca/blog/your-ai-assistant-lives-in-the-wrong-place'}</loc>`,
     );
   });
+
+  it('publishes the OmniAgent article with canonical metadata and five example workflows', () => {
+    const slug = 'i-gave-my-keyboard-shortcut-a-terminal-and-a-browser';
+    const page = fs.readFileSync(path.join(publicDir, 'blog', `${slug}.html`), 'utf8');
+    expect(blogIndex).toContain(`href="/blog/${slug}"`);
+    expect(page).toContain(`<link rel="canonical" href="https://omnikeyai.ca/blog/${slug}"`);
+    expect(page).toContain('I Gave My Keyboard Shortcut a Terminal and a Browser');
+    for (const heading of [
+      'Audit your own codebase',
+      'Summarise a pull request',
+      'Triage a Slack thread',
+      'Ask your database a question',
+      'Pull numbers off an internal dashboard',
+    ]) {
+      expect(page).toContain(heading);
+    }
+    expect(page).toContain('example prompts, not benchmark results');
+    expect(page).not.toContain('Terminal access is off until you enable it');
+  });
+
+  it('includes the OmniAgent article in discovery and changelog surfaces', () => {
+    const url = '/blog/i-gave-my-keyboard-shortcut-a-terminal-and-a-browser';
+    const sitemap = fs.readFileSync(path.join(publicDir, 'sitemap.xml'), 'utf8');
+    expect(sitemap).toContain(`<loc>https://omnikeyai.ca${url}</loc>`);
+    expect(fs.readFileSync(path.join(publicDir, 'changelog.html'), 'utf8')).toContain(
+      `href="${url}"`,
+    );
+    expect(fs.readFileSync(path.join(publicDir, 'changelog.xml'), 'utf8')).toContain(
+      `<link>https://omnikeyai.ca${url}</link>`,
+    );
+  });
 });
