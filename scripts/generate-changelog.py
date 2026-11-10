@@ -115,6 +115,25 @@ def build():
           </div>
         </article>""")
 
+    # Website updates are independent of versioned CLI releases. Keep their
+    # sources so release-time regeneration does not erase published updates.
+    updates = []
+    for source in (ROOT / "content" / "changelog").glob("*.txt"):
+        update = dict(line.split(": ", 1) for line in source.read_text().splitlines() if line)
+        update["id"] = source.stem
+        updates.append(update)
+    updates.sort(key=lambda item: item["date"], reverse=True)
+    update_rows = []
+    for update in updates:
+        update_rows.append(f"""        <article class="chg-release" id="{html.escape(update['id'])}">
+          <div class="chg-meta"><span class="chg-version">Website</span><time datetime="{update['date']}">{update['date']}</time></div>
+          <div class="chg-body"><h3><a href="{html.escape(update['url'], quote=True)}">{html.escape(update['title'])}</a></h3><p>{html.escape(update['description'])}</p></div>
+        </article>""")
+    website_section = (
+        '<section class="docs-section" id="website-updates"><h2>Website updates</h2>'
+        + "\n".join(update_rows) + '</section>'
+    ) if updates else ""
+
     latest = entries[0]
     page = f"""<!doctype html>
 <html lang="en">
@@ -167,6 +186,8 @@ def build():
         <p class="chg-latest">Latest release <strong>{latest['tag']}</strong> &nbsp;&middot;&nbsp; {datetime.date.fromisoformat(latest['date']).strftime('%B %-d, %Y')}</p>
       </section>
 
+      {website_section}
+
       <section class="docs-section" id="releases">
 {chr(10).join(rows)}
       </section>
@@ -182,6 +203,15 @@ def build():
 
     # RSS
     items = []
+    for update in updates:
+        pub = datetime.datetime.fromisoformat(update["date"]).strftime("%a, %d %b %Y 00:00:00 +0000")
+        items.append(f"""    <item>
+      <title>{html.escape(update['title'])}</title>
+      <link>{SITE}{html.escape(update['url'])}</link>
+      <guid isPermaLink="false">omnikey-website-{html.escape(update['id'])}</guid>
+      <pubDate>{pub}</pubDate>
+      <description>{html.escape(update['description'])}</description>
+    </item>""")
     for e in entries[:20]:
         desc = "<ul>" + "".join(f"<li>{html.escape(t)}</li>" for _, _, _, t in e["items"]) + "</ul>" if e["items"] else "<p>Release and packaging updates.</p>"
         pub = datetime.datetime.fromisoformat(e["date"]).strftime("%a, %d %b %Y 00:00:00 +0000")

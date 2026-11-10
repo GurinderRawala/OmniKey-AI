@@ -1,0 +1,107 @@
+title: I Gave My Keyboard Shortcut a Terminal and a Browser
+description: How OmniAgent uses terminal access, authenticated browser sessions, and MCP tools to answer questions about your actual workflow.
+date: 2026-11-10
+read_time: 5 min read
+---
+Most AI desktop tools can rewrite your sentence. Few can go find out whether the sentence is true.
+
+A model that only sees your selected text is a good editor. A model that can run a command, read a logged-in dashboard, and query a database answers questions about your actual situation. OmniKey does both. Command-E and Command-G are the editor. @omniAgent is the other thing.
+
+HOW IT WORKS
+
+Type an instruction anywhere, starting with @omniAgent. Select it. Press Command-T.
+
+  @omniAgent find every TODO in this project and group them by area
+
+The agent works and pastes the result back in place. While running it can reach:
+
+  Your terminal — shell commands, as your user
+  The web — DuckDuckGo, Serper, Brave, Tavily, or SearXNG
+  Your browser — pages in a dedicated debug profile, including logged-in ones
+  Any MCP server you've registered
+
+The last one is the lever. Everything else is fixed; MCP is what you extend.
+
+WHY MCP MATTERS
+
+Model Context Protocol is a standard for exposing tools to a model. A server declares what it can do; the agent discovers those tools and calls them when relevant.
+
+So the agent's abilities aren't fixed at install time. Register a Postgres server and it can answer questions about your data. Register GitHub and it can reason about your pull requests.
+
+  omnikey mcp add
+  omnikey mcp list
+  omnikey mcp toggle <id>
+
+stdio, HTTP, and SSE transports are supported. A fresh install seeds three stdio servers so there's something to try immediately: filesystem, playwright, and git.
+
+One design decision worth knowing: the agent sees every server you've configured but connects only to the one it needs. Ten registered servers don't mean ten connections per request. You can also name one explicitly — "use the Slack server to find that thread."
+
+FIVE RECIPES
+
+These are example prompts, not benchmark results. Register and authenticate the relevant MCP server first, and give the agent the repository, thread URL, or dashboard it should inspect.
+
+1. Audit your own codebase
+
+  @omniAgent find all TODO and FIXME comments in this repo, group them by
+  directory, and tell me which area has the most unfinished work
+
+Terminal access only, no MCP server. Good first test because you can verify every line.
+
+2. Summarise a pull request
+
+With the GitHub MCP server:
+
+  @omniAgent use GitHub to summarise the open PRs touching the auth module
+  and flag any waiting more than a week
+
+3. Triage a Slack thread
+
+With a Slack MCP server, written from inside the Slack message box:
+
+  @omniAgent read this thread, summarise what was decided, and draft a reply
+  that answers the open question
+
+The reply lands where you were already typing.
+
+4. Ask your database a question
+
+With a read-only Postgres MCP server:
+
+  @omniAgent how many signups did we get last week, broken down by day?
+
+Point it at a read-only replica with a read-only role. The agent is exactly as constrained as the credentials you give it — the credentials are the security boundary.
+
+5. Pull numbers off an internal dashboard
+
+This one uses browser access rather than MCP:
+
+  omnikey grant-browser-access
+
+Then:
+
+  @omniAgent read the Grafana dashboard in my open tab and summarise which
+  service regressed this week
+
+The agent reads the rendered page from your own logged-in session. No API tokens, no screenshot-and-paste. People underestimate this until they try it — a lot of important information lives behind a login and has no API.
+
+THE SAFETY PART
+
+An agent with shell access running as your user is powerful and dangerous. Pretending otherwise would be dishonest.
+
+Review your terminal-access settings before running a task; shell commands execute with your user privileges. Browser access needs an explicit grant that creates a separate debug profile rather than touching your main one. Every MCP server is one you registered.
+
+Once enabled, treat an @omniAgent task the way you'd treat pasting a script from the internet into your shell. Read what you're asking for. Use read-only credentials where you can.
+
+The other side: nothing leaves your machine except to providers you chose. Your prompt goes to your LLM provider, searches to your search provider, MCP traffic wherever you pointed it. No OmniKey server in the path, no telemetry, no usage counters. MIT on GitHub if you'd rather verify than trust.
+
+THE PATTERN
+
+The agent earns its keep when the question is about your situation, not about language. "Rewrite this paragraph" is a model problem. "Which service regressed this week" is a context problem — and context is what MCP, terminal, and browser access are for.
+
+We're collecting recipes people have actually run, with exact commands. There's an open issue if you build one worth sharing.
+
+  brew install GurinderRawala/omnikey/omnikey-cli
+  omnikey onboard
+  omnikey mcp add
+
+https://omnikeyai.ca

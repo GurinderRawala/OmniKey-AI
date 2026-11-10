@@ -1,0 +1,4 @@
+title: New blog: I Gave My Keyboard Shortcut a Terminal and a Browser
+date: 2026-11-10
+url: /blog/i-gave-my-keyboard-shortcut-a-terminal-and-a-browser
+description: Five example workflows using OmniAgent with terminal access, authenticated browser sessions, and MCP integrations, plus permission and safety guidance.

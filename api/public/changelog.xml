@@ -6,6 +6,13 @@
     <description>New features, fixes, and improvements in OmniKey AI.</description>
     <language>en</language>
     <item>
+      <title>New blog: I Gave My Keyboard Shortcut a Terminal and a Browser</title>
+      <link>https://omnikeyai.ca/blog/i-gave-my-keyboard-shortcut-a-terminal-and-a-browser</link>
+      <guid isPermaLink="false">omnikey-website-omniagent-blog</guid>
+      <pubDate>Tue, 10 Nov 2026 00:00:00 +0000</pubDate>
+      <description>Five example workflows using OmniAgent with terminal access, authenticated browser sessions, and MCP integrations, plus permission and safety guidance.</description>
+    </item>
+    <item>
       <title>OmniKey v1.8.16</title>
       <link>https://omnikeyai.ca/changelog#v1.8.16</link>
       <guid isPermaLink="false">omnikey-v1.8.16</guid>
