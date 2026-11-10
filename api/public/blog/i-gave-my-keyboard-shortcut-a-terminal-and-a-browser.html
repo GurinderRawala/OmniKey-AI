@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>I Gave My Keyboard Shortcut a Terminal and a Browser | OmniKey AI</title>
+    <meta name="description" content="How OmniAgent uses terminal access, authenticated browser sessions, and MCP tools to answer questions about your actual workflow." />
+    <link rel="canonical" href="https://omnikeyai.ca/blog/i-gave-my-keyboard-shortcut-a-terminal-and-a-browser" />
+    <meta name="robots" content="index, follow" />
+    <meta property="og:type" content="article" />
+    <meta property="og:url" content="https://omnikeyai.ca/blog/i-gave-my-keyboard-shortcut-a-terminal-and-a-browser" />
+    <meta property="og:title" content="I Gave My Keyboard Shortcut a Terminal and a Browser | OmniKey AI" />
+    <meta property="og:description" content="How OmniAgent uses terminal access, authenticated browser sessions, and MCP tools to answer questions about your actual workflow." />
+    <meta property="og:site_name" content="OmniKey AI" />
+    <meta property="article:published_time" content="2026-11-10" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="I Gave My Keyboard Shortcut a Terminal and a Browser | OmniKey AI" />
+    <meta name="twitter:description" content="How OmniAgent uses terminal access, authenticated browser sessions, and MCP tools to answer questions about your actual workflow." />
+    <script type="application/ld+json">
+      {"@context":"https://schema.org","@type":"BlogPosting","headline":"I Gave My Keyboard Shortcut a Terminal and a Browser | OmniKey AI","description":"How OmniAgent uses terminal access, authenticated browser sessions, and MCP tools to answer questions about your actual workflow.","url":"https://omnikeyai.ca/blog/i-gave-my-keyboard-shortcut-a-terminal-and-a-browser","publisher":{"@type":"Organization","name":"OmniKey AI","url":"https://omnikeyai.ca"}}
+    </script>
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" href="/icon-192.png" type="image/png" sizes="192x192" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
+    <meta name="theme-color" content="#111318" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;600;700;800&amp;family=Manrope:wght@400;500;600;700;800&amp;display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/style.css" />
+    <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Skip to main content</a>
+    <nav class="nav">
+      <div class="nav-inner">
+        <a href="/" class="nav-logo">
+          <img src="/icon-96.png" alt="" class="nav-icon" width="36" height="36" />
+          <span>OmniKey</span>
+        </a>
+        <div class="nav-links">
+          <a href="/#omniagent" class="nav-link-new">OmniAgent</a>
+          <a href="/docs">Docs</a>
+          <a href="/blog" class="nav-link-active">Blog</a>
+          <a href="/changelog">Changelog</a>
+          <a href="/#getting-started">Get started</a>
+        </div>
+        <div class="nav-actions">
+          <a
+            href="https://github.com/GurinderRawala/OmniKey-AI"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="nav-github"
+            aria-label="Star OmniKey on GitHub"
+          >
+            <svg viewBox="0 0 16 16" fill="currentColor" width="13" height="13" aria-hidden="true">
+              <path
+                d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.751.751 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z"
+              />
+            </svg>
+            <span class="nav-github-label">GitHub</span>
+          </a>
+          <a href="/#download" class="nav-download">Download</a>
+        </div>
+        <button
+          type="button"
+          class="nav-hamburger"
+          id="nav-hamburger"
+          aria-label="Open menu"
+          aria-expanded="false"
+          aria-controls="mobile-menu"
+        >
+          <span class="nav-hamburger-bar"></span>
+          <span class="nav-hamburger-bar"></span>
+          <span class="nav-hamburger-bar"></span>
+        </button>
+      </div>
+      <div class="mobile-menu" id="mobile-menu" hidden>
+        <nav class="mobile-menu-links" aria-label="Mobile">
+          <a href="/#omniagent" class="mobile-menu-link mobile-menu-link-new">OmniAgent</a>
+          <a href="/docs" class="mobile-menu-link">Docs</a>
+          <a href="/blog" class="mobile-menu-link mobile-menu-link-active">Blog</a>
+          <a href="/changelog" class="mobile-menu-link">Changelog</a>
+          <a href="/#getting-started" class="mobile-menu-link">Get started</a>
+        </nav>
+        <div class="mobile-menu-actions">
+          <a href="/#download" class="mobile-menu-download">Download for macOS / Windows</a>
+          <a
+            href="https://github.com/GurinderRawala/OmniKey-AI"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="mobile-menu-github"
+          >
+            <svg viewBox="0 0 16 16" fill="currentColor" width="15" height="15" aria-hidden="true">
+              <path
+                d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.751.751 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z"
+              />
+            </svg>
+            Star on GitHub
+          </a>
+        </div>
+      </div>
+    </nav>
+    <main class="blog-main" id="main-content">
+      <article class="blog-article">
+        <header class="blog-article-header">
+          <a href="/blog" class="blog-back">&larr; All posts</a>
+          <h1>I Gave My Keyboard Shortcut a Terminal and a Browser</h1>
+          <p class="blog-dek">How OmniAgent uses terminal access, authenticated browser sessions, and MCP tools to answer questions about your actual workflow.</p>
+          <div class="blog-byline"><time datetime="2026-11-10">November 10, 2026</time><span>&middot;</span><span>5 min read</span></div>
+        </header>
+        <div class="blog-prose">
+<p>Most AI desktop tools can rewrite your sentence. Few can go find out whether the sentence is true.</p>
+<p>A model that only sees your selected text is a good editor. A model that can run a command, read a logged-in dashboard, and query a database answers questions about your actual situation. OmniKey does both. Command-E and Command-G are the editor. @omniAgent is the other thing.</p>
+<h2>How It Works</h2>
+<p>Type an instruction anywhere, starting with @omniAgent. Select it. Press Command-T.</p>
+<pre><code>@omniAgent find every TODO in this project and group them by area</code></pre>
+<p>The agent works and pastes the result back in place. While running it can reach:</p>
+<pre><code>Your terminal — shell commands, as your user
+The web — DuckDuckGo, Serper, Brave, Tavily, or SearXNG
+Your browser — pages in a dedicated debug profile, including logged-in ones
+Any MCP server you&#x27;ve registered</code></pre>
+<p>The last one is the lever. Everything else is fixed; MCP is what you extend.</p>
+<h2>Why Mcp Matters</h2>
+<p>Model Context Protocol is a standard for exposing tools to a model. A server declares what it can do; the agent discovers those tools and calls them when relevant.</p>
+<p>So the agent&#x27;s abilities aren&#x27;t fixed at install time. Register a Postgres server and it can answer questions about your data. Register GitHub and it can reason about your pull requests.</p>
+<pre><code>omnikey mcp add
+omnikey mcp list
+omnikey mcp toggle &lt;id&gt;</code></pre>
+<p>stdio, HTTP, and SSE transports are supported. A fresh install seeds three stdio servers so there&#x27;s something to try immediately: filesystem, playwright, and git.</p>
+<p>One design decision worth knowing: the agent sees every server you&#x27;ve configured but connects only to the one it needs. Ten registered servers don&#x27;t mean ten connections per request. You can also name one explicitly — &quot;use the Slack server to find that thread.&quot;</p>
+<h2>Five Recipes</h2>
+<p>These are example prompts, not benchmark results. Register and authenticate the relevant MCP server first, and give the agent the repository, thread URL, or dashboard it should inspect.</p>
+<p>1. Audit your own codebase</p>
+<pre><code>@omniAgent find all TODO and FIXME comments in this repo, group them by
+directory, and tell me which area has the most unfinished work</code></pre>
+<p>Terminal access only, no MCP server. Good first test because you can verify every line.</p>
+<p>2. Summarise a pull request</p>
+<p>With the GitHub MCP server:</p>
+<pre><code>@omniAgent use GitHub to summarise the open PRs touching the auth module
+and flag any waiting more than a week</code></pre>
+<p>3. Triage a Slack thread</p>
+<p>With a Slack MCP server, written from inside the Slack message box:</p>
+<pre><code>@omniAgent read this thread, summarise what was decided, and draft a reply
+that answers the open question</code></pre>
+<p>The reply lands where you were already typing.</p>
+<p>4. Ask your database a question</p>
+<p>With a read-only Postgres MCP server:</p>
+<pre><code>@omniAgent how many signups did we get last week, broken down by day?</code></pre>
+<p>Point it at a read-only replica with a read-only role. The agent is exactly as constrained as the credentials you give it — the credentials are the security boundary.</p>
+<p>5. Pull numbers off an internal dashboard</p>
+<p>This one uses browser access rather than MCP:</p>
+<pre><code>omnikey grant-browser-access</code></pre>
+<p>Then:</p>
+<pre><code>@omniAgent read the Grafana dashboard in my open tab and summarise which
+service regressed this week</code></pre>
+<p>The agent reads the rendered page from your own logged-in session. No API tokens, no screenshot-and-paste. People underestimate this until they try it — a lot of important information lives behind a login and has no API.</p>
+<h2>The Safety Part</h2>
+<p>An agent with shell access running as your user is powerful and dangerous. Pretending otherwise would be dishonest.</p>
+<p>Review your terminal-access settings before running a task; shell commands execute with your user privileges. Browser access needs an explicit grant that creates a separate debug profile rather than touching your main one. Every MCP server is one you registered.</p>
+<p>Once enabled, treat an @omniAgent task the way you&#x27;d treat pasting a script from the internet into your shell. Read what you&#x27;re asking for. Use read-only credentials where you can.</p>
+<p>The other side: nothing leaves your machine except to providers you chose. Your prompt goes to your LLM provider, searches to your search provider, MCP traffic wherever you pointed it. No OmniKey server in the path, no telemetry, no usage counters. MIT on GitHub if you&#x27;d rather verify than trust.</p>
+<h2>The Pattern</h2>
+<p>The agent earns its keep when the question is about your situation, not about language. &quot;Rewrite this paragraph&quot; is a model problem. &quot;Which service regressed this week&quot; is a context problem — and context is what MCP, terminal, and browser access are for.</p>
+<p>We&#x27;re collecting recipes people have actually run, with exact commands. There&#x27;s an open issue if you build one worth sharing.</p>
+<pre><code>brew install GurinderRawala/omnikey/omnikey-cli
+omnikey onboard
+omnikey mcp add</code></pre>
+<p><a href="https://omnikeyai.ca">https://omnikeyai.ca</a></p>
+        </div>
+        <aside class="blog-cta">
+          <p class="section-label">Try it where you type</p>
+          <h2>One shortcut. Any app.</h2>
+          <p>Free, open source, and built for macOS and Windows. Bring your own model.</p>
+          <div class="blog-cta-actions"><a href="/#download" class="btn btn-primary">Download OmniKey</a><a href="https://github.com/GurinderRawala/OmniKey-AI" class="btn btn-secondary">View source</a></div>
+        </aside>
+      </article>
+    </main>
+    <footer>
+      <p>
+        OmniKey &copy; <span id="year"></span> &nbsp;·&nbsp; <a href="/docs">Docs</a> &nbsp;·&nbsp; <a href="/blog">Blog</a> &nbsp;·&nbsp; <a href="/changelog">Changelog</a> &nbsp;·&nbsp;
+        <a
+          href="https://github.com/GurinderRawala/OmniKey-AI"
+          target="_blank"
+          rel="noopener noreferrer"
+          >GitHub</a
+        >
+      </p>
+    </footer>
+    <script src="/app.js" defer></script>
+  </body>
+</html>
