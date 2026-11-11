@@ -27,7 +27,13 @@ import {
   recoverOutputLengthResult,
   removeInjectedUserPromptsFromHistory,
 } from './completionRecovery';
-import { getOrCreateSession, persistSessionToDB } from './sessionStore';
+import {
+  getOrCreateSession,
+  ownedSessionWhere,
+  persistSessionToDB,
+  SESSION_UNAVAILABLE_MESSAGE,
+  SessionAccessError,
+} from './sessionStore';
 import {
   consumeSteeringRestart,
   createSteeringRestartBudget,
@@ -58,6 +64,9 @@ type InternalAgentTurnOptions = AgentTurnOptions & {
   // Outer-run Skills state, threaded unchanged through every recursion.
   skillRun?: SkillRunState;
 };
+
+/** Same fixed text the WebSocket layer uses for a foreign session/run. */
+export { SESSION_UNAVAILABLE_MESSAGE };
 
 function hasTag(content: string, tag: string): boolean {
   return new RegExp(`<${tag}\\b`, 'i').test(content);
@@ -225,7 +234,10 @@ async function runAgentTurnInternal(
         const rawInput = clientMessage.content || '';
         const titleSlug = rawInput.trim().slice(0, 60).replace(/\s+/g, ' ');
         if (titleSlug) {
-          AgentSession.update({ title: titleSlug }, { where: { id: sessionId } }).catch((err) => {
+          AgentSession.update(
+            { title: titleSlug },
+            { where: ownedSessionWhere(sessionId, subscription.id) },
+          ).catch((err) => {
             log.error('Failed to update agent session title', { sessionId, error: err });
           });
         }
@@ -276,7 +288,7 @@ async function runAgentTurnInternal(
           completionTokensUsed: usage.completion_tokens,
           totalTokensUsed: usage.total_tokens,
         },
-        { where: { id: sessionId } },
+        { where: ownedSessionWhere(sessionId, subscription.id) },
       );
     } catch (err) {
       log.error('Failed to update agent session token usage', { sessionId, error: err });
@@ -785,6 +797,9 @@ async function runAgentTurnInternal(
       await persistAndSendFailure('The agent returned an empty response. Please try again.');
     }
   } catch (err) {
+    // A continuation whose session ownership can no longer be proven must not
+    // persist anything; the outer boundary sends the fixed rejection.
+    if (err instanceof SessionAccessError) throw err;
     if (err instanceof SkillContextBudgetError && !session.signal?.aborted && session.skillRun) {
       // Fixed context-limit frames only: no further model/tool work and no
       // persisted failure or overlay. Already completed work stays as it was
@@ -874,6 +889,20 @@ export async function runAgentTurn(
       skillRun,
     });
   } catch (err) {
+    if (err instanceof SessionAccessError) {
+      // Foreign or unverifiable session id: nothing was sent to a model or
+      // tool and nothing is persisted. Fixed frame, no owner details.
+      if (skillRun) skillRun.pendingInputCheckpoint = undefined;
+      log.warn('Refused agent turn for an unavailable session', { sessionId });
+      send({
+        session_id: sessionId,
+        sender: 'agent',
+        content: SESSION_UNAVAILABLE_MESSAGE,
+        is_terminal_output: false,
+        is_error: true,
+      });
+      return;
+    }
     // Errors outside the internal try (e.g. tool discovery) keep the previous
     // durable-checkpoint behavior for a deferred input checkpoint.
     await flushSkillInputCheckpoint(skillRun);

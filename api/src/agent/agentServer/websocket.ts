@@ -18,6 +18,7 @@ import {
   takePendingSteeringMessages,
   MAX_STEERING_ID_LENGTH,
 } from './steering';
+import { isSessionIdAvailableTo, SESSION_UNAVAILABLE_MESSAGE } from './sessionStore';
 import { buildShellToolResult } from './terminalOutput';
 import { runAgentTurn } from './turnRunner';
 
@@ -29,8 +30,9 @@ export function rejectPendingSteeringAtTurnEnd(
   const pending = takePendingSteeringMessages(sessionId, log);
   if (!pending.length) return 0;
 
+  // Late rejection goes to the steering sender, like its received ack.
   for (const message of pending) {
-    send({
+    (message.replyTo ?? send)({
       session_id: sessionId,
       sender: 'agent',
       content:
@@ -117,217 +119,255 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
     // Track session IDs touched by this connection so we can clean up on close.
     const connectionSessionIds = new Set<string>();
 
-    ws.on('message', (data) => {
-      void (async () => {
-        const ok = await ensureAuthenticated();
-        const subscription = getSubscription();
-        if (connection.signal.aborted) return;
+    // Messages of one connection are admitted (ownership-checked, then queued,
+    // steered or resolved) strictly in arrival order, even though the ownership
+    // check is asynchronous. Only admission is serialized, never a whole turn.
+    let admissionTail: Promise<void> = Promise.resolve();
 
-        if (!ok || !subscription) {
-          if (ws.readyState === WebSocket.OPEN) {
-            log.warn('Closing Agent WebSocket due to failed authentication');
-            send({
-              session_id: '',
-              sender: 'agent',
-              content:
-                'Unauthorized: missing or invalid subscription. Please re-activate your key.',
-              is_terminal_output: false,
-              is_error: true,
-            });
-            ws.close();
-          }
-          return;
-        }
+    // Resolves once the message is admitted. Never waits for a turn to finish.
+    const admitMessage = async (data: WebSocket.RawData): Promise<void> => {
+      const ok = await ensureAuthenticated();
+      const subscription = getSubscription();
+      if (connection.signal.aborted) return;
 
-        let message: AgentMessage;
-        try {
-          const text = typeof data === 'string' ? data : data.toString('utf8');
-          log.info('Agent WebSocket received message from client', {
-            approximateLength: text.length,
+      if (!ok || !subscription) {
+        if (ws.readyState === WebSocket.OPEN) {
+          log.warn('Closing Agent WebSocket due to failed authentication');
+          send({
+            session_id: '',
+            sender: 'agent',
+            content: 'Unauthorized: missing or invalid subscription. Please re-activate your key.',
+            is_terminal_output: false,
+            is_error: true,
           });
-          message = JSON.parse(text) as AgentMessage;
-        } catch (err) {
-          log.warn('Received invalid AgentMessage payload over WebSocket', { error: err });
-          return;
+          ws.close();
         }
+        return;
+      }
 
-        const sessionId = message.session_id || 'default';
-        connectionSessionIds.add(sessionId);
-        log.debug('Received AgentMessage from client (WebSocket)', {
-          sessionId,
-          sender: message.sender,
-          isTerminalOutput: message.is_terminal_output,
-          isError: message.is_error,
+      let message: AgentMessage;
+      try {
+        const text = typeof data === 'string' ? data : data.toString('utf8');
+        log.info('Agent WebSocket received message from client', {
+          approximateLength: text.length,
         });
+        message = JSON.parse(text) as AgentMessage;
+      } catch (err) {
+        log.warn('Received invalid AgentMessage payload over WebSocket', { error: err });
+        return;
+      }
 
-        // Only terminal feedback can resolve work within an active turn. All
-        // other wire messages share the session queue, including web callbacks.
-        const isTerminalFeedback = Boolean(message.is_terminal_output) || Boolean(message.is_error);
-        const isInternalCall = Boolean(message.is_web_call);
-        const isSteeringMessage = Boolean(message.is_steering);
+      const sessionId = message.session_id || 'default';
+      connectionSessionIds.add(sessionId);
+      log.debug('Received AgentMessage from client (WebSocket)', {
+        sessionId,
+        sender: message.sender,
+        isTerminalOutput: message.is_terminal_output,
+        isError: message.is_error,
+      });
 
-        // A run is owned by the authenticated subscription that started it.
-        // Another subscription may not steer, feed back into, or queue onto
-        // it. Rejections reuse fixed frames and carry no owner/skill details;
-        // other connections of the same subscription are unaffected.
-        const activeOwner = activeSessions.has(sessionId)
-          ? sessionActiveSubscriptions.get(sessionId)
-          : undefined;
-        if (activeOwner && activeOwner.subscriptionId !== subscription.id) {
-          log.warn('Rejected message for a session run owned by another subscription', {
-            sessionId,
-          });
-          if (isTerminalFeedback) return;
-          if (isSteeringMessage && !isInternalCall) {
-            send({
-              session_id: sessionId,
-              sender: 'agent',
-              content:
-                'The current task finished before this update could be queued. Send it again as a follow-up.',
-              is_terminal_output: false,
-              is_error: true,
-              is_steering: true,
-              steering_id:
-                typeof message.steering_id === 'string' &&
-                message.steering_id.length <= MAX_STEERING_ID_LENGTH
-                  ? message.steering_id
-                  : undefined,
-              steering_status: 'rejected',
-              steering_pending_count: 0,
-            });
-            return;
-          }
+      // Only terminal feedback can resolve work within an active turn. All
+      // other wire messages share the session queue, including web callbacks.
+      const isTerminalFeedback = Boolean(message.is_terminal_output) || Boolean(message.is_error);
+      const isInternalCall = Boolean(message.is_web_call);
+      const isSteeringMessage = Boolean(message.is_steering);
+      const isTurnInput = !isTerminalFeedback && !(isSteeringMessage && !isInternalCall);
+      // Feedback with no active turn falls through to start a new turn.
+      const mayStartTurn = isTurnInput || (isTerminalFeedback && !activeSessions.has(sessionId));
+
+      // Ownership before the queue: a message for an id stored under another
+      // subscription (or whose lookup fails) never queues, marks the session
+      // active, resolves Skills or reaches a model. An unused id stays
+      // claimable; getOrCreateSession settles creation races fail closed.
+      if (mayStartTurn) {
+        const available = await isSessionIdAvailableTo(sessionId, subscription.id, log);
+        if (connection.signal.aborted) return;
+        if (!available) {
           send({
             session_id: sessionId,
             sender: 'agent',
-            content: 'This message could not be processed. Start a new session and try again.',
+            content: SESSION_UNAVAILABLE_MESSAGE,
             is_terminal_output: false,
             is_error: true,
           });
           return;
         }
+      }
 
-        if (isSteeringMessage && !isTerminalFeedback && !isInternalCall) {
-          if (!activeSessions.has(sessionId) || sessionOwners.get(sessionId)?.aborted) {
-            send({
-              session_id: sessionId,
-              sender: 'agent',
-              content:
-                'The current task finished before this update could be queued. Send it again as a follow-up.',
-              is_terminal_output: false,
-              is_error: true,
-              is_steering: true,
-              steering_id:
-                typeof message.steering_id === 'string' &&
-                message.steering_id.length <= MAX_STEERING_ID_LENGTH
-                  ? message.steering_id
-                  : undefined,
-              steering_status: 'rejected',
-              steering_pending_count: 0,
-            });
-            return;
-          }
+      // A run is owned by the authenticated subscription that started it.
+      // Another subscription may not steer or feed back into it. Rejections
+      // reuse fixed frames and carry no owner/skill details; other
+      // connections of the same subscription are unaffected. A turn input
+      // that passed the ownership check above is not rejected here: the
+      // other run is then an unproven claim (refused when its session
+      // loads), so the input queues behind it in FIFO order.
+      const activeOwner = activeSessions.has(sessionId)
+        ? sessionActiveSubscriptions.get(sessionId)
+        : undefined;
+      if (activeOwner && activeOwner.subscriptionId !== subscription.id && !isTurnInput) {
+        log.warn('Rejected message for a session run owned by another subscription', {
+          sessionId,
+        });
+        if (isTerminalFeedback) return;
+        send({
+          session_id: sessionId,
+          sender: 'agent',
+          content:
+            'The current task finished before this update could be queued. Send it again as a follow-up.',
+          is_terminal_output: false,
+          is_error: true,
+          is_steering: true,
+          steering_id:
+            typeof message.steering_id === 'string' &&
+            message.steering_id.length <= MAX_STEERING_ID_LENGTH
+              ? message.steering_id
+              : undefined,
+          steering_status: 'rejected',
+          steering_pending_count: 0,
+        });
+        return;
+      }
 
-          const steeringResult = enqueueSteeringMessage(sessionId, message, log, send);
-          if (steeringResult.duplicate) return;
-          if (!steeringResult.accepted) {
-            send({
-              session_id: sessionId,
-              sender: 'agent',
-              content: steeringResult.rejectionReason ?? 'Empty steering update ignored.',
-              is_terminal_output: false,
-              is_error: true,
-              is_steering: true,
-              steering_id:
-                typeof message.steering_id === 'string' &&
-                message.steering_id.length <= MAX_STEERING_ID_LENGTH
-                  ? message.steering_id
-                  : undefined,
-              steering_status: 'rejected',
-              steering_pending_count: steeringResult.pendingCount,
-            });
-            log.info('Ignored steering message for active session', {
-              sessionId,
-              reason: steeringResult.rejectionReason ?? 'empty',
-              pendingSteeringMessages: steeringResult.pendingCount,
-            });
-            return;
-          }
-
+      if (isSteeringMessage && !isTerminalFeedback && !isInternalCall) {
+        if (!activeSessions.has(sessionId) || sessionOwners.get(sessionId)?.aborted) {
           send({
             session_id: sessionId,
             sender: 'agent',
-            content: 'Steering update received for the running task.',
+            content:
+              'The current task finished before this update could be queued. Send it again as a follow-up.',
             is_terminal_output: false,
-            is_error: false,
+            is_error: true,
             is_steering: true,
             steering_id:
               typeof message.steering_id === 'string' &&
               message.steering_id.length <= MAX_STEERING_ID_LENGTH
                 ? message.steering_id
                 : undefined,
-            steering_status: 'received',
+            steering_status: 'rejected',
+            steering_pending_count: 0,
+          });
+          return;
+        }
+
+        const steeringResult = enqueueSteeringMessage(sessionId, message, log, send);
+        if (steeringResult.duplicate) return;
+        if (!steeringResult.accepted) {
+          send({
+            session_id: sessionId,
+            sender: 'agent',
+            content: steeringResult.rejectionReason ?? 'Empty steering update ignored.',
+            is_terminal_output: false,
+            is_error: true,
+            is_steering: true,
+            steering_id:
+              typeof message.steering_id === 'string' &&
+              message.steering_id.length <= MAX_STEERING_ID_LENGTH
+                ? message.steering_id
+                : undefined,
+            steering_status: 'rejected',
             steering_pending_count: steeringResult.pendingCount,
           });
-          log.info('Accepted steering message for active session', {
+          log.info('Ignored steering message for active session', {
             sessionId,
+            reason: steeringResult.rejectionReason ?? 'empty',
             pendingSteeringMessages: steeringResult.pendingCount,
           });
           return;
         }
 
-        if (!isTerminalFeedback && activeSessions.has(sessionId)) {
-          // A turn is already running for this session. Queue the message so it
-          // is processed in order once the current turn completes.
-          const queue = sessionQueues.get(sessionId) ?? [];
-          queue.push({ message, send, subscription, log, signal: connection.signal });
-          sessionQueues.set(sessionId, queue);
-          log.info('Queued user message for active session', {
-            sessionId,
-            queueLength: queue.length,
-          });
-          return;
-        }
+        send({
+          session_id: sessionId,
+          sender: 'agent',
+          content: 'Steering update received for the running task.',
+          is_terminal_output: false,
+          is_error: false,
+          is_steering: true,
+          steering_id:
+            typeof message.steering_id === 'string' &&
+            message.steering_id.length <= MAX_STEERING_ID_LENGTH
+              ? message.steering_id
+              : undefined,
+          steering_status: 'received',
+          steering_pending_count: steeringResult.pendingCount,
+        });
+        log.info('Accepted steering message for active session', {
+          sessionId,
+          pendingSteeringMessages: steeringResult.pendingCount,
+        });
+        return;
+      }
 
-        // If the tool loop is awaiting shell_script terminal output, resolve
-        // the pending promise instead of starting a new agent turn.
-        const pendingShell = pendingShellScripts.get(sessionId);
-        if (
-          isTerminalFeedback &&
-          activeSessions.has(sessionId) &&
-          sessionOwners.get(sessionId) !== connection.signal
-        ) {
-          log.warn('Ignored terminal feedback from a connection that does not own the turn', {
-            sessionId,
-          });
-          return;
-        }
-        if (pendingShell && isTerminalFeedback) {
-          pendingShellScripts.delete(sessionId);
-          const content = buildShellToolResult(
-            message.content ?? '',
-            Boolean(message.is_error),
-            pendingShell.filterKeywords,
-          );
-          log.info('Resolving pending shell_script tool result from terminal output', {
-            sessionId,
-            isError: Boolean(message.is_error),
-            rawContentLength: (message.content ?? '').length,
-            refinedContentLength: content.length,
-          });
-          pendingShell.resolve(
-            content,
-            typeof message.is_error === 'boolean' ? message.is_error : undefined,
-          );
-          return;
-        }
-
-        // Late feedback must not start another turn while its owner is running.
-        if (isTerminalFeedback && activeSessions.has(sessionId)) return;
+      if (!isTerminalFeedback && activeSessions.has(sessionId)) {
+        // A turn is already running for this session. Queue the message so it
+        // is processed in order once the current turn completes.
         const queue = sessionQueues.get(sessionId) ?? [];
         queue.push({ message, send, subscription, log, signal: connection.signal });
         sessionQueues.set(sessionId, queue);
-        await processNextInQueue(sessionId);
+        log.info('Queued user message for active session', {
+          sessionId,
+          queueLength: queue.length,
+        });
+        return;
+      }
+
+      // If the tool loop is awaiting shell_script terminal output, resolve
+      // the pending promise instead of starting a new agent turn.
+      const pendingShell = pendingShellScripts.get(sessionId);
+      if (
+        isTerminalFeedback &&
+        activeSessions.has(sessionId) &&
+        sessionOwners.get(sessionId) !== connection.signal
+      ) {
+        log.warn('Ignored terminal feedback from a connection that does not own the turn', {
+          sessionId,
+        });
+        return;
+      }
+      if (pendingShell && isTerminalFeedback) {
+        pendingShellScripts.delete(sessionId);
+        const content = buildShellToolResult(
+          message.content ?? '',
+          Boolean(message.is_error),
+          pendingShell.filterKeywords,
+        );
+        log.info('Resolving pending shell_script tool result from terminal output', {
+          sessionId,
+          isError: Boolean(message.is_error),
+          rawContentLength: (message.content ?? '').length,
+          refinedContentLength: content.length,
+        });
+        pendingShell.resolve(
+          content,
+          typeof message.is_error === 'boolean' ? message.is_error : undefined,
+        );
+        return;
+      }
+
+      // Late feedback must not start another turn while its owner is running.
+      if (isTerminalFeedback && activeSessions.has(sessionId)) return;
+      const queue = sessionQueues.get(sessionId) ?? [];
+      queue.push({ message, send, subscription, log, signal: connection.signal });
+      sessionQueues.set(sessionId, queue);
+      // Marks the session active synchronously; the turn itself is not awaited
+      // so the next message's admission is not held behind it.
+      void processNextInQueue(sessionId);
+    };
+
+    ws.on('message', (data) => {
+      const priorAdmission = admissionTail;
+      let releaseAdmission!: () => void;
+      admissionTail = new Promise<void>((resolve) => {
+        releaseAdmission = resolve;
+      });
+      void (async () => {
+        try {
+          await priorAdmission;
+          await admitMessage(data);
+        } catch (err) {
+          log.error('Failed to admit Agent WebSocket message', { error: err });
+        } finally {
+          releaseAdmission();
+        }
       })();
     });
 

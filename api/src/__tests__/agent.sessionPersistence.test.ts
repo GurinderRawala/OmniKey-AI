@@ -499,6 +499,7 @@ describe('agent session persistence checkpoints', () => {
       ],
       turns: 2,
       activeModel: 'test-model',
+      subscription: { id: 'subscription-1' },
     } as any;
 
     await persistSessionToDB('session-1', state);
@@ -509,6 +510,7 @@ describe('agent session persistence checkpoints', () => {
       'session-1',
       state.history,
       values.transcriptRevision,
+      'subscription-1',
     );
   });
 
@@ -558,6 +560,7 @@ describe('agent session persistence checkpoints', () => {
       ],
       turns: 1,
       activeModel: 'test-model',
+      subscription: { id: 'subscription-1' },
     } as any;
 
     await persistSessionToDB('session-1', state);
@@ -568,6 +571,7 @@ describe('agent session persistence checkpoints', () => {
       'session-1',
       state.history,
       values.transcriptRevision,
+      'subscription-1',
     );
     expect(mocks.log.error).toHaveBeenCalledWith(
       'Failed to publish normalized agent transcript',
@@ -587,6 +591,7 @@ describe('agent session persistence checkpoints', () => {
       ],
       turns: 1,
       activeModel: 'test-model',
+      subscription: { id: 'subscription-1' },
     } as any;
 
     await persistSessionToDB('grouping-subscription-1', state);

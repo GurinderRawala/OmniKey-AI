@@ -118,7 +118,10 @@ vi.mock('ws', async () => {
 });
 
 import { runAgentTurn } from '../agent/agentServer';
-import { attachAgentWebSocketServer } from '../agent/agentServer/websocket';
+import {
+  attachAgentWebSocketServer,
+  rejectPendingSteeringAtTurnEnd,
+} from '../agent/agentServer/websocket';
 import {
   enqueueSteeringMessage,
   drainSteeringMessagesIntoHistory,
@@ -793,6 +796,47 @@ class Socket extends EventEmitter {
   }
 }
 
+describe('steering acknowledgements and deferred Skills notices', () => {
+  it('sends no applied Skills notice for steering whose next request the provider rejects', async () => {
+    addSkill('a', 'alpha');
+    addSkill('b', 'beta');
+    responses = [
+      () => {
+        steer('also beta please', 'st-1', { supports_skill_status: true });
+        return finalAnswer('stale');
+      },
+      () => {
+        throw new Error('provider offline');
+      },
+    ];
+    const send = await run('alpha task');
+    expect(requests).toHaveLength(2);
+    expect(ids(requests[1])).toEqual(['a', 'b']);
+    // Only the ordinary input (accepted request) is reported as applied.
+    expect(notices(send).map((n) => [n.skill_status.status, n.skill_status.input_id])).toEqual([
+      ['applied', expect.not.stringMatching(/^st-1$/)],
+    ]);
+    // The steering text itself was applied: its ack goes to the sender only.
+    expect(stewardSend.mock.calls.map(([m]) => m.steering_status)).toEqual(['applied']);
+    expect(stewardSend.mock.calls.some(([m]) => m.skill_status)).toBe(false);
+    expect(send.mock.calls.some(([m]) => m.steering_status)).toBe(false);
+  });
+
+  it('routes a late turn-end rejection to the steering sender', () => {
+    sessionSteeringIds.set('session-1', new Set());
+    steer('too late', 'st-late', { supports_skill_status: true });
+    steer('legacy too late', undefined);
+    const owner = vi.fn();
+    expect(rejectPendingSteeringAtTurnEnd('session-1', owner, mocks.log as any)).toBe(2);
+    expect(stewardSend.mock.calls.map(([m]) => [m.steering_id, m.steering_status])).toEqual([
+      ['st-late', 'rejected'],
+    ]);
+    // Without a recorded sender the turn owner remains the fallback channel.
+    expect(owner.mock.calls.map(([m]) => m.steering_status)).toEqual(['rejected']);
+    expect(sessionSteeringMessages.has('session-1')).toBe(false);
+  });
+});
+
 describe('WebSocket ingress', () => {
   it('snapshots capability per input, dedups steering ids and isolates queued inputs', async () => {
     addSkill('a', 'alpha');
@@ -837,6 +881,12 @@ describe('WebSocket ingress', () => {
     ]);
     // The steering sender did not opt in and receives no Skills notices.
     expect(other.sent.some((m) => m.skill_status)).toBe(false);
+    // Its final applied acknowledgement goes to the sender, not the turn owner;
+    // the Skills status above stayed on the turn-owner channel.
+    expect(
+      other.sent.filter((m) => m.steering_status === 'applied').map((m) => m.steering_id),
+    ).toEqual(['st-1']);
+    expect(owner.sent.some((m) => m.steering_status)).toBe(false);
     expect(JSON.stringify([...owner.sent, ...other.sent])).not.toContain(SECRET);
     expect(sessionSteeringIds.has('session-1')).toBe(false);
     owner.close();

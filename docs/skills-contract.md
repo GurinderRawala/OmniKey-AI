@@ -202,3 +202,9 @@ Skill overlay tokens use a conservative UTF-8-byte reservation plus message over
 ### Bounded steering identifiers
 
 Client steering_id must be a string of at most 128 UTF-16 code units before trimming (null/non-string values are rejected); omitted IDs retain legacy behavior. Each active run retains at most 256 distinct client IDs, including rejected IDs for deduplication. At capacity all new steering, including legacy no-ID frames, is rejected without retaining more IDs; existing duplicate IDs remain ignored. Oversized IDs are never echoed. Start a new task to reset the retention budget. Candidate steering history plus first-snapshot overlay and current tool schemas must fit the current model request budget before any steering is committed; rejection applies only to that input.
+
+### Review hardening: ownership and acceptance feedback
+
+Ordinary and steering `applied`/`warning` Skills notices are queued until a provider request containing those snapshots succeeds; a preflight rejection or provider failure never emits a premature `applied` notice. Final steering `applied` and late `rejected` acknowledgements go to the connection that submitted the steering (`replyTo`, falling back to the turn connection). Skills activation notices remain on the documented turn-owner channel.
+
+Interactive ingress checks stored session ownership before queue admission. Foreign or unverifiable session IDs fail closed before model/tool work; session writes and transcript publication remain subscription-scoped. An omitted session ID retains the legacy `default` name, but another subscription cannot reuse its existing row. Corrupt owned history is retained and the turn is refused rather than silently replacing it with empty history; start a new session and recover the original data separately.

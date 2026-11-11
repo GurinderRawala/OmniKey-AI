@@ -219,7 +219,8 @@ function historyWithSteering(
     .filter((message) => message.content.length > 0);
   if (!cleaned.length) return session.history.slice();
   const scratch = commit ? session : { ...session, history: session.history.slice() };
-  const last = scratch.history.at(-1);
+  // Index instead of Array#at: the runtime package still supports Node 14.
+  const last = scratch.history[scratch.history.length - 1];
   const content = formatSteeringContent(cleaned);
   let popped: AIMessage | undefined;
   try {
@@ -328,7 +329,7 @@ export async function drainSteeringMessagesForRun(
             ...run,
             active: [...snapshots],
             activeIds: new Set(snapshots.map((s) => s.id)),
-            anchorContent: history.at(-1)?.content,
+            anchorContent: history[history.length - 1]?.content,
           },
         };
         try {
@@ -382,8 +383,11 @@ export function sendSteeringAppliedNotice(
   sessionId: string,
   steeringMessages: PendingSteeringMessage[],
 ): void {
+  // The acknowledgement goes to the connection that sent the steering (its
+  // received/rejected acks use the same channel); Skills status notices stay
+  // on the documented turn-owner channel.
   for (const message of steeringMessages) {
-    send({
+    (message.replyTo ?? send)({
       session_id: sessionId,
       sender: 'agent',
       content: 'Applied steering update to the current task.',

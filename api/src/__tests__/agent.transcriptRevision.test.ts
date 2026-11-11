@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   destroy: vi.fn(),
   getDialect: vi.fn(() => 'postgres'),
   findAll: vi.fn(),
+  sessionFindOne: vi.fn(),
   sessionUpdate: vi.fn(),
   transaction: vi.fn(async (callback: (transaction: object) => Promise<void>) => callback({})),
 }));
@@ -15,7 +16,7 @@ vi.mock('../db', () => ({
 }));
 vi.mock('../agent/mcpRuntime', () => ({ MCP_TOOL_PREFIX: 'mcp__' }));
 vi.mock('../models/agentSession', () => ({
-  AgentSession: { update: mocks.sessionUpdate },
+  AgentSession: { findOne: mocks.sessionFindOne, update: mocks.sessionUpdate },
 }));
 vi.mock('../models/agentTranscriptMessage', () => ({
   AgentTranscriptMessage: {
@@ -40,6 +41,37 @@ describe('normalized transcript source revisions', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getDialect.mockReturnValue('postgres');
+    mocks.sessionFindOne.mockResolvedValue({ id: 'owned' });
+  });
+
+  it('publishes nothing when the session id is not owned by the publisher', async () => {
+    const history = [
+      { role: 'user', content: '<user_input>Owner question</user_input>' },
+      { role: 'assistant', content: '<final_answer>Owner answer</final_answer>' },
+    ];
+    const revision = completedTranscriptRevision(buildTranscript(history));
+    // The id was deleted and recreated by another subscription.
+    mocks.sessionFindOne.mockResolvedValue(null);
+
+    const previews = await replaceNormalizedTranscript(
+      'session-reused',
+      history,
+      revision ?? undefined,
+      'sub-a',
+    );
+
+    expect(previews.at(-1)?.text).toBe('Owner answer');
+    // Owner check runs inside the publication transaction, with a row lock.
+    expect(mocks.sessionFindOne).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'session-reused', subscriptionId: 'sub-a' },
+        transaction: expect.anything(),
+        lock: true,
+      }),
+    );
+    expect(mocks.destroy).not.toHaveBeenCalled();
+    expect(mocks.bulkCreate).not.toHaveBeenCalled();
+    expect(mocks.create).not.toHaveBeenCalled();
   });
 
   it('rejects stale rows after a failed publish and rebuilds the current snapshot', async () => {
@@ -70,6 +102,7 @@ describe('normalized transcript source revisions', () => {
       'session-1',
       JSON.stringify(historyB),
       revisionB,
+      'sub-a',
     );
 
     expect(result.at(-1)?.text).toBe('Answer B');
@@ -82,7 +115,7 @@ describe('normalized transcript source revisions', () => {
     );
     expect(mocks.sessionUpdate).toHaveBeenCalledWith(
       { transcriptRevision: revisionB },
-      { where: { id: 'session-1', transcriptRevision: revisionB } },
+      { where: { id: 'session-1', subscriptionId: 'sub-a', transcriptRevision: revisionB } },
     );
   });
 
@@ -108,6 +141,7 @@ describe('normalized transcript source revisions', () => {
       'session-interrupted',
       interruptedHistory,
       interruptedRevision ?? undefined,
+      'sub-a',
     );
 
     expect(mocks.bulkCreate).toHaveBeenCalledWith(
@@ -161,6 +195,7 @@ describe('normalized transcript source revisions', () => {
       'session-interrupted',
       JSON.stringify(interruptedHistory),
       interruptedRevision,
+      'sub-a',
     );
 
     expect(result.at(-2)).toMatchObject({ role: 'user', text: 'Question B' });
@@ -199,7 +234,7 @@ describe('normalized transcript source revisions', () => {
     const revision = completedTranscriptRevision(buildTranscript(history));
     mocks.getDialect.mockReturnValue('sqlite');
 
-    await replaceNormalizedTranscript('session-large', history, revision ?? undefined);
+    await replaceNormalizedTranscript('session-large', history, revision ?? undefined, 'sub-a');
 
     expect(mocks.bulkCreate).not.toHaveBeenCalled();
     expect(mocks.create).toHaveBeenCalledTimes(buildTranscript(history).length);

@@ -14,6 +14,7 @@ import {
   applySkillOverlay,
   buildSkillOverlay,
   flushSkillInputCheckpoint,
+  flushSkillNotices,
   SkillContextBudgetError,
 } from '../skillContext';
 
@@ -121,6 +122,9 @@ export async function completeWithContextRecovery(
       // The run's deferred input checkpoint (if any) is written only once a
       // request was actually accepted by the provider.
       await flushSkillInputCheckpoint(session.skillRun);
+      // Applied/warning Skills notices are likewise sent only now, so a
+      // preflight or provider failure never reports skills as applied.
+      flushSkillNotices(session.skillRun);
       return result;
     } catch (err) {
       throwIfTurnCancelled(session.signal);

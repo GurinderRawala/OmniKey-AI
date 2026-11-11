@@ -172,7 +172,7 @@ async function updateSessionMemoryInDB(sessionId: string, session: SessionState)
       sessionMemoryHistoryLength: session.sessionMemoryHistoryLength ?? 0,
       sessionMemoryUpdatedAt: session.sessionMemoryUpdatedAt ?? null,
     },
-    { where: { id: sessionId } },
+    { where: { id: sessionId, subscriptionId: session.subscription.id } },
   );
 }
 

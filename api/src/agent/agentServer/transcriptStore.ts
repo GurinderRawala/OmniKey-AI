@@ -47,10 +47,18 @@ function normalizedTranscriptInsertBatches<T>(rows: T[]): T[][] {
   return batches;
 }
 
+/**
+ * Publishes transcript rows only while `ownerSubscriptionId` owns the session
+ * row. The owner check and the row replacement share one transaction (the
+ * session row is locked where the dialect supports it), so a session id that
+ * was deleted and reused by another subscription never receives this
+ * owner's transcript. Returns the previews either way.
+ */
 export async function replaceNormalizedTranscript(
   sessionId: string,
   raw: RawHistoryMessage[],
-  sourceRevision?: string,
+  sourceRevision: string | undefined,
+  ownerSubscriptionId: string,
 ): Promise<TranscriptMessage[]> {
   const messages = completedTranscriptSnapshot(buildTranscript(raw));
   const revision = sourceRevision ?? completedTranscriptRevision(messages);
@@ -68,6 +76,13 @@ export async function replaceNormalizedTranscript(
     sourceRevision: revision,
   }));
   await sequelize.transaction(async (transaction: Transaction) => {
+    const owned = await AgentSession.findOne({
+      where: { id: sessionId, subscriptionId: ownerSubscriptionId },
+      attributes: ['id'],
+      transaction,
+      lock: true,
+    });
+    if (!owned) return;
     await AgentTranscriptMessage.destroy({ where: { sessionId }, transaction });
     if (sequelize.getDialect() === 'sqlite') {
       // Sequelize's SQLite bulkCreate result parser can return undefined for
@@ -117,7 +132,8 @@ export async function readFreshNormalizedTranscript(
 export async function readOrBackfillNormalizedTranscript(
   sessionId: string,
   historyJson: string,
-  sourceRevision?: string | null,
+  sourceRevision: string | null | undefined,
+  ownerSubscriptionId: string,
 ): Promise<TranscriptMessage[]> {
   const fresh = await readFreshNormalizedTranscript(sessionId, sourceRevision);
   if (fresh) return fresh;
@@ -125,12 +141,18 @@ export async function readOrBackfillNormalizedTranscript(
   const messages = completedTranscriptSnapshot(buildTranscript(raw));
   const revision = completedTranscriptRevision(messages);
   if (!revision) return previewTranscript(messages);
-  const previews = await replaceNormalizedTranscript(sessionId, raw, revision);
+  const previews = await replaceNormalizedTranscript(sessionId, raw, revision, ownerSubscriptionId);
   // If this update fails, rows and session disagree and the next read safely
   // retries the backfill instead of accepting the rows as current.
   await AgentSession.update(
     { transcriptRevision: revision },
-    { where: { id: sessionId, transcriptRevision: sourceRevision ?? null } },
+    {
+      where: {
+        id: sessionId,
+        subscriptionId: ownerSubscriptionId,
+        transcriptRevision: sourceRevision ?? null,
+      },
+    },
   );
   return previews;
 }

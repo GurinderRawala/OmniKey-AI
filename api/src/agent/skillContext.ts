@@ -95,6 +95,12 @@ export interface SkillRunState {
   /** `${input_id}\0${status}` keys already notified. */
   readonly sentNotices: Set<string>;
   /**
+   * Turn-owner applied/warning notices resolved but not yet confirmed: sent
+   * only once a request carrying them was accepted by the provider, and
+   * discarded on a preflight/provider failure, block or close.
+   */
+  readonly pendingNotices: SkillStatus[];
+  /**
    * Deferred durable checkpoint (history + first-turn title) of the genuine
    * input that started this run. Flushed once the first request passed the
    * Skills budget check, so an initial budget rejection persists nothing.
@@ -231,14 +237,27 @@ function blockedStatus(inputId: string, error: SkillError): SkillStatus {
   };
 }
 
-function sendResolutionNotices(
+function noticeKey(status: SkillStatus): string {
+  return `${status.input_id}\u0000${status.status}`;
+}
+
+/** Queue a turn-owner notice until the provider accepts a request (deduped). */
+function queueRunNotice(run: SkillRunState, status: SkillStatus): void {
+  if (!run.supportsSkillStatus || run.closed) return;
+  const key = noticeKey(status);
+  if (run.sentNotices.has(key)) return;
+  if (run.pendingNotices.some((queued) => noticeKey(queued) === key)) return;
+  run.pendingNotices.push(status);
+}
+
+function queueResolutionNotices(
   run: SkillRunState,
   inputId: string,
   added: readonly SkillSnapshot[],
   warnings: readonly SkillWarning[],
 ): void {
   if (added.length > 0) {
-    sendSkillNotice(run, run.sessionId, {
+    queueRunNotice(run, {
       input_id: inputId,
       status: 'applied',
       skills: refs(added),
@@ -246,13 +265,24 @@ function sendResolutionNotices(
     });
   }
   if (warnings.length > 0) {
-    sendSkillNotice(run, run.sessionId, {
+    queueRunNotice(run, {
       input_id: inputId,
       status: 'warning',
       skills: [],
       warnings: safeWarnings(warnings),
     });
   }
+}
+
+/**
+ * Send queued applied/warning notices once the provider accepted a request
+ * carrying the active skills. Each input id + status is sent at most once per
+ * run lifetime (ordinary input, steering, retries and continuations).
+ */
+export function flushSkillNotices(run: SkillRunState | undefined): void {
+  if (!run || run.closed || run.pendingNotices.length === 0) return;
+  const queued = run.pendingNotices.splice(0);
+  for (const status of queued) sendSkillNotice(run, run.sessionId, status);
 }
 
 export interface StartSkillRunParams {
@@ -270,6 +300,8 @@ export interface StartSkillRunParams {
  * owner. Nothing is persisted by this helper.
  */
 function sendBlockedFrames(run: SkillRunState, inputId: string, error: SkillError): void {
+  // The run stops: unconfirmed applied/warning notices never become true.
+  run.pendingNotices.length = 0;
   sendSkillNotice(run, run.sessionId, blockedStatus(inputId, error));
   run.send({
     session_id: run.sessionId,
@@ -325,6 +357,7 @@ export async function startSkillRun(
     active: [],
     activeIds: new Set(),
     sentNotices: new Set(),
+    pendingNotices: [],
     closed: false,
   };
   if (!isGenuineSkillInput(message)) return run;
@@ -357,13 +390,15 @@ export async function startSkillRun(
       warningCount: result.warnings.length,
     });
   }
-  sendResolutionNotices(run, run.inputId, run.active, result.warnings);
+  // Notified only after the provider accepts the first request with them.
+  queueResolutionNotices(run, run.inputId, run.active, result.warnings);
   return run;
 }
 
 /** Outer-boundary cleanup; later request builds see no overlay. */
 export function closeSkillRun(run: SkillRunState): void {
   run.closed = true;
+  run.pendingNotices.length = 0;
   run.active.length = 0;
   run.activeIds.clear();
   run.anchorContent = undefined;
@@ -375,7 +410,8 @@ export function closeSkillRun(run: SkillRunState): void {
 export function anchorSkillsToLatestUserMessage(session: SessionState): void {
   const run = session.skillRun;
   if (!run || run.closed) return;
-  const last = session.history.at(-1);
+  // Index instead of Array#at: the runtime package still supports Node 14.
+  const last = session.history[session.history.length - 1];
   if (last?.role === 'user' && typeof last.content === 'string') run.anchorContent = last.content;
 }
 
@@ -589,7 +625,7 @@ export function commitSteeringSkills(
       run.active.push(snapshot);
       added.push(snapshot);
     }
-    sendResolutionNotices(run, message.steeringId, added, message.skillWarnings ?? []);
+    queueResolutionNotices(run, message.steeringId, added, message.skillWarnings ?? []);
   }
   anchorSkillsToLatestUserMessage(session);
 }

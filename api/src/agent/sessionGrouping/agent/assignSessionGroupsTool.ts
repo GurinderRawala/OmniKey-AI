@@ -180,7 +180,10 @@ export function createAssignSessionGroupsHandler(params: {
       if (groupName && isCatchAllGroupName(groupName)) {
         skippedCatchAll++;
         if (summary && !row.groupName) {
-          await AgentSession.update({ sessionSummary: summary }, { where: { id: s.sessionId } });
+          await AgentSession.update(
+            { sessionSummary: summary },
+            { where: { id: s.sessionId, subscriptionId } },
+          );
           summarised++;
         }
         continue;
@@ -191,7 +194,7 @@ export function createAssignSessionGroupsHandler(params: {
       if (canAssign) {
         await AgentSession.update(
           { groupName, ...(summary ? { sessionSummary: summary } : {}) },
-          { where: { id: s.sessionId } },
+          { where: { id: s.sessionId, subscriptionId } },
         );
         assigned++;
         groupsGainingMembers.add(groupName);
@@ -201,7 +204,10 @@ export function createAssignSessionGroupsHandler(params: {
         // still useful for buildProjectContext.
         if (row.groupName) skippedGrouped++;
         if (summary) {
-          await AgentSession.update({ sessionSummary: summary }, { where: { id: s.sessionId } });
+          await AgentSession.update(
+            { sessionSummary: summary },
+            { where: { id: s.sessionId, subscriptionId } },
+          );
           summarised++;
         }
       }

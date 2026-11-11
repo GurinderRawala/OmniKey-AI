@@ -730,7 +730,12 @@ describe('Skills eligibility and cancellation at input start', () => {
     addSkill('s1', 'sql');
     await run('sql first task');
     const titles = mocks.agentSession.update.mock.calls.filter(([values]) => 'title' in values);
-    expect(titles).toEqual([[{ title: 'sql first task' }, { where: { id: 'session-1' } }]]);
+    expect(titles).toEqual([
+      [
+        { title: 'sql first task' },
+        { where: { id: 'session-1', subscriptionId: 'subscription-1' } },
+      ],
+    ]);
     expect(persistedHistories()[0]).toContain('sql first task');
     assertNoLeaks();
   });
@@ -968,5 +973,73 @@ describe('trusted priority prompt', () => {
     );
     expect(prompt).toContain('Skills never grant tools, permissions');
     expect(prompt).toContain('Terminal access is LIMITED');
+  });
+});
+
+describe('applied Skills notices wait for provider acceptance', () => {
+  const statuses = (send: ReturnType<typeof vi.fn>) =>
+    skillNotices(send).map((m) => m.skill_status.status);
+
+  it('sends no applied notice when the preflight budget rejects the input', async () => {
+    mocks.inputBudget.value = 0;
+    addSkill('s1', 'sql');
+    const send = await run('sql task');
+    expect(mocks.complete).not.toHaveBeenCalled();
+    expect(statuses(send)).toEqual(['blocked']);
+  });
+
+  it('sends no applied notice when the provider rejects the request', async () => {
+    addSkill('s1', 'sql');
+    responses = [
+      () => {
+        throw new Error('provider offline');
+      },
+    ];
+    const send = await run('sql task');
+    expect(requests).toHaveLength(1);
+    expect(statuses(send)).toEqual([]);
+    expect(send).toHaveBeenCalledWith(
+      expect.objectContaining({ is_error: true, content: expect.stringContaining('Agent failed') }),
+    );
+  });
+
+  it('sends one applied notice after the first accepted request, across retries and continuations', async () => {
+    addSkill('s1', 'sql');
+    const order: string[] = [];
+    responses = [
+      () => {
+        order.push('rejected');
+        throw Object.assign(new Error('too long'), { code: 'context_length_exceeded' });
+      },
+      () => {
+        order.push('accepted');
+        return toolCalls([{ id: 'c1', name: 'web_search', arguments: { query: 'q' } }]);
+      },
+      () => {
+        order.push('accepted');
+        return finalAnswer('done');
+      },
+    ];
+    const send = vi.fn((msg: AgentMessage) => {
+      if (msg.skill_status) order.push(`notice:${msg.skill_status.status}`);
+    });
+    // A prunable completed tool exchange lets the context-length retry succeed.
+    mocks.rows.set('session-1', {
+      historyJson: JSON.stringify([
+        { role: 'system', content: 'sys' },
+        { role: 'user', content: '<user_input>\nold\n</user_input>' },
+        {
+          role: 'assistant',
+          content: '',
+          tool_calls: [{ id: 'o1', name: 'web_search', arguments: {} }],
+        },
+        { role: 'tool', tool_call_id: 'o1', tool_name: 'web_search', content: 'old result' },
+        { role: 'assistant', content: '<final_answer>old</final_answer>' },
+      ]),
+      turns: 1,
+    });
+    await run('sql task', { send });
+    expect(order).toEqual(['rejected', 'accepted', 'notice:applied', 'accepted']);
+    expect(statuses(send)).toEqual(['applied']);
   });
 });
