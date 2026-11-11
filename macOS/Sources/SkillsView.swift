@@ -1,7 +1,8 @@
 import SwiftUI
+import Textual
 
 /// Manage backend Skills: keyword-triggered guidance applied to agent turns.
-/// All values are rendered with `Text(String)` (literal, no Markdown).
+/// Labels stay literal; saved instructions use the app’s selectable Markdown renderer.
 struct SkillsView: View {
     @Environment(\.colorScheme) private var colorScheme
     @StateObject private var model: SkillsViewModel
@@ -38,6 +39,13 @@ struct SkillsView: View {
             }
         }
         .onAppear { model.onAppear() }
+        .alert("Save changes to this skill?", isPresented: $model.showsUnsavedChanges) {
+            Button("Save") { model.saveAndNavigate() }
+            Button("Discard Changes", role: .destructive) { model.discardAndNavigate() }
+            Button("Cancel", role: .cancel) { model.keepEditing() }
+        } message: {
+            Text("You have unsaved changes. Save or discard them before leaving this skill.")
+        }
         .confirmationDialog(
             deleteTitle,
             isPresented: Binding(
@@ -92,7 +100,7 @@ struct SkillsView: View {
                 .buttonStyle(.borderedProminent)
                 .tint(NordTheme.accent(colorScheme))
                 .keyboardShortcut("n", modifiers: .command)
-                .disabled(model.editor != nil || model.isUpgradeRequired)
+                .disabled(model.editor?.isSaving == true || model.isUpgradeRequired)
                 .help("Create a skill (⌘N)")
             }
 
@@ -163,11 +171,8 @@ struct SkillsView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List(selection: Binding(
-                    get: { model.selectedID },
-                    set: { id in
-                        guard model.editor == nil else { return }
-                        model.select(id)
-                    }
+                    get: { model.sidebarSelection },
+                    set: { id in model.select(id) }
                 )) {
                     ForEach(model.skills) { skill in
                         row(skill).tag(skill.id)
@@ -175,7 +180,7 @@ struct SkillsView: View {
                 }
                 .listStyle(.sidebar)
                 .scrollContentBackground(.hidden)
-                .disabled(model.editor != nil)
+                .disabled(model.editor?.isSaving == true)
                 .accessibilityLabel("Skills")
             }
         }
@@ -220,6 +225,7 @@ struct SkillsView: View {
     private var detailPane: some View {
         if let editor = model.editor {
             SkillEditorForm(model: model, editor: editor)
+                .id(editor.sessionID)
         } else if let summary = model.selectedSummary {
             detailView(summary)
         } else {
@@ -289,10 +295,7 @@ struct SkillsView: View {
             Group {
                 if let detail = model.detail, model.isDetailCurrent {
                     ScrollView {
-                        Text(detail.instructions)
-                            .font(.system(size: 12.5).monospaced())
-                            .foregroundColor(NordTheme.primaryText(colorScheme))
-                            .textSelection(.enabled)
+                        SkillInstructionsPreview(instructions: detail.instructions)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(12)
                     }
@@ -421,7 +424,7 @@ private struct SkillEditorForm: View {
             field("Instructions", error: message(for: .instructions)) {
                 MarkdownTextEditor(
                     text: binding(\.instructions),
-                    sessionKey: "skill-editor-\(editorKey)",
+                    sessionKey: "skill-editor-\(editor.sessionID.uuidString)",
                     colorScheme: colorScheme,
                     editorLabel: "Skill instructions"
                 )
@@ -438,7 +441,7 @@ private struct SkillEditorForm: View {
                     .foregroundColor(count > SkillLimits.instructionCodePoints ? .red : NordTheme.secondaryText(colorScheme))
                 Spacer()
                 if editor.isSaving { ProgressView().controlSize(.small) }
-                Button("Cancel", action: model.cancelEdit)
+                Button("Cancel", action: model.requestCloseEditor)
                     .keyboardShortcut(.cancelAction)
                     .disabled(editor.isSaving)
                 Button(isCreate ? "Create Skill" : "Save Changes", action: model.save)
@@ -450,13 +453,6 @@ private struct SkillEditorForm: View {
             }
         }
         .padding(20)
-    }
-
-    private var editorKey: String {
-        switch editor.mode {
-        case .create: return "new"
-        case let .edit(base): return base.id
-        }
     }
 
     /// Server/local field error first, then a same-field conflict note.
@@ -491,5 +487,20 @@ private struct SkillEditorForm: View {
                     .accessibilityLabel("\(label) error: \(error)")
             }
         }
+    }
+}
+
+
+/// Read-only counterpart to MarkdownTextEditor: render the saved source without
+/// rewriting it, while retaining headings, lists, code blocks and selection.
+struct SkillInstructionsPreview: View {
+    let instructions: String
+
+    var body: some View {
+        StructuredText(markdown: instructions)
+            .chatStructuredTextStyle()
+            .textual.textSelection(.enabled)
+            .font(.system(size: 13))
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

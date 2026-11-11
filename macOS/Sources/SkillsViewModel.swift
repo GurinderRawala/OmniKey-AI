@@ -20,6 +20,7 @@ final class SkillsViewModel: ObservableObject {
     }
 
     struct EditorState: Equatable {
+        let sessionID = UUID()
         var mode: EditorMode
         var draft: SkillDraft
         var fieldErrors: [String: String] = [:]
@@ -40,6 +41,16 @@ final class SkillsViewModel: ObservableObject {
     @Published private(set) var detail: SkillDTO?
     @Published private(set) var detailState: LoadState = .idle
     @Published var editor: EditorState?
+    enum Navigation: Equatable {
+        case selection(String?)
+        case create
+        case closeEditor
+    }
+
+    @Published private(set) var sidebarSelection: String?
+    @Published var showsUnsavedChanges = false
+    private(set) var pendingNavigation: Navigation?
+    private var navigationAfterSave: Navigation?
     @Published var pendingDelete: SkillSummary?
     @Published private(set) var busyIDs: Set<String> = []
     /// Neutral status line (success/info). Errors use `actionError`.
@@ -73,10 +84,14 @@ final class SkillsViewModel: ObservableObject {
         listTask?.cancel()
         detailTask?.cancel()
         editor = nil
+        pendingNavigation = nil
+        navigationAfterSave = nil
+        showsUnsavedChanges = false
         pendingDelete = nil
         busyIDs = []
         skills = []
         selectedID = nil
+        sidebarSelection = nil
         detail = nil
         listState = .idle
         detailState = .idle
@@ -141,6 +156,7 @@ final class SkillsViewModel: ObservableObject {
             listState = .loaded
             if let selectedID, !list.contains(where: { $0.id == selectedID }), editor == nil {
                 self.selectedID = nil
+                sidebarSelection = nil
                 detail = nil
                 detailState = .idle
             } else if editor == nil, let selectedID, let detail, detail.id == selectedID,
@@ -157,8 +173,72 @@ final class SkillsViewModel: ObservableObject {
         }
     }
 
+    var hasUnsavedChanges: Bool {
+        guard let editor else { return false }
+        switch editor.mode {
+        case .create: return editor.draft != SkillDraft()
+        case let .edit(base): return editor.draft != SkillDraft(base)
+        }
+    }
+
     func select(_ id: String?) {
-        guard id != selectedID else { return }
+        guard !isRetired else { return }
+        // Clicking the previously selected row still leaves a New Skill draft.
+        if editor == nil, id == selectedID { return }
+        guard editor?.isSaving != true else { return }
+        sidebarSelection = id
+        requestNavigation(.selection(id))
+    }
+
+    private func requestNavigation(_ destination: Navigation) {
+        guard !isRetired, editor?.isSaving != true else { return }
+        if hasUnsavedChanges {
+            pendingNavigation = destination
+            showsUnsavedChanges = true
+        } else {
+            performNavigation(destination)
+        }
+    }
+
+    func keepEditing() {
+        pendingNavigation = nil
+        showsUnsavedChanges = false
+        sidebarSelection = editor?.mode == .create ? nil : selectedID
+    }
+
+    func discardAndNavigate() {
+        guard !isRetired, editor?.isSaving != true, let destination = pendingNavigation else { return }
+        keepEditing()
+        performNavigation(destination)
+    }
+
+    func saveAndNavigate() {
+        guard !isRetired, editor?.isSaving != true, let destination = pendingNavigation else { return }
+        navigationAfterSave = destination
+        keepEditing()
+        save()
+        // Local validation can fail before a request is sent. Stay in the editor.
+        if editor?.isSaving != true { navigationAfterSave = nil }
+    }
+
+    private func performNavigation(_ destination: Navigation, afterSave: Bool = false) {
+        editor = nil
+        switch destination {
+        case let .selection(id): applySelection(id)
+        case .create:
+            sidebarSelection = nil
+            if !afterSave { statusMessage = nil }
+            actionError = nil
+            editor = EditorState(mode: .create, draft: SkillDraft())
+        case .closeEditor:
+            sidebarSelection = selectedID
+            reconcileDetail()
+        }
+    }
+
+    private func applySelection(_ id: String?) {
+        sidebarSelection = id
+        if id == selectedID { reconcileDetail(); return }
         selectedID = id
         if let id { loadDetail(id: id) } else {
             detailGeneration += 1
@@ -238,9 +318,7 @@ final class SkillsViewModel: ObservableObject {
 
     func startCreate() {
         guard !isRetired, !isUpgradeRequired else { return }
-        statusMessage = nil
-        actionError = nil
-        editor = EditorState(mode: .create, draft: SkillDraft())
+        requestNavigation(.create)
     }
 
     func startEdit() {
@@ -249,6 +327,8 @@ final class SkillsViewModel: ObservableObject {
         actionError = nil
         editor = EditorState(mode: .edit(base: detail), draft: SkillDraft(detail))
     }
+
+    func requestCloseEditor() { requestNavigation(.closeEditor) }
 
     func cancelEdit() {
         guard editor?.isSaving != true else { return }
@@ -302,7 +382,10 @@ final class SkillsViewModel: ObservableObject {
         if case let .edit(base) = mode, SkillPatch.diff(from: base, to: draft).isEmpty {
             editor = nil
             statusMessage = "No changes to save."
-            reconcileDetail()
+            if let destination = navigationAfterSave {
+                navigationAfterSave = nil
+                performNavigation(destination, afterSave: true)
+            } else { reconcileDetail() }
             return
         }
 
@@ -334,13 +417,18 @@ final class SkillsViewModel: ObservableObject {
             statusMessage = mode == .create ? "Skill created." : "Skill saved."
             replaceSummary(skill.summary)
             selectedID = skill.id
+            sidebarSelection = skill.id
             detailGeneration += 1
             detailTask?.cancel()
             detail = skill
             detailState = .loaded
+            let destination = navigationAfterSave
+            navigationAfterSave = nil
+            if let destination { performNavigation(destination, afterSave: true) }
             reloadList()
 
         case let .failure(error):
+            navigationAfterSave = nil
             // Keep the draft in every failure case.
             state.error = error.kind == .cancelled ? nil : error
             state.fieldErrors = error.fields
@@ -496,6 +584,7 @@ final class SkillsViewModel: ObservableObject {
             self.skills.removeAll { $0.id == summary.id }
             if self.selectedID == summary.id {
                 self.selectedID = nil
+                self.sidebarSelection = nil
                 self.detailGeneration += 1
                 self.detailTask?.cancel()
                 self.detail = nil

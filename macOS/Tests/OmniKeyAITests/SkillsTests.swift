@@ -1680,6 +1680,152 @@ final class SkillsViewModelTests: XCTestCase {
         return model
     }
 
+    func testDiscardToNewEditorUsesFreshUndoIdentityAndSaveToNewKeepsSuccess() async {
+        let service = makeService()
+        let model = await loaded(service, skills: [])
+        model.startCreate()
+        let first = model.editor?.sessionID
+        model.editor?.draft.name = "Discard"
+        model.startCreate()
+        model.discardAndNavigate()
+        XCTAssertNotEqual(model.editor?.sessionID, first)
+        XCTAssertEqual(model.editor?.draft, SkillDraft())
+        let second = model.editor?.sessionID
+        model.editor?.draft = SkillDraft(name: "Saved", keyword: "saved", instructions: "# Heading")
+        model.startCreate()
+        model.saveAndNavigate()
+        await waitFor("create") { service.calls.count == 2 }
+        service.resolve(1, .skill(Fixture.skill(id: "saved")))
+        await waitFor("new editor") { model.editor?.mode == .create && model.editor?.isSaving == false }
+        XCTAssertNotEqual(model.editor?.sessionID, second)
+        XCTAssertEqual(model.editor?.draft, SkillDraft())
+        XCTAssertEqual(model.statusMessage, "Skill created.")
+        XCTAssertNil(model.sidebarSelection)
+    }
+
+    func testBlankCreateCanNavigateWithoutWarningOrSaving() async {
+        let service = makeService()
+        let target = Fixture.skill(id: "b")
+        let model = await loaded(service, skills: [target])
+        model.startCreate()
+        model.select("b")
+        XCTAssertNil(model.editor)
+        XCTAssertFalse(model.showsUnsavedChanges)
+        await waitFor("target requested") { service.calls.count == 2 }
+        XCTAssertEqual(service.calls[1], .get("b"))
+        service.resolve(1, .skill(target))
+    }
+
+    func testDirtyCreateNavigationCanCancelOrDiscardWithoutLosingDraftEarly() async {
+        let service = makeService()
+        let target = Fixture.skill(id: "b")
+        let model = await loaded(service, skills: [target])
+        model.startCreate()
+        model.editor?.draft.instructions = "# Unsaved draft"
+        model.select("b")
+        XCTAssertTrue(model.showsUnsavedChanges)
+        XCTAssertNil(model.selectedID)
+        XCTAssertEqual(service.calls.count, 1)
+        XCTAssertEqual(model.sidebarSelection, "b")
+        model.keepEditing()
+        XCTAssertNil(model.sidebarSelection)
+        XCTAssertFalse(model.showsUnsavedChanges)
+        XCTAssertEqual(model.editor?.draft.instructions, "# Unsaved draft")
+        model.select("b")
+        model.discardAndNavigate()
+        XCTAssertNil(model.editor)
+        XCTAssertEqual(model.selectedID, "b")
+        await waitFor("target requested") { service.calls.count == 2 }
+        service.resolve(1, .skill(target))
+    }
+
+    func testSaveAndNavigateWaitsForCreateSuccessAndUsesRequestedTarget() async {
+        let service = makeService()
+        let target = Fixture.skill(id: "b")
+        let model = await loaded(service, skills: [target])
+        model.startCreate()
+        model.editor?.draft = SkillDraft(name: "Draft", keyword: "draft", instructions: "# Heading\n\n**Bold**")
+        model.select("b")
+        model.saveAndNavigate()
+        XCTAssertTrue(model.editor?.isSaving == true)
+        XCTAssertNil(model.selectedID)
+        model.select("other") // No target replacement while request is in flight.
+        await waitFor("create") { service.calls.count == 2 }
+        service.resolve(1, .skill(Fixture.skill(id: "created", instructions: "# Heading\n\n**Bold**")))
+        await waitFor("navigation") { model.selectedID == "b" && model.editor == nil }
+        await waitFor("target and refresh") { service.calls.count == 4 }
+        XCTAssertTrue(service.calls.contains(.get("b")))
+    }
+
+    func testSaveBeforeNavigationFailureAndValidationKeepDraftAndSelection() async {
+        let service = makeService()
+        let model = await loaded(service, skills: [Fixture.skill(id: "b")])
+        model.startCreate()
+        model.editor?.draft.instructions = "unsaved"
+        model.select("b")
+        model.saveAndNavigate()
+        XCTAssertNil(model.selectedID)
+        XCTAssertNotNil(model.editor?.fieldErrors["name"])
+        XCTAssertEqual(service.calls.count, 1)
+        model.editor?.draft = SkillDraft(name: "Valid", keyword: "valid", instructions: "unsaved")
+        model.select("b")
+        model.saveAndNavigate()
+        await waitFor("create") { service.calls.count == 2 }
+        service.resolve(1, .failure(SkillsAPIError(kind: .network, message: "Offline")))
+        await waitFor("failed") { model.editor?.isSaving == false }
+        XCTAssertNil(model.selectedID)
+        XCTAssertEqual(model.editor?.draft.instructions, "unsaved")
+        XCTAssertEqual(model.editor?.error?.kind, .network)
+        XCTAssertEqual(service.calls.count, 2)
+    }
+
+    func testEditNavigationConflictStaysOnOriginalAndRetirementClearsIntent() async {
+        let service = makeService()
+        let original = Fixture.skill(id: "a")
+        let model = await loaded(service, skills: [original, Fixture.skill(id: "b")])
+        model.select("a")
+        await waitFor("detail") { service.calls.count == 2 }
+        service.resolve(1, .skill(original))
+        await waitFor("loaded") { model.isDetailCurrent }
+        model.startEdit()
+        model.editor?.draft.instructions = "changed"
+        model.select("b")
+        model.saveAndNavigate()
+        await waitFor("update") { service.calls.count == 3 }
+        service.resolve(2, .failure(SkillsAPIError(kind: .revisionConflict, status: 409, message: "Conflict")))
+        await waitFor("conflict") { model.editor?.hasConflict == true }
+        XCTAssertEqual(model.selectedID, "a")
+        XCTAssertEqual(model.editor?.draft.instructions, "changed")
+        model.select("b")
+        model.retire()
+        XCTAssertNil(model.pendingNavigation)
+        XCTAssertFalse(model.showsUnsavedChanges)
+        model.discardAndNavigate()
+        XCTAssertNil(model.selectedID)
+    }
+
+    func testUnchangedEditNavigatesImmediatelyAndNewSkillWarnsForDirtyEdit() async {
+        let service = makeService()
+        let original = Fixture.skill(id: "a")
+        let model = await loaded(service, skills: [original])
+        model.select("a")
+        await waitFor("detail") { service.calls.count == 2 }
+        service.resolve(1, .skill(original))
+        await waitFor("loaded") { model.isDetailCurrent }
+        model.startEdit()
+        model.select(nil)
+        XCTAssertNil(model.editor)
+        XCTAssertFalse(model.showsUnsavedChanges)
+        model.startCreate()
+        model.editor?.draft.name = "Keep me"
+        model.startCreate()
+        XCTAssertTrue(model.showsUnsavedChanges)
+        model.keepEditing()
+        XCTAssertEqual(model.editor?.draft.name, "Keep me")
+        model.requestCloseEditor()
+        XCTAssertTrue(model.showsUnsavedChanges)
+    }
+
     func testStaleListResponseIsIgnored() async {
         let service = makeService()
         let model = SkillsViewModel(service: service)
