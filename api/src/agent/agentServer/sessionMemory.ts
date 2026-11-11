@@ -172,7 +172,7 @@ async function updateSessionMemoryInDB(sessionId: string, session: SessionState)
       sessionMemoryHistoryLength: session.sessionMemoryHistoryLength ?? 0,
       sessionMemoryUpdatedAt: session.sessionMemoryUpdatedAt ?? null,
     },
-    { where: { id: sessionId } },
+    { where: { id: sessionId, subscriptionId: session.subscription.id } },
   );
 }
 
@@ -247,6 +247,20 @@ export function buildHistoryForRequest(session: SessionState, model?: string): A
   return buildCompactedHistoryForRequest(session);
 }
 
+/** Safe request-token budget the proactive trimmer targets (<= 0 when unknown). */
+export function getProactiveRequestTokenBudget(model: string): number {
+  return Math.floor(getInputTokenBudget(config.aiProvider, model) * PROACTIVE_TRIM_RATIO);
+}
+
+/**
+ * Tool-schema footprint using the same estimator as history (the repo has no
+ * provider tokenizer or provider-side tool accounting).
+ */
+export function estimateToolSchemaTokens(tools?: readonly unknown[]): number {
+  if (!tools?.length) return 0;
+  return estimateHistoryTokens([{ role: 'system', content: JSON.stringify(tools) }]);
+}
+
 /**
  * Proactively shrinks a request history to a safe fraction of the active
  * model's input budget. The raw persisted transcript is not mutated; this is
@@ -257,9 +271,13 @@ export function trimHistoryToBudget(
   sessionId: string,
   model: string,
   log?: Logger,
+  // Tokens of request-only content added after trimming (e.g. the runtime
+  // Skills overlay); subtracted so the final request still fits.
+  reservedTokens = 0,
 ): AIMessage[] {
-  const budget = Math.floor(getInputTokenBudget(config.aiProvider, model) * PROACTIVE_TRIM_RATIO);
-  if (budget <= 0) return history;
+  const fullBudget = getProactiveRequestTokenBudget(model);
+  if (fullBudget <= 0) return history;
+  const budget = fullBudget - Math.max(0, reservedTokens);
 
   const scratchSession = { subscription: {} as any, history, turns: 0 };
   let guard = 0;
@@ -275,6 +293,7 @@ export function trimHistoryToBudget(
       steps: guard,
       estimatedTokens: estimateHistoryTokens(scratchSession.history),
       budget,
+      reservedTokens,
     });
   }
 
@@ -286,6 +305,7 @@ export function buildTrimmedHistoryForRequest(
   model?: string,
   sessionId = 'unknown',
   log?: Logger,
+  reservedTokens = 0,
 ): AIMessage[] {
   const resolvedModel = resolveMemoryModel(session, model);
   return trimHistoryToBudget(
@@ -293,6 +313,7 @@ export function buildTrimmedHistoryForRequest(
     sessionId,
     resolvedModel,
     log,
+    reservedTokens,
   );
 }
 

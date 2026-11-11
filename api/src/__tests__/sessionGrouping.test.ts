@@ -1039,7 +1039,7 @@ describe('assign_session_groups handler', () => {
     // Session assigned + summarised.
     expect(update).toHaveBeenCalledWith(
       { groupName: 'My App', sessionSummary: 'Did a thing.' },
-      { where: { id: 's1' } },
+      { where: { id: 's1', subscriptionId: 'sub-1' } },
     );
     // Group description written with the verified root prefixed.
     const descCall = update.mock.calls.find(
@@ -1071,7 +1071,7 @@ describe('assign_session_groups handler', () => {
     expect(groupWrite).toBeUndefined();
     expect(update).toHaveBeenCalledWith(
       { sessionSummary: 'New summary.' },
-      { where: { id: 's2' } },
+      { where: { id: 's2', subscriptionId: 'sub-1' } },
     );
   });
 
@@ -1210,7 +1210,7 @@ describe('assign_session_groups handler — catch-all rejection', () => {
     // ...but the summary is still recorded for the (ungrouped) session.
     expect(update).toHaveBeenCalledWith(
       { sessionSummary: 'A one-off question.' },
-      { where: { id: 's1' } },
+      { where: { id: 's1', subscriptionId: 'sub-1' } },
     );
     // ...and no catch-all description row is written.
     const descWrite = update.mock.calls.find((c) => c[0]?.groupDescription);

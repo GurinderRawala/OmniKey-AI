@@ -35,6 +35,7 @@ struct AgentCommandActivity: Identifiable, Equatable {
             }
             return AgentTimelineSummarizer.friendlyToolName(tool)
         case .agentReasoning: return "Progress"
+        case .skillStatus: return AgentTimelinePresentation.skillNoticeTitle
         case .finalAnswer: return "Answer"
         }
     }
@@ -58,6 +59,7 @@ struct AgentCommandActivity: Identifiable, Equatable {
         case .imageRendering: return "image"
         case .toolCall: return "tool"
         case .agentReasoning: return "progress"
+        case .skillStatus: return "skills"
         case .finalAnswer: return "answer"
         }
     }
@@ -100,6 +102,17 @@ struct AgentTaskStep: Identifiable, Equatable {
     let referencedFiles: [String]
     let modifiedFiles: [String]
     let createdAt: Date
+    /// A live Skills notice row: neutral, no activities, not a milestone.
+    var isSkillNotice: Bool = false
+
+    /// Milestone titles repeat the opening of their progress message. Only
+    /// non-milestone Skills notices keep their distinct category heading.
+    var displayedHeading: String? { isSkillNotice ? title : nil }
+
+    var progressAccessibilityLabel: String {
+        guard let displayedHeading else { return outcome ?? "" }
+        return "\(displayedHeading): \(outcome ?? "")"
+    }
 }
 
 /// Owned by one timeline view, never shared across sessions. Equality includes
@@ -166,7 +179,11 @@ struct AgentTimelinePresentation {
 
     var activityCount: Int { steps.reduce(0) { $0 + $1.activities.count } }
 
-    var milestoneCount: Int { steps.filter { $0.outcome?.isEmpty == false }.count }
+    var milestoneCount: Int {
+        steps.filter { !$0.isSkillNotice && $0.outcome?.isEmpty == false }.count
+    }
+
+    static let skillNoticeTitle = "Skills"
 
     var runOutcome: AgentRunOutcome {
         runOutcome(finalAnswer: nil)
@@ -271,8 +288,18 @@ struct AgentTimelinePresentation {
     {
         var steps: [AgentTaskStep] = []
         var activityBlocks: [ChatBlock] = []
+        // Skills notices that arrived while a tool group was still open. They
+        // are placed right after that group closes so the group keeps its own
+        // summary (a notice must never relabel earlier tool activity).
+        var deferredNotices: [ChatBlock] = []
+
+        func appendDeferredNotices() {
+            steps.append(contentsOf: deferredNotices.map(skillNoticeStep))
+            deferredNotices = []
+        }
 
         func flush(summaryBlock: ChatBlock? = nil, streaming: Bool = false) {
+            defer { appendDeferredNotices() }
             guard summaryBlock != nil || !activityBlocks.isEmpty else { return }
             let buildStep = { () -> AgentTaskStep in
                 let activities = makeActivities(from: activityBlocks, isStreaming: streaming)
@@ -321,7 +348,13 @@ struct AgentTimelinePresentation {
         for block in blocks {
             let kind = AgentTimelineSummarizer.classify(kind: block.kind, text: block.text)
             guard kind != .finalAnswer else { continue }
-            if kind == .agentReasoning {
+            if kind == .skillStatus {
+                if activityBlocks.isEmpty {
+                    steps.append(skillNoticeStep(block))
+                } else {
+                    deferredNotices.append(block)
+                }
+            } else if kind == .agentReasoning {
                 // A milestone describes the work that preceded it. Closing the step
                 // here avoids attaching the next tool call to the previous outcome.
                 flush(summaryBlock: block)
@@ -332,6 +365,26 @@ struct AgentTimelinePresentation {
         flush(streaming: isStreaming)
 
         return AgentTimelinePresentation(steps: steps)
+    }
+
+    /// Neutral standalone row for a Skills notice. The text is already fixed
+    /// wording plus sanitized names, so it is shown verbatim (no Markdown
+    /// stripping, redaction, or semantic keyword scoring).
+    private static func skillNoticeStep(_ block: ChatBlock) -> AgentTaskStep {
+        AgentTaskStep(
+            id: block.id,
+            title: skillNoticeTitle,
+            outcome: block.text,
+            detail: nil,
+            status: .completed,
+            semanticOutcome: .usefulResult,
+            activities: [],
+            evidence: [],
+            referencedFiles: [],
+            modifiedFiles: [],
+            createdAt: block.createdAt,
+            isSkillNotice: true
+        )
     }
 
     private static func stepStatus(
@@ -658,7 +711,7 @@ struct AgentTimelinePresentation {
             case .mcpCall: mcp += 1
             case .imageRendering: images += 1
             case .toolCall: tools += 1
-            case .agentReasoning, .finalAnswer: break
+            case .agentReasoning, .skillStatus, .finalAnswer: break
             }
         }
 

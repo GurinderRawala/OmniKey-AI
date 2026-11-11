@@ -9,6 +9,14 @@ import { persistSessionToDB } from './sessionStore';
 import { throwIfTurnCancelled } from './turnCancellation';
 import { isContextLengthError, pruneHistoryForContextLimit } from './contextPruning';
 import { buildTrimmedHistoryForRequest, ensureSessionMemory } from './sessionMemory';
+import {
+  assertSkillRequestFits,
+  applySkillOverlay,
+  buildSkillOverlay,
+  flushSkillInputCheckpoint,
+  flushSkillNotices,
+  SkillContextBudgetError,
+} from '../skillContext';
 
 // Upper bound on prune-and-retry cycles per completion. Each cycle removes one
 // unit (or compacts one message), so 12 is plenty to claw back from an overflow
@@ -90,8 +98,19 @@ export async function completeWithContextRecovery(
   onUsage?: (result: AICompletionResult) => Promise<void>,
 ): Promise<AICompletionResult> {
   throwIfTurnCancelled(session.signal);
+  // Skills budget, fail closed. Pre-memory first: an input whose overlay can
+  // never fit is rejected before ANY provider call, including the memory helper.
+  if (buildSkillOverlay(session)) {
+    assertSkillRequestFits(session, model, sessionId, options.tools);
+  }
+  // Memory never sees the Skills overlay: it is built afterwards, only on the
+  // request copy, with its tokens reserved before trimming.
   await ensureSessionMemory(session, sessionId, model, log, onUsage);
-  let requestHistory = buildTrimmedHistoryForRequest(session, model, sessionId, log);
+  const skillOverlay = buildSkillOverlay(session);
+  let baseHistory = skillOverlay
+    ? assertSkillRequestFits(session, model, sessionId, options.tools, log)
+    : buildTrimmedHistoryForRequest(session, model, sessionId, log);
+  let requestHistory = applySkillOverlay(baseHistory, skillOverlay);
   const requestOptions = cacheableOptions(session, model, { ...options, signal: session.signal });
 
   let attempt = 0;
@@ -100,18 +119,32 @@ export async function completeWithContextRecovery(
       throwIfTurnCancelled(session.signal);
       const result = await aiClient.complete(model, requestHistory, requestOptions);
       throwIfTurnCancelled(session.signal);
+      // The run's deferred input checkpoint (if any) is written only once a
+      // request was actually accepted by the provider.
+      await flushSkillInputCheckpoint(session.skillRun);
+      // Applied/warning Skills notices are likewise sent only now, so a
+      // preflight or provider failure never reports skills as applied.
+      flushSkillNotices(session.skillRun);
       return result;
     } catch (err) {
       throwIfTurnCancelled(session.signal);
-      if (!isContextLengthError(err) || attempt >= MAX_CONTEXT_RECOVERY_ATTEMPTS) throw err;
+      if (!isContextLengthError(err)) throw err;
+      if (attempt >= MAX_CONTEXT_RECOVERY_ATTEMPTS) {
+        // Retries exhausted: with Skills active this is the fixed context-limit
+        // outcome, never the raw provider error.
+        if (skillOverlay) throw new SkillContextBudgetError();
+        throw err;
+      }
       attempt++;
+      // Prune the overlay-free view, then reconstruct exactly one overlay.
       const scratchSession = {
         subscription: session.subscription,
-        history: requestHistory,
+        history: baseHistory,
         turns: session.turns,
       };
       const pruned = pruneHistoryForContextLimit(scratchSession, log);
-      requestHistory = scratchSession.history;
+      baseHistory = scratchSession.history;
+      requestHistory = applySkillOverlay(baseHistory, skillOverlay);
       log.warn('Context-length error from provider; pruned history and retrying', {
         sessionId,
         attempt,
@@ -119,8 +152,12 @@ export async function completeWithContextRecovery(
         historyLength: session.history.length,
       });
       // Nothing left to prune (only system + final user turn remain) — give up
-      // and let the caller surface the error instead of spinning.
-      if (!pruned) throw err;
+      // and let the caller surface the error instead of spinning. With Skills
+      // active this is the fixed context-limit outcome, not a generic failure.
+      if (!pruned) {
+        if (skillOverlay) throw new SkillContextBudgetError();
+        throw err;
+      }
     }
   }
 }

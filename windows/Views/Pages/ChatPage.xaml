@@ -273,9 +273,15 @@
                             <Setter Property="Background" Value="{StaticResource Nord.UserBubbleBrush}" />
                             <Setter Property="BorderBrush" Value="Transparent" />
                             <Style.Triggers>
-                                <DataTrigger Binding="{Binding IsSteering}" Value="True">
+                                <!-- Accent only once applied; pending/queued keep the plain bubble. -->
+                                <DataTrigger Binding="{Binding IsSteeringAccepted}" Value="True">
                                     <Setter Property="Background" Value="#296EC88C" />
                                     <Setter Property="BorderBrush" Value="#4D6EC88C" />
+                                </DataTrigger>
+                                <!-- Not applied: kept (text never lost) but never accepted-looking. -->
+                                <DataTrigger Binding="{Binding IsSteeringFailed}" Value="True">
+                                    <Setter Property="Background" Value="{StaticResource Nord.UserBubbleBrush}" />
+                                    <Setter Property="BorderBrush" Value="#80FC6464" />
                                 </DataTrigger>
                             </Style.Triggers>
                         </Style>
@@ -293,7 +299,7 @@
                     HorizontalAlignment="Right"
                     Orientation="Horizontal"
                     ToolTip="Sent to the running task instead of queued as a new turn"
-                    Visibility="{Binding IsSteering, Converter={StaticResource BooleanToVisibilityConverter}}">
+                    Visibility="{Binding IsSteeringAccepted, Converter={StaticResource BooleanToVisibilityConverter}}">
                     <ui:SymbolIcon
                         Margin="0,0,4,0"
                         VerticalAlignment="Center"
@@ -306,7 +312,54 @@
                         FontSize="10"
                         FontWeight="Medium"
                         Foreground="{StaticResource Nord.AccentGreenBrush}"
-                        Text="Steered current task" />
+                        Text="{Binding SteeringStatusText}" />
+                </StackPanel>
+                <!-- Sent or queued: not applied yet, so never accepted-looking. -->
+                <StackPanel
+                    MaxWidth="600"
+                    Margin="0,6,2,0"
+                    HorizontalAlignment="Right"
+                    AutomationProperties.Name="{Binding SteeringStatusText}"
+                    Orientation="Horizontal"
+                    Visibility="{Binding IsSteeringInFlight, Converter={StaticResource BooleanToVisibilityConverter}}">
+                    <ui:SymbolIcon
+                        Margin="0,0,4,0"
+                        VerticalAlignment="Center"
+                        FontSize="12"
+                        Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                        Symbol="Clock24" />
+                    <TextBlock
+                        VerticalAlignment="Center"
+                        FontFamily="{StaticResource OK.FontFamily}"
+                        FontSize="10"
+                        FontWeight="Medium"
+                        Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                        Text="{Binding SteeringStatusText}"
+                        TextTrimming="CharacterEllipsis"
+                        ToolTip="{Binding SteeringStatusText}" />
+                </StackPanel>
+                <StackPanel
+                    MaxWidth="600"
+                    Margin="0,6,2,0"
+                    HorizontalAlignment="Right"
+                    AutomationProperties.Name="{Binding SteeringFailureText}"
+                    Orientation="Horizontal"
+                    Visibility="{Binding IsSteeringFailed, Converter={StaticResource BooleanToVisibilityConverter}}">
+                    <ui:SymbolIcon
+                        Margin="0,0,4,0"
+                        VerticalAlignment="Center"
+                        FontSize="12"
+                        Foreground="#FFFC6464"
+                        Symbol="ErrorCircle24" />
+                    <TextBlock
+                        VerticalAlignment="Center"
+                        FontFamily="{StaticResource OK.FontFamily}"
+                        FontSize="10"
+                        FontWeight="Medium"
+                        Foreground="#FFFC6464"
+                        Text="{Binding SteeringFailureText}"
+                        TextTrimming="CharacterEllipsis"
+                        ToolTip="{Binding SteeringFailureText}" />
                 </StackPanel>
                 <Button
                     Margin="0,6,2,0"

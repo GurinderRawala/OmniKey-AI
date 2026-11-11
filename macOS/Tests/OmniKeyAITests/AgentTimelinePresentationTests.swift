@@ -4,6 +4,30 @@ import XCTest
 @testable import OmniKeyAI
 
 final class AgentTimelinePresentationTests: XCTestCase {
+    func testMilestoneOmitsRepeatedHeadingAndSpeaksProgressOnly() throws {
+        let text = "Found the relevant files. The timeline can now be updated safely."
+        for streaming in [true, false] {
+            let presentation = AgentTimelinePresentation.build(
+                from: [ChatBlock(kind: .agentReasoning, text: text)], isStreaming: streaming)
+            let step = try XCTUnwrap(presentation.steps.first)
+            XCTAssertNil(step.displayedHeading)
+            XCTAssertEqual(step.outcome, text)
+            XCTAssertEqual(step.progressAccessibilityLabel, text)
+            // Internal summaries remain available for grouping and completion recaps.
+            XCTAssertEqual(step.title, "Found the relevant files")
+        }
+    }
+
+    func testSkillsNoticeKeepsItsCategoryHeading() throws {
+        let text = "Skills applied: Frontend design."
+        let presentation = AgentTimelinePresentation.build(
+            from: [ChatBlock(kind: .skillStatus, text: text)], isStreaming: true)
+        let step = try XCTUnwrap(presentation.steps.first)
+        XCTAssertEqual(step.displayedHeading, "Skills")
+        XCTAssertEqual(step.outcome, text)
+        XCTAssertEqual(step.progressAccessibilityLabel, "Skills: " + text)
+    }
+
     @MainActor
     func testExpandedActivityPanelProducesFiniteStableLayoutForLongHistory() {
         let activities = (0..<10).map { index in
