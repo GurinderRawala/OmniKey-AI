@@ -20,7 +20,7 @@
     "build:telegram-client": "rm -rf telegram-client-dist && mkdir -p telegram-client-dist && cp -R ../telegram/dist/* telegram-client-dist/",
     "clean": "rm -rf dist backend-dist telegram-client-dist",
     "format": "prettier --write \"src/**/*.ts\"",
-    "test": "echo \"(no tests in this workspace)\" && exit 0",
+    "test": "vitest run",
     "lint": "eslint --config ../eslint.config.mjs \"src/**/*.ts\""
   },
   "keywords": [
@@ -60,7 +60,8 @@
   "devDependencies": {
     "@types/inquirer": "^9.0.9",
     "@types/node-telegram-bot-api": "^0.64.0",
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "vitest": "^4.1.7"
   },
   "repository": {
     "type": "git",
