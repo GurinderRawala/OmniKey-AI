@@ -23,6 +23,7 @@ import {
   type SkillMatchPreview,
 } from './skills/contracts';
 import {
+  createSkillInputResolver,
   SKILL_ERROR_MESSAGES,
   getDefaultSkillStore,
   safeErrorMeta,
@@ -31,17 +32,12 @@ import {
   type SkillStoreLogger,
 } from './skills/skillStore';
 import { parseIfMatchRevision, parseSkillPreview, revisionETag } from './skills/validation';
+import { matchSkills } from './skills/matcher';
 
 /** Serialized JSON cap; decoded preview text is limited separately. */
 export const SKILLS_JSON_BODY_LIMIT_BYTES = 2_500_000;
 
 export const PREVIEW_TOO_LONG_MESSAGE = 'Preview text is too long. Use a shorter sample.';
-export const PREVIEW_UNAVAILABLE_MESSAGE = 'Skill preview is not available yet.';
-
-/** Explicitly unavailable until the S2 matcher is integrated; never fakes matches. */
-export const unavailableSkillResolver: ResolveSkillsForInput = async () => {
-  throw new SkillError(503, 'STORE_UNAVAILABLE', PREVIEW_UNAVAILABLE_MESSAGE);
-};
 
 export interface SkillRouterOptions {
   store?: SkillCrudStore | (() => Promise<SkillCrudStore>);
@@ -70,7 +66,9 @@ function isBodyParserError(err: unknown): err is { type: string; status: number 
 
 export function createSkillRouter(options: SkillRouterOptions = {}): express.Router {
   const router = express.Router();
-  const resolveSkills = options.resolveSkills ?? unavailableSkillResolver;
+  const resolveSkills: ResolveSkillsForInput =
+    options.resolveSkills ??
+    (async (owner, text) => createSkillInputResolver(await getStore(), matchSkills)(owner, text));
   let fallbackLogger: SkillStoreLogger | undefined = options.logger;
 
   const getLogger = async (res: Response): Promise<SkillStoreLogger> => {

@@ -450,17 +450,26 @@ describe('Skills auth and parser boundary', () => {
 });
 
 describe('POST /api/skills/match preview', () => {
-  it('is explicitly unavailable until the matcher is integrated (no fake matching)', async () => {
-    await store.create('owner-a', createBody('preview default'));
-    const res = await request(makeApp())
+  it('uses the real shared matcher by default with fresh stored snapshots', async () => {
+    const skill = await store.create('owner-a', createBody('preview default'));
+    const app = makeApp();
+    const matched = await request(app)
       .post('/api/skills/match')
       .set('x-test-owner', 'owner-a')
-      .send({ text: 'Please preview default' });
-    expect(res.status).toBe(503);
-    expect(res.body).toEqual({
-      error: { code: 'STORE_UNAVAILABLE', message: 'Skill preview is not available yet.' },
+      .send({ text: '@omniagent Please PREVIEW   DEFAULT!' });
+    expect(matched.status).toBe(200);
+    expect(matched.body).toEqual({
+      matches: [{ id: skill.id, name: skill.name, keyword: skill.keyword, revision: 1 }],
+      warnings: [],
     });
-    expect(JSON.stringify(res.body)).not.toContain('matches');
+    expect(JSON.stringify(matched.body)).not.toContain(SECRET);
+    await store.update('owner-a', skill.id, 1, { enabled: false });
+    const disabled = await request(app)
+      .post('/api/skills/match')
+      .set('x-test-owner', 'owner-a')
+      .send({ text: 'preview default' });
+    expect(disabled.body).toEqual({ matches: [], warnings: [] });
+    await store.remove('owner-a', skill.id, 2);
   });
 
   it('returns refs only (never instructions) from the injected resolver over the real store', async () => {
