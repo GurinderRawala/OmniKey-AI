@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 extension Notification.Name {
@@ -5,35 +6,288 @@ extension Notification.Name {
     static let subscriptionExpired = Notification.Name("SubscriptionExpiredNotification")
 }
 
+/// Who backend requests act for: the backend plus the subscription (a
+/// fingerprint of the stored key, or the single self-hosted owner). It is
+/// deliberately independent of the short-lived JWT, so refreshing a token
+/// for the same key keeps the identity while changing or clearing the key,
+/// or switching backend, does not. Never contains the key itself.
+struct SubscriptionIdentity: Hashable, Sendable {
+    let backend: String
+    let subscription: String
+
+    /// `nil` when no subscription is selected (hosted mode without a key).
+    static func make(baseURL: URL, isSelfHosted: Bool, userKey: String?) -> SubscriptionIdentity? {
+        var backend = baseURL.absoluteString
+        while backend.hasSuffix("/") { backend.removeLast() }
+        if isSelfHosted { return SubscriptionIdentity(backend: backend, subscription: "self-hosted") }
+        guard let userKey, !userKey.isEmpty else { return nil }
+        let digest = SHA256.hash(data: Data(userKey.utf8)).map { String(format: "%02x", $0) }.joined()
+        return SubscriptionIdentity(backend: backend, subscription: "key:" + digest)
+    }
+
+    static func make(backend: BackendSelection, userKey: String?) -> SubscriptionIdentity? {
+        make(baseURL: backend.baseURL, isSelfHosted: backend.isSelfHosted, userKey: userKey)
+    }
+}
+
+/// The backend selection from a single configuration read, so the URL and
+/// the self-hosted flag always agree.
+struct BackendSelection: Equatable, Sendable {
+    let baseURL: URL
+    let isSelfHosted: Bool
+}
+
+/// Identity, backend and token read together, so a request never pairs one
+/// subscription's identity with another's token. `token` is only ever the
+/// token issued for `identity` (same backend and subscription), else nil.
+struct SubscriptionAuthSnapshot: Sendable {
+    let identity: SubscriptionIdentity?
+    let baseURL: URL
+    let token: String?
+}
+
+/// What an activation request was started for: the key it sends, the
+/// backend it is sent to (captured once) and the key generation. Its result
+/// may only be installed while all of these are still current.
+struct SubscriptionActivationTicket: Sendable {
+    /// Sent as-is to `/activate` (empty for self-hosted). Never logged.
+    let key: String
+    let backend: BackendSelection
+    let identity: SubscriptionIdentity
+    fileprivate let epoch: Int
+}
+
+/// Lock-guarded key/token state. Pure (no I/O): the backend is passed in,
+/// so every rule is unit-testable. Each token is stored with the identity
+/// it was issued for and is handed out only for that identity, so a token
+/// can never be sent to another backend or subscription.
+final class SubscriptionAuthState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var key: String?
+    private var token: String?
+    private var tokenIdentity: SubscriptionIdentity?
+    /// Bumped whenever the key changes or the subscription is cleared, so an
+    /// activation started earlier can't install its result afterwards (even
+    /// if the same key is entered again).
+    private var epoch = 0
+
+    init(key: String? = nil) {
+        self.key = key
+    }
+
+    var storedKey: String? { lock.withLock { key } }
+
+    func snapshot(backend: BackendSelection) -> SubscriptionAuthSnapshot {
+        lock.withLock {
+            let identity = SubscriptionIdentity.make(backend: backend, userKey: key)
+            let bound = identity != nil && tokenIdentity == identity ? token : nil
+            return SubscriptionAuthSnapshot(identity: identity, baseURL: backend.baseURL, token: bound)
+        }
+    }
+
+    /// Ticket to re-activate the stored key (or self-hosted owner) against
+    /// `backend`; nil in hosted mode without a key.
+    func beginActivation(backend: BackendSelection) -> SubscriptionActivationTicket? {
+        lock.withLock {
+            guard let identity = SubscriptionIdentity.make(backend: backend, userKey: key) else { return nil }
+            return SubscriptionActivationTicket(
+                key: backend.isSelfHosted ? "" : (key ?? ""), backend: backend, identity: identity, epoch: epoch
+            )
+        }
+    }
+
+    /// Ticket to validate a newly entered key against `backend`.
+    func beginActivation(newKey: String, backend: BackendSelection) -> SubscriptionActivationTicket? {
+        lock.withLock {
+            guard let identity = SubscriptionIdentity.make(backend: backend, userKey: newKey) else { return nil }
+            return SubscriptionActivationTicket(key: newKey, backend: backend, identity: identity, epoch: epoch)
+        }
+    }
+
+    private func isCurrentLocked(_ ticket: SubscriptionActivationTicket, backend: BackendSelection) -> Bool {
+        epoch == ticket.epoch && backend == ticket.backend
+            && SubscriptionIdentity.make(backend: backend, userKey: key) == ticket.identity
+    }
+
+    /// Same key generation, backend and identity as when `ticket` was issued.
+    func isCurrent(_ ticket: SubscriptionActivationTicket, backend: BackendSelection) -> Bool {
+        lock.withLock { isCurrentLocked(ticket, backend: backend) }
+    }
+
+    /// Install a re-activation result (nil clears the token) only if the
+    /// ticket is still current. Returns false and changes nothing otherwise.
+    @discardableResult
+    func commit(token newToken: String?, for ticket: SubscriptionActivationTicket, backend: BackendSelection) -> Bool {
+        lock.withLock {
+            guard isCurrentLocked(ticket, backend: backend) else { return false }
+            token = newToken
+            tokenIdentity = newToken == nil ? nil : ticket.identity
+            return true
+        }
+    }
+
+    /// A newly entered key was accepted: store it with its token. The token
+    /// stays bound to the backend that issued it.
+    func install(key newKey: String, token newToken: String, for ticket: SubscriptionActivationTicket) {
+        lock.withLock {
+            if key != newKey { epoch += 1 }
+            key = newKey
+            token = newToken
+            tokenIdentity = ticket.identity
+        }
+    }
+
+    /// Unconditional token drop (legacy callers that are not identity-bound).
+    func invalidateToken() {
+        lock.withLock {
+            token = nil
+            tokenIdentity = nil
+        }
+    }
+
+    /// Drop the token only if `identity` is still the current one. Returns
+    /// whether it was current; a stale caller changes nothing.
+    @discardableResult
+    func invalidateToken(ifCurrent identity: SubscriptionIdentity?, backend: BackendSelection) -> Bool {
+        lock.withLock {
+            guard let identity, SubscriptionIdentity.make(backend: backend, userKey: key) == identity else { return false }
+            if tokenIdentity == identity {
+                token = nil
+                tokenIdentity = nil
+            }
+            return true
+        }
+    }
+
+    func clear() {
+        lock.withLock {
+            epoch += 1
+            key = nil
+            token = nil
+            tokenIdentity = nil
+        }
+    }
+
+    /// Clear only if `identity` is still the current one.
+    @discardableResult
+    func clear(ifCurrent identity: SubscriptionIdentity?, backend: BackendSelection) -> Bool {
+        lock.withLock {
+            guard let identity, SubscriptionIdentity.make(backend: backend, userKey: key) == identity else { return false }
+            epoch += 1
+            key = nil
+            token = nil
+            tokenIdentity = nil
+            return true
+        }
+    }
+}
+
+/// Persistence for the subscription key (injectable for tests).
+struct SubscriptionKeyStore: @unchecked Sendable {
+    var load: () -> String?
+    var save: (String?) -> Void
+
+    static func userDefaults(_ defaults: UserDefaults, key: String = "SubscriptionUserKey") -> SubscriptionKeyStore {
+        SubscriptionKeyStore(
+            load: { defaults.string(forKey: key) },
+            save: { value in
+                if let value { defaults.set(value, forKey: key) } else { defaults.removeObject(forKey: key) }
+            }
+        )
+    }
+}
+
 /// Manages the persisted user subscription key and the in‑memory
 /// JWT used to authenticate requests to the OmniKey backend.
 final class SubscriptionManager: @unchecked Sendable {
-    static let shared = SubscriptionManager()
+    /// POSTs `key` to `<baseURL>/api/subscription/activate`.
+    typealias Activator = @Sendable (
+        _ key: String, _ baseURL: URL, _ completion: @escaping (Result<String, Error>) -> Void
+    ) -> Void
 
-    private let defaults = UserDefaults.standard
-    private let userKeyDefaultsKey = "SubscriptionUserKey"
+    static let shared = SubscriptionManager(
+        keyStore: .userDefaults(.standard),
+        backend: { APIClient.backendSelection },
+        activator: SubscriptionManager.liveActivate
+    )
+
+    /// `userInfo` key on subscription notices naming the identity they are
+    /// about. A notice for an identity that is no longer current is ignored.
+    static let noticeIdentityKey = "SubscriptionIdentity"
+
+    private let state: SubscriptionAuthState
+    private let keyStore: SubscriptionKeyStore
+    private let backend: @Sendable () -> BackendSelection
+    private let activator: Activator
+    private let post: @Sendable (Notification.Name, SubscriptionIdentity?) -> Void
+
+    init(
+        keyStore: SubscriptionKeyStore,
+        backend: @escaping @Sendable () -> BackendSelection,
+        activator: @escaping Activator,
+        post: @escaping @Sendable (Notification.Name, SubscriptionIdentity?) -> Void = {
+            SubscriptionManager.postNotice($0, identity: $1)
+        }
+    ) {
+        self.keyStore = keyStore
+        self.backend = backend
+        self.activator = activator
+        self.post = post
+        state = SubscriptionAuthState(key: keyStore.load())
+    }
 
     /// The user-entered subscription key, persisted across launches.
-    private(set) var userKey: String?
+    var userKey: String? { state.storedKey }
 
-    /// The short-lived JWT issued by the backend. This is kept in
-    /// memory only and refreshed by re-activating the stored key.
-    private(set) var jwtToken: String?
+    /// The short-lived JWT issued by the current backend for the current
+    /// subscription (nil if it was issued for another one). Kept in memory
+    /// only and refreshed by re-activating the stored key.
+    var jwtToken: String? { authSnapshot().token }
 
     var hasStoredKey: Bool {
         userKey != nil
     }
 
-    private init() {
-        userKey = defaults.string(forKey: userKeyDefaultsKey)
+    /// The identity requests made now would act for.
+    var currentIdentity: SubscriptionIdentity? { authSnapshot().identity }
+
+    func authSnapshot() -> SubscriptionAuthSnapshot {
+        state.snapshot(backend: backend())
     }
+
+    // MARK: Notices
+
+    /// A notice scoped to `identity` (unscoped/legacy when nil).
+    static func notice(_ name: Notification.Name, identity: SubscriptionIdentity?) -> Notification {
+        Notification(name: name, object: nil, userInfo: identity.map { [noticeIdentityKey: $0] })
+    }
+
+    static func postNotice(_ name: Notification.Name, identity: SubscriptionIdentity?) {
+        let send: @Sendable () -> Void = {
+            NotificationCenter.default.post(notice(name, identity: identity))
+        }
+        if Thread.isMainThread { send() } else { DispatchQueue.main.async(execute: send) }
+    }
+
+    /// The identity a notice is scoped to; nil for unscoped (legacy) notices.
+    static func noticeIdentity(_ notification: Notification) -> SubscriptionIdentity? {
+        notification.userInfo?[noticeIdentityKey] as? SubscriptionIdentity
+    }
+
+    /// Whether a notice still applies: unscoped, or scoped to the current identity.
+    func noticeApplies(_ notification: Notification) -> Bool {
+        guard let scope = Self.noticeIdentity(notification) else { return true }
+        return scope == currentIdentity
+    }
+
+    // MARK: Activation
 
     /// Update (or set) the subscription key based on user input.
     /// This will validate the key with the backend and, on success,
     /// persist the key and store the issued JWT in memory.
     func updateUserKey(_ newKey: String, completion: @escaping (Result<Void, Error>) -> Void) {
         let trimmed = newKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
+        guard !trimmed.isEmpty, let ticket = state.beginActivation(newKey: trimmed, backend: backend()) else {
             let error = NSError(
                 domain: "SubscriptionManager",
                 code: -1,
@@ -43,21 +297,21 @@ final class SubscriptionManager: @unchecked Sendable {
             return
         }
 
-        activate(key: trimmed) { [weak self] result in
+        activator(ticket.key, ticket.backend.baseURL) { [weak self] result in
             guard let self else { return }
 
             switch result {
             case let .success(token):
-                self.userKey = trimmed
-                self.jwtToken = token
-                self.defaults.set(trimmed, forKey: self.userKeyDefaultsKey)
+                self.state.install(key: trimmed, token: token, for: ticket)
+                self.keyStore.save(trimmed)
                 completion(.success(()))
 
             case let .failure(error as NSError):
                 if error.domain == "SubscriptionManager", error.code == 403 {
                     // Subscription has expired for this key – notify the app
                     // so it can present the subscription window / purchase link.
-                    NotificationCenter.default.post(name: .subscriptionExpired, object: nil)
+                    // Unscoped: entering an expired key keeps its existing flow.
+                    self.post(.subscriptionExpired, nil)
                 }
                 completion(.failure(error))
             }
@@ -68,32 +322,36 @@ final class SubscriptionManager: @unchecked Sendable {
     /// When self-hosted the backend issues a JWT without a key, so
     /// we call /activate with an empty string instead of returning early.
     /// Calls completion(true) and stores a JWT on success.
+    ///
+    /// The backend is captured once; a result arriving after the key or
+    /// backend changed is discarded and reports the newer state.
     func activateStoredKey(completion: @escaping (Bool) -> Void) {
-        let key: String
-        if APIClient.isSelfHosted {
-            key = ""
-        } else {
-            guard let storedKey = userKey else {
-                completion(false)
-                return
-            }
-            key = storedKey
+        guard let ticket = state.beginActivation(backend: backend()) else {
+            completion(false)
+            return
         }
 
-        activate(key: key) { [weak self] result in
+        activator(ticket.key, ticket.backend.baseURL) { [weak self] result in
             guard let self else { return }
 
             switch result {
             case let .success(token):
-                self.jwtToken = token
+                guard self.state.commit(token: token, for: ticket, backend: self.backend()) else {
+                    completion(self.jwtToken != nil)
+                    return
+                }
                 completion(true)
 
             case let .failure(error as NSError):
-                self.jwtToken = nil
+                guard self.state.commit(token: nil, for: ticket, backend: self.backend()) else {
+                    completion(self.jwtToken != nil)
+                    return
+                }
                 if error.domain == "SubscriptionManager", error.code == 403 {
                     // Stored key is now expired; surface the subscription
-                    // expired flow so the user can renew.
-                    NotificationCenter.default.post(name: .subscriptionExpired, object: nil)
+                    // expired flow so the user can renew. Scoped, so it is
+                    // ignored if another subscription is active by then.
+                    self.post(.subscriptionExpired, ticket.identity)
                 }
                 completion(false)
             }
@@ -105,7 +363,20 @@ final class SubscriptionManager: @unchecked Sendable {
         case noStoredKey
         case expired
         case failure(Error)
+        /// The key, backend or key generation changed while activating, so
+        /// the result was discarded. Callers fail the original request with
+        /// `supersededError` and must not retry, invalidate, clear or post
+        /// a notice: the newer subscription is not theirs to touch.
+        case superseded
     }
+
+    /// Returned to the original caller when its re-activation was superseded.
+    /// Not `AgentRunner/401`, so it is never replayed.
+    static let supersededError = NSError(
+        domain: "SubscriptionManager",
+        code: -409,
+        userInfo: [NSLocalizedDescriptionKey: "Your OmniKey subscription or backend changed. Please try again."]
+    )
 
     /// Re-activate using the stored key (if any). This is used when
     /// an API request returns 401/403 so we can transparently refresh
@@ -113,28 +384,31 @@ final class SubscriptionManager: @unchecked Sendable {
     /// without a key. If there is no stored key on a non-self-hosted
     /// setup, or the server reports the subscription as expired (403),
     /// the caller is informed so it can show appropriate UI.
+    ///
+    /// If the stored key, backend or key generation changes while activating,
+    /// the result is discarded (the newer state keeps its token) and the
+    /// outcome is `.superseded`, never `.success` for the newer state, so the
+    /// original request is not retried as, and nothing expires, clears or
+    /// invalidates, the newer subscription.
     func reactivateStoredKeyIfNeeded(completion: @escaping (ReactivationOutcome) -> Void) {
-        let key: String
-        if APIClient.isSelfHosted {
-            key = ""
-        } else {
-            guard let storedKey = userKey else {
-                completion(.noStoredKey)
-                return
-            }
-            key = storedKey
+        guard let ticket = state.beginActivation(backend: backend()) else {
+            completion(.noStoredKey)
+            return
         }
 
-        activate(key: key) { [weak self] result in
+        activator(ticket.key, ticket.backend.baseURL) { [weak self] result in
             guard let self else { return }
+
+            let current = self.backend()
 
             switch result {
             case let .success(token):
-                self.jwtToken = token
-                completion(.success)
+                completion(self.state.commit(token: token, for: ticket, backend: current) ? .success : .superseded)
 
             case let .failure(error as NSError):
-                if error.domain == "SubscriptionManager", error.code == 403 {
+                if !self.state.isCurrent(ticket, backend: current) {
+                    completion(.superseded)
+                } else if error.domain == "SubscriptionManager", error.code == 403 {
                     completion(.expired)
                 } else {
                     completion(.failure(error))
@@ -146,15 +420,34 @@ final class SubscriptionManager: @unchecked Sendable {
     /// Clear the in-memory JWT so the next API call will re-activate
     /// using the stored key (if any).
     func invalidateToken() {
-        jwtToken = nil
+        state.invalidateToken()
+    }
+
+    /// Clear the token only while `identity` is current; returns whether it
+    /// was. Lets a stale request's failure leave a newer subscription alone.
+    @discardableResult
+    func invalidateToken(ifCurrent identity: SubscriptionIdentity?) -> Bool {
+        state.invalidateToken(ifCurrent: identity, backend: backend())
     }
 
     /// Completely forget the subscription, removing the stored key
     /// and any in-memory token.
     func clearSubscription() {
-        userKey = nil
-        jwtToken = nil
-        defaults.removeObject(forKey: userKeyDefaultsKey)
+        state.clear()
+        keyStore.save(nil)
+    }
+
+    /// Handle an expiry notice: clears when it is unscoped or scoped to the
+    /// current identity. Returns false (nothing cleared) for a stale notice.
+    @discardableResult
+    func clearSubscription(forNotice notification: Notification) -> Bool {
+        guard let scope = Self.noticeIdentity(notification) else {
+            clearSubscription()
+            return true
+        }
+        guard state.clear(ifCurrent: scope, backend: backend()) else { return false }
+        keyStore.save(nil)
+        return true
     }
 
     // MARK: - Networking
@@ -166,8 +459,10 @@ final class SubscriptionManager: @unchecked Sendable {
         let error: String?
     }
 
-    private func activate(key: String, completion: @escaping (Result<String, Error>) -> Void) {
-        let url = APIClient.baseURL.appendingPathComponent("api/subscription/activate")
+    static func liveActivate(
+        key: String, baseURL: URL, completion: @escaping (Result<String, Error>) -> Void
+    ) {
+        let url = baseURL.appendingPathComponent("api/subscription/activate")
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"

@@ -6,8 +6,8 @@ struct SkillsView: View {
     @Environment(\.colorScheme) private var colorScheme
     @StateObject private var model: SkillsViewModel
 
-    init(model: SkillsViewModel? = nil) {
-        _model = StateObject(wrappedValue: model ?? SkillsViewModel())
+    init(model: SkillsViewModel) {
+        _model = StateObject(wrappedValue: model)
     }
 
     var body: some View {

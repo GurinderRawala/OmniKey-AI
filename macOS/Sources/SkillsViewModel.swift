@@ -52,8 +52,36 @@ final class SkillsViewModel: ObservableObject {
     private var listTask: Task<Void, Never>?
     private var detailTask: Task<Void, Never>?
 
-    init(service: any SkillsService = APIClient.skills) {
+    /// `service` is bound to one backend + subscription; a model (and its
+    /// drafts) is never reused for another identity.
+    init(service: any SkillsService) {
         self.service = service
+    }
+
+    /// Set once the identity this model was bound to is no longer current.
+    private(set) var isRetired = false
+
+    /// Stop for good: cancel reads, drop drafts and shown data, and ignore
+    /// every late completion. In-flight mutations still finish on the old
+    /// identity's backend (the bound service refuses anything else), but
+    /// their results never reach the UI.
+    func retire() {
+        guard !isRetired else { return }
+        isRetired = true
+        listGeneration += 1
+        detailGeneration += 1
+        listTask?.cancel()
+        detailTask?.cancel()
+        editor = nil
+        pendingDelete = nil
+        busyIDs = []
+        skills = []
+        selectedID = nil
+        detail = nil
+        listState = .idle
+        detailState = .idle
+        statusMessage = nil
+        actionError = nil
     }
 
     var isUpgradeRequired: Bool {
@@ -84,6 +112,7 @@ final class SkillsViewModel: ObservableObject {
 
     /// Re-fetch the list (and the open detail, unless the user is editing).
     func refresh() {
+        guard !isRetired else { return }
         statusMessage = nil
         actionError = nil
         reloadList()
@@ -91,6 +120,7 @@ final class SkillsViewModel: ObservableObject {
     }
 
     private func reloadList() {
+        guard !isRetired else { return }
         listGeneration += 1
         let generation = listGeneration
         listTask?.cancel()
@@ -104,7 +134,7 @@ final class SkillsViewModel: ObservableObject {
     }
 
     private func applyList(_ result: Result<[SkillSummary], SkillsAPIError>, generation: Int) {
-        guard generation == listGeneration else { return }
+        guard !isRetired, generation == listGeneration else { return }
         switch result {
         case let .success(list):
             skills = list
@@ -138,7 +168,17 @@ final class SkillsViewModel: ObservableObject {
         }
     }
 
-    private func loadDetail(id: String) {
+    /// Shown when the backend keeps returning instructions older than the
+    /// listed revision even after one re-fetch.
+    static let staleDetailError = SkillsAPIError(
+        kind: .invalidResponse,
+        message: "The backend returned an older version of this skill than the list shows. Retry to load the latest."
+    )
+
+    /// `staleRetry` marks the single automatic re-fetch after a read came
+    /// back older than a known revision; a second stale read fails visibly.
+    private func loadDetail(id: String, staleRetry: Bool = false) {
+        guard !isRetired else { return }
         detailGeneration += 1
         let generation = detailGeneration
         detailTask?.cancel()
@@ -148,14 +188,31 @@ final class SkillsViewModel: ObservableObject {
             let result: Result<SkillDTO, SkillsAPIError>
             do { result = .success(try await service.get(id: id)) }
             catch { result = .failure(Self.apiError(error)) }
-            self.applyDetail(result, id: id, generation: generation)
+            self.applyDetail(result, id: id, generation: generation, staleRetry: staleRetry)
         }
     }
 
-    private func applyDetail(_ result: Result<SkillDTO, SkillsAPIError>, id: String, generation: Int) {
-        guard generation == detailGeneration, selectedID == id else { return }
+    private func applyDetail(
+        _ result: Result<SkillDTO, SkillsAPIError>, id: String, generation: Int, staleRetry: Bool
+    ) {
+        guard !isRetired, generation == detailGeneration, selectedID == id else { return }
         switch result {
         case let .success(skill):
+            // A read issued before a mutation/refresh can return an older
+            // revision than one already known; never step back to it.
+            let shownRevision = detail?.id == skill.id ? detail?.revision ?? 0 : 0
+            let listedRevision = selectedSummary?.revision ?? 0
+            if skill.revision < max(shownRevision, listedRevision) {
+                if editor != nil || isDetailCurrent {
+                    // Keep what is shown; closing the editor reconciles.
+                    detailState = .loaded
+                } else if staleRetry {
+                    detailState = .failed(Self.staleDetailError)
+                } else {
+                    loadDetail(id: id, staleRetry: true)
+                }
+                return
+            }
             detail = skill
             detailState = .loaded
             replaceSummary(skill.summary)
@@ -169,17 +226,25 @@ final class SkillsViewModel: ObservableObject {
         }
     }
 
+    /// Fetch the selected skill's instructions when the pane is settled but
+    /// shows an older revision than its row (e.g. a refresh during editing
+    /// deferred the fetch). No-op while editing, loading or failed.
+    private func reconcileDetail() {
+        guard editor == nil, let selectedID, detailState == .loaded, !isDetailCurrent else { return }
+        loadDetail(id: selectedID)
+    }
+
     // MARK: - Editing
 
     func startCreate() {
-        guard !isUpgradeRequired else { return }
+        guard !isRetired, !isUpgradeRequired else { return }
         statusMessage = nil
         actionError = nil
         editor = EditorState(mode: .create, draft: SkillDraft())
     }
 
     func startEdit() {
-        guard let detail, detail.id == selectedID, isDetailCurrent else { return }
+        guard !isRetired, let detail, detail.id == selectedID, isDetailCurrent else { return }
         statusMessage = nil
         actionError = nil
         editor = EditorState(mode: .edit(base: detail), draft: SkillDraft(detail))
@@ -188,6 +253,7 @@ final class SkillsViewModel: ObservableObject {
     func cancelEdit() {
         guard editor?.isSaving != true else { return }
         editor = nil
+        reconcileDetail()
     }
 
     /// Local checks for obvious mistakes. The server remains authoritative.
@@ -221,7 +287,7 @@ final class SkillsViewModel: ObservableObject {
     }
 
     func save() {
-        guard var state = editor, !state.isSaving else { return }
+        guard !isRetired, var state = editor, !state.isSaving else { return }
         let localErrors = Self.localFieldErrors(for: state.draft)
         state.fieldErrors = localErrors
         state.error = nil
@@ -236,6 +302,7 @@ final class SkillsViewModel: ObservableObject {
         if case let .edit(base) = mode, SkillPatch.diff(from: base, to: draft).isEmpty {
             editor = nil
             statusMessage = "No changes to save."
+            reconcileDetail()
             return
         }
 
@@ -259,7 +326,7 @@ final class SkillsViewModel: ObservableObject {
     }
 
     private func finishSave(_ result: Result<SkillDTO, SkillsAPIError>, mode: EditorMode) {
-        guard var state = editor, state.mode == mode, state.isSaving else { return }
+        guard !isRetired, var state = editor, state.mode == mode, state.isSaving else { return }
         state.isSaving = false
         switch result {
         case let .success(skill):
@@ -297,7 +364,7 @@ final class SkillsViewModel: ObservableObject {
     /// After a conflict: fetch the latest revision and rebase the draft onto
     /// it without discarding the user's text.
     func reloadLatestKeepingDraft() {
-        guard let state = editor, !state.isSaving, case let .edit(base) = state.mode else { return }
+        guard !isRetired, let state = editor, !state.isSaving, case let .edit(base) = state.mode else { return }
         var saving = state
         saving.isSaving = true
         editor = saving
@@ -310,7 +377,7 @@ final class SkillsViewModel: ObservableObject {
     }
 
     private func finishRebase(_ result: Result<SkillDTO, SkillsAPIError>, originalBase: SkillDTO) {
-        guard var state = editor, state.isSaving, state.mode == .edit(base: originalBase) else { return }
+        guard !isRetired, var state = editor, state.isSaving, state.mode == .edit(base: originalBase) else { return }
         state.isSaving = false
         switch result {
         case let .success(latest):
@@ -355,7 +422,7 @@ final class SkillsViewModel: ObservableObject {
     // MARK: - Toggle / delete
 
     func toggleEnabled(_ summary: SkillSummary) {
-        guard !busyIDs.contains(summary.id), !showsStaleDetail(for: summary) else { return }
+        guard !isRetired, !busyIDs.contains(summary.id), !showsStaleDetail(for: summary) else { return }
         let revision = displayedRevision(for: summary)
         busyIDs.insert(summary.id)
         actionError = nil
@@ -375,12 +442,17 @@ final class SkillsViewModel: ObservableObject {
     }
 
     private func finishToggle(_ result: Result<SkillDTO, SkillsAPIError>, id: String) {
+        guard !isRetired else { return }
         busyIDs.remove(id)
         switch result {
         case let .success(skill):
             replaceSummary(skill.summary)
-            if detail?.id == skill.id, editor == nil {
+            if let current = detail, current.id == skill.id, current.revision <= skill.revision, editor == nil {
+                // Committed revision supersedes any read still in flight.
+                detailGeneration += 1
+                detailTask?.cancel()
                 detail = skill
+                detailState = .loaded
             }
             statusMessage = skill.enabled ? "Enabled “\(skill.name)”." : "Disabled “\(skill.name)”."
             reloadList()
@@ -393,12 +465,12 @@ final class SkillsViewModel: ObservableObject {
     }
 
     func requestDelete(_ summary: SkillSummary) {
-        guard !busyIDs.contains(summary.id), !showsStaleDetail(for: summary) else { return }
+        guard !isRetired, !busyIDs.contains(summary.id), !showsStaleDetail(for: summary) else { return }
         pendingDelete = summary
     }
 
     func confirmDelete() {
-        guard let summary = pendingDelete else { return }
+        guard !isRetired, let summary = pendingDelete else { return }
         pendingDelete = nil
         guard !busyIDs.contains(summary.id) else { return }
         let revision = displayedRevision(for: summary)
@@ -418,6 +490,7 @@ final class SkillsViewModel: ObservableObject {
     }
 
     private func finishDelete(_ result: Result<Void, SkillsAPIError>, summary: SkillSummary) {
+        guard !isRetired else { return }
         busyIDs.remove(summary.id)
         let removeLocally = {
             self.skills.removeAll { $0.id == summary.id }

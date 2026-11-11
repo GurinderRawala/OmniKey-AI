@@ -175,6 +175,17 @@ enum HotkeyAgentFrame {
         /// Completes with an error and is never pasted into the document.
         /// The string is a sanitized single line safe for an alert.
         case failure(String)
+        /// The backend rejected the connection's credentials before
+        /// processing the message (legacy untagged frame: `is_error`, empty
+        /// `session_id`, `Unauthorized:` text). The only replay-safe failure.
+        case unauthorized
+    }
+
+    /// The backend's pre-processing auth rejection (agentServer/websocket.ts).
+    /// It has no error code, so match its fixed shape exactly.
+    static func isAuthRejection(_ message: HotkeyAgentMessage) -> Bool {
+        message.isError == true && message.sessionID.isEmpty && message.sender == "agent"
+            && message.content.hasPrefix("Unauthorized:")
     }
 
     static let genericFailureText = "The agent could not complete this request."
@@ -231,7 +242,9 @@ enum HotkeyAgentFrame {
 
         let display = AgentRunner.cleanedDisplayText(from: content)
         let disposition: Disposition
-        if let script = AgentRunner.extractShellScript(from: content) {
+        if isAuthRejection(message) {
+            disposition = .unauthorized
+        } else if let script = AgentRunner.extractShellScript(from: content) {
             disposition = .runShellScript(script)
         } else if let final = AgentRunner.extractFinalAnswer(from: content) {
             // Server-generated terminal failures (e.g. Skills blocked) are
@@ -241,6 +254,56 @@ enum HotkeyAgentFrame {
             disposition = .implicitFinalAnswer(display.isEmpty ? content : display)
         }
         return .agentText(message, display: display, disposition: disposition)
+    }
+}
+
+/// When a failed hotkey run may re-authenticate and resend the original
+/// message. Replaying re-runs the whole request, so it is allowed only when
+/// the backend provably did no work: its credentials were rejected (WebSocket
+/// handshake 401/403, or the pre-processing `Unauthorized:` frame). Terminal
+/// agent errors (`AgentRunner/-3`), transport and provider failures can
+/// follow completed tool work and are reported, never replayed. The replay
+/// must also stay on the identity the run started with; a refreshed JWT for
+/// the same backend + subscription is fine.
+enum AgentAuthRetry {
+    static let domain = "AgentRunner"
+    static let code = 401
+
+    static func authenticationError() -> NSError {
+        NSError(
+            domain: domain, code: code,
+            userInfo: [NSLocalizedDescriptionKey: "Subscription is not active. Please re-activate your key."]
+        )
+    }
+
+    static func isAuthenticationFailure(_ error: Error) -> Bool {
+        let error = error as NSError
+        return error.domain == domain && error.code == code
+    }
+
+    /// A socket error, reclassified as an auth failure if the server
+    /// refused the WebSocket upgrade for credentials.
+    static func socketError(_ error: Error, handshakeStatus: Int?) -> Error {
+        handshakeStatus == 401 || handshakeStatus == 403 ? authenticationError() : error
+    }
+
+    static func shouldReauthenticate(after error: Error, allowReauth: Bool) -> Bool {
+        allowReauth && isAuthenticationFailure(error)
+    }
+
+    static func mayReplay(startedFor started: SubscriptionIdentity?, current: SubscriptionIdentity?) -> Bool {
+        started != nil && started == current
+    }
+
+    /// Token and backend for a send of a run that started for `started`:
+    /// only from one snapshot, only for that identity, never empty.
+    static func credentials(
+        for started: SubscriptionIdentity?, from snapshot: SubscriptionAuthSnapshot
+    ) -> (token: String, baseURL: URL)? {
+        guard mayReplay(startedFor: started, current: snapshot.identity),
+              let token = snapshot.token, !token.isEmpty
+        else { return nil }
+        return (token, snapshot.baseURL)
     }
 }
 
@@ -437,15 +500,24 @@ final class AgentRunner {
         completion: @escaping @Sendable (Result<String, Error>) -> Void
     ) {
         let chosenSessionId = AgentThinkingModel.shared.selectedSessionId ?? UUID().uuidString
+        // One snapshot: the identity this run acts for, and (if issued for
+        // it) the token and backend of the first send.
+        let initial = SubscriptionManager.shared.authSnapshot()
+        let startIdentity = initial.identity
+        let notActive = NSError(
+            domain: "AgentRunner",
+            code: 401,
+            userInfo: [NSLocalizedDescriptionKey: "Subscription is not active."]
+        )
 
         // Pre-load prior turns so the view can show a compact history banner.
         if AgentThinkingModel.shared.selectedSessionId != nil {
             AgentThinkingModel.shared.fetchSessionHistory(for: chosenSessionId)
         }
 
-        let sessionBox = ClosureBox<@MainActor @Sendable (String, Bool) -> Void>()
-        sessionBox.call = { [self] jwt, allowReauth in
-            self.connectAndRun(originalText: originalText, sessionId: chosenSessionId, jwt: jwt) { result in
+        let sessionBox = ClosureBox<@MainActor @Sendable (String, URL, Bool) -> Void>()
+        sessionBox.call = { [self] jwt, baseURL, allowReauth in
+            self.connectAndRun(originalText: originalText, sessionId: chosenSessionId, jwt: jwt, baseURL: baseURL) { result in
                 // If the user pressed Cancel, surface a dedicated
                 // cancellation error and skip any re-auth logic.
                 Task { @MainActor in
@@ -466,7 +538,9 @@ final class AgentRunner {
                     completion(result)
 
                 case let .failure(error):
-                    guard allowReauth else {
+                    // Only a credentials rejection is replayed; anything
+                    // else may follow completed tool work.
+                    guard AgentAuthRetry.shouldReauthenticate(after: error, allowReauth: allowReauth) else {
                         completion(.failure(error))
                         return
                     }
@@ -474,9 +548,22 @@ final class AgentRunner {
                     SubscriptionManager.shared.reactivateStoredKeyIfNeeded { outcome in
                         switch outcome {
                         case .success:
-                            let newJwt = SubscriptionManager.shared.jwtToken ?? ""
                             DispatchQueue.main.async {
-                                sessionBox.call?(newJwt, false)
+                                // Never resend this request as another subscription.
+                                guard let next = AgentAuthRetry.credentials(
+                                    for: startIdentity, from: SubscriptionManager.shared.authSnapshot()
+                                ) else {
+                                    completion(.failure(error))
+                                    return
+                                }
+                                sessionBox.call?(next.token, next.baseURL, false)
+                            }
+
+                        case .superseded:
+                            // Another subscription/backend is current: never
+                            // replay this run as it.
+                            DispatchQueue.main.async {
+                                completion(.failure(SubscriptionManager.supersededError))
                             }
 
                         case .noStoredKey, .expired:
@@ -497,27 +584,33 @@ final class AgentRunner {
 
         // Ensure we have (or can obtain) a JWT before
         // attempting to connect to the agent.
-        if let token = SubscriptionManager.shared.jwtToken, !token.isEmpty {
-            sessionBox.call?(token, true)
+        if let first = AgentAuthRetry.credentials(for: startIdentity, from: initial) {
+            sessionBox.call?(first.token, first.baseURL, true)
             return
         }
 
         SubscriptionManager.shared.reactivateStoredKeyIfNeeded { outcome in
             switch outcome {
             case .success:
-                let jwt = SubscriptionManager.shared.jwtToken ?? ""
                 DispatchQueue.main.async {
-                    sessionBox.call?(jwt, false)
+                    // Only send for the identity this run started with.
+                    guard let first = AgentAuthRetry.credentials(
+                        for: startIdentity, from: SubscriptionManager.shared.authSnapshot()
+                    ) else {
+                        completion(.failure(notActive))
+                        return
+                    }
+                    sessionBox.call?(first.token, first.baseURL, false)
+                }
+
+            case .superseded:
+                DispatchQueue.main.async {
+                    completion(.failure(SubscriptionManager.supersededError))
                 }
 
             case .noStoredKey, .expired:
-                let error = NSError(
-                    domain: "AgentRunner",
-                    code: 401,
-                    userInfo: [NSLocalizedDescriptionKey: "Subscription is not active."]
-                )
                 DispatchQueue.main.async {
-                    completion(.failure(error))
+                    completion(.failure(notActive))
                 }
 
             case let .failure(error):
@@ -544,6 +637,11 @@ final class AgentRunner {
                 let jwt = SubscriptionManager.shared.jwtToken ?? ""
                 self.connectAndCheck(jwt: jwt, completion: completion)
 
+            case .superseded:
+                DispatchQueue.main.async {
+                    completion(.failure(SubscriptionManager.supersededError))
+                }
+
             case .noStoredKey, .expired:
                 let error = NSError(
                     domain: "AgentRunner",
@@ -566,9 +664,11 @@ final class AgentRunner {
         originalText: String,
         sessionId: String,
         jwt: String,
+        baseURL: URL,
         completion: @escaping @Sendable (Result<String, Error>) -> Void
     ) {
-        guard let url = makeAgentWebSocketURL() else {
+        // The backend the token was issued for, not a fresh config read.
+        guard let url = makeAgentWebSocketURL(baseURL: baseURL) else {
             let error = NSError(
                 domain: "AgentRunner",
                 code: -1,
@@ -663,8 +763,11 @@ final class AgentRunner {
                 case let .failure(error):
                     print("[AgentRunner] WebSocket receive failed: \(error.localizedDescription)")
                     if !finalAnswerDelivered.value {
+                        let mapped = AgentAuthRetry.socketError(
+                            error, handshakeStatus: (task.response as? HTTPURLResponse)?.statusCode
+                        )
                         DispatchQueue.main.async {
-                            completion(.failure(error))
+                            completion(.failure(mapped))
                         }
                     }
                     task.cancel(with: .goingAway, reason: nil)
@@ -733,6 +836,21 @@ final class AgentRunner {
                         response = message
                         displayText = display
                         disposition = kind
+                    }
+
+                    // Credentials rejected before any work: fail as an auth
+                    // error (the caller may refresh and replay once).
+                    if case .unauthorized = disposition {
+                        print("[AgentRunner] Agent rejected credentials; completing with auth failure.")
+                        finalAnswerDelivered.value = true
+                        DispatchQueue.main.async {
+                            completion(.failure(AgentAuthRetry.authenticationError()))
+                        }
+                        task.cancel(with: .goingAway, reason: nil)
+                        Task {
+                            await AgentSessionState.shared.registerWebSocketTask(nil)
+                        }
+                        return
                     }
 
                     // Surface a cleaned, human-readable version of
@@ -908,8 +1026,11 @@ final class AgentRunner {
             task.send(.string(json)) { error in
                 if let error, !finalAnswerDelivered.value {
                     print("[AgentRunner] Failed to send initial WebSocket message: \(error.localizedDescription)")
+                    let mapped = AgentAuthRetry.socketError(
+                        error, handshakeStatus: (task.response as? HTTPURLResponse)?.statusCode
+                    )
                     DispatchQueue.main.async {
-                        completion(.failure(error))
+                        completion(.failure(mapped))
                     }
                     task.cancel(with: .goingAway, reason: nil)
                     return
@@ -968,8 +1089,8 @@ final class AgentRunner {
     /// Construct the WebSocket URL for the agent endpoint based on the
     /// configured HTTP API base URL. This mirrors the backend's
     /// /ws/omni-agent path.
-    private func makeAgentWebSocketURL() -> URL? {
-        guard var components = URLComponents(url: APIClient.baseURL, resolvingAgainstBaseURL: false) else {
+    private func makeAgentWebSocketURL(baseURL: URL = APIClient.baseURL) -> URL? {
+        guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
             return nil
         }
 

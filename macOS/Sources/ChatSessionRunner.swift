@@ -255,6 +255,11 @@ final class ChatSessionRunner {
                     )
                 }
 
+            case .superseded:
+                // The subscription/backend changed while activating: fail
+                // without connecting as the newer subscription.
+                DispatchQueue.main.async { onError(SubscriptionManager.supersededError) }
+
             case .noStoredKey, .expired:
                 let error = NSError(
                     domain: "ChatSessionRunner",

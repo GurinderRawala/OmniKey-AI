@@ -702,6 +702,40 @@ private final class Counter: @unchecked Sendable {
     func setToken(_ value: String) { lock.withLock { token = value } }
 }
 
+private enum Identities {
+    static let backend = URL(string: "http://skills.test:7071/")!
+    static let otherBackend = URL(string: "http://other.test:7071/")!
+    static func hosted(_ key: String, backend: URL = backend) -> SubscriptionIdentity {
+        SubscriptionIdentity.make(baseURL: backend, isSelfHosted: false, userKey: key)!
+    }
+}
+
+/// Fake SubscriptionManager state: which identity/backend/token is current.
+private final class FakeAccount: @unchecked Sendable {
+    private let lock = NSLock()
+    private var identity: SubscriptionIdentity?
+    private var baseURL: URL
+    private let tokens: Counter
+
+    init(identity: SubscriptionIdentity? = Identities.hosted("key-a"), baseURL: URL = Identities.backend, tokens: Counter) {
+        self.identity = identity
+        self.baseURL = baseURL
+        self.tokens = tokens
+    }
+
+    func switchTo(_ identity: SubscriptionIdentity?, baseURL: URL? = nil, token: String) {
+        lock.withLock {
+            self.identity = identity
+            if let baseURL { self.baseURL = baseURL }
+        }
+        tokens.setToken(token)
+    }
+
+    var snapshot: SubscriptionAuthSnapshot {
+        lock.withLock { SubscriptionAuthSnapshot(identity: identity, baseURL: baseURL, token: tokens.currentToken) }
+    }
+}
+
 final class SkillsAPITests: XCTestCase {
     private var state = StubState()
 
@@ -713,15 +747,18 @@ final class SkillsAPITests: XCTestCase {
 
     private func makeAPI(
         tokens: Counter = Counter(token: "jwt-1"),
+        account: FakeAccount? = nil,
+        boundTo identity: SubscriptionIdentity? = Identities.hosted("key-a"),
         reauth: @escaping @Sendable () async -> SkillsReauthOutcome = { .failed },
         onFinal: @escaping @Sendable () -> Void = {}
     ) -> SkillsAPI {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [SkillsStubProtocol.self]
+        let account = account ?? FakeAccount(tokens: tokens)
         return SkillsAPI(
-            baseURL: { URL(string: "http://skills.test:7071/")! },
+            identity: identity,
+            credentials: { account.snapshot },
             session: URLSession(configuration: config),
-            token: { tokens.currentToken },
             reauthenticate: reauth,
             onFinalUnauthorized: onFinal
         )
@@ -877,6 +914,651 @@ final class SkillsAPITests: XCTestCase {
         state.enqueue(.http(200, #"{"skills":"nope"}"#))
         let api = makeAPI()
         _ = await expectError(.invalidResponse) { _ = try await api.list() }
+    }
+
+    // MARK: Identity fencing
+
+    func testRefreshedTokenForSameSubscriptionRetries() async throws {
+        let tokens = Counter(token: "a-old")
+        let account = FakeAccount(tokens: tokens)
+        state.enqueue(.http(401, "Unauthorized"), .http(200, #"{"skills":[]}"#))
+        let api = makeAPI(account: account, reauth: {
+            account.switchTo(Identities.hosted("key-a"), token: "a-new")
+            return .retry
+        })
+        _ = try await api.list()
+        XCTAssertEqual(state.requests.map { $0.headers["Authorization"] }, ["Bearer a-old", "Bearer a-new"])
+    }
+
+    func testMutationAfterSubscriptionChangeSendsNothing() async {
+        let tokens = Counter(token: "a")
+        let account = FakeAccount(tokens: tokens)
+        let api = makeAPI(account: account)
+        account.switchTo(Identities.hosted("key-b"), token: "b")
+        _ = await expectError(.accountChanged) {
+            _ = try await api.create(SkillDraft(name: "A's", keyword: "a", instructions: "A's private text"))
+        }
+        _ = await expectError(.accountChanged) { try await api.delete(id: "s1", revision: 1) }
+        XCTAssertTrue(state.requests.isEmpty)
+    }
+
+    func testBackendChangeWithSameKeySendsNothing() async {
+        let tokens = Counter(token: "a")
+        let account = FakeAccount(tokens: tokens)
+        let api = makeAPI(account: account)
+        account.switchTo(Identities.hosted("key-a", backend: Identities.otherBackend),
+                         baseURL: Identities.otherBackend, token: "a")
+        _ = await expectError(.accountChanged) { _ = try await api.list() }
+        XCTAssertTrue(state.requests.isEmpty)
+    }
+
+    func testAuthRetryIsNotReplayedAsAnotherSubscription() async {
+        let tokens = Counter(token: "a")
+        let account = FakeAccount(tokens: tokens)
+        let finals = Counter()
+        state.enqueue(.http(401, "Unauthorized"))
+        let api = makeAPI(account: account, reauth: {
+            // Subscription B is activated while A's request is re-authenticating.
+            account.switchTo(Identities.hosted("key-b"), token: "b")
+            return .retry
+        }, onFinal: { finals.increment() })
+        _ = await expectError(.accountChanged) {
+            _ = try await api.update(id: "s1", revision: 1, patch: SkillPatch(instructions: "A's text"))
+        }
+        XCTAssertEqual(state.requests.map { $0.headers["Authorization"] }, ["Bearer a"])
+        XCTAssertEqual(finals.value, 0, "B's token must not be invalidated by A's failure")
+    }
+
+    func testClientBoundToNoIdentityNeverSends() async {
+        let tokens = Counter(token: "leftover")
+        let account = FakeAccount(identity: nil, tokens: tokens)
+        let api = makeAPI(account: account, boundTo: nil)
+        _ = await expectError(.accountChanged) { _ = try await api.list() }
+        _ = await expectError(.accountChanged) {
+            _ = try await api.create(SkillDraft(name: "x", keyword: "y", instructions: "z"))
+        }
+        XCTAssertTrue(state.requests.isEmpty)
+    }
+
+    func testFailedReauthAfterSubscriptionChangeReportsAccountChange() async {
+        let tokens = Counter(token: "a")
+        let account = FakeAccount(tokens: tokens)
+        state.enqueue(.http(401, "Unauthorized"))
+        let api = makeAPI(account: account, reauth: {
+            account.switchTo(Identities.hosted("key-b"), token: "b")
+            return .failed
+        })
+        _ = await expectError(.accountChanged) { _ = try await api.list() }
+        XCTAssertEqual(state.requests.count, 1)
+    }
+}
+
+final class SubscriptionIdentityTests: XCTestCase {
+    func testIdentityIgnoresTokenAndNeverContainsKey() {
+        let a = SubscriptionIdentity.make(baseURL: Identities.backend, isSelfHosted: false, userKey: "secret-key-a")
+        let again = SubscriptionIdentity.make(baseURL: URL(string: "http://skills.test:7071")!, isSelfHosted: false, userKey: "secret-key-a")
+        XCTAssertEqual(a, again, "trailing slash and JWT refreshes keep the identity")
+        XCTAssertFalse(String(describing: a).contains("secret-key-a"))
+    }
+
+    func testDifferentKeyBackendOrSignOutIsDifferentIdentity() {
+        let a = Identities.hosted("key-a")
+        XCTAssertNotEqual(a, Identities.hosted("key-b"))
+        XCTAssertNotEqual(a, Identities.hosted("key-a", backend: Identities.otherBackend))
+        XCTAssertNil(SubscriptionIdentity.make(baseURL: Identities.backend, isSelfHosted: false, userKey: nil))
+        XCTAssertNil(SubscriptionIdentity.make(baseURL: Identities.backend, isSelfHosted: false, userKey: ""))
+    }
+
+    func testSelfHostedIsOneOwnerPerBackend() {
+        let one = SubscriptionIdentity.make(baseURL: Identities.backend, isSelfHosted: true, userKey: nil)
+        let keyed = SubscriptionIdentity.make(baseURL: Identities.backend, isSelfHosted: true, userKey: "stale-key")
+        XCTAssertNotNil(one)
+        XCTAssertEqual(one, keyed)
+        XCTAssertNotEqual(one, SubscriptionIdentity.make(baseURL: Identities.otherBackend, isSelfHosted: true, userKey: nil))
+    }
+
+    func testSkillsWindowIsReusedOnlyForTheSameIdentity() {
+        let a = Identities.hosted("key-a")
+        XCTAssertTrue(SkillsWindowController.canReuse(boundTo: a, for: Identities.hosted("key-a")))
+        XCTAssertFalse(SkillsWindowController.canReuse(boundTo: a, for: Identities.hosted("key-b")))
+        XCTAssertFalse(SkillsWindowController.canReuse(boundTo: a, for: nil))
+        XCTAssertFalse(SkillsWindowController.canReuse(boundTo: nil, for: nil))
+    }
+}
+
+// MARK: - SubscriptionManager auth state (injected: no UserDefaults.standard, no network)
+
+/// Holds `/activate` calls until the test answers them.
+private final class FakeActivator: @unchecked Sendable {
+    struct Call {
+        let key: String
+        let baseURL: URL
+        let completion: (Result<String, Error>) -> Void
+    }
+
+    private let lock = NSLock()
+    private var calls: [Call] = []
+
+    var count: Int { lock.withLock { calls.count } }
+    func call(_ index: Int) -> Call { lock.withLock { calls[index] } }
+
+    func activate(_ key: String, _ baseURL: URL, _ completion: @escaping (Result<String, Error>) -> Void) {
+        lock.withLock { calls.append(Call(key: key, baseURL: baseURL, completion: completion)) }
+    }
+
+    func succeed(_ index: Int, token: String) { call(index).completion(.success(token)) }
+    func fail(_ index: Int, status: Int) {
+        call(index).completion(.failure(NSError(domain: "SubscriptionManager", code: status)))
+    }
+}
+
+private final class AuthHarness: @unchecked Sendable {
+    static let hosted = BackendSelection(baseURL: Identities.backend, isSelfHosted: false)
+    static let local = BackendSelection(baseURL: URL(string: "http://localhost:7072")!, isSelfHosted: true)
+
+    private let lock = NSLock()
+    private var selection: BackendSelection
+    private var persisted: String?
+    private var notices: [(Notification.Name, SubscriptionIdentity?)] = []
+    let activator = FakeActivator()
+    private(set) var manager: SubscriptionManager!
+
+    init(key: String? = nil, backend: BackendSelection = AuthHarness.hosted) {
+        selection = backend
+        persisted = key
+        let store = SubscriptionKeyStore(
+            load: { [unowned self] in self.lock.withLock { self.persisted } },
+            save: { [unowned self] value in self.lock.withLock { self.persisted = value } }
+        )
+        let activator = activator
+        manager = SubscriptionManager(
+            keyStore: store,
+            backend: { [unowned self] in self.lock.withLock { self.selection } },
+            activator: { activator.activate($0, $1, $2) },
+            post: { [unowned self] name, identity in self.lock.withLock { self.notices.append((name, identity)) } }
+        )
+    }
+
+    func switchBackend(_ backend: BackendSelection) { lock.withLock { selection = backend } }
+    var storedKey: String? { lock.withLock { persisted } }
+    var posted: [(Notification.Name, SubscriptionIdentity?)] { lock.withLock { notices } }
+
+    /// Activates `key` through `updateUserKey` and answers with `token`.
+    func signIn(_ key: String, token: String) {
+        let index = activator.count
+        var outcome: Result<Void, Error>?
+        manager.updateUserKey(key) { outcome = $0 }
+        activator.succeed(index, token: token)
+        if case .success = outcome {} else { XCTFail("sign-in failed") }
+    }
+
+    func reactivate() -> (index: Int, outcome: () -> SubscriptionManager.ReactivationOutcome?) {
+        let index = activator.count
+        let box = OutcomeBox()
+        manager.reactivateStoredKeyIfNeeded { box.value = $0 }
+        return (index, { box.value })
+    }
+
+    final class OutcomeBox: @unchecked Sendable { var value: SubscriptionManager.ReactivationOutcome? }
+}
+
+private func isSuccess(_ outcome: SubscriptionManager.ReactivationOutcome?) -> Bool {
+    if case .success = outcome { return true }
+    return false
+}
+
+private func isSuperseded(_ outcome: SubscriptionManager.ReactivationOutcome?) -> Bool {
+    if case .superseded = outcome { return true }
+    return false
+}
+
+private final class LockedValue<T>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: T?
+    var value: T? {
+        get { lock.withLock { stored } }
+        set { lock.withLock { stored = newValue } }
+    }
+}
+
+/// Auth notices on `NotificationCenter.default`, where the legacy APIClient
+/// paths and `SubscriptionManager.postNotice` (Skills) deliver them.
+private final class DefaultCenterAuthNotices: @unchecked Sendable {
+    private let lock = NSLock()
+    private var names: [Notification.Name] = []
+    private var observers: [NSObjectProtocol] = []
+
+    init() {
+        for name in [Notification.Name.subscriptionExpired, .subscriptionUnauthorized] {
+            observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: nil) { [weak self] note in
+                guard let self else { return }
+                self.lock.withLock { self.names.append(note.name) }
+            })
+        }
+    }
+
+    deinit { observers.forEach { NotificationCenter.default.removeObserver($0) } }
+
+    var posted: [Notification.Name] { lock.withLock { names } }
+}
+
+final class SubscriptionAuthStateTests: XCTestCase {
+    private let a = Identities.hosted("key-a")
+    private let b = Identities.hosted("key-b")
+
+    func testTokenRefreshKeepsIdentityAndUsesNewToken() {
+        let h = AuthHarness()
+        h.signIn("key-a", token: "a-1")
+        XCTAssertEqual(h.manager.currentIdentity, a)
+        let (index, outcome) = h.reactivate()
+        XCTAssertEqual(h.activator.call(index).key, "key-a")
+        h.activator.succeed(index, token: "a-2")
+        XCTAssertTrue(isSuccess(outcome()))
+        let snapshot = h.manager.authSnapshot()
+        XCTAssertEqual(snapshot.identity, a)
+        XCTAssertEqual(snapshot.token, "a-2")
+        XCTAssertEqual(h.manager.jwtToken, "a-2")
+    }
+
+    func testStaleActivationAfterKeyChangeCannotInstallToken() {
+        let h = AuthHarness()
+        h.signIn("key-a", token: "a-1")
+        let (index, outcome) = h.reactivate()
+        h.signIn("key-b", token: "b-1")
+        h.activator.succeed(index, token: "a-2") // A's late answer
+        XCTAssertTrue(isSuperseded(outcome()), "never .success for B's state")
+        XCTAssertEqual(h.manager.authSnapshot().identity, b)
+        XCTAssertEqual(h.manager.authSnapshot().token, "b-1")
+    }
+
+    func testStaleFailedActivationCannotClearOrExpireNewKey() {
+        let h = AuthHarness()
+        h.signIn("key-a", token: "a-1")
+        var stored: Bool?
+        h.manager.activateStoredKey { stored = $0 }
+        h.signIn("key-b", token: "b-1")
+        h.activator.fail(1, status: 403) // A expired, but B is active now
+        XCTAssertEqual(stored, true)
+        XCTAssertEqual(h.manager.authSnapshot().token, "b-1")
+        XCTAssertTrue(h.posted.isEmpty, "no expiry notice for B")
+    }
+
+    func testExpiredStoredKeyPostsNoticeScopedToItsIdentity() {
+        let h = AuthHarness()
+        h.signIn("key-a", token: "a-1")
+        var stored: Bool?
+        h.manager.activateStoredKey { stored = $0 }
+        h.activator.fail(1, status: 403)
+        XCTAssertEqual(stored, false)
+        XCTAssertNil(h.manager.jwtToken)
+        XCTAssertEqual(h.posted.count, 1)
+        XCTAssertEqual(h.posted.first?.0, .subscriptionExpired)
+        XCTAssertEqual(h.posted.first?.1, a)
+    }
+
+    func testStaleActivationAfterBackendChangeIsDiscarded() {
+        let h = AuthHarness()
+        h.signIn("key-a", token: "hosted-a")
+        let (index, outcome) = h.reactivate()
+        XCTAssertEqual(h.activator.call(index).baseURL, Identities.backend, "backend captured once")
+        h.switchBackend(AuthHarness.local)
+        h.activator.succeed(index, token: "late-hosted")
+        XCTAssertTrue(isSuperseded(outcome()))
+        let snapshot = h.manager.authSnapshot()
+        XCTAssertEqual(snapshot.baseURL, AuthHarness.local.baseURL)
+        XCTAssertNil(snapshot.token, "hosted token must not be sent to the local backend")
+        XCTAssertNil(h.manager.jwtToken)
+
+        var stored: Bool?
+        h.manager.activateStoredKey { stored = $0 }
+        XCTAssertEqual(h.activator.call(index + 1).baseURL, AuthHarness.local.baseURL)
+        XCTAssertEqual(h.activator.call(index + 1).key, "", "self-hosted activation sends no key")
+        h.activator.succeed(index + 1, token: "local")
+        XCTAssertEqual(stored, true)
+        XCTAssertEqual(h.manager.authSnapshot().token, "local")
+    }
+
+    func testSnapshotNeverPairsTokenWithAnotherBackend() {
+        let h = AuthHarness()
+        h.signIn("key-a", token: "hosted-a")
+        h.switchBackend(AuthHarness.local)
+        XCTAssertNil(h.manager.authSnapshot().token)
+        XCTAssertNil(h.manager.jwtToken)
+        h.switchBackend(AuthHarness.hosted)
+        XCTAssertEqual(h.manager.authSnapshot().token, "hosted-a", "back on its own backend")
+        let other = BackendSelection(baseURL: Identities.otherBackend, isSelfHosted: false)
+        h.switchBackend(other)
+        let snapshot = h.manager.authSnapshot()
+        XCTAssertEqual(snapshot.identity, Identities.hosted("key-a", backend: Identities.otherBackend))
+        XCTAssertNil(snapshot.token)
+    }
+
+    func testStaleActivationAfterClearIsDiscarded() {
+        let h = AuthHarness()
+        h.signIn("key-a", token: "a-1")
+        let (index, outcome) = h.reactivate()
+        h.manager.clearSubscription()
+        XCTAssertNil(h.storedKey)
+        h.activator.succeed(index, token: "a-2")
+        XCTAssertTrue(isSuperseded(outcome()), "cleared mid-activation: no expiry flow")
+        XCTAssertNil(h.manager.authSnapshot().identity)
+        XCTAssertNil(h.manager.jwtToken)
+    }
+
+    func testActivationFromBeforeClearCannotInstallAfterSameKeyReentered() {
+        let h = AuthHarness()
+        h.signIn("key-a", token: "a-1")
+        let (index, _) = h.reactivate()
+        h.manager.clearSubscription()
+        h.signIn("key-a", token: "a-3")
+        h.activator.succeed(index, token: "a-2")
+        XCTAssertEqual(h.manager.jwtToken, "a-3")
+    }
+
+    func testAuthFailureForACannotClearB() {
+        let h = AuthHarness()
+        h.signIn("key-a", token: "a-1")
+        h.signIn("key-b", token: "b-1")
+        XCTAssertFalse(h.manager.invalidateToken(ifCurrent: a))
+        XCTAssertFalse(h.manager.invalidateToken(ifCurrent: nil))
+        XCTAssertEqual(h.manager.jwtToken, "b-1")
+
+        let staleExpiry = Notification(name: .subscriptionExpired, object: nil,
+                                       userInfo: [SubscriptionManager.noticeIdentityKey: a])
+        XCTAssertFalse(h.manager.noticeApplies(staleExpiry))
+        XCTAssertFalse(h.manager.clearSubscription(forNotice: staleExpiry))
+        XCTAssertEqual(h.storedKey, "key-b")
+        XCTAssertEqual(h.manager.authSnapshot().identity, b)
+        XCTAssertEqual(h.manager.jwtToken, "b-1")
+
+        XCTAssertTrue(h.manager.invalidateToken(ifCurrent: b))
+        XCTAssertNil(h.manager.jwtToken)
+        XCTAssertEqual(h.manager.currentIdentity, b, "token drop keeps the subscription")
+
+        let current = Notification(name: .subscriptionExpired, object: nil,
+                                   userInfo: [SubscriptionManager.noticeIdentityKey: b])
+        XCTAssertTrue(h.manager.clearSubscription(forNotice: current))
+        XCTAssertNil(h.storedKey)
+    }
+
+    func testUnscopedNoticeKeepsLegacyBehaviour() {
+        let h = AuthHarness()
+        h.signIn("key-a", token: "a-1")
+        let legacy = Notification(name: .subscriptionExpired)
+        XCTAssertTrue(h.manager.noticeApplies(legacy))
+        XCTAssertTrue(h.manager.clearSubscription(forNotice: legacy))
+        XCTAssertNil(h.storedKey)
+        XCTAssertNil(h.manager.currentIdentity)
+    }
+
+    func testPersistedKeyIsLoadedAndHostedWithoutKeyHasNoIdentity() {
+        var stored: Bool?
+        let empty = AuthHarness()
+        XCTAssertNil(empty.manager.currentIdentity)
+        empty.manager.activateStoredKey { stored = $0 }
+        XCTAssertEqual(stored, false)
+        XCTAssertEqual(empty.activator.count, 0, "nothing sent without a key")
+        let persisted = AuthHarness(key: "key-a")
+        XCTAssertEqual(persisted.manager.currentIdentity, a)
+    }
+}
+
+/// `.superseded` through the real manager and the real callers' helpers
+/// (`APIClient.handleAuthFailure`, `SkillsAPI.live(for:manager:)`).
+final class SupersededReactivationTests: XCTestCase {
+    private let a = Identities.hosted("key-a")
+    private let b = Identities.hosted("key-b")
+
+    private struct APIRun {
+        let index: Int
+        let handled: Bool
+        let retried: LockedValue<Bool>
+        let result: LockedValue<Result<String, Error>>
+    }
+
+    /// Drives the production retry helper used by enhance/templates/jobs.
+    private func startAPIAuthFailure(_ h: AuthHarness, status: Int = 401) -> APIRun {
+        let index = h.activator.count
+        let retried = LockedValue<Bool>()
+        let result = LockedValue<Result<String, Error>>()
+        let handled = APIClient().handleAuthFailure(
+            statusCode: status, allowReauth: true, manager: h.manager,
+            onRetry: { retried.value = true },
+            completion: { (r: Result<String, Error>) in result.value = r }
+        )
+        return APIRun(index: index, handled: handled, retried: retried, result: result)
+    }
+
+    private func assertSupersededFailure(_ result: Result<String, Error>?, file: StaticString = #filePath, line: UInt = #line) {
+        guard case let .failure(error as NSError)? = result else {
+            return XCTFail("expected a failure, got \(String(describing: result))", file: file, line: line)
+        }
+        XCTAssertEqual(error, SubscriptionManager.supersededError, file: file, line: line)
+        XCTAssertFalse(AgentAuthRetry.shouldReauthenticate(after: error, allowReauth: true), "never replayed",
+                       file: file, line: line)
+    }
+
+    func testLateReactivationFailureAfterKeyChangeIsSupersededNotExpired() {
+        let h = AuthHarness()
+        h.signIn("key-a", token: "a-1")
+        let (index, outcome) = h.reactivate()
+        h.signIn("key-b", token: "b-1")
+        h.activator.fail(index, status: 403) // A expired, but B is active now
+        XCTAssertTrue(isSuperseded(outcome()))
+        XCTAssertEqual(h.manager.authSnapshot().identity, b)
+        XCTAssertEqual(h.manager.jwtToken, "b-1")
+        XCTAssertEqual(h.storedKey, "key-b")
+        XCTAssertTrue(h.posted.isEmpty)
+    }
+
+    func testAPIRetryHelperRetriesForSameSubscription() {
+        let h = AuthHarness()
+        h.signIn("key-a", token: "a-1")
+        let run = startAPIAuthFailure(h)
+        XCTAssertTrue(run.handled)
+        XCTAssertEqual(h.activator.call(run.index).key, "key-a")
+        h.activator.succeed(run.index, token: "a-2")
+        XCTAssertEqual(run.retried.value, true)
+        XCTAssertNil(run.result.value)
+        XCTAssertEqual(h.manager.jwtToken, "a-2")
+    }
+
+    func testAPIRetryHelperFailsSafelyWhenSupersededByNewKey() {
+        let h = AuthHarness()
+        h.signIn("key-a", token: "a-1")
+        let notices = DefaultCenterAuthNotices()
+        let run = startAPIAuthFailure(h)
+        h.signIn("key-b", token: "b-1")
+        h.activator.succeed(run.index, token: "a-2") // A's late answer
+        assertSupersededFailure(run.result.value)
+        XCTAssertNil(run.retried.value, "A's request is never retried as B")
+        XCTAssertEqual(h.manager.authSnapshot().identity, b)
+        XCTAssertEqual(h.manager.jwtToken, "b-1", "B's token is neither replaced nor invalidated")
+        XCTAssertEqual(h.storedKey, "key-b")
+        XCTAssertTrue(h.posted.isEmpty)
+        XCTAssertTrue(notices.posted.isEmpty, "no expired/unauthorized notice")
+    }
+
+    func testAPIRetryHelperLateFailureAfterBackendSwitchLeavesNewBackendToken() {
+        let h = AuthHarness()
+        h.signIn("key-a", token: "hosted-a")
+        let notices = DefaultCenterAuthNotices()
+        let run = startAPIAuthFailure(h)
+        h.switchBackend(AuthHarness.local)
+        var stored: Bool?
+        h.manager.activateStoredKey { stored = $0 }
+        h.activator.succeed(run.index + 1, token: "local")
+        XCTAssertEqual(stored, true)
+        h.activator.fail(run.index, status: 500) // would have been a generic unauthorized
+        assertSupersededFailure(run.result.value)
+        XCTAssertNil(run.retried.value)
+        XCTAssertEqual(h.manager.jwtToken, "local", "no token invalidation for the new backend")
+        XCTAssertTrue(h.posted.isEmpty)
+        XCTAssertTrue(notices.posted.isEmpty)
+    }
+
+    func testAPIRetryHelperAfterClearPostsNoExpiry() {
+        let h = AuthHarness()
+        h.signIn("key-a", token: "a-1")
+        let notices = DefaultCenterAuthNotices()
+        let run = startAPIAuthFailure(h)
+        h.manager.clearSubscription()
+        h.activator.succeed(run.index, token: "a-2")
+        assertSupersededFailure(run.result.value)
+        XCTAssertNil(run.retried.value)
+        XCTAssertNil(h.manager.jwtToken)
+        XCTAssertTrue(notices.posted.isEmpty)
+    }
+
+    private func waitUntil(_ condition: () -> Bool) async {
+        let deadline = Date().addingTimeInterval(2)
+        while !condition(), Date() < deadline { try? await Task.sleep(nanoseconds: 1_000_000) }
+    }
+
+    func testSkillsLiveReauthSupersededFailsWithoutTouchingB() async {
+        let h = AuthHarness()
+        h.signIn("key-a", token: "a-1")
+        let api = SkillsAPI.live(for: a, manager: h.manager)
+        let notices = DefaultCenterAuthNotices()
+        let index = h.activator.count
+        let task = Task { await api.reauthenticate() }
+        await waitUntil { h.activator.count > index }
+        XCTAssertEqual(h.activator.call(index).key, "key-a")
+        h.signIn("key-b", token: "b-1")
+        h.activator.succeed(index, token: "a-2")
+        let outcome = await task.value
+        XCTAssertEqual(outcome, .failed)
+        XCTAssertEqual(h.manager.authSnapshot().identity, b)
+        XCTAssertEqual(h.manager.jwtToken, "b-1")
+        XCTAssertEqual(h.storedKey, "key-b")
+        XCTAssertTrue(h.posted.isEmpty)
+        XCTAssertTrue(notices.posted.isEmpty)
+    }
+
+    func testSkillsLiveReauthSameSubscriptionRetries() async {
+        let h = AuthHarness()
+        h.signIn("key-a", token: "a-1")
+        let api = SkillsAPI.live(for: a, manager: h.manager)
+        let index = h.activator.count
+        let task = Task { await api.reauthenticate() }
+        await waitUntil { h.activator.count > index }
+        h.activator.succeed(index, token: "a-2")
+        let outcome = await task.value
+        XCTAssertEqual(outcome, .retry)
+        XCTAssertEqual(api.credentials().token, "a-2")
+    }
+}
+
+/// The AppDelegate auth-notice handlers run their whole body through this.
+final class AuthNoticeMainThreadTests: XCTestCase {
+    func testBackgroundNoticeBodyRunsOnMainThread() {
+        let ran = expectation(description: "body ran")
+        let onMain = LockedValue<Bool>()
+        DispatchQueue.global().async {
+            AppDelegate.onMainThread {
+                onMain.value = Thread.isMainThread
+                ran.fulfill()
+            }
+        }
+        wait(for: [ran], timeout: 2)
+        XCTAssertEqual(onMain.value, true)
+    }
+
+    func testMainThreadNoticeBodyRunsInline() {
+        XCTAssertTrue(Thread.isMainThread)
+        let ran = LockedValue<Bool>()
+        AppDelegate.onMainThread { ran.value = true }
+        XCTAssertEqual(ran.value, true, "inline, not deferred")
+    }
+}
+
+final class AgentAuthRetryTests: XCTestCase {
+    func testTerminalAgentFailureIsNeverReplayed() {
+        let terminal = NSError(domain: "AgentRunner", code: -3, userInfo: [NSLocalizedDescriptionKey: "Skills could not be applied."])
+        XCTAssertFalse(AgentAuthRetry.shouldReauthenticate(after: terminal, allowReauth: true))
+    }
+
+    func testTransportAndProviderFailuresAreNeverReplayed() {
+        let failures: [Error] = [
+            URLError(.networkConnectionLost),
+            URLError(.timedOut),
+            NSError(domain: "AgentRunner", code: -2), // terminal output encode failure
+            NSError(domain: "AgentRunner", code: -1),
+            NSError(domain: "NSPOSIXErrorDomain", code: 57),
+            NSError(domain: "SubscriptionManager", code: 401), // not the runner's auth signal
+        ]
+        for error in failures {
+            XCTAssertFalse(AgentAuthRetry.shouldReauthenticate(after: error, allowReauth: true), "\(error)")
+        }
+    }
+
+    func testCredentialRejectionIsReplayedOnce() {
+        let auth = AgentAuthRetry.authenticationError()
+        XCTAssertTrue(AgentAuthRetry.shouldReauthenticate(after: auth, allowReauth: true))
+        XCTAssertFalse(AgentAuthRetry.shouldReauthenticate(after: auth, allowReauth: false))
+    }
+
+    func testHandshakeRejectionMapsToAuthOnly() {
+        let lost = URLError(.badServerResponse)
+        XCTAssertTrue(AgentAuthRetry.isAuthenticationFailure(AgentAuthRetry.socketError(lost, handshakeStatus: 401)))
+        XCTAssertTrue(AgentAuthRetry.isAuthenticationFailure(AgentAuthRetry.socketError(lost, handshakeStatus: 403)))
+        for status in [nil, 101, 200, 500, 502] as [Int?] {
+            XCTAssertFalse(AgentAuthRetry.isAuthenticationFailure(AgentAuthRetry.socketError(lost, handshakeStatus: status)))
+        }
+    }
+
+    func testReplayStaysOnTheStartingIdentity() {
+        let a = Identities.hosted("key-a")
+        XCTAssertTrue(AgentAuthRetry.mayReplay(startedFor: a, current: Identities.hosted("key-a")))
+        XCTAssertFalse(AgentAuthRetry.mayReplay(startedFor: a, current: Identities.hosted("key-b")))
+        XCTAssertFalse(AgentAuthRetry.mayReplay(startedFor: a, current: Identities.hosted("key-a", backend: Identities.otherBackend)))
+        XCTAssertFalse(AgentAuthRetry.mayReplay(startedFor: a, current: nil))
+        XCTAssertFalse(AgentAuthRetry.mayReplay(startedFor: nil, current: nil))
+    }
+
+    /// First send, no-JWT activation and replay all take token + backend
+    /// from one snapshot, and only for the identity the run started with.
+    func testSendCredentialsComeFromOneSnapshotForTheStartingIdentity() {
+        let a = Identities.hosted("key-a")
+        let refreshed = SubscriptionAuthSnapshot(identity: a, baseURL: Identities.backend, token: "a-new")
+        let sent = AgentAuthRetry.credentials(for: a, from: refreshed)
+        XCTAssertEqual(sent?.token, "a-new")
+        XCTAssertEqual(sent?.baseURL, Identities.backend)
+
+        let other = SubscriptionAuthSnapshot(identity: Identities.hosted("key-b"), baseURL: Identities.backend, token: "b")
+        XCTAssertNil(AgentAuthRetry.credentials(for: a, from: other))
+        let moved = SubscriptionAuthSnapshot(
+            identity: Identities.hosted("key-a", backend: Identities.otherBackend), baseURL: Identities.otherBackend, token: "a"
+        )
+        XCTAssertNil(AgentAuthRetry.credentials(for: a, from: moved))
+        XCTAssertNil(AgentAuthRetry.credentials(for: a, from: SubscriptionAuthSnapshot(identity: a, baseURL: Identities.backend, token: nil)))
+        XCTAssertNil(AgentAuthRetry.credentials(for: a, from: SubscriptionAuthSnapshot(identity: a, baseURL: Identities.backend, token: "")))
+        let signedOut = SubscriptionAuthSnapshot(identity: nil, baseURL: Identities.backend, token: "leftover")
+        XCTAssertNil(AgentAuthRetry.credentials(for: nil, from: signedOut), "no identity: never send")
+    }
+
+    private func disposition(_ json: String) -> HotkeyAgentFrame.Disposition? {
+        guard case let .agentText(_, _, disposition) = HotkeyAgentFrame.action(for: Data(json.utf8), tracker: SkillStatusTracker()) else {
+            return nil
+        }
+        return disposition
+    }
+
+    func testBackendAuthRejectionFrameIsAnAuthFailureNotAnAnswer() {
+        let frame = #"{"session_id":"","sender":"agent","content":"Unauthorized: missing or invalid subscription. Please re-activate your key.","is_terminal_output":false,"is_error":true}"#
+        XCTAssertEqual(disposition(frame), .unauthorized)
+    }
+
+    func testOtherErrorFramesAreNotAuthRejections() {
+        // Terminal Skills failure after possible work: a failure, never auth.
+        let terminal = #"{"session_id":"s","sender":"agent","content":"<final_answer>\nUnauthorized: nope\n</final_answer>","is_error":true}"#
+        XCTAssertEqual(disposition(terminal), .failure("Unauthorized: nope"))
+        // Same text inside a running session (not the pre-processing rejection).
+        let inSession = #"{"session_id":"s","sender":"agent","content":"Unauthorized: x","is_error":true}"#
+        XCTAssertEqual(disposition(inSession), .implicitFinalAnswer("Unauthorized: x"))
+        // Not flagged as an error.
+        let notError = #"{"session_id":"","sender":"agent","content":"Unauthorized: x"}"#
+        XCTAssertEqual(disposition(notError), .implicitFinalAnswer("Unauthorized: x"))
     }
 }
 
@@ -1363,5 +2045,283 @@ final class SkillsViewModelTests: XCTestCase {
         await waitFor("second list") { service.calls.count == 2 }
         service.resolve(1, .list([Fixture.skill(id: "from-cli", name: "CLI skill").summary]))
         await waitFor("visible") { model.skills.map(\.id) == ["from-cli"] }
+    }
+
+    // MARK: Detail revision races
+
+    /// Review finding: a refresh GET for revision 1 resolving after a toggle
+    /// and its list refresh published revision 2 must not restore revision 1.
+    func testDelayedDetailReadCannotRevertCommittedToggle() async {
+        let service = makeService()
+        let a1 = Fixture.skill(id: "a", enabled: true, revision: 1)
+        let a2 = Fixture.skill(id: "a", enabled: false, revision: 2)
+        let model = await loaded(service, skills: [a1])
+        model.select("a")
+        await waitFor("get") { service.calls.count == 2 }
+        service.resolve(1, .skill(a1))
+        await waitFor("detail") { model.detail == a1 }
+
+        model.refresh() // list + detail GET (either order), both left pending
+        await waitFor("refresh calls") { service.calls.count == 4 }
+        let refreshList = service.calls[2] == .list ? 2 : 3
+        let refreshGet = 5 - refreshList
+        XCTAssertEqual(service.calls[refreshGet], .get("a"))
+
+        model.toggleEnabled(a1.summary)
+        await waitFor("update") { service.calls.count == 5 }
+        XCTAssertEqual(service.calls[4], .update("a", 1, SkillPatch(enabled: false)))
+        service.resolve(4, .skill(a2))
+        await waitFor("post-toggle list") { service.calls.count == 6 }
+        service.resolve(5, .list([a2.summary]))
+        await waitFor("list applied") { model.listState == .loaded && model.busyIDs.isEmpty }
+
+        // The delayed reads issued before the toggle now arrive.
+        service.resolve(refreshList, .list([a1.summary]))
+        service.resolve(refreshGet, .skill(a1))
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(model.detail, a2)
+        XCTAssertEqual(model.detailState, .loaded)
+        XCTAssertTrue(model.isDetailCurrent)
+        XCTAssertEqual(model.selectedSummary?.revision, 2)
+        XCTAssertEqual(service.calls.count, 6)
+    }
+
+    /// A detail read older than the listed revision (list refreshed by an
+    /// unrelated mutation while it was in flight) is re-fetched, not shown.
+    func testDetailOlderThanListedRevisionIsRefetched() async {
+        let service = makeService()
+        let a1 = Fixture.skill(id: "a", instructions: "Old", revision: 1)
+        let a2 = Fixture.skill(id: "a", instructions: "New", revision: 2)
+        let b1 = Fixture.skill(id: "b", name: "Other", keyword: "other", enabled: true, revision: 1)
+        let model = await loaded(service, skills: [a1, b1])
+        model.select("a")
+        await waitFor("get") { service.calls.count == 2 }
+
+        model.toggleEnabled(b1.summary)
+        await waitFor("update b") { service.calls.count == 3 }
+        service.resolve(2, .skill(Fixture.skill(id: "b", name: "Other", keyword: "other", enabled: false, revision: 2)))
+        await waitFor("list") { service.calls.count == 4 }
+        service.resolve(3, .list([a2.summary, b1.summary]))
+        await waitFor("list applied") { model.selectedSummary?.revision == 2 }
+
+        service.resolve(1, .skill(a1))
+        await waitFor("refetch") { service.calls.count == 5 }
+        XCTAssertEqual(service.calls[4], .get("a"))
+        XCTAssertNotEqual(model.detail, a1)
+        service.resolve(4, .skill(a2))
+        await waitFor("current") { model.isDetailCurrent }
+        XCTAssertEqual(model.detail?.instructions, "New")
+    }
+
+    // MARK: Closing the editor reconciles a deferred detail fetch
+
+    private func editingWhileListFindsNewerRevision(
+        _ service: ControlledSkillsService
+    ) async -> (SkillsViewModel, SkillDTO) {
+        let a1 = Fixture.skill(id: "a", instructions: "Seen", revision: 1)
+        let a2 = Fixture.skill(id: "a", instructions: "Changed by CLI", revision: 2)
+        let model = await loaded(service, skills: [a1])
+        model.select("a")
+        await waitFor("get") { service.calls.count == 2 }
+        service.resolve(1, .skill(a1))
+        await waitFor("detail") { model.isDetailCurrent }
+        model.startEdit()
+        XCTAssertNotNil(model.editor)
+        model.refresh()
+        await waitFor("list only") { service.calls.count == 3 }
+        XCTAssertEqual(service.calls[2], .list)
+        service.resolve(2, .list([a2.summary]))
+        await waitFor("newer row") { model.selectedSummary?.revision == 2 }
+        // Deferred while editing: no detail fetch yet.
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        XCTAssertEqual(service.calls.count, 3)
+        XCTAssertFalse(model.isDetailCurrent)
+        return (model, a2)
+    }
+
+    func testCancelEditFetchesRevisionFoundDuringEditing() async {
+        let service = makeService()
+        let (model, a2) = await editingWhileListFindsNewerRevision(service)
+        model.cancelEdit()
+        XCTAssertNil(model.editor)
+        await waitFor("detail fetch") { service.calls.count == 4 }
+        XCTAssertEqual(service.calls[3], .get("a"))
+        service.resolve(3, .skill(a2))
+        await waitFor("current") { model.isDetailCurrent }
+        XCTAssertEqual(model.detail?.instructions, "Changed by CLI")
+        model.startEdit()
+        XCTAssertEqual(model.editor?.mode, .edit(base: a2))
+    }
+
+    func testUnchangedSaveFetchesRevisionFoundDuringEditing() async {
+        let service = makeService()
+        let (model, a2) = await editingWhileListFindsNewerRevision(service)
+        model.save()
+        XCTAssertNil(model.editor)
+        XCTAssertEqual(model.statusMessage, "No changes to save.")
+        await waitFor("detail fetch") { service.calls.count == 4 }
+        XCTAssertEqual(service.calls[3], .get("a"))
+        service.resolve(3, .skill(a2))
+        await waitFor("current") { model.isDetailCurrent }
+    }
+
+    func testCancelWithCurrentDetailFetchesNothing() async {
+        let service = makeService()
+        let skill = Fixture.skill(id: "s1")
+        let model = await loaded(service, skills: [skill])
+        model.select("s1")
+        await waitFor("get") { service.calls.count == 2 }
+        service.resolve(1, .skill(skill))
+        await waitFor("detail") { model.isDetailCurrent }
+        model.startEdit()
+        model.cancelEdit()
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        XCTAssertEqual(service.calls.count, 2)
+    }
+
+    // MARK: Identity isolation
+
+    /// The app retires A's model when B becomes active: A's draft is gone,
+    /// its reads are cancelled, late completions change nothing and it
+    /// sends nothing further.
+    func testRetiredModelDropsDraftAndIgnoresLateCompletions() async {
+        let service = makeService()
+        let a1 = Fixture.skill(id: "a1", revision: 1)
+        let model = await loaded(service, skills: [a1])
+        model.select("a1")
+        await waitFor("get") { service.calls.count == 2 }
+        model.startCreate()
+        model.editor?.draft = SkillDraft(name: "A only", keyword: "alpha", instructions: "A's text")
+        model.save()
+        await waitFor("create") { service.calls.count == 3 }
+
+        model.retire()
+        XCTAssertTrue(model.isRetired)
+        XCTAssertNil(model.editor, "A's draft is dropped")
+        XCTAssertTrue(model.skills.isEmpty)
+        XCTAssertNil(model.selectedID)
+
+        service.resolve(1, .skill(a1))
+        service.resolve(2, .skill(Fixture.skill(id: "a-new", instructions: "A's text")))
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertNil(model.detail)
+        XCTAssertNil(model.statusMessage)
+        XCTAssertTrue(model.skills.isEmpty)
+        XCTAssertEqual(model.listState, .idle)
+
+        model.refresh()
+        model.startCreate()
+        model.toggleEnabled(a1.summary)
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        XCTAssertNil(model.editor)
+        XCTAssertEqual(service.calls.count, 3, "a retired model sends nothing")
+    }
+
+    // MARK: Bounded stale-detail recovery
+
+    /// A backend whose GET keeps lagging its list is retried once, then the
+    /// pane fails visibly (with Retry) instead of looping or spinning.
+    func testRepeatedStaleDetailRetriesOnceThenFails() async {
+        let service = makeService()
+        let a1 = Fixture.skill(id: "a", revision: 1)
+        let a2 = Fixture.skill(id: "a", revision: 2)
+        let model = await loaded(service, skills: [a2])
+        model.select("a")
+        await waitFor("get") { service.calls.count == 2 }
+        service.resolve(1, .skill(a1))
+        await waitFor("one retry") { service.calls.count == 3 }
+        XCTAssertEqual(service.calls[2], .get("a"))
+        service.resolve(2, .skill(a1))
+        await waitFor("failed") { model.detailState == .failed(SkillsViewModel.staleDetailError) }
+        try? await Task.sleep(nanoseconds: 30_000_000)
+        XCTAssertEqual(service.calls.count, 3, "no further automatic fetches")
+        XCTAssertFalse(model.isDetailCurrent)
+
+        model.refresh() // the Retry button
+        await waitFor("manual retry") { service.calls.count == 5 }
+        let get = service.calls[3] == .get("a") ? 3 : 4
+        service.resolve(get, .skill(a2))
+        await waitFor("current") { model.isDetailCurrent && model.detailState == .loaded }
+    }
+
+    /// Toggle while editing, then a read issued before the toggle arrives
+    /// with the older revision: the editor is untouched and Cancel loads
+    /// the committed revision.
+    func testToggleWhileEditingThenOlderReadThenCancelReconciles() async {
+        let service = makeService()
+        let a1 = Fixture.skill(id: "a", enabled: true, revision: 1)
+        let a2 = Fixture.skill(id: "a", enabled: false, revision: 2)
+        let model = await loaded(service, skills: [a1])
+        model.select("a")
+        await waitFor("get") { service.calls.count == 2 }
+        service.resolve(1, .skill(a1))
+        await waitFor("detail") { model.isDetailCurrent }
+
+        model.refresh()
+        await waitFor("refresh calls") { service.calls.count == 4 }
+        let refreshList = service.calls[2] == .list ? 2 : 3
+        let refreshGet = 5 - refreshList
+        model.startEdit()
+        XCTAssertNotNil(model.editor)
+
+        model.toggleEnabled(a1.summary)
+        await waitFor("update") { service.calls.count == 5 }
+        service.resolve(4, .skill(a2))
+        await waitFor("post-toggle list") { service.calls.count == 6 }
+        service.resolve(5, .list([a2.summary]))
+        await waitFor("row newer") { model.selectedSummary?.revision == 2 && model.busyIDs.isEmpty }
+
+        service.resolve(refreshList, .list([a1.summary]))
+        service.resolve(refreshGet, .skill(a1))
+        try? await Task.sleep(nanoseconds: 30_000_000)
+        XCTAssertEqual(model.editor?.mode, .edit(base: a1), "editor untouched")
+        XCTAssertEqual(service.calls.count, 6, "no fetch while editing")
+
+        model.cancelEdit()
+        await waitFor("reconcile fetch") { service.calls.count == 7 }
+        XCTAssertEqual(service.calls[6], .get("a"))
+        service.resolve(6, .skill(a2))
+        await waitFor("current") { model.isDetailCurrent }
+        XCTAssertEqual(model.detail, a2)
+    }
+}
+
+/// End-to-end with the real transport: a draft opened for subscription A
+/// cannot be saved once B is active, and nothing is sent.
+final class SkillsIdentityIsolationTests: XCTestCase {
+    private var state = StubState()
+
+    override func setUp() {
+        super.setUp()
+        state = StubState()
+        SkillsStubProtocol.state = state
+    }
+
+    @MainActor
+    func testDraftFromSubscriptionACannotBeSavedIntoB() async {
+        let tokens = Counter(token: "jwt-a")
+        let account = FakeAccount(tokens: tokens)
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [SkillsStubProtocol.self]
+        let api = SkillsAPI(
+            identity: Identities.hosted("key-a"),
+            credentials: { account.snapshot },
+            session: URLSession(configuration: config),
+            reauthenticate: { .failed },
+            onFinalUnauthorized: {}
+        )
+        let model = SkillsViewModel(service: api)
+        model.startCreate()
+        model.editor?.draft = SkillDraft(name: "A only", keyword: "alpha", instructions: "A's private instructions")
+
+        account.switchTo(Identities.hosted("key-b"), token: "jwt-b")
+        model.save()
+        for _ in 0 ..< 400 {
+            if model.editor?.isSaving == false { break }
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        XCTAssertEqual(model.editor?.error?.kind, .accountChanged)
+        XCTAssertEqual(model.editor?.draft.instructions, "A's private instructions", "draft kept, never sent")
+        XCTAssertTrue(state.requests.isEmpty)
     }
 }

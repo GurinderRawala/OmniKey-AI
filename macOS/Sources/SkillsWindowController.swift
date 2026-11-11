@@ -28,9 +28,18 @@ final class SkillsWindow: NSWindow {
 
 final class SkillsWindowController: NSWindowController {
     private var model: SkillsViewModel?
+    /// The backend + subscription this window's list, drafts and pending
+    /// requests belong to. The app replaces the controller when it changes.
+    private(set) var identity: SubscriptionIdentity?
 
-    convenience init() {
-        let model = SkillsViewModel()
+    /// Whether a controller bound to `bound` may keep serving `current`.
+    /// JWT refreshes keep the identity; key/backend changes or sign-out don't.
+    static func canReuse(boundTo bound: SubscriptionIdentity?, for current: SubscriptionIdentity?) -> Bool {
+        bound != nil && bound == current
+    }
+
+    convenience init(identity: SubscriptionIdentity?) {
+        let model = SkillsViewModel(service: APIClient.skills(for: identity))
         let hostingController = NSHostingController(rootView: SkillsView(model: model))
 
         let window = SkillsWindow(
@@ -47,6 +56,13 @@ final class SkillsWindowController: NSWindowController {
 
         self.init(window: window)
         self.model = model
+        self.identity = identity
+    }
+
+    /// The identity changed: stop the model before the window goes away.
+    @MainActor
+    func retire() {
+        model?.retire()
     }
 
     override func showWindow(_ sender: Any?) {
