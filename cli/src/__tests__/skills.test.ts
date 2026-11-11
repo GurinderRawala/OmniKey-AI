@@ -498,6 +498,19 @@ describe('add', () => {
     expect(fake.requests).toHaveLength(0);
   });
 
+  it('reports prompt initialization errors separately without leaking input or raw errors', async () => {
+    const h = await cli(['skills', 'add', '--name', 'N', '--json'], {
+      interactive: true,
+      answers: [{ kind: 'text', value: new Error('editor load failed SECRET-PROMPT-INPUT') }],
+    });
+    expect(h.code).toBe(EXIT_FAILURE);
+    expect(h.err).toContain('PROMPT_ERROR');
+    expect(h.err).not.toContain('Cancelled');
+    expect(h.err).not.toContain('SECRET-PROMPT-INPUT');
+    expect(h.out).toBe('');
+    expect(fake.requests).toHaveLength(0);
+  });
+
   it('refuses to read stdin from a terminal', async () => {
     const tty = Object.assign(new PassThrough(), { isTTY: true });
     const h = await cli(

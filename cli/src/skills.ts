@@ -543,12 +543,24 @@ function requireId(id: string): string {
 
 const itemPath = (id: string) => `/api/skills/${encodeURIComponent(id)}`;
 
-/** Wraps prompt failures (Ctrl-C, closed terminal) as a clean cancellation. */
+/** Classify cancellation without echoing prompt input or raw initialization errors. */
 async function ask<T>(fn: () => Promise<T>): Promise<T> {
   try {
     return await fn();
-  } catch {
-    throw failure('CANCELLED', 'Cancelled.');
+  } catch (err) {
+    const error = err as { name?: unknown; message?: unknown };
+    if (
+      error?.name === 'ExitPromptError' ||
+      error?.name === 'AbortPromptError' ||
+      error?.message === 'User force closed the prompt' ||
+      error?.message === 'User force closed the prompt with 0 null'
+    ) {
+      throw failure('CANCELLED', 'Cancelled.');
+    }
+    throw failure(
+      'PROMPT_ERROR',
+      'The interactive prompt could not be opened or completed. Retry, or supply command flags and an instructions file.',
+    );
   }
 }
 
