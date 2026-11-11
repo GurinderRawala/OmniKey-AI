@@ -644,6 +644,14 @@ namespace OmniKey.Windows.Tests
             Assert.True(vm2.HasDetailError);
             Assert.False(vm2.IsDetailLoading);
             Assert.Equal(SkillsViewModel.StaleDetailMessage, vm2.DetailError);
+            Assert.Null(vm2.Detail);
+            // The selected row switch must use the same freshness gate as the detail toolbar.
+            await vm2.ToggleAsync(vm2.SelectedRow!, !A.Enabled);
+            Assert.Equal(0, svc2.Count("update"));
+            Assert.Equal(A.Enabled, vm2.SelectedRow!.IsEnabled);
+            Assert.False(vm2.SelectedRow.IsBusy);
+            vm2.RequestDeleteFor(vm2.SelectedRow);
+            Assert.False(vm2.HasPendingDelete);
         }
 
         // ── Saving locks the draft ──────────────────────────────────────

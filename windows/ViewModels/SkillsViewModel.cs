@@ -715,10 +715,10 @@ namespace OmniKey.Windows.ViewModels
 
         // ── Helpers ─────────────────────────────────────────────────────
 
-        /// <summary>The open detail for this skill is older than its row;
-        /// mutating now would target a revision the user hasn't read.</summary>
+        /// <summary>The selected skill has missing or stale detail; mutating
+        /// now would target a revision the user has not read.</summary>
         private bool ShowsStaleDetail(SkillRow row) =>
-            SelectedRow?.Id == row.Id && Detail is { } d && d.Id == row.Id && d.Revision < row.Summary.Revision;
+            SelectedRow?.Id == row.Id && !IsDetailCurrent;
 
         private void OpenEditor(SkillDraft draft, bool create)
         {

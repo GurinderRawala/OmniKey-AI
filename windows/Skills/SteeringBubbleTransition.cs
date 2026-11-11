@@ -54,9 +54,9 @@ namespace OmniKey.Windows.Skills
         }
 
         /// <summary>The banner to show after an unconfirmed send was marked:
-        /// only the session on screen shows it.</summary>
+        /// only the session on screen shows it, without replacing an existing error.</summary>
         public static string? BannerAfterUnconfirmed(string? banner, bool isActive) =>
-            isActive ? SteeringPresentation.UnconfirmedBanner : banner;
+            isActive && string.IsNullOrEmpty(banner) ? SteeringPresentation.UnconfirmedBanner : banner;
 
         /// <summary>The banner after an acknowledgement resolved a send. The
         /// "not confirmed" warning is cleared only once no send in the

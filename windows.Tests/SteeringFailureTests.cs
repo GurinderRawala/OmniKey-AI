@@ -133,6 +133,18 @@ namespace OmniKey.Windows.Tests
         private static SteeringAck Rejected(string id, string reason = "Skills blocked this update.") =>
             new(id, SteeringAckStatus.Rejected, false, reason);
 
+        [Theory]
+        [InlineData("First update was rejected.")]
+        [InlineData("Network error")]
+        [InlineData("Not confirmed yet")]
+        public void AnotherUnconfirmedSendNeverReplacesAnExistingError(string error)
+        {
+            Assert.Equal(error, SteeringBubbleTransition.BannerAfterUnconfirmed(error, true));
+            Assert.Equal(error, SteeringBubbleTransition.BannerAfterUnconfirmed(error, false));
+            Assert.Equal(SteeringPresentation.UnconfirmedBanner,
+                SteeringBubbleTransition.BannerAfterUnconfirmed(null, true));
+        }
+
         [Fact]
         public void VisibleEmptyComposerRestoresTextAndKeepsFailedBubble()
         {
