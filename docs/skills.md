@@ -50,3 +50,9 @@ SQLite startup creates an empty `skills` table and unique owner/keyword index th
 CLI/API versions are bumped together because `cli/**` changes trigger npm publication on merge to main. This PR does not publish, deploy or merge. Native runtime smoke checks and Windows UI validation remain release gates; see [verification notes](skills-verification.md). Existing self-hosted authentication/CORS behavior is unchanged: localhost is not an independent security boundary.
 
 See [the exact v1 contract](skills-contract.md) for DTOs, error codes, events, fixtures and acceptance rules.
+
+### Small-model configuration and hotkey error behavior
+
+The existing model input budget reserves 40,000 tokens for output. A configured context window at or below that reserve produces a nonpositive input budget: matched Skills inputs fail closed even if the skill text is short, while legacy no-skill behavior is unchanged. Choose a model/context-window configuration with a positive usable input budget; shortening instructions alone cannot fix a zero budget.
+
+Native hotkey runners now treat **any tagged final answer with `is_error: true`** as a failure, not text to paste/present as a successful answer. This includes non-Skills backend failures. Retrying rejected steering must be a new user send with a new ID; replaying the same rejected ID receives no additional acknowledgement by design.
