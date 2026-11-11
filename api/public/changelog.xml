@@ -13,6 +13,13 @@
       <description>Five example workflows using OmniAgent with terminal access, authenticated browser sessions, and MCP integrations, plus permission and safety guidance.</description>
     </item>
     <item>
+      <title>OmniKey v1.8.17</title>
+      <link>https://omnikeyai.ca/changelog#v1.8.17</link>
+      <guid isPermaLink="false">omnikey-v1.8.17</guid>
+      <pubDate>Wed, 11 Nov 2026 00:00:00 +0000</pubDate>
+      <description><![CDATA[<ul><li>MacOS 1.9.15 build 75 with Skills and CLI 1.8.17</li><li>Harden Skills auth races and small-window editing</li><li>Enforce session ownership and confirm skill application feedback</li><li>Preserve error banners and guard unavailable skill details</li><li>Remove redundant milestone progress headings</li><li>Render saved Skills markdown and guard unsaved navigation</li><li>Keep Skills window compact and within the visible display</li><li>Scope Skills state and authentication retries to identity</li><li>Preserve steering acknowledgements and refresh skill UI safely</li><li>Distinguish prompt initialization failures from cancellation</li><li>Bound steering retention and preflight per-input model budgets</li><li>Record final review and small-model release limitations</li><li>Verify PostgreSQL integration and document release gates</li><li>Add shared Skills management and safe steering feedback</li><li>Add Skills management and safe live application feedback</li><li>Manage and preview backend skills with tested commands</li><li>Apply isolated per-run agent context and safe steering</li><li>Add deterministic Unicode matcher and live preview</li><li>Add owner-scoped persistence and authenticated CRUD</li><li>Freeze shared contracts and acceptance fixtures</li><li>Publish OmniAgent blog and announce it in the changelog</li><li>Restore task instructions window in 1.9.14</li><li>Ship 1.9.13 with shared Markdown editors</li></ul>]]></description>
+    </item>
+    <item>
       <title>OmniKey v1.8.16</title>
       <link>https://omnikeyai.ca/changelog#v1.8.16</link>
       <guid isPermaLink="false">omnikey-v1.8.16</guid>
@@ -144,13 +151,6 @@
       <guid isPermaLink="false">omnikey-v1.6.27</guid>
       <pubDate>Fri, 11 Sep 2026 00:00:00 +0000</pubDate>
       <description><![CDATA[<ul><li>Support Astra and future Responses models</li></ul>]]></description>
-    </item>
-    <item>
-      <title>OmniKey v1.6.26</title>
-      <link>https://omnikeyai.ca/changelog#v1.6.26</link>
-      <guid isPermaLink="false">omnikey-v1.6.26</guid>
-      <pubDate>Thu, 10 Sep 2026 00:00:00 +0000</pubDate>
-      <description><![CDATA[<ul><li>Rebuild desktop bundles</li><li>Harden settings migration and browser access</li><li>Persist agent and browser access settings</li><li>Macos app markdown fix</li><li>Selected text fix macos app</li><li>Windows app fixes</li><li>Onboarding page added</li></ul>]]></description>
     </item>
   </channel>
 </rss>
