@@ -18,6 +18,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     private var scheduledJobsMenuItem: NSMenuItem?
     private var mcpServersWindowController: MCPServersWindowController?
     private var mcpServersMenuItem: NSMenuItem?
+    private var skillsWindowController: SkillsWindowController?
+    private var skillsMenuItem: NSMenuItem?
     private var settingsWindowController: SettingsWindowController?
     private var settingsMenuItem: NSMenuItem?
     private var chatWindowController: ChatWindowController?
@@ -268,6 +270,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         instructionsItem.isEnabled = false
         menu.addItem(instructionsItem)
         taskInstructionsMenuItem = instructionsItem
+        let skillsItem = NSMenuItem(title: "Skills", action: #selector(showSkillsWindowFromMenu), keyEquivalent: "")
+        skillsItem.target = self
+        skillsItem.isEnabled = false
+        menu.addItem(skillsItem)
+        skillsMenuItem = skillsItem
         let agentItem = NSMenuItem(title: "OmniAgent Session", action: #selector(showAgentThinkingWindowFromMenu), keyEquivalent: "")
         agentItem.target = self
         agentItem.isEnabled = true
@@ -422,6 +429,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         taskInstructionsWindowController?.showWindow(nil)
     }
 
+    @objc private func showSkillsWindowFromMenu() {
+        showSkillsWindow()
+    }
+
+    func showSkillsWindow() {
+        guard requireTermsAccepted() else { return }
+        guard isAuthorized else { showLicenseWindow(); return }
+        if skillsWindowController == nil {
+            skillsWindowController = SkillsWindowController()
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        skillsWindowController?.showWindow(nil)
+    }
+
     @objc private func showScheduledJobsWindowFromMenu() {
         showScheduledJobsWindow()
     }
@@ -543,6 +564,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         statusMenuItem?.title = title
         licenseMenuItem?.isHidden = APIClient.isSelfHosted
         taskInstructionsMenuItem?.isEnabled = isAuthorized
+        skillsMenuItem?.isEnabled = isAuthorized
         scheduledJobsMenuItem?.isEnabled = isAuthorized
         mcpServersMenuItem?.isEnabled = isAuthorized
     }

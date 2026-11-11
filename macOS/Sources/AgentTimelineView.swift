@@ -171,11 +171,16 @@ private struct AgentTaskStepRow: View, Equatable {
     var body: some View {
         if let outcome = step.outcome, !outcome.isEmpty {
             HStack(alignment: .top, spacing: 10) {
-                Image(systemName: "checkmark.circle.fill")
+                // Skills notices (applied/warning/blocked) are neutral info,
+                // not a completed milestone.
+                Image(systemName: step.isSkillNotice ? "info.circle" : "checkmark.circle.fill")
                     .font(.system(size: 10, weight: .semibold))
-                    .foregroundColor(NordTheme.accentBlue(colorScheme))
+                    .foregroundColor(step.isSkillNotice
+                        ? NordTheme.secondaryText(colorScheme)
+                        : NordTheme.accentBlue(colorScheme))
                     .frame(width: 16, height: 16)
                     .frame(width: 18, height: 18)
+                    .accessibilityHidden(step.isSkillNotice)
 
                 VStack(alignment: .leading, spacing: 5) {
                     Text(step.title)

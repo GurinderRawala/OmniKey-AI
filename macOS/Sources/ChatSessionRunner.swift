@@ -286,7 +286,8 @@ final class ChatSessionRunner {
             isError: false,
             isSteering: true,
             steeringID: steeringID,
-            platform: "macos"
+            platform: "macos",
+            supportsSkillStatus: true
         )
 
         let encoder = JSONEncoder()
@@ -377,6 +378,9 @@ final class ChatSessionRunner {
         let platform: String?
         let groupName: String?
         let model: String?
+        /// Client -> server opt-in for nonterminal Skills notices. Sent only
+        /// on genuine user input (the initial message and steering).
+        let supportsSkillStatus: Bool?
 
         init(
             sessionID: String,
@@ -395,7 +399,8 @@ final class ChatSessionRunner {
             steeringPendingCount: Int? = nil,
             platform: String? = nil,
             groupName: String? = nil,
-            model: String? = nil
+            model: String? = nil,
+            supportsSkillStatus: Bool? = nil
         ) {
             self.sessionID = sessionID
             self.sender = sender
@@ -414,6 +419,7 @@ final class ChatSessionRunner {
             self.platform = platform
             self.groupName = groupName
             self.model = model
+            self.supportsSkillStatus = supportsSkillStatus
         }
 
         enum CodingKeys: String, CodingKey {
@@ -434,6 +440,7 @@ final class ChatSessionRunner {
             case platform
             case model
             case groupName = "group_name"
+            case supportsSkillStatus = "supports_skill_status"
         }
     }
 
@@ -506,6 +513,8 @@ final class ChatSessionRunner {
         let encoder = JSONEncoder()
         let decoder = JSONDecoder()
         let completion = ChatSessionCompletion()
+        // Live-only Skills feedback, deduplicated for this turn alone.
+        let skillNotices = SkillStatusTracker()
 
         @Sendable func finishWithError(_ error: Error) {
             guard completion.finish() else { return }
@@ -547,9 +556,25 @@ final class ChatSessionRunner {
                         return
                     }
 
-                    guard let data = text.data(using: .utf8),
-                          let response = try? decoder.decode(AgentMessage.self, from: data)
-                    else {
+                    guard let data = text.data(using: .utf8) else {
+                        receiveNext()
+                        return
+                    }
+
+                    // Skills notices are status only. Intercept them before any
+                    // tool, steering, shell-script, or final-answer parsing so
+                    // their content can never run a command or end the turn.
+                    if case let .consumed(display) = SkillNoticeInterceptor.intercept(data, tracker: skillNotices) {
+                        if let display {
+                            DispatchQueue.main.async {
+                                onBlock(ChatSessionRunner.skillStatusBlock(display))
+                            }
+                        }
+                        receiveNext()
+                        return
+                    }
+
+                    guard let response = try? decoder.decode(AgentMessage.self, from: data) else {
                         print("[ChatSessionRunner] Failed to decode AgentMessage; skipping.")
                         receiveNext()
                         return
@@ -759,7 +784,8 @@ final class ChatSessionRunner {
             isError: false,
             platform: "macos",
             groupName: groupName,
-            model: model
+            model: model,
+            supportsSkillStatus: true
         )
 
         guard let data = try? encoder.encode(initial),
@@ -781,6 +807,14 @@ final class ChatSessionRunner {
             }
             receiveNext()
         }
+    }
+
+    /// A dedicated live-only Skills row. Its own kind keeps it out of tool
+    /// reclassification, the reasoning noise filter, and milestone grouping,
+    /// so a notice can never relabel the preceding tool activity. The
+    /// timeline renders it literally via `Text(String)`.
+    nonisolated static func skillStatusBlock(_ text: String) -> ChatBlock {
+        ChatBlock(kind: .skillStatus, text: text)
     }
 
     static func genericErrorBlock(from response: AgentMessage) -> ChatBlock {

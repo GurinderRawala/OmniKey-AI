@@ -108,6 +108,142 @@ func resolvedLoginShell() -> String {
 /// handler more than once across URLSession WebSocket callbacks.
 final class BoolBox: @unchecked Sendable { var value = false }
 
+/// Wire message for the hotkey (`@omniAgent`) WebSocket session.
+struct HotkeyAgentMessage: Codable, Equatable, Sendable {
+    let sessionID: String
+    let sender: String
+    let content: String
+    let isTerminalOutput: Bool?
+    let isError: Bool?
+    let isWebCall: Bool?
+    let isImageRendering: Bool?
+    let isMcpCall: Bool?
+    let platform: String?
+    /// Opt-in for Skills notices; sent only on the user's input.
+    let supportsSkillStatus: Bool?
+
+    init(
+        sessionID: String,
+        sender: String,
+        content: String,
+        isTerminalOutput: Bool? = nil,
+        isError: Bool? = nil,
+        isWebCall: Bool? = nil,
+        isImageRendering: Bool? = nil,
+        isMcpCall: Bool? = nil,
+        platform: String? = nil,
+        supportsSkillStatus: Bool? = nil
+    ) {
+        self.sessionID = sessionID
+        self.sender = sender
+        self.content = content
+        self.isTerminalOutput = isTerminalOutput
+        self.isError = isError
+        self.isWebCall = isWebCall
+        self.isImageRendering = isImageRendering
+        self.isMcpCall = isMcpCall
+        self.platform = platform
+        self.supportsSkillStatus = supportsSkillStatus
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case sessionID = "session_id"
+        case sender
+        case content
+        case isTerminalOutput = "is_terminal_output"
+        case isError = "is_error"
+        case isWebCall = "is_web_call"
+        case isImageRendering = "is_image_rendering"
+        case isMcpCall = "is_mcp_call"
+        case platform
+        case supportsSkillStatus = "supports_skill_status"
+    }
+}
+
+/// Pure decision for one inbound hotkey-agent frame. `AgentRunner`'s
+/// receive loop calls this for every text frame and only performs the side
+/// effects (UI, shell, completion) the action names, so the ordering —
+/// Skills notices first, before decode, shell or final-answer parsing — is
+/// testable without a socket.
+enum HotkeyAgentFrame {
+    enum Disposition: Equatable, Sendable {
+        case runShellScript(String)
+        case finalAnswer(String)
+        /// No tags: this runner treats the text as the final answer.
+        case implicitFinalAnswer(String)
+        /// A terminal frame marked `is_error` (e.g. Skills blocked the run).
+        /// Completes with an error and is never pasted into the document.
+        /// The string is a sanitized single line safe for an alert.
+        case failure(String)
+    }
+
+    static let genericFailureText = "The agent could not complete this request."
+    static let failureTextLimit = 300
+
+    /// Single-line, length-capped failure text: the cleaned server message
+    /// without markup, controls or bidi/format characters, or a fixed
+    /// fallback when nothing readable remains.
+    static func safeFailureText(from raw: String) -> String {
+        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.hasPrefix("**Error:**") { text = String(text.dropFirst("**Error:**".count)) }
+        var scalars = String.UnicodeScalarView()
+        var lastWasSpace = false
+        for scalar in text.unicodeScalars {
+            let category = scalar.properties.generalCategory
+            let breaking = category == .control || category == .format
+                || category == .lineSeparator || category == .paragraphSeparator
+                || scalar.properties.isWhitespace
+            if breaking {
+                if !lastWasSpace { scalars.append(" ") }
+                lastWasSpace = true
+            } else {
+                scalars.append(scalar)
+                lastWasSpace = false
+            }
+        }
+        var line = String(scalars).trimmingCharacters(in: .whitespaces)
+        if line.count > failureTextLimit { line = String(line.prefix(failureTextLimit)) + "…" }
+        return line.isEmpty ? genericFailureText : line
+    }
+
+    enum Action: Equatable, Sendable {
+        /// A Skills notice (valid, duplicate or malformed). Never executes
+        /// or completes; `display` is literal live-only text, or nil.
+        case skillNotice(display: String?)
+        case undecodable
+        case webCall(String)
+        case imageRendering(String)
+        case mcpCall(String)
+        case agentText(HotkeyAgentMessage, display: String, disposition: Disposition)
+    }
+
+    static func action(for data: Data, tracker: SkillStatusTracker) -> Action {
+        if case let .consumed(display) = SkillNoticeInterceptor.intercept(data, tracker: tracker) {
+            return .skillNotice(display: display)
+        }
+        guard let message = try? JSONDecoder().decode(HotkeyAgentMessage.self, from: data) else {
+            return .undecodable
+        }
+        let content = message.content
+        if message.isWebCall == true { return .webCall(content) }
+        if message.isImageRendering == true { return .imageRendering(content) }
+        if message.isMcpCall == true { return .mcpCall(content) }
+
+        let display = AgentRunner.cleanedDisplayText(from: content)
+        let disposition: Disposition
+        if let script = AgentRunner.extractShellScript(from: content) {
+            disposition = .runShellScript(script)
+        } else if let final = AgentRunner.extractFinalAnswer(from: content) {
+            // Server-generated terminal failures (e.g. Skills blocked) are
+            // final answers with is_error; never deliver them as the answer.
+            disposition = message.isError == true ? .failure(safeFailureText(from: final)) : .finalAnswer(final)
+        } else {
+            disposition = .implicitFinalAnswer(display.isEmpty ? content : display)
+        }
+        return .agentText(message, display: display, disposition: disposition)
+    }
+}
+
 /// Box that holds an optional closure so it can be captured by reference
 /// inside @Sendable closures without triggering data-race warnings.
 final class ClosureBox<T>: @unchecked Sendable { var call: T? }
@@ -513,56 +649,13 @@ final class AgentRunner {
         let session = URLSession(configuration: .default)
         let task = session.webSocketTask(with: request)
 
-        struct AgentMessage: Codable {
-            let sessionID: String
-            let sender: String
-            let content: String
-            let isTerminalOutput: Bool?
-            let isError: Bool?
-            let isWebCall: Bool?
-            let isImageRendering: Bool?
-            let isMcpCall: Bool?
-            let platform: String?
-
-            init(
-                sessionID: String,
-                sender: String,
-                content: String,
-                isTerminalOutput: Bool? = nil,
-                isError: Bool? = nil,
-                isWebCall: Bool? = nil,
-                isImageRendering: Bool? = nil,
-                isMcpCall: Bool? = nil,
-                platform: String? = nil
-            ) {
-                self.sessionID = sessionID
-                self.sender = sender
-                self.content = content
-                self.isTerminalOutput = isTerminalOutput
-                self.isError = isError
-                self.isWebCall = isWebCall
-                self.isImageRendering = isImageRendering
-                self.isMcpCall = isMcpCall
-                self.platform = platform
-            }
-
-            enum CodingKeys: String, CodingKey {
-                case sessionID = "session_id"
-                case sender
-                case content
-                case isTerminalOutput = "is_terminal_output"
-                case isError = "is_error"
-                case isWebCall = "is_web_call"
-                case isImageRendering = "is_image_rendering"
-                case isMcpCall = "is_mcp_call"
-                case platform
-            }
-        }
+        typealias AgentMessage = HotkeyAgentMessage
 
         let encoder = JSONEncoder()
-        let decoder = JSONDecoder()
 
         let finalAnswerDelivered = BoolBox()
+        // Live-only Skills feedback, deduplicated for this run alone.
+        let skillNotices = SkillStatusTracker()
 
         func receiveNext() {
             task.receive { result in
@@ -589,51 +682,63 @@ final class AgentRunner {
 
                     print("[AgentRunner] Received WebSocket text message (length: \(text.count))")
 
-                    guard let data = text.data(using: .utf8),
-                          let response = try? decoder.decode(AgentMessage.self, from: data)
-                    else {
+                    // Every frame goes through the pure classifier, which
+                    // consumes Skills notices before any decode, shell or
+                    // final-answer handling (this runner otherwise treats
+                    // untagged text as the final answer).
+                    let action = HotkeyAgentFrame.action(for: Data(text.utf8), tracker: skillNotices)
+
+                    let response: AgentMessage
+                    let displayText: String
+                    let disposition: HotkeyAgentFrame.Disposition
+                    switch action {
+                    case let .skillNotice(display):
+                        if let display {
+                            DispatchQueue.main.async {
+                                AgentThinkingModel.shared.append(display)
+                            }
+                        }
+                        receiveNext()
+                        return
+
+                    case .undecodable:
                         print("[AgentRunner] Failed to decode AgentMessage from text payload.")
                         receiveNext()
                         return
-                    }
 
-                    let content = response.content
-
-                    // Web call notification: show it in the thinking view and
-                    // keep listening — this is not a final answer.
-                    if response.isWebCall == true {
+                    // Web/image/MCP notifications: show them in the thinking
+                    // view and keep listening — they are not final answers.
+                    case let .webCall(content):
                         DispatchQueue.main.async {
                             AgentThinkingModel.shared.appendWebCall(content)
                         }
                         receiveNext()
                         return
-                    }
 
-                    // Image rendering notification: show it in the thinking view and
-                    // keep listening — this is not a final answer.
-                    if response.isImageRendering == true {
+                    case let .imageRendering(content):
                         DispatchQueue.main.async {
                             AgentThinkingModel.shared.appendImageRendering(content)
                         }
                         receiveNext()
                         return
-                    }
 
-                    // MCP call notification: show it in the thinking view and
-                    // keep listening — this is not a final answer.
-                    if response.isMcpCall == true {
+                    case let .mcpCall(content):
                         DispatchQueue.main.async {
                             AgentThinkingModel.shared.appendMcpCall(content)
                         }
                         receiveNext()
                         return
+
+                    case let .agentText(message, display, kind):
+                        response = message
+                        displayText = display
+                        disposition = kind
                     }
 
                     // Surface a cleaned, human-readable version of
                     // the agent's message (without XML-like tags)
                     // directly to the shared thinking model so the
                     // UI can display a streaming transcript.
-                    let displayText = AgentRunner.cleanedDisplayText(from: content)
                     if !displayText.isEmpty {
                         DispatchQueue.main.async {
                             AgentThinkingModel.shared.append(displayText)
@@ -643,7 +748,7 @@ final class AgentRunner {
                     // If the agent wants us to run a shell script,
                     // execute it and stream the output back as a
                     // terminal_output message.
-                    if let script = AgentRunner.extractShellScript(from: content) {
+                    if case let .runShellScript(script) = disposition {
                         print("[AgentRunner] Detected <shell_script> block in agent response. Script length: \(script.count)")
                         DispatchQueue.global(qos: .userInitiated).async {
                             let (output, status) = runShellCommandWithStatus(script)
@@ -729,7 +834,7 @@ final class AgentRunner {
 
                     // If we received a final answer, surface it to the
                     // caller and close the stream.
-                    if let final = AgentRunner.extractFinalAnswer(from: content) {
+                    if case let .finalAnswer(final) = disposition {
                         print("[AgentRunner] Detected <final_answer> block in agent response. Length: \(final.count)")
                         finalAnswerDelivered.value = true
                         DispatchQueue.main.async {
@@ -743,12 +848,31 @@ final class AgentRunner {
                         return
                     }
 
+                    // Server-reported terminal error: fail the run so the
+                    // caller shows an alert instead of pasting the text.
+                    if case let .failure(reason) = disposition {
+                        print("[AgentRunner] Agent reported an error; completing with failure.")
+                        finalAnswerDelivered.value = true
+                        DispatchQueue.main.async {
+                            completion(.failure(NSError(
+                                domain: "AgentRunner",
+                                code: -3,
+                                userInfo: [NSLocalizedDescriptionKey: reason]
+                            )))
+                        }
+                        task.cancel(with: .goingAway, reason: nil)
+                        Task {
+                            await AgentSessionState.shared.registerWebSocketTask(nil)
+                        }
+                        return
+                    }
+
                     // If there is no shell script to run and no
                     // <final_answer> tag present, treat this message
                     // as the final answer as well and close the
                     // connection. This allows simpler agents that
                     // just stream plain text without special tags.
-                    let answerText = !displayText.isEmpty ? displayText : content
+                    guard case let .implicitFinalAnswer(answerText) = disposition else { return }
                     print("[AgentRunner] Treating agent message as implicit final answer. Length: \(answerText.count)")
                     finalAnswerDelivered.value = true
                     DispatchQueue.main.async {
@@ -773,7 +897,8 @@ final class AgentRunner {
             content: originalText,
             isTerminalOutput: false,
             isError: false,
-            platform: "macos"
+            platform: "macos",
+            supportsSkillStatus: true
         )
 
         if let data = try? encoder.encode(initial),

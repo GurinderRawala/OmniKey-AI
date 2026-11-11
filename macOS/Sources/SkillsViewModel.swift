@@ -1,0 +1,482 @@
+import Foundation
+
+/// State for the Skills window. The backend is the only source of truth:
+/// nothing is cached across launches, nothing is matched locally, and every
+/// mutation is followed by a re-fetch. Responses that arrive after a newer
+/// request for the same slot are dropped (generation tokens).
+@MainActor
+final class SkillsViewModel: ObservableObject {
+    enum LoadState: Equatable {
+        case idle
+        case loading
+        case loaded
+        case failed(SkillsAPIError)
+    }
+
+    enum EditorMode: Equatable {
+        case create
+        /// `base` is the revision the draft will be saved against.
+        case edit(base: SkillDTO)
+    }
+
+    struct EditorState: Equatable {
+        var mode: EditorMode
+        var draft: SkillDraft
+        var fieldErrors: [String: String] = [:]
+        var error: SkillsAPIError?
+        var isSaving = false
+        /// The server rejected the save as stale. The draft is kept; the user
+        /// may reload the latest revision (keeping their text) and save again.
+        var hasConflict = false
+        var notice: String?
+        /// Fields edited here that were also changed elsewhere (after a
+        /// rebase). The draft value is kept; the view flags them.
+        var conflictFields: [SkillDraftRebase.Field] = []
+    }
+
+    @Published private(set) var skills: [SkillSummary] = []
+    @Published private(set) var listState: LoadState = .idle
+    @Published private(set) var selectedID: String?
+    @Published private(set) var detail: SkillDTO?
+    @Published private(set) var detailState: LoadState = .idle
+    @Published var editor: EditorState?
+    @Published var pendingDelete: SkillSummary?
+    @Published private(set) var busyIDs: Set<String> = []
+    /// Neutral status line (success/info). Errors use `actionError`.
+    @Published var statusMessage: String?
+    @Published var actionError: String?
+
+    private let service: any SkillsService
+    private var listGeneration = 0
+    private var detailGeneration = 0
+    private var listTask: Task<Void, Never>?
+    private var detailTask: Task<Void, Never>?
+
+    init(service: any SkillsService = APIClient.skills) {
+        self.service = service
+    }
+
+    var isUpgradeRequired: Bool {
+        if case let .failed(error) = listState { return error.kind == .upgradeRequired }
+        return false
+    }
+
+    var isListLoading: Bool { listState == .loading }
+
+    var selectedSummary: SkillSummary? {
+        guard let selectedID else { return nil }
+        return skills.first { $0.id == selectedID }
+    }
+
+    /// The loaded detail matches the selected row's revision (or is newer).
+    /// While false the pane shows progress and edit/toggle/delete are
+    /// disabled, so no action targets a revision the user has not seen.
+    var isDetailCurrent: Bool {
+        guard let detail, let summary = selectedSummary, detail.id == summary.id else { return false }
+        return detail.revision >= summary.revision
+    }
+
+    // MARK: - Loading
+
+    func onAppear() {
+        if listState == .idle { refresh() }
+    }
+
+    /// Re-fetch the list (and the open detail, unless the user is editing).
+    func refresh() {
+        statusMessage = nil
+        actionError = nil
+        reloadList()
+        if editor == nil, let selectedID { loadDetail(id: selectedID) }
+    }
+
+    private func reloadList() {
+        listGeneration += 1
+        let generation = listGeneration
+        listTask?.cancel()
+        listState = .loading
+        listTask = Task { [service] in
+            let result: Result<[SkillSummary], SkillsAPIError>
+            do { result = .success(try await service.list()) }
+            catch { result = .failure(Self.apiError(error)) }
+            self.applyList(result, generation: generation)
+        }
+    }
+
+    private func applyList(_ result: Result<[SkillSummary], SkillsAPIError>, generation: Int) {
+        guard generation == listGeneration else { return }
+        switch result {
+        case let .success(list):
+            skills = list
+            listState = .loaded
+            if let selectedID, !list.contains(where: { $0.id == selectedID }), editor == nil {
+                self.selectedID = nil
+                detail = nil
+                detailState = .idle
+            } else if editor == nil, let selectedID, let detail, detail.id == selectedID,
+                      let summary = selectedSummary, summary.revision > detail.revision
+            {
+                // The row is newer than the instructions on screen; fetch them
+                // so the pane never mixes revisions.
+                loadDetail(id: selectedID)
+            }
+        case let .failure(error):
+            if error.kind == .cancelled { return }
+            listState = .failed(error)
+            if error.kind == .upgradeRequired { skills = [] }
+        }
+    }
+
+    func select(_ id: String?) {
+        guard id != selectedID else { return }
+        selectedID = id
+        if let id { loadDetail(id: id) } else {
+            detailGeneration += 1
+            detailTask?.cancel()
+            detail = nil
+            detailState = .idle
+        }
+    }
+
+    private func loadDetail(id: String) {
+        detailGeneration += 1
+        let generation = detailGeneration
+        detailTask?.cancel()
+        if detail?.id != id { detail = nil }
+        detailState = .loading
+        detailTask = Task { [service] in
+            let result: Result<SkillDTO, SkillsAPIError>
+            do { result = .success(try await service.get(id: id)) }
+            catch { result = .failure(Self.apiError(error)) }
+            self.applyDetail(result, id: id, generation: generation)
+        }
+    }
+
+    private func applyDetail(_ result: Result<SkillDTO, SkillsAPIError>, id: String, generation: Int) {
+        guard generation == detailGeneration, selectedID == id else { return }
+        switch result {
+        case let .success(skill):
+            detail = skill
+            detailState = .loaded
+            replaceSummary(skill.summary)
+        case let .failure(error):
+            if error.kind == .cancelled { return }
+            detailState = .failed(error)
+            if error.kind == .notFound {
+                detail = nil
+                reloadList()
+            }
+        }
+    }
+
+    // MARK: - Editing
+
+    func startCreate() {
+        guard !isUpgradeRequired else { return }
+        statusMessage = nil
+        actionError = nil
+        editor = EditorState(mode: .create, draft: SkillDraft())
+    }
+
+    func startEdit() {
+        guard let detail, detail.id == selectedID, isDetailCurrent else { return }
+        statusMessage = nil
+        actionError = nil
+        editor = EditorState(mode: .edit(base: detail), draft: SkillDraft(detail))
+    }
+
+    func cancelEdit() {
+        guard editor?.isSaving != true else { return }
+        editor = nil
+    }
+
+    /// Local checks for obvious mistakes. The server remains authoritative.
+    static func localFieldErrors(for draft: SkillDraft) -> [String: String] {
+        var errors: [String: String] = [:]
+        let name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let keyword = draft.keyword.trimmingCharacters(in: .whitespacesAndNewlines)
+        if name.isEmpty {
+            errors["name"] = "Enter a name."
+        } else if name.codePointCount > SkillLimits.nameCodePoints {
+            errors["name"] = "Use at most \(SkillLimits.nameCodePoints) characters."
+        } else if name.contains(where: \.isNewline) {
+            errors["name"] = "Names must be a single line."
+        }
+        if keyword.isEmpty {
+            errors["keyword"] = "Enter a keyword or phrase."
+        } else if keyword.codePointCount > SkillLimits.keywordCodePoints {
+            errors["keyword"] = "Use at most \(SkillLimits.keywordCodePoints) characters."
+        } else if keyword.contains(where: \.isNewline) {
+            errors["keyword"] = "Keywords must be a single line."
+        }
+        if draft.instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            errors["instructions"] = "Enter instructions."
+        } else if draft.instructions.codePointCount > SkillLimits.instructionCodePoints
+            || draft.instructions.utf8.count > SkillLimits.instructionBytes
+        {
+            errors["instructions"] =
+                "Use at most \(SkillLimits.instructionCodePoints) characters (\(SkillLimits.instructionBytes / 1024) KiB)."
+        }
+        return errors
+    }
+
+    func save() {
+        guard var state = editor, !state.isSaving else { return }
+        let localErrors = Self.localFieldErrors(for: state.draft)
+        state.fieldErrors = localErrors
+        state.error = nil
+        state.notice = nil
+        guard localErrors.isEmpty else {
+            editor = state
+            return
+        }
+
+        let draft = state.draft
+        let mode = state.mode
+        if case let .edit(base) = mode, SkillPatch.diff(from: base, to: draft).isEmpty {
+            editor = nil
+            statusMessage = "No changes to save."
+            return
+        }
+
+        state.isSaving = true
+        editor = state
+        Task { [service] in
+            let result: Result<SkillDTO, SkillsAPIError>
+            do {
+                switch mode {
+                case .create:
+                    result = .success(try await service.create(draft))
+                case let .edit(base):
+                    let patch = SkillPatch.diff(from: base, to: draft)
+                    result = .success(try await service.update(id: base.id, revision: base.revision, patch: patch))
+                }
+            } catch {
+                result = .failure(Self.apiError(error))
+            }
+            self.finishSave(result, mode: mode)
+        }
+    }
+
+    private func finishSave(_ result: Result<SkillDTO, SkillsAPIError>, mode: EditorMode) {
+        guard var state = editor, state.mode == mode, state.isSaving else { return }
+        state.isSaving = false
+        switch result {
+        case let .success(skill):
+            editor = nil
+            statusMessage = mode == .create ? "Skill created." : "Skill saved."
+            replaceSummary(skill.summary)
+            selectedID = skill.id
+            detailGeneration += 1
+            detailTask?.cancel()
+            detail = skill
+            detailState = .loaded
+            reloadList()
+
+        case let .failure(error):
+            // Keep the draft in every failure case.
+            state.error = error.kind == .cancelled ? nil : error
+            state.fieldErrors = error.fields
+            switch error.kind {
+            case .revisionConflict, .revisionRequired:
+                state.hasConflict = true
+            case .notFound:
+                if case .edit = mode {
+                    state.mode = .create
+                    state.hasConflict = false
+                    state.conflictFields = []
+                    state.notice = "This skill was deleted elsewhere. Your text is kept; saving will create a new skill."
+                }
+            default:
+                break
+            }
+            editor = state
+        }
+    }
+
+    /// After a conflict: fetch the latest revision and rebase the draft onto
+    /// it without discarding the user's text.
+    func reloadLatestKeepingDraft() {
+        guard let state = editor, !state.isSaving, case let .edit(base) = state.mode else { return }
+        var saving = state
+        saving.isSaving = true
+        editor = saving
+        Task { [service] in
+            let result: Result<SkillDTO, SkillsAPIError>
+            do { result = .success(try await service.get(id: base.id)) }
+            catch { result = .failure(Self.apiError(error)) }
+            self.finishRebase(result, originalBase: base)
+        }
+    }
+
+    private func finishRebase(_ result: Result<SkillDTO, SkillsAPIError>, originalBase: SkillDTO) {
+        guard var state = editor, state.isSaving, state.mode == .edit(base: originalBase) else { return }
+        state.isSaving = false
+        switch result {
+        case let .success(latest):
+            let rebase = SkillDraftRebase.merge(draft: state.draft, original: originalBase, latest: latest)
+            state.mode = .edit(base: latest)
+            state.draft = rebase.draft
+            state.conflictFields = rebase.conflicts
+            state.hasConflict = false
+            state.error = nil
+            if !rebase.conflicts.isEmpty {
+                let labels = rebase.conflicts.map(\.label).joined(separator: ", ")
+                state.notice = "Loaded revision \(latest.revision). \(labels) also changed elsewhere; "
+                    + "your version is kept and will replace it if you save. Review before saving."
+            } else if latest.revision == originalBase.revision {
+                state.notice = "Already up to date. Save again to apply your edits."
+            } else if rebase.adopted.isEmpty {
+                state.notice = "Loaded revision \(latest.revision). Your edits are kept; review and save again."
+            } else {
+                let labels = rebase.adopted.map(\.label).joined(separator: ", ")
+                state.notice = "Loaded revision \(latest.revision). Updated \(labels) from the latest version; "
+                    + "your edits are kept. Review and save again."
+            }
+            replaceSummary(latest.summary)
+            if selectedID == latest.id {
+                detail = latest
+                detailState = .loaded
+            }
+        case let .failure(error):
+            if error.kind == .notFound {
+                state.mode = .create
+                state.hasConflict = false
+                state.conflictFields = []
+                state.error = nil
+                state.notice = "This skill was deleted elsewhere. Your text is kept; saving will create a new skill."
+            } else if error.kind != .cancelled {
+                state.error = error
+            }
+        }
+        editor = state
+    }
+
+    // MARK: - Toggle / delete
+
+    func toggleEnabled(_ summary: SkillSummary) {
+        guard !busyIDs.contains(summary.id), !showsStaleDetail(for: summary) else { return }
+        let revision = displayedRevision(for: summary)
+        busyIDs.insert(summary.id)
+        actionError = nil
+        statusMessage = nil
+        let target = !summary.enabled
+        Task { [service] in
+            let result: Result<SkillDTO, SkillsAPIError>
+            do {
+                result = .success(try await service.update(
+                    id: summary.id, revision: revision, patch: SkillPatch(enabled: target)
+                ))
+            } catch {
+                result = .failure(Self.apiError(error))
+            }
+            self.finishToggle(result, id: summary.id)
+        }
+    }
+
+    private func finishToggle(_ result: Result<SkillDTO, SkillsAPIError>, id: String) {
+        busyIDs.remove(id)
+        switch result {
+        case let .success(skill):
+            replaceSummary(skill.summary)
+            if detail?.id == skill.id, editor == nil {
+                detail = skill
+            }
+            statusMessage = skill.enabled ? "Enabled “\(skill.name)”." : "Disabled “\(skill.name)”."
+            reloadList()
+        case let .failure(error):
+            guard error.kind != .cancelled else { return }
+            actionError = error.message
+            reloadList()
+            if editor == nil, selectedID == id { loadDetail(id: id) }
+        }
+    }
+
+    func requestDelete(_ summary: SkillSummary) {
+        guard !busyIDs.contains(summary.id), !showsStaleDetail(for: summary) else { return }
+        pendingDelete = summary
+    }
+
+    func confirmDelete() {
+        guard let summary = pendingDelete else { return }
+        pendingDelete = nil
+        guard !busyIDs.contains(summary.id) else { return }
+        let revision = displayedRevision(for: summary)
+        busyIDs.insert(summary.id)
+        actionError = nil
+        statusMessage = nil
+        Task { [service] in
+            let result: Result<Void, SkillsAPIError>
+            do {
+                try await service.delete(id: summary.id, revision: revision)
+                result = .success(())
+            } catch {
+                result = .failure(Self.apiError(error))
+            }
+            self.finishDelete(result, summary: summary)
+        }
+    }
+
+    private func finishDelete(_ result: Result<Void, SkillsAPIError>, summary: SkillSummary) {
+        busyIDs.remove(summary.id)
+        let removeLocally = {
+            self.skills.removeAll { $0.id == summary.id }
+            if self.selectedID == summary.id {
+                self.selectedID = nil
+                self.detailGeneration += 1
+                self.detailTask?.cancel()
+                self.detail = nil
+                self.detailState = .idle
+                if case let .edit(base) = self.editor?.mode, base.id == summary.id, self.editor?.isSaving != true {
+                    self.editor = nil
+                }
+            }
+        }
+        switch result {
+        case .success:
+            removeLocally()
+            statusMessage = "Deleted “\(summary.name)”."
+        case let .failure(error):
+            switch error.kind {
+            case .cancelled:
+                return
+            case .notFound:
+                removeLocally()
+                statusMessage = "“\(summary.name)” was already deleted."
+            default:
+                actionError = error.message
+            }
+        }
+        reloadList()
+    }
+
+    // MARK: - Helpers
+
+    /// The revision the user is looking at. A newer revision the user has not
+    /// seen must not be targeted silently; the server answers 409 and the
+    /// following refresh shows the latest state instead.
+    private func displayedRevision(for summary: SkillSummary) -> Int {
+        summary.revision
+    }
+
+    /// The open detail pane for this skill shows older instructions than
+    /// the row; mutating now would target a revision the user hasn't read.
+    private func showsStaleDetail(for summary: SkillSummary) -> Bool {
+        guard summary.id == selectedID, let detail, detail.id == summary.id else { return false }
+        return detail.revision < summary.revision
+    }
+
+    private func replaceSummary(_ summary: SkillSummary) {
+        if let index = skills.firstIndex(where: { $0.id == summary.id }) {
+            if skills[index].revision <= summary.revision { skills[index] = summary }
+        } else {
+            skills.append(summary)
+        }
+    }
+
+    nonisolated static func apiError(_ error: Error) -> SkillsAPIError {
+        if let error = error as? SkillsAPIError { return error }
+        if error is CancellationError { return SkillsAPIError(kind: .cancelled, message: "Request cancelled.") }
+        return SkillsAPIError(kind: .network, message: "Couldn't reach the OmniKey backend. Check that it is running, then retry.")
+    }
+}
