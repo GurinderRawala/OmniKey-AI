@@ -312,6 +312,7 @@ async function runAgentTurnInternal(
         session,
         hasStoredPrompt,
         log,
+        tools,
       );
       if (steeringMessages.length === 0) return current;
 
@@ -360,6 +361,7 @@ async function runAgentTurnInternal(
       session,
       hasStoredPrompt,
       log,
+      tools,
     );
     if (steeringMessages.length === 0) return false;
 

@@ -13,7 +13,11 @@ import {
   sessionOwners,
   sessionSteeringIds,
 } from './runtimeState';
-import { enqueueSteeringMessage, takePendingSteeringMessages } from './steering';
+import {
+  enqueueSteeringMessage,
+  takePendingSteeringMessages,
+  MAX_STEERING_ID_LENGTH,
+} from './steering';
 import { buildShellToolResult } from './terminalOutput';
 import { runAgentTurn } from './turnRunner';
 
@@ -183,7 +187,11 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
               is_terminal_output: false,
               is_error: true,
               is_steering: true,
-              steering_id: message.steering_id,
+              steering_id:
+                typeof message.steering_id === 'string' &&
+                message.steering_id.length <= MAX_STEERING_ID_LENGTH
+                  ? message.steering_id
+                  : undefined,
               steering_status: 'rejected',
               steering_pending_count: 0,
             });
@@ -209,7 +217,11 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
               is_terminal_output: false,
               is_error: true,
               is_steering: true,
-              steering_id: message.steering_id,
+              steering_id:
+                typeof message.steering_id === 'string' &&
+                message.steering_id.length <= MAX_STEERING_ID_LENGTH
+                  ? message.steering_id
+                  : undefined,
               steering_status: 'rejected',
               steering_pending_count: 0,
             });
@@ -226,7 +238,11 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
               is_terminal_output: false,
               is_error: true,
               is_steering: true,
-              steering_id: message.steering_id,
+              steering_id:
+                typeof message.steering_id === 'string' &&
+                message.steering_id.length <= MAX_STEERING_ID_LENGTH
+                  ? message.steering_id
+                  : undefined,
               steering_status: 'rejected',
               steering_pending_count: steeringResult.pendingCount,
             });
@@ -245,7 +261,11 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
             is_terminal_output: false,
             is_error: false,
             is_steering: true,
-            steering_id: message.steering_id,
+            steering_id:
+              typeof message.steering_id === 'string' &&
+              message.steering_id.length <= MAX_STEERING_ID_LENGTH
+                ? message.steering_id
+                : undefined,
             steering_status: 'received',
             steering_pending_count: steeringResult.pendingCount,
           });

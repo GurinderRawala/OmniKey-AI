@@ -30,6 +30,7 @@ const mocks = vi.hoisted(() => {
     getMcpToolsForSubscription: vi.fn(),
     getAgentSettings: vi.fn(),
     replaceNormalizedTranscript: vi.fn(),
+    inputBudget: { value: 100_000 },
     cancelCheck: { hook: undefined as undefined | ((stack: string) => void) },
   };
 });
@@ -102,7 +103,7 @@ vi.mock('../ai-client', () => ({
   getContextWindowSize: vi.fn(() => 128_000),
   getDefaultModel: vi.fn(() => 'test-model'),
   getFixedHelperModel: vi.fn(() => 'summary-model'),
-  getInputTokenBudget: vi.fn(() => 100_000),
+  getInputTokenBudget: vi.fn(() => mocks.inputBudget.value),
   getMaxMessageContentLength: vi.fn(() => 1_000_000),
   providerSupportsImageGeneration: vi.fn(() => false),
 }));
@@ -118,7 +119,12 @@ vi.mock('ws', async () => {
 
 import { runAgentTurn } from '../agent/agentServer';
 import { attachAgentWebSocketServer } from '../agent/agentServer/websocket';
-import { enqueueSteeringMessage } from '../agent/agentServer/steering';
+import {
+  enqueueSteeringMessage,
+  drainSteeringMessagesIntoHistory,
+  MAX_STEERING_ID_LENGTH,
+  MAX_RETAINED_STEERING_IDS,
+} from '../agent/agentServer/steering';
 import {
   activeSessions,
   pendingShellScripts,
@@ -195,6 +201,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.log.child.mockReturnValue(mocks.log);
   mocks.cancelCheck.hook = undefined;
+  mocks.inputBudget.value = 100_000;
   mocks.rows.clear();
   fake.rows.length = 0;
   fake.state.down = false;
@@ -658,6 +665,103 @@ describe('steering Skills semantics', () => {
     expect(JSON.stringify(requests[1].history)).toContain('beta via agent sender');
     expect(fake.state.calls).toBe(1);
   });
+
+  it('keeps genuine steering separate from an injected progress prompt so replay does not drop it', async () => {
+    const { removeInjectedUserPromptsFromHistory } =
+      await import('../agent/agentServer/completionRecovery');
+    const session = {
+      subscription,
+      turns: 1,
+      activeModel: 'test-model',
+      history: [
+        { role: 'system', content: 'system' },
+        { role: 'user', content: 'Agent progress checkpoint: internal recovery guidance' },
+      ],
+    } as Parameters<typeof drainSteeringMessagesIntoHistory>[1];
+    steer('keep this genuine direction', 'separate');
+    drainSteeringMessagesIntoHistory('session-1', session, false, mocks.log as never);
+    expect(session.history).toHaveLength(3);
+    removeInjectedUserPromptsFromHistory(session, mocks.log as never);
+    expect(session.history).toHaveLength(2);
+    expect(session.history[1].content).toContain('keep this genuine direction');
+    expect(session.history[1].content).toContain('<user_steering');
+  });
+
+  it('bounds retained steering IDs before insertion, including rejected empty frames', () => {
+    const seen = new Set<string>();
+    sessionSteeringIds.set('session-1', seen);
+    expect(steer('', 'x'.repeat(MAX_STEERING_ID_LENGTH + 1)).accepted).toBe(false);
+    expect(seen.size).toBe(0);
+    for (let i = 0; i < MAX_RETAINED_STEERING_IDS; i++)
+      expect(steer('', `rejected-${i}`).accepted).toBe(false);
+    expect(seen.size).toBe(MAX_RETAINED_STEERING_IDS);
+    expect(steer('valid guidance', 'new-id').accepted).toBe(false);
+    expect(steer('legacy guidance', undefined).accepted).toBe(false);
+    expect(seen.size).toBe(MAX_RETAINED_STEERING_IDS);
+    expect(sessionSteeringMessages.has('session-1')).toBe(false);
+    expect(steer('', 'rejected-0').duplicate).toBe(true);
+  });
+
+  it('rejects only steering that exceeds the model request budget before committing it', async () => {
+    mocks.inputBudget.value = 6_000;
+    addSkill('a', 'alpha', { instructions: 'Small original guidance.' });
+    addSkill('b', 'beta', { instructions: 'b'.repeat(8_000) });
+    responses = [
+      () => {
+        steer('beta rejected candidate', 'too-large', { supports_skill_status: true });
+        steer('alpha accepted direction', 'fits', { supports_skill_status: true });
+        return finalAnswer('stale');
+      },
+      finalAnswer('original run continued'),
+    ];
+    const send = await run('alpha task');
+    expect(requests).toHaveLength(2);
+    expect(ids(requests[1])).toEqual(['a']);
+    expect(JSON.stringify(requests[1].history)).not.toContain('beta rejected candidate');
+    expect(persistedText()).not.toContain('beta rejected candidate');
+    expect(persistedText()).toContain('alpha accepted direction');
+    expect(stewardSend).toHaveBeenCalledWith(
+      expect.objectContaining({ steering_id: 'too-large', steering_status: 'rejected' }),
+    );
+    expect(stewardSend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        skill_status: expect.objectContaining({
+          input_id: 'too-large',
+          status: 'blocked',
+          error: expect.objectContaining({ code: 'CONTEXT_LIMIT_EXCEEDED' }),
+        }),
+      }),
+    );
+    expect(send.mock.calls.some(([message]) => message.is_error && !message.is_steering)).toBe(
+      false,
+    );
+  });
+
+  it.each(['client', 'agent'])(
+    'budgets combined FIFO history for a later %s steer before committing',
+    async (sender) => {
+      mocks.inputBudget.value = 6_000;
+      addSkill('a', 'alpha', { instructions: 'Small original guidance.' });
+      const first = 'first accepted ' + 'x'.repeat(2_300);
+      const second = 'second rejected ' + 'y'.repeat(2_300);
+      responses = [
+        () => {
+          steer(first, 'first', { supports_skill_status: true });
+          steer(second, 'second', { supports_skill_status: true, sender });
+          return finalAnswer('stale');
+        },
+        finalAnswer('continued'),
+      ];
+      await run('alpha task');
+      expect(requests).toHaveLength(2);
+      expect(JSON.stringify(requests[1].history)).toContain('first accepted');
+      expect(JSON.stringify(requests[1].history)).not.toContain('second rejected');
+      expect(persistedText()).not.toContain('second rejected');
+      expect(stewardSend).toHaveBeenCalledWith(
+        expect.objectContaining({ steering_id: 'second', steering_status: 'rejected' }),
+      );
+    },
+  );
 
   it('deduplicates steering ids synchronously within a run, not across runs', () => {
     sessionSteeringIds.set('session-1', new Set());

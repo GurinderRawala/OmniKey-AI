@@ -22,7 +22,12 @@
  */
 import cuid from 'cuid';
 import type { Logger } from 'winston';
-import type { AIMessage } from '../ai-client';
+import { estimateHistoryTokens, type AIMessage } from '../ai-client';
+import {
+  buildTrimmedHistoryForRequest,
+  estimateToolSchemaTokens,
+  getProactiveRequestTokenBudget,
+} from './agentServer/sessionMemory';
 import {
   SkillError,
   type AppliedSkillRef,
@@ -150,6 +155,35 @@ export class SkillContextBudgetError extends Error {
     super('Skills overlay does not fit the model input budget');
     this.name = 'SkillContextBudgetError';
   }
+}
+
+/**
+ * Trim the overlay-free request view with the Skills reservation and verify
+ * that history + overlay + tool schemas fit the model's safe input budget.
+ * Throws SkillContextBudgetError (fail closed) when the budget is unknown or
+ * nonpositive, when the reservation alone exhausts it, or when trimming cannot
+ * shrink the irreducible history enough. Returns the trimmed base history.
+ *
+ * Bounds: overlay = UTF-8 bytes (conservative upper bound); history and tool
+ * schemas = the repo's existing estimator. Not exact provider tokenization.
+ */
+export function assertSkillRequestFits(
+  session: SessionState,
+  model: string,
+  sessionId: string,
+  tools: readonly unknown[] | undefined,
+  log?: Logger,
+): AIMessage[] {
+  const overlay = buildSkillOverlay(session);
+  const budget = getProactiveRequestTokenBudget(model);
+  const reserved = (overlay?.reservedTokens ?? 0) + estimateToolSchemaTokens(tools);
+  if (!Number.isFinite(budget) || budget <= 0 || reserved >= budget) {
+    throw new SkillContextBudgetError();
+  }
+  const base = buildTrimmedHistoryForRequest(session, model, sessionId, log, reserved);
+  if (estimateHistoryTokens(base) + reserved > budget) throw new SkillContextBudgetError();
+  if (session.skillRun) session.skillRun.reservedTokensHint = reserved;
+  return base;
 }
 
 function refs(snapshots: readonly SkillSnapshot[]): AppliedSkillRef[] {
@@ -469,6 +503,10 @@ export async function prepareSteeringSkills(
   session: SessionState,
   log: Logger,
   discardExpired: () => void = () => undefined,
+  validateCandidate: (
+    snapshots: readonly SkillSnapshot[],
+    pending: readonly PendingSteeringMessage[],
+  ) => void = () => undefined,
 ): Promise<void> {
   const run = session.skillRun;
   if (!run || run.closed) return;
@@ -477,18 +515,15 @@ export async function prepareSteeringSkills(
     discardExpired();
     const next = (sessionSteeringMessages.get(sessionId) ?? []).find((m) => !m.skillsPrepared);
     if (!next) return;
-    if (next.skillsEligible === false) {
-      // Not client-originated: delivered as steering, never activates skills.
-      next.skillsPrepared = true;
-      next.skillAdditions = Object.freeze([]);
-      next.skillWarnings = Object.freeze([]);
-      continue;
-    }
-
     let result: SkillMatchResult | undefined;
     let failure: SkillError | undefined;
     try {
-      result = await steeringResolver(run.subscriptionId, next.content);
+      // Non-client guidance must not activate skills, but still consumes
+      // model context when delivered into an already-active run.
+      result =
+        next.skillsEligible === false
+          ? { matches: [], warnings: [] }
+          : await steeringResolver(run.subscriptionId, next.content);
     } catch (err) {
       failure = toSkillError(err);
     }
@@ -513,7 +548,12 @@ export async function prepareSteeringSkills(
       }
       const additions = result.matches.filter((snapshot) => !known.has(snapshot.id));
       try {
-        enforceSkillActiveLimits([...union, ...additions]);
+        const candidate = [...union, ...additions];
+        enforceSkillActiveLimits(candidate);
+        validateCandidate(
+          candidate,
+          current.filter((message) => message === next || message.skillsPrepared),
+        );
         next.skillsPrepared = true;
         next.skillAdditions = Object.freeze(additions);
         // A row that became invalid after activation keeps its frozen, still

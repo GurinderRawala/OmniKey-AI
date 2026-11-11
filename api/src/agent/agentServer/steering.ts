@@ -1,15 +1,23 @@
+import type { AIMessage, AITool } from '../../ai-client';
+import type { SkillSnapshot } from '../../skills/contracts';
+import { SkillError } from '../../skills/contracts';
 import type { Logger } from 'winston';
+import { isInjectedUserPrompt } from '../injectedUserPrompts';
 import { pushToSessionHistory, createUserContent } from '../utils';
 import type { AgentMessage, AgentSendFn, SessionState } from '../types';
 import type { PendingSteeringMessage } from './serverTypes';
 import { sessionSteeringIds, sessionSteeringMessages } from './runtimeState';
 import {
+  assertSkillRequestFits,
+  SkillContextBudgetError,
   commitSteeringSkills,
   hasUnpreparedSteering,
   prepareSteeringSkills,
 } from '../skillContext';
 
 export const MAX_STEERING_RESTARTS = 8;
+export const MAX_STEERING_ID_LENGTH = 128;
+export const MAX_RETAINED_STEERING_IDS = 256;
 export const MAX_PENDING_STEERING_MESSAGES = 8;
 export const MAX_PENDING_STEERING_CONTENT_CHARS = 16_000;
 export const STEERING_MESSAGE_TTL_MS = 30 * 60 * 1000;
@@ -116,20 +124,32 @@ export function enqueueSteeringMessage(
   // Per-run, synchronous ID dedup: a retried steering_id is never enqueued,
   // applied or acknowledged twice. Legacy messages without an ID cannot be
   // correlated and are not deduplicated.
-  const clientSteeringId =
-    typeof message.steering_id === 'string' ? message.steering_id.trim() : '';
-  const seenIds = sessionSteeringIds.get(sessionId);
-  if (clientSteeringId && seenIds) {
-    if (seenIds.has(clientSteeringId)) {
-      log.info('Ignored duplicate steering message for active agent turn', { sessionId });
-      return {
-        accepted: false,
-        duplicate: true,
-        pendingCount: sessionSteeringMessages.get(sessionId)?.length ?? 0,
-      };
-    }
-    seenIds.add(clientSteeringId);
+  const rawId = message.steering_id;
+  if (rawId !== undefined && (typeof rawId !== 'string' || rawId.length > MAX_STEERING_ID_LENGTH)) {
+    return {
+      accepted: false,
+      pendingCount: sessionSteeringMessages.get(sessionId)?.length ?? 0,
+      rejectionReason: 'Steering identifier is invalid or too long.',
+    };
   }
+  const clientSteeringId = rawId?.trim() ?? '';
+  const seenIds = sessionSteeringIds.get(sessionId);
+  if (clientSteeringId && seenIds?.has(clientSteeringId)) {
+    return {
+      accepted: false,
+      duplicate: true,
+      pendingCount: sessionSteeringMessages.get(sessionId)?.length ?? 0,
+    };
+  }
+  if (seenIds && seenIds.size >= MAX_RETAINED_STEERING_IDS) {
+    return {
+      accepted: false,
+      pendingCount: sessionSteeringMessages.get(sessionId)?.length ?? 0,
+      rejectionReason:
+        'This task has received too many steering identifiers. Send a new task instead.',
+    };
+  }
+  if (clientSteeringId && seenIds) seenIds.add(clientSteeringId);
 
   const content = normalizeSteeringContent(message.content ?? '');
   if (!content) {
@@ -183,6 +203,44 @@ export function enqueueSteeringMessage(
   return { accepted: true, pendingCount: pending.length };
 }
 
+/** Use identical append semantics for a scratch preflight and the real commit. */
+function historyWithSteering(
+  session: SessionState,
+  pending: readonly PendingSteeringMessage[],
+  hasStoredPrompt: boolean,
+  log: Logger,
+  commit = false,
+): AIMessage[] {
+  const cleaned = pending
+    .map((message) => ({
+      content: createUserContent(message.content, hasStoredPrompt).trim(),
+      receivedAt: message.receivedAt,
+    }))
+    .filter((message) => message.content.length > 0);
+  if (!cleaned.length) return session.history.slice();
+  const scratch = commit ? session : { ...session, history: session.history.slice() };
+  const last = scratch.history.at(-1);
+  const content = formatSteeringContent(cleaned);
+  let popped: AIMessage | undefined;
+  try {
+    if (
+      last?.role === 'user' &&
+      typeof last.content === 'string' &&
+      !isInjectedUserPrompt(last.content)
+    ) {
+      popped = scratch.history.pop();
+      pushToSessionHistory(log, scratch, {
+        ...last,
+        content: [last.content.trimEnd(), content].join('\n\n'),
+      });
+    } else pushToSessionHistory(log, scratch, { role: 'user', content });
+  } catch (err) {
+    if (popped) scratch.history[scratch.history.length] = popped;
+    throw err;
+  }
+  return scratch.history;
+}
+
 export function drainSteeringMessagesIntoHistory(
   sessionId: string,
   session: SessionState,
@@ -209,24 +267,11 @@ export function drainSteeringMessagesIntoHistory(
     return [];
   }
 
-  const steeringContent = formatSteeringContent(cleaned);
-  const lastMessage = session.history.at(-1);
-  let poppedLastMessage: typeof lastMessage | undefined;
+  const previousHistory = session.history;
   try {
-    if (lastMessage?.role === 'user' && typeof lastMessage.content === 'string') {
-      poppedLastMessage = session.history.pop();
-      pushToSessionHistory(log, session, {
-        ...lastMessage,
-        content: [lastMessage.content.trimEnd(), steeringContent].join('\n\n'),
-      });
-    } else {
-      pushToSessionHistory(log, session, {
-        role: 'user',
-        content: steeringContent,
-      });
-    }
+    session.history = historyWithSteering(session, pending, hasStoredPrompt, log, true);
   } catch (err) {
-    if (poppedLastMessage) session.history[session.history.length] = poppedLastMessage;
+    session.history = previousHistory;
     sessionSteeringMessages.set(sessionId, pending);
     throw err;
   }
@@ -254,6 +299,7 @@ export async function drainSteeringMessagesForRun(
   session: SessionState,
   hasStoredPrompt: boolean,
   log: Logger,
+  tools: readonly AITool[],
 ): Promise<PendingSteeringMessage[]> {
   // TTL-expired steering is dropped before and during preparation (seen IDs
   // are kept), exactly as the synchronous drain below would drop it.
@@ -266,7 +312,37 @@ export async function drainSteeringMessagesForRun(
     else sessionSteeringMessages.delete(sessionId);
   };
   while (hasUnpreparedSteering(sessionId, session)) {
-    await prepareSteeringSkills(sessionId, session, log, discardExpired);
+    await prepareSteeringSkills(
+      sessionId,
+      session,
+      log,
+      discardExpired,
+      (snapshots: readonly SkillSnapshot[], pending: readonly PendingSteeringMessage[]) => {
+        const run = session.skillRun;
+        if (!run || !snapshots.length) return;
+        const history = historyWithSteering(session, pending, hasStoredPrompt, log);
+        const candidate = {
+          ...session,
+          history,
+          skillRun: {
+            ...run,
+            active: [...snapshots],
+            activeIds: new Set(snapshots.map((s) => s.id)),
+            anchorContent: history.at(-1)?.content,
+          },
+        };
+        try {
+          assertSkillRequestFits(candidate, session.activeModel ?? '', sessionId, tools);
+        } catch (error) {
+          if (!(error instanceof SkillContextBudgetError)) throw error;
+          throw new SkillError(
+            413,
+            'CONTEXT_LIMIT_EXCEEDED',
+            'Matched skill instructions exceed the context budget. Shorten or disable skills.',
+          );
+        }
+      },
+    );
   }
   const applied = drainSteeringMessagesIntoHistory(sessionId, session, hasStoredPrompt, log);
   commitSteeringSkills(session, applied);

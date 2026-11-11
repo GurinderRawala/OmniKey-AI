@@ -1,61 +1,21 @@
 import type { Logger } from 'winston';
 import { config } from '../../config';
 import { logger } from '../../logger';
-import {
-  aiClient,
-  AIMessage,
-  AITool,
-  AICompletionResult,
-  CompletionOptions,
-  estimateHistoryTokens,
-} from '../../ai-client';
+import { aiClient, AITool, AICompletionResult, CompletionOptions } from '../../ai-client';
 import { pushToSessionHistory } from '../utils';
 import { isInjectedUserPrompt } from '../injectedUserPrompts';
 import type { SessionState } from '../types';
 import { persistSessionToDB } from './sessionStore';
 import { throwIfTurnCancelled } from './turnCancellation';
 import { isContextLengthError, pruneHistoryForContextLimit } from './contextPruning';
+import { buildTrimmedHistoryForRequest, ensureSessionMemory } from './sessionMemory';
 import {
-  buildTrimmedHistoryForRequest,
-  ensureSessionMemory,
-  estimateToolSchemaTokens,
-  getProactiveRequestTokenBudget,
-} from './sessionMemory';
-import {
+  assertSkillRequestFits,
   applySkillOverlay,
   buildSkillOverlay,
   flushSkillInputCheckpoint,
   SkillContextBudgetError,
 } from '../skillContext';
-
-/**
- * Trim the overlay-free request view with the Skills reservation and verify
- * that history + overlay + tool schemas fit the model's safe input budget.
- * Throws SkillContextBudgetError (fail closed) when the budget is unknown or
- * nonpositive, when the reservation alone exhausts it, or when trimming cannot
- * shrink the irreducible history enough. Returns the trimmed base history.
- *
- * Bounds: overlay = UTF-8 bytes (conservative upper bound); history and tool
- * schemas = the repo's existing estimator. Not exact provider tokenization.
- */
-function assertSkillRequestFits(
-  session: SessionState,
-  model: string,
-  sessionId: string,
-  tools: readonly unknown[] | undefined,
-  log?: Logger,
-): AIMessage[] {
-  const overlay = buildSkillOverlay(session);
-  const budget = getProactiveRequestTokenBudget(model);
-  const reserved = (overlay?.reservedTokens ?? 0) + estimateToolSchemaTokens(tools);
-  if (!Number.isFinite(budget) || budget <= 0 || reserved >= budget) {
-    throw new SkillContextBudgetError();
-  }
-  const base = buildTrimmedHistoryForRequest(session, model, sessionId, log, reserved);
-  if (estimateHistoryTokens(base) + reserved > budget) throw new SkillContextBudgetError();
-  if (session.skillRun) session.skillRun.reservedTokensHint = reserved;
-  return base;
-}
 
 // Upper bound on prune-and-retry cycles per completion. Each cycle removes one
 // unit (or compacts one message), so 12 is plenty to claw back from an overflow
