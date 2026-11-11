@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using OmniKey.Windows.Skills;
 
 namespace OmniKey.Windows.ViewModels
 {
@@ -22,7 +23,7 @@ namespace OmniKey.Windows.ViewModels
     /// ChatPage thinking-timeline pattern instead of dumping every
     /// reasoning + terminal block in full.
     /// </summary>
-    internal sealed partial class AgentSessionViewModel : ObservableObject, IAgentSession
+    internal sealed partial class AgentSessionViewModel : ObservableObject, IAgentSession, ISkillNoticeSink
     {
         public static readonly AgentSessionViewModel Shared = new();
 
@@ -327,6 +328,15 @@ namespace OmniKey.Windows.ViewModels
         public void AppendAgentMessage(string text) => OnUi(() =>
         {
             Timeline.Add(new AgentTimelineRow(TimelineKind.Reasoning, (text ?? "").Trim()));
+            BumpThinking();
+        });
+
+        /// <summary>Live Skills notice: one literal line in this run's
+        /// timeline. Cleared with the timeline at the next run; never part of
+        /// the final answer and never restored from session history.</summary>
+        public void AppendSkillNotice(string text) => OnUi(() =>
+        {
+            Timeline.Add(new AgentTimelineRow(TimelineKind.SkillNotice, (text ?? "").Trim()));
             BumpThinking();
         });
 

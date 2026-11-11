@@ -13,6 +13,7 @@ import { setConfig } from './setConfig';
 import { grantBrowserAccess, reopenBrowserDebugProfile } from './grantBrowserAccess';
 import { scheduleAdd, scheduleList, scheduleRemove, scheduleRunNow } from './scheduleJob';
 import { mcpAdd, mcpList, mcpRemove, mcpToggle, mcpUpdate } from './mcpServer';
+import { createProcessDeps, registerSkillsCommand, SkillsExit } from './skills';
 import {
   startTelegramDaemon,
   stopTelegramDaemon,
@@ -271,4 +272,14 @@ telegramDaemonCmd
     uninstallTelegramDaemon();
   });
 
-program.parseAsync(process.argv);
+registerSkillsCommand(program, createProcessDeps());
+
+program.parseAsync(process.argv).catch((err: unknown) => {
+  // Skills usage/help exits are signalled by exception; everything else keeps
+  // the previous unhandled-rejection behavior.
+  if (err instanceof SkillsExit) {
+    process.exitCode = err.exitCode;
+    return;
+  }
+  throw err;
+});

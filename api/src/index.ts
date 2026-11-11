@@ -27,6 +27,8 @@ import './models/mcpServer';
 import './models/subscriptionTaskTemplate';
 import './models/subscriptionUsage';
 import './models/agentSettings';
+import './models/skill';
+import { createSkillRouter } from './skillRoutes';
 import { incrementDownloadCount, getDownloadCounts } from './bucket-adapter';
 
 const app = express();
@@ -35,6 +37,9 @@ const PORT = Number(config.port);
 app.set('trust proxy', 1);
 app.use(cors());
 app.use(compression({ threshold: 1_024 }) as unknown as express.RequestHandler);
+// Skills authenticates before parsing and owns its JSON limit/error envelope,
+// so it is mounted ahead of the global parser.
+app.use('/api/skills', createSkillRouter());
 app.use(express.json());
 
 // Static website pages
@@ -167,8 +172,8 @@ app.get('/macos/appcast', (req, res) => {
 
   // These should match the values embedded into the macOS app
   // Info.plist in macOS/build_release_dmg.sh.
-  const bundleVersion = '74';
-  const shortVersion = '1.9.14';
+  const bundleVersion = '75';
+  const shortVersion = '1.9.15';
 
   const xml = `<?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0"
@@ -181,7 +186,7 @@ app.get('/macos/appcast', (req, res) => {
     <language>en</language>
     <item>
       <title>Version ${shortVersion}</title>
-      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
       <enclosure
         url="${downloadUrl}"
         sparkle:version="${bundleVersion}"

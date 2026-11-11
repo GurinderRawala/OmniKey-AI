@@ -26,7 +26,7 @@ yarn build
 yarn test
 ```
 
-Node ≥ 22 and Yarn 1.22+. Xcode 15+ only if you are touching `macOS/`; .NET 8 only for
+Node ≥ 22 and Yarn 1.22+. Xcode 15+ only if you are touching `macOS/`; .NET 10 only for
 `windows/`. Neither native client is needed to work on the TypeScript services.
 
 ## Where to start
@@ -47,7 +47,7 @@ to contribute to meaningfully:
 1. Branch off `main`.
 2. Keep the change focused. One concern per pull request.
 3. Run `yarn test` and `yarn format` before pushing. For native changes run
-   `swift build && swift test` (macOS) or `dotnet build` (Windows).
+   `swift build && swift test` (macOS) or `dotnet build` and `dotnet test windows.Tests/OmniKey.Windows.Tests.csproj` (Windows).
 4. Add tests when you change behaviour. The `api` workspace uses vitest; see
    `api/src/__tests__/` for the established patterns.
 5. Write a commit message that explains _why_, not just _what_. The diff shows what changed.

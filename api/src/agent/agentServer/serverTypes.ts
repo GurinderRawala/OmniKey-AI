@@ -2,6 +2,7 @@ import type { Logger } from 'winston';
 import type { AITool } from '../../ai-client';
 import type { Subscription } from '../../models/subscription';
 import type { AgentMessage, AgentSendFn } from '../types';
+import type { SkillSnapshot, SkillWarning } from '../../skills/contracts';
 
 // A server-side tool handler injected for a single agent invocation (see
 // AgentTurnOptions.toolHandlers). Receives the parsed tool arguments and
@@ -20,6 +21,12 @@ export interface AgentTurnOptions {
   disableWebTools?: boolean;
   extraTools?: AITool[];
   toolHandlers?: Map<string, CustomToolHandler>;
+  // Set only by the interactive WebSocket queue. Genuine interactive inputs and
+  // their steering may activate Skills; cron/internal/direct callers never do.
+  interactiveInput?: boolean;
+  // Notice capability of the connection that sent this input (and receives
+  // its frames). Literal-true opt-in, per input.
+  supportsSkillStatus?: boolean;
 }
 
 export interface QueuedMessage {
@@ -36,6 +43,16 @@ export interface PendingSteeringMessage {
   receivedAt: string;
   platform?: string;
   groupName?: string;
+  // Sender connection and its per-input Skills notice capability (runtime only).
+  replyTo?: AgentSendFn;
+  supportsSkillStatus?: boolean;
+  // False when the steering was not client-originated: it is still delivered
+  // as steering but never activates skills (runtime only).
+  skillsEligible?: boolean;
+  // Set once Skills resolution for this steering input succeeded (runtime only).
+  skillsPrepared?: boolean;
+  skillAdditions?: readonly SkillSnapshot[];
+  skillWarnings?: readonly SkillWarning[];
 }
 
 export type PendingShellScript = {

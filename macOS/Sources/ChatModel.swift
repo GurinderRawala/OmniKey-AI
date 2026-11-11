@@ -43,6 +43,10 @@ enum ChatBlockKind: Equatable {
     /// they are recovered client-side by `AgentTimelineSummarizer.classify`
     /// and shown as a tool step rather than mislabelled as reasoning.
     case toolCall
+    /// Live-only Skills status notice (applied/warning/blocked). Never
+    /// persisted or hydrated; rendered as its own neutral timeline row so it
+    /// cannot become the summary of preceding tool activity.
+    case skillStatus
     case finalAnswer
 }
 
@@ -57,6 +61,8 @@ enum TranscriptContentIntegrity {
         case .mcpCall: wireKind = "mcpCall"
         case .imageRendering: wireKind = "imageRendering"
         case .finalAnswer: wireKind = "finalAnswer"
+        // Never sent by the server; a distinct tag can never match a server id.
+        case .skillStatus: wireKind = "skillStatus"
         }
         let digest = SHA256.hash(
             data: Data("transcript-content-v1\0\(wireKind)\0\(text)".utf8)

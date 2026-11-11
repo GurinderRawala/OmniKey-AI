@@ -15,8 +15,16 @@ final class APIClient: @unchecked Sendable {
     /// 2. Environment variable `OMNIKEY_BACKEND_URL` at runtime
     /// 3. Info.plist key `OMNIKEY_BACKEND_URL` (set by build_release_dmg.sh)
     /// 4. Fallback to local development server at http://localhost:7071
-    static var baseURL: URL {
-        if let port = selfHostedPort() {
+    static var baseURL: URL { resolveBaseURL(selfHostedPort: selfHostedPort()) }
+
+    /// URL and self-hosted mode from one configuration read, so they agree.
+    static var backendSelection: BackendSelection {
+        let port = selfHostedPort()
+        return BackendSelection(baseURL: resolveBaseURL(selfHostedPort: port), isSelfHosted: port != nil)
+    }
+
+    private static func resolveBaseURL(selfHostedPort: String?) -> URL {
+        if let port = selfHostedPort {
             return URL(string: "http://localhost:\(port)")!
         }
         if let env = ProcessInfo.processInfo.environment["OMNIKEY_BACKEND_URL"], !env.isEmpty,
@@ -186,10 +194,13 @@ final class APIClient: @unchecked Sendable {
         task.resume()
     }
 
+    /// Internal (not private) with an injectable manager so tests drive the
+    /// real helper; production callers use the `.shared` default.
     @discardableResult
-    private func handleAuthFailure<T>(
+    func handleAuthFailure<T>(
         statusCode: Int,
         allowReauth: Bool,
+        manager: SubscriptionManager = .shared,
         onRetry: @escaping @Sendable () -> Void,
         completion: @escaping @Sendable (Result<T, Error>) -> Void
     ) -> Bool {
@@ -201,15 +212,21 @@ final class APIClient: @unchecked Sendable {
         // If we've already attempted reauth for this request,
         // fall back to the standard unauthorized handling.
         guard allowReauth else {
-            handleUnauthorized(statusCode: statusCode, completion: completion)
+            handleUnauthorized(statusCode: statusCode, manager: manager, completion: completion)
             return true
         }
 
-        SubscriptionManager.shared.reactivateStoredKeyIfNeeded { outcome in
+        manager.reactivateStoredKeyIfNeeded { outcome in
             switch outcome {
             case .success:
                 // We have a fresh JWT; let the caller retry once.
                 onRetry()
+
+            case .superseded:
+                // The subscription/backend changed mid-request: fail this
+                // request without retrying it as, invalidating or expiring
+                // the newer subscription.
+                completion(.failure(SubscriptionManager.supersededError))
 
             case .noStoredKey, .expired:
                 // No key to re-activate, or server reports the
@@ -226,7 +243,7 @@ final class APIClient: @unchecked Sendable {
             case .failure:
                 // Re-activation failed for a non-expiry reason;
                 // treat as a generic unauthorized.
-                self.handleUnauthorized(statusCode: statusCode, completion: completion)
+                self.handleUnauthorized(statusCode: statusCode, manager: manager, completion: completion)
             }
         }
 
@@ -235,9 +252,10 @@ final class APIClient: @unchecked Sendable {
 
     private func handleUnauthorized<T>(
         statusCode: Int,
+        manager: SubscriptionManager,
         completion: @escaping @Sendable (Result<T, Error>) -> Void
     ) {
-        SubscriptionManager.shared.invalidateToken()
+        manager.invalidateToken()
         NotificationCenter.default.post(name: .subscriptionUnauthorized, object: nil)
 
         let error = NSError(

@@ -217,58 +217,101 @@ final class ChatSessionRunner {
     ) -> ChatSessionRunHandle {
         let handle = ChatSessionRunHandle()
 
-        // Acquire a JWT first (same flow as `AgentRunner.startSession`).
-        if let token = SubscriptionManager.shared.jwtToken, !token.isEmpty {
-            connect(
-                sessionId: sessionId,
-                jwt: token,
-                userText: userText,
-                groupName: groupName,
-                model: model,
-                allowReauth: true,
-                handle: handle,
-                onBlock: onBlock,
-                onSteeringEvent: onSteeringEvent,
-                onFinal: onFinal,
-                onError: onError
-            )
-            return handle
-        }
-
-        SubscriptionManager.shared.reactivateStoredKeyIfNeeded { outcome in
-            switch outcome {
-            case .success:
-                let jwt = SubscriptionManager.shared.jwtToken ?? ""
-                DispatchQueue.main.async {
-                    self.connect(
-                        sessionId: sessionId,
-                        jwt: jwt,
-                        userText: userText,
-                        groupName: groupName,
-                        model: model,
-                        allowReauth: false,
-                        handle: handle,
-                        onBlock: onBlock,
-                        onSteeringEvent: onSteeringEvent,
-                        onFinal: onFinal,
-                        onError: onError
-                    )
+        // Acquire credentials first (same rules as `AgentRunner.startSession`).
+        Self.resolveConnection(manager: .shared) { result in
+            switch result {
+            case let .success(connection):
+                // A turn stopped while credentials were pending never connects.
+                guard !handle.isCancelledByUser else {
+                    onError(NSError(
+                        domain: "ChatSessionRunner",
+                        code: -9999,
+                        userInfo: [NSLocalizedDescriptionKey: "Chat turn cancelled."]
+                    ))
+                    return
                 }
-
-            case .noStoredKey, .expired:
-                let error = NSError(
-                    domain: "ChatSessionRunner",
-                    code: 401,
-                    userInfo: [NSLocalizedDescriptionKey: "Subscription is not active."]
+                self.connect(
+                    sessionId: sessionId,
+                    connection: connection,
+                    userText: userText,
+                    groupName: groupName,
+                    model: model,
+                    handle: handle,
+                    onBlock: onBlock,
+                    onSteeringEvent: onSteeringEvent,
+                    onFinal: onFinal,
+                    onError: onError
                 )
-                DispatchQueue.main.async { onError(error) }
-
             case let .failure(error):
-                DispatchQueue.main.async { onError(error) }
+                onError(error)
             }
         }
 
         return handle
+    }
+
+    /// The backend, identity and token one chat turn connects with, taken
+    /// from a single snapshot. Never logged (the token is a credential).
+    struct ChatConnection: Sendable {
+        let identity: SubscriptionIdentity
+        let baseURL: URL
+        let token: String
+    }
+
+    static let notActiveError = NSError(
+        domain: "ChatSessionRunner",
+        code: 401,
+        userInfo: [NSLocalizedDescriptionKey: "Subscription is not active."]
+    )
+
+    /// Resolves the credentials for a turn bound to the identity current
+    /// when it starts. With a token for that identity it completes inline;
+    /// otherwise it re-activates and hops to the main queue. The connection
+    /// is refused with `supersededError` if, by the time it would be used,
+    /// the subscription or backend differs from the one the turn started
+    /// for, so a queued turn never connects (or sends its text) as another
+    /// subscription or to another backend. Completion runs on the main actor.
+    static func resolveConnection(
+        manager: SubscriptionManager,
+        completion: @escaping @MainActor @Sendable (Result<ChatConnection, Error>) -> Void
+    ) {
+        let initial = manager.authSnapshot()
+        let start = initial.identity
+        if let start, let first = AgentAuthRetry.credentials(for: start, from: initial) {
+            completion(.success(ChatConnection(identity: start, baseURL: first.baseURL, token: first.token)))
+            return
+        }
+
+        manager.reactivateStoredKeyIfNeeded { outcome in
+            let result: Result<ChatConnection, Error>
+            switch outcome {
+            case .success:
+                if let start, let next = AgentAuthRetry.credentials(for: start, from: manager.authSnapshot()) {
+                    result = .success(ChatConnection(identity: start, baseURL: next.baseURL, token: next.token))
+                } else {
+                    result = .failure(SubscriptionManager.supersededError)
+                }
+            case .superseded:
+                // Fail without connecting as the newer subscription.
+                result = .failure(SubscriptionManager.supersededError)
+            case .noStoredKey, .expired:
+                result = .failure(notActiveError)
+            case let .failure(error):
+                result = .failure(error)
+            }
+
+            DispatchQueue.main.async {
+                // Re-check at the moment of use: the queued hop can run
+                // after a sign-out, key change or backend switch.
+                if case let .success(connection) = result,
+                   !AgentAuthRetry.mayReplay(startedFor: connection.identity, current: manager.currentIdentity)
+                {
+                    completion(.failure(SubscriptionManager.supersededError))
+                    return
+                }
+                completion(result)
+            }
+        }
     }
 
     func sendSteeringMessage(
@@ -286,7 +329,8 @@ final class ChatSessionRunner {
             isError: false,
             isSteering: true,
             steeringID: steeringID,
-            platform: "macos"
+            platform: "macos",
+            supportsSkillStatus: true
         )
 
         let encoder = JSONEncoder()
@@ -317,18 +361,18 @@ final class ChatSessionRunner {
 
     private func connect(
         sessionId: String,
-        jwt: String,
+        connection: ChatConnection,
         userText: String,
         groupName: String?,
         model: String? = nil,
-        allowReauth: Bool,
         handle: ChatSessionRunHandle,
         onBlock: @escaping @MainActor @Sendable (ChatBlock) -> Void,
         onSteeringEvent: @escaping @MainActor @Sendable (SteeringServerEvent) -> Void,
         onFinal: @escaping @MainActor @Sendable (String) -> Void,
         onError: @escaping @MainActor @Sendable (Error) -> Void
     ) {
-        guard let url = ChatSessionRunner.makeAgentWebSocketURL() else {
+        // The backend the token was issued for, not a fresh config read.
+        guard let url = ChatSessionRunner.makeAgentWebSocketURL(baseURL: connection.baseURL) else {
             let error = NSError(
                 domain: "ChatSessionRunner",
                 code: -1,
@@ -343,11 +387,11 @@ final class ChatSessionRunner {
         startAgentWebSocketSession(
             url: url,
             sessionID: sessionId,
-            jwt: jwt,
+            jwt: connection.token,
             originalText: userText,
             groupName: groupName,
             model: model,
-            allowReauth: allowReauth,
+            allowReauth: false,
             handle: handle,
             onBlock: onBlock,
             onSteeringEvent: onSteeringEvent,
@@ -377,6 +421,9 @@ final class ChatSessionRunner {
         let platform: String?
         let groupName: String?
         let model: String?
+        /// Client -> server opt-in for nonterminal Skills notices. Sent only
+        /// on genuine user input (the initial message and steering).
+        let supportsSkillStatus: Bool?
 
         init(
             sessionID: String,
@@ -395,7 +442,8 @@ final class ChatSessionRunner {
             steeringPendingCount: Int? = nil,
             platform: String? = nil,
             groupName: String? = nil,
-            model: String? = nil
+            model: String? = nil,
+            supportsSkillStatus: Bool? = nil
         ) {
             self.sessionID = sessionID
             self.sender = sender
@@ -414,6 +462,7 @@ final class ChatSessionRunner {
             self.platform = platform
             self.groupName = groupName
             self.model = model
+            self.supportsSkillStatus = supportsSkillStatus
         }
 
         enum CodingKeys: String, CodingKey {
@@ -434,6 +483,7 @@ final class ChatSessionRunner {
             case platform
             case model
             case groupName = "group_name"
+            case supportsSkillStatus = "supports_skill_status"
         }
     }
 
@@ -506,6 +556,8 @@ final class ChatSessionRunner {
         let encoder = JSONEncoder()
         let decoder = JSONDecoder()
         let completion = ChatSessionCompletion()
+        // Live-only Skills feedback, deduplicated for this turn alone.
+        let skillNotices = SkillStatusTracker()
 
         @Sendable func finishWithError(_ error: Error) {
             guard completion.finish() else { return }
@@ -547,9 +599,25 @@ final class ChatSessionRunner {
                         return
                     }
 
-                    guard let data = text.data(using: .utf8),
-                          let response = try? decoder.decode(AgentMessage.self, from: data)
-                    else {
+                    guard let data = text.data(using: .utf8) else {
+                        receiveNext()
+                        return
+                    }
+
+                    // Skills notices are status only. Intercept them before any
+                    // tool, steering, shell-script, or final-answer parsing so
+                    // their content can never run a command or end the turn.
+                    if case let .consumed(display) = SkillNoticeInterceptor.intercept(data, tracker: skillNotices) {
+                        if let display {
+                            DispatchQueue.main.async {
+                                onBlock(ChatSessionRunner.skillStatusBlock(display))
+                            }
+                        }
+                        receiveNext()
+                        return
+                    }
+
+                    guard let response = try? decoder.decode(AgentMessage.self, from: data) else {
                         print("[ChatSessionRunner] Failed to decode AgentMessage; skipping.")
                         receiveNext()
                         return
@@ -759,7 +827,8 @@ final class ChatSessionRunner {
             isError: false,
             platform: "macos",
             groupName: groupName,
-            model: model
+            model: model,
+            supportsSkillStatus: true
         )
 
         guard let data = try? encoder.encode(initial),
@@ -783,6 +852,14 @@ final class ChatSessionRunner {
         }
     }
 
+    /// A dedicated live-only Skills row. Its own kind keeps it out of tool
+    /// reclassification, the reasoning noise filter, and milestone grouping,
+    /// so a notice can never relabel the preceding tool activity. The
+    /// timeline renders it literally via `Text(String)`.
+    nonisolated static func skillStatusBlock(_ text: String) -> ChatBlock {
+        ChatBlock(kind: .skillStatus, text: text)
+    }
+
     static func genericErrorBlock(from response: AgentMessage) -> ChatBlock {
         ChatBlock(
             kind: .toolCall,
@@ -796,8 +873,8 @@ final class ChatSessionRunner {
 
     /// Mirror of `AgentRunner.makeAgentWebSocketURL` — kept private here so
     /// this file does not depend on a non-public helper.
-    private static func makeAgentWebSocketURL() -> URL? {
-        guard var components = URLComponents(url: APIClient.baseURL, resolvingAgainstBaseURL: false) else {
+    static func makeAgentWebSocketURL(baseURL: URL) -> URL? {
+        guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
             return nil
         }
 

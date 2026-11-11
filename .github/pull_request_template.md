@@ -10,7 +10,7 @@
 
 - [ ] `yarn test` passes
 - [ ] `yarn format` has been run
-- [ ] Native changes build (`swift build && swift test`, or `dotnet build`)
+- [ ] Native changes build (`swift build && swift test`, or `dotnet build` and `dotnet test windows.Tests/OmniKey.Windows.Tests.csproj`)
 - [ ] If this touches `cli/**`, the patch version is bumped in `cli/package.json`,
       `api/package.json`, and `cli/package-lock.json` (a merge to `main` publishes to npm,
       and npm rejects republishing an existing version)

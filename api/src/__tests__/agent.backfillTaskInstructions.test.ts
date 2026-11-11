@@ -115,7 +115,7 @@ describe('backfillSessionTaskInstructions', () => {
     expect(mocks.sessionUpdate).toHaveBeenCalledTimes(1);
     expect(mocks.sessionUpdate).toHaveBeenCalledWith(
       { taskInstructionId: 'tpl_coder', taskInstructionHeading: 'Coder' },
-      { where: { id: 'sess_1' } },
+      { where: { id: 'sess_1', subscriptionId: 'sub_1' } },
     );
   });
 
@@ -173,7 +173,7 @@ describe('backfillSessionTaskInstructions', () => {
     expect(mocks.sessionUpdate).toHaveBeenCalledTimes(1);
     expect(mocks.sessionUpdate).toHaveBeenCalledWith(
       { taskInstructionId: 'tpl_good', taskInstructionHeading: 'Good' },
-      { where: { id: 'sess_good' } },
+      { where: { id: 'sess_good', subscriptionId: 'sub_1' } },
     );
   });
 

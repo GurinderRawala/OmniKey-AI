@@ -102,7 +102,7 @@ describe('agent session memory compaction', () => {
         sessionMemoryHistoryLength: 3,
         sessionMemoryUpdatedAt: expect.any(Date),
       }),
-      { where: { id: 'session-1' } },
+      { where: { id: 'session-1', subscriptionId: 'subscription-1' } },
     );
 
     const compacted = buildCompactedHistoryForRequest(session);

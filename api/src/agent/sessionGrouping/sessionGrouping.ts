@@ -233,7 +233,12 @@ export async function updateSessionGroup(sessionId: string, subscriptionId: stri
       (g) => g.groupName.toLowerCase() === result.groupName.toLowerCase(),
     );
 
-    await AgentSession.update({ groupName: result.groupName }, { where: { id: sessionId } });
+    // Owner-scoped: the id could be reused by another subscription during the
+    // classification call, and must never receive this owner's group.
+    await AgentSession.update(
+      { groupName: result.groupName },
+      { where: { id: sessionId, subscriptionId } },
+    );
 
     logger.info('Session group updated', {
       sessionId,

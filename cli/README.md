@@ -369,3 +369,18 @@ Commands that query process state use `netstat` (instead of `lsof`) on Windows, 
 ## License
 
 MIT
+
+## Skills management and preview
+
+```sh
+omnikey skills add --name "Review" --keyword "code review" --instructions-file review.md
+omnikey skills list --json
+omnikey skills show <id>
+omnikey skills edit <id> --instructions-file revised.md
+omnikey skills disable <id>
+omnikey skills enable <id>
+omnikey skills match --text "Please code review" --json
+omnikey skills delete <id> --yes
+```
+
+All operations use authenticated HTTP to the configured local daemon; no CLI skill database or agent runner is added. `match` never invokes tools or an LLM. Use `--instructions-file -` for stdin. Non-TTY missing inputs fail clearly. Updates/deletes use current revisions (`--revision` can assert an expected version); conflicts never overwrite silently. JSON success output is stdout and errors are stderr; exits are 0 success, 1 API/auth/network/file failure, 2 local usage. Same backend + identity is required for native sharing. [Full Skills guide](../docs/skills.md).

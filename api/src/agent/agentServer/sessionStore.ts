@@ -18,12 +18,77 @@ import {
 } from './transcript';
 import { replaceNormalizedTranscript } from './transcriptStore';
 
+/**
+ * The session id cannot be used by this subscription: it belongs to another
+ * subscription, or ownership could not be proven (lookup/creation failed).
+ * Carries no owner details; callers must stop before any turn work.
+ */
+export class SessionAccessError extends Error {
+  constructor() {
+    super('Agent session is unavailable for this subscription');
+    this.name = 'SessionAccessError';
+  }
+}
+
+/** Fixed refusal text for a foreign/unverifiable session id; no owner details. */
+export const SESSION_UNAVAILABLE_MESSAGE =
+  'This message could not be processed. Start a new session and try again.';
+
+/**
+ * Narrow id-only ownership check (one primary-key read, no session state).
+ * True when the id is unused or already owned by `subscriptionId`; false when
+ * another subscription owns it or the lookup fails (fail closed). An unused id
+ * stays claimable: creation races are settled by `getOrCreateSession`.
+ */
+export async function isSessionIdAvailableTo(
+  sessionId: string,
+  subscriptionId: string,
+  log: Logger,
+): Promise<boolean> {
+  try {
+    const existing = await AgentSession.findOne({
+      where: { id: sessionId },
+      attributes: ['subscriptionId'],
+    });
+    if (existing && existing.subscriptionId !== subscriptionId) {
+      log.warn('Rejected agent session id owned by another subscription', { sessionId });
+      return false;
+    }
+    return true;
+  } catch (err) {
+    log.error('Failed to verify agent session ownership; refusing the turn', {
+      sessionId,
+      error: err,
+    });
+    return false;
+  }
+}
+
+/** Every session-row write is scoped to the owning subscription. */
+export function ownedSessionWhere(
+  sessionId: string,
+  subscriptionId: string,
+): { id: string; subscriptionId: string } {
+  return { id: sessionId, subscriptionId };
+}
+
 export async function persistSessionToDB(sessionId: string, state: SessionState): Promise<void> {
   try {
     const historyJson = JSON.stringify(state.history);
-    const estimatedPromptTokens = estimateHistoryTokens(
-      buildTrimmedHistoryForRequest(state, state.activeModel, sessionId),
-    );
+    // An active run's request-only Skills reservation (overlay + tool schemas)
+    // counts toward "context remaining" without ever entering stored history.
+    const skillReservation =
+      state.skillRun && !state.skillRun.closed ? (state.skillRun.reservedTokensHint ?? 0) : 0;
+    const estimatedPromptTokens =
+      estimateHistoryTokens(
+        buildTrimmedHistoryForRequest(
+          state,
+          state.activeModel,
+          sessionId,
+          undefined,
+          skillReservation,
+        ),
+      ) + skillReservation;
     const transcriptRevision = completedTranscriptRevision(buildTranscript(state.history));
     const [updatedRows] = await AgentSession.update(
       {
@@ -42,9 +107,10 @@ export async function persistSessionToDB(sessionId: string, state: SessionState)
           ? getContextWindowSize(config.aiProvider, state.activeModel)
           : null,
       },
-      { where: { id: sessionId } },
+      { where: ownedSessionWhere(sessionId, state.subscription.id) },
     );
-    // Internal helper sessions can be deleted while a late asynchronous
+    // A zero-row update also covers a row owned by another subscription:
+    // never publish transcript rows for it. Internal helper sessions can be deleted while a late asynchronous
     // checkpoint is unwinding. Never publish child transcript rows when the
     // authoritative parent session no longer exists.
     if (updatedRows === 0) {
@@ -60,6 +126,7 @@ export async function persistSessionToDB(sessionId: string, state: SessionState)
           sessionId,
           state.history,
           transcriptRevision ?? undefined,
+          state.subscription.id,
         );
       } catch (err) {
         logger.error('Failed to publish normalized agent transcript', {
@@ -92,7 +159,7 @@ async function enforceSessionCap(subscriptionId: string, log: Logger): Promise<v
     });
 
     const ids = oldest.map((s) => s.id);
-    await AgentSession.destroy({ where: { id: ids } });
+    await AgentSession.destroy({ where: { id: ids, subscriptionId } });
     log.info('Pruned oldest agent sessions to enforce cap', {
       subscriptionId,
       pruned: ids.length,
@@ -173,10 +240,22 @@ export async function getOrCreateSession(
       };
     }
   } catch (err) {
-    log.error('Failed to load agent session from DB; creating a fresh one', {
+    // Fail closed: a fresh in-memory session could later overwrite the stored
+    // row (including one owned by another subscription).
+    log.error('Failed to load agent session from DB; refusing the turn', {
       sessionId,
       error: err,
     });
+    throw new SessionAccessError();
+  }
+
+  // 1b. Ownership: an id that already exists under another subscription
+  // (including the shared 'default' id) is never resumed, recreated or written.
+  // Checked before any template, MCP, model or tool work. A row the caller
+  // owns that appeared since step 1 (same-owner race) is reused below by
+  // findOrCreate's owner-scoped `!created` branch.
+  if (!(await isSessionIdAvailableTo(sessionId, subscription.id, log))) {
+    throw new SessionAccessError();
   }
 
   // 2. Create a brand-new session and persist it to the DB.
@@ -283,7 +362,7 @@ ${prompt}
             groupDescription: groupMeta.groupDescription,
             groupDescriptionUpdatedAt: groupMeta.groupDescriptionUpdatedAt,
           },
-          { where: { id: sessionId } },
+          { where: ownedSessionWhere(sessionId, subscription.id) },
         );
       }
       const effectiveGroupName = dbSession.groupName ?? (adoptUserGroup ? groupName! : null);
@@ -321,7 +400,13 @@ ${prompt}
     // Prune oldest sessions after each creation so the cap is always respected.
     void enforceSessionCap(subscription.id, log);
   } catch (err) {
-    log.error('Failed to create agent session in DB', { sessionId, error: err });
+    // Includes a creation race lost to another subscription (primary-key
+    // conflict): ownership is unproven, so the turn must not run.
+    log.error('Failed to create agent session in DB; refusing the turn', {
+      sessionId,
+      error: err,
+    });
+    throw new SessionAccessError();
   }
 
   log.info('Created new agent session', {
