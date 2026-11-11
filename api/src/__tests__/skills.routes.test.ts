@@ -29,6 +29,7 @@ vi.mock('../authMiddleware', () => ({
 
 import { createSkillRouter, SKILLS_JSON_BODY_LIMIT_BYTES } from '../skillRoutes';
 import { defineSkillModel } from '../models/skill';
+import { createSkillResolver, resolveSkillsForInput } from '../skills/resolveSkills';
 
 const SECRET = 'ROUTE-SECRET-INSTRUCTIONS-91c2';
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'skills-routes-'));
@@ -556,6 +557,97 @@ describe('POST /api/skills/match preview', () => {
         code: 'ACTIVE_LIMIT_EXCEEDED',
         message: 'Too many skills matched. Use fewer keywords or disable some skills.',
       },
+    });
+  });
+
+  it('applies real default active and aggregate limits through the shared resolver', async () => {
+    await seq.query("INSERT INTO subscriptions (id) VALUES ('owner-limits')");
+    const created: string[] = [];
+    for (let i = 0; i < 9; i++) {
+      const skill = await store.create('owner-limits', {
+        name: `Limit ${i}`,
+        keyword: `limit${i}`,
+        instructions: i < 8 ? 'x'.repeat(2_000) : 'y',
+      });
+      created.push(skill.id);
+    }
+    // Default wiring: no resolveSkills option, the injected store is still used.
+    const app = makeApp();
+    const post = (text: string) =>
+      request(app).post('/api/skills/match').set('x-test-owner', 'owner-limits').send({ text });
+
+    const eight = await post('limit0 limit1 limit2 limit3 limit4 limit5 limit6 limit7');
+    expect(eight.status).toBe(200);
+    expect(eight.body.matches).toHaveLength(8); // exactly 8 skills and 16,000 code points
+    expect(JSON.stringify(eight.body)).not.toContain('xxxx');
+
+    const nine = await post('limit0 limit1 limit2 limit3 limit4 limit5 limit6 limit7 limit8');
+    expect(nine.status).toBe(413);
+    expect(nine.body).toEqual({
+      error: {
+        code: 'ACTIVE_LIMIT_EXCEEDED',
+        message: 'Too many skills matched. Use fewer keywords or disable some skills.',
+      },
+    });
+
+    // 7 x 2,000 + 2,000 + 1 = 16,001 code points across 8 skills.
+    const second = await store.get('owner-limits', created[8]);
+    await store.update('owner-limits', created[8], second.revision, {
+      instructions: 'z'.repeat(2_001),
+    });
+    const aggregate = await post('limit0 limit1 limit2 limit3 limit4 limit5 limit6 limit8');
+    expect(aggregate.status).toBe(413);
+    expect(aggregate.body).toEqual({
+      error: {
+        code: 'CONTEXT_LIMIT_EXCEEDED',
+        message: 'Matched skill instructions exceed the context budget. Shorten or disable skills.',
+      },
+    });
+    expect(JSON.stringify([eight.body, nine.body, aggregate.body])).not.toContain('zzzz');
+  });
+
+  it('fails closed through the exported default resolver when the shared store is unavailable', async () => {
+    // No store/resolver injected: the shared default store is bound to the
+    // mocked in-memory db, which has no skills table (an outage, not empty).
+    const app = express();
+    app.use('/api/skills', createSkillRouter({ auth: headerAuth, logger }));
+    const preview = await request(app)
+      .post('/api/skills/match')
+      .set('x-test-owner', 'owner-a')
+      .send({ text: 'anything' });
+    expect(preview.status).toBe(503);
+    expect(preview.body).toEqual({
+      error: {
+        code: 'STORE_UNAVAILABLE',
+        message: 'Skills are temporarily unavailable. Please retry.',
+      },
+    });
+    const direct = resolveSkillsForInput('owner-a', 'anything');
+    await expect(direct).rejects.toBeInstanceOf(SkillError);
+    await expect(direct).rejects.toMatchObject({ status: 503, code: 'STORE_UNAVAILABLE' });
+  });
+
+  it('maps resolver acquisition and unexpected matcher failures to safe SkillErrors', async () => {
+    const noStore = createSkillResolver({
+      getStore: async () => {
+        throw new Error(`cannot open ${SECRET}`);
+      },
+    });
+    await expect(noStore('owner-a', 'x')).rejects.toMatchObject({
+      status: 503,
+      code: 'STORE_UNAVAILABLE',
+      message: 'Skills are temporarily unavailable. Please retry.',
+    });
+    const brokenMatcher = createSkillResolver({
+      getStore: async () => store,
+      match: () => {
+        throw new Error(`matcher bug ${SECRET}`);
+      },
+    });
+    await expect(brokenMatcher('owner-a', 'x')).rejects.toMatchObject({
+      status: 500,
+      code: 'INTERNAL_ERROR',
+      message: 'Skills could not be processed.',
     });
   });
 

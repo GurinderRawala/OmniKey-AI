@@ -31,7 +31,7 @@ import { getOrCreateSession, persistSessionToDB } from './sessionStore';
 import {
   consumeSteeringRestart,
   createSteeringRestartBudget,
-  drainSteeringMessagesIntoHistory,
+  drainSteeringMessagesForRun,
   sendSteeringAppliedNotice,
   STEERING_RESTART_LIMIT_MESSAGE,
 } from './steering';
@@ -40,12 +40,23 @@ import { runToolLoop } from './toolLoop';
 import { ToolProgressGuard } from './toolProgressGuard';
 import { extractProgressSummary, isProgressOnlyResponse } from './progressSummary';
 import { throwIfTurnCancelled } from './turnCancellation';
+import {
+  anchorSkillsToLatestUserMessage,
+  closeSkillRun,
+  flushSkillInputCheckpoint,
+  sendSkillContextLimitFrames,
+  SkillContextBudgetError,
+  startSkillRun,
+  type SkillRunState,
+} from '../skillContext';
 
 type InternalAgentTurnOptions = AgentTurnOptions & {
   progressGuard?: ToolProgressGuard;
   untaggedDepth?: number;
   webFallbackDepth?: number;
   steeringRestartCount?: number;
+  // Outer-run Skills state, threaded unchanged through every recursion.
+  skillRun?: SkillRunState;
 };
 
 function hasTag(content: string, tag: string): boolean {
@@ -90,6 +101,8 @@ async function runAgentTurnInternal(
   );
 
   session.signal = options?.signal;
+  // Runtime-only; each recursive invocation reloads the session, so reattach.
+  session.skillRun = options?.skillRun;
   throwIfTurnCancelled(session.signal);
 
   // Count this call as one agent iteration.
@@ -203,20 +216,34 @@ async function runAgentTurnInternal(
           ].join('\n'),
     });
     session.lastModelPromptTokens = undefined;
+    if (!isAssistance) anchorSkillsToLatestUserMessage(session);
 
-    // Use the first real user message (turn 1) as the session title.
-    if (session.turns === 1 && !isAssistance) {
-      const rawInput = clientMessage.content || '';
-      const titleSlug = rawInput.trim().slice(0, 60).replace(/\s+/g, ' ');
-      if (titleSlug) {
-        AgentSession.update({ title: titleSlug }, { where: { id: sessionId } }).catch((err) => {
-          log.error('Failed to update agent session title', { sessionId, error: err });
-        });
+    const isFirstTurn = session.turns === 1;
+    const writeInputCheckpoint = async () => {
+      // Use the first real user message (turn 1) as the session title.
+      if (isFirstTurn && !isAssistance) {
+        const rawInput = clientMessage.content || '';
+        const titleSlug = rawInput.trim().slice(0, 60).replace(/\s+/g, ' ');
+        if (titleSlug) {
+          AgentSession.update({ title: titleSlug }, { where: { id: sessionId } }).catch((err) => {
+            log.error('Failed to update agent session title', { sessionId, error: err });
+          });
+        }
       }
-    }
 
-    // Durable checkpoint for interrupted turns.
-    await persistSessionToDB(sessionId, session);
+      // Durable checkpoint for interrupted turns.
+      await persistSessionToDB(sessionId, session);
+    };
+
+    const skillRun = session.skillRun;
+    if (skillRun && !skillRun.closed && skillRun.active.length > 0 && !isAssistance) {
+      // Skills active: the input/title are written once the first request
+      // passed the Skills budget and the provider accepted it (or on a
+      // non-budget stop), so an initial budget rejection persists nothing.
+      skillRun.pendingInputCheckpoint = writeInputCheckpoint;
+    } else {
+      await writeInputCheckpoint();
+    }
   }
 
   const mcpBundle = await getMcpToolsForSubscription(subscription.id, log);
@@ -280,7 +307,7 @@ async function runAgentTurnInternal(
     await recordUsage(current);
 
     for (;;) {
-      const steeringMessages = drainSteeringMessagesIntoHistory(
+      const steeringMessages = await drainSteeringMessagesForRun(
         sessionId,
         session,
         hasStoredPrompt,
@@ -328,7 +355,7 @@ async function runAgentTurnInternal(
   };
 
   const restartAfterPendingSteering = async (): Promise<boolean> => {
-    const steeringMessages = drainSteeringMessagesIntoHistory(
+    const steeringMessages = await drainSteeringMessagesForRun(
       sessionId,
       session,
       hasStoredPrompt,
@@ -756,6 +783,21 @@ async function runAgentTurnInternal(
       await persistAndSendFailure('The agent returned an empty response. Please try again.');
     }
   } catch (err) {
+    if (err instanceof SkillContextBudgetError && !session.signal?.aborted && session.skillRun) {
+      // Fixed context-limit frames only: no further model/tool work and no
+      // persisted failure or overlay. Already completed work stays as it was
+      // checkpointed; completed tool side effects are not (and cannot be)
+      // rolled back. An initial rejection leaves the input unpersisted.
+      log.warn('Skills context budget exceeded; stopping agent run', {
+        sessionId,
+        inputId: session.skillRun.inputId,
+      });
+      session.skillRun.pendingInputCheckpoint = undefined;
+      sendSkillContextLimitFrames(session.skillRun);
+      return;
+    }
+    // Any other stop keeps the previous durable-checkpoint behavior.
+    await flushSkillInputCheckpoint(session.skillRun);
     if (session.signal?.aborted) {
       log.info('Agent turn cancelled after saving completed tool results', { sessionId });
       return;
@@ -798,10 +840,45 @@ export async function runAgentTurn(
     });
     return;
   }
+  // Skills: only interactive WebSocket inputs, never cron/internal helper runs.
+  // Resolution happens before any session, turn, history, model or tool work;
+  // a blocked input returns here with fixed frames and nothing persisted.
+  let skillRun: SkillRunState | undefined;
+  if (
+    options?.interactiveInput &&
+    !options.isCronJob &&
+    !options.extraTools?.length &&
+    !options.toolHandlers?.size
+  ) {
+    const run = await startSkillRun({
+      sessionId,
+      subscriptionId: subscription.id,
+      message: clientMessage,
+      send,
+      supportsSkillStatus: options.supportsSkillStatus === true,
+      log,
+      signal: options.signal,
+    });
+    // Blocked: fixed frames already sent. Cancelled: nothing sent or persisted.
+    if (run === 'blocked' || run === 'cancelled') return;
+    skillRun = run;
+  }
   // untaggedDepth always starts at 0 for external callers; it is only threaded
   // through the internal recursive path.
-  return runAgentTurnInternal(sessionId, subscription, clientMessage, send, log, {
-    ...options,
-    progressGuard: new ToolProgressGuard(),
-  });
+  try {
+    return await runAgentTurnInternal(sessionId, subscription, clientMessage, send, log, {
+      ...options,
+      progressGuard: new ToolProgressGuard(),
+      skillRun,
+    });
+  } catch (err) {
+    // Errors outside the internal try (e.g. tool discovery) keep the previous
+    // durable-checkpoint behavior for a deferred input checkpoint.
+    await flushSkillInputCheckpoint(skillRun);
+    throw err;
+  } finally {
+    // Outer boundary only: after every recursive/tool continuation, error,
+    // cancellation or disconnect.
+    if (skillRun) closeSkillRun(skillRun);
+  }
 }

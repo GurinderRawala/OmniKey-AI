@@ -5,7 +5,14 @@ import { logger } from '../../logger';
 import { createLazyAuthContext } from '../agentAuth';
 import type { AgentMessage, AgentSendFn } from '../types';
 import type { Logger } from 'winston';
-import { activeSessions, pendingShellScripts, sessionQueues, sessionOwners } from './runtimeState';
+import {
+  activeSessions,
+  pendingShellScripts,
+  sessionActiveSubscriptions,
+  sessionQueues,
+  sessionOwners,
+  sessionSteeringIds,
+} from './runtimeState';
 import { enqueueSteeringMessage, takePendingSteeringMessages } from './steering';
 import { buildShellToolResult } from './terminalOutput';
 import { runAgentTurn } from './turnRunner';
@@ -54,14 +61,25 @@ async function processNextInQueue(sessionId: string): Promise<void> {
   }
   activeSessions.add(sessionId);
   if (next.signal) sessionOwners.set(sessionId, next.signal);
+  const runOwner = { subscriptionId: next.subscription.id };
+  sessionActiveSubscriptions.set(sessionId, runOwner);
+  const runSteeringIds = new Set<string>();
+  sessionSteeringIds.set(sessionId, runSteeringIds);
   try {
     await runAgentTurn(sessionId, next.subscription, next.message, next.send, next.log, {
       signal: next.signal,
+      interactiveInput: true,
+      // Capability of the connection that sent (and receives frames for) this input.
+      supportsSkillStatus: next.message.supports_skill_status === true,
     });
   } catch (err) {
     next.log.error('Queued agent turn failed', { sessionId, error: err });
   } finally {
     rejectPendingSteeringAtTurnEnd(sessionId, next.send, next.log);
+    if (sessionSteeringIds.get(sessionId) === runSteeringIds) sessionSteeringIds.delete(sessionId);
+    if (sessionActiveSubscriptions.get(sessionId) === runOwner) {
+      sessionActiveSubscriptions.delete(sessionId);
+    }
     sessionOwners.delete(sessionId);
     activeSessions.delete(sessionId);
     void processNextInQueue(sessionId);
@@ -144,6 +162,43 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
         const isInternalCall = Boolean(message.is_web_call);
         const isSteeringMessage = Boolean(message.is_steering);
 
+        // A run is owned by the authenticated subscription that started it.
+        // Another subscription may not steer, feed back into, or queue onto
+        // it. Rejections reuse fixed frames and carry no owner/skill details;
+        // other connections of the same subscription are unaffected.
+        const activeOwner = activeSessions.has(sessionId)
+          ? sessionActiveSubscriptions.get(sessionId)
+          : undefined;
+        if (activeOwner && activeOwner.subscriptionId !== subscription.id) {
+          log.warn('Rejected message for a session run owned by another subscription', {
+            sessionId,
+          });
+          if (isTerminalFeedback) return;
+          if (isSteeringMessage && !isInternalCall) {
+            send({
+              session_id: sessionId,
+              sender: 'agent',
+              content:
+                'The current task finished before this update could be queued. Send it again as a follow-up.',
+              is_terminal_output: false,
+              is_error: true,
+              is_steering: true,
+              steering_id: message.steering_id,
+              steering_status: 'rejected',
+              steering_pending_count: 0,
+            });
+            return;
+          }
+          send({
+            session_id: sessionId,
+            sender: 'agent',
+            content: 'This message could not be processed. Start a new session and try again.',
+            is_terminal_output: false,
+            is_error: true,
+          });
+          return;
+        }
+
         if (isSteeringMessage && !isTerminalFeedback && !isInternalCall) {
           if (!activeSessions.has(sessionId) || sessionOwners.get(sessionId)?.aborted) {
             send({
@@ -161,7 +216,8 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
             return;
           }
 
-          const steeringResult = enqueueSteeringMessage(sessionId, message, log);
+          const steeringResult = enqueueSteeringMessage(sessionId, message, log, send);
+          if (steeringResult.duplicate) return;
           if (!steeringResult.accepted) {
             send({
               session_id: sessionId,

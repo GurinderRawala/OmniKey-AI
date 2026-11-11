@@ -9,9 +9,10 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../logger', () => ({ logger: mocks.log }));
 vi.mock('../agent/agentServer/turnRunner', () => ({ runAgentTurn: mocks.run }));
 vi.mock('../agent/agentAuth', () => ({
-  createLazyAuthContext: () => ({
+  // The connection's authorization header selects the authenticated identity.
+  createLazyAuthContext: (authHeader?: string) => ({
     ensureAuthenticated: mocks.auth,
-    getSubscription: () => ({ id: 'sub' }),
+    getSubscription: () => ({ id: authHeader ?? 'sub' }),
   }),
 }));
 vi.mock('ws', async () => {
@@ -27,8 +28,10 @@ import { attachAgentWebSocketServer } from '../agent/agentServer/websocket';
 import {
   activeSessions,
   pendingShellScripts,
+  sessionActiveSubscriptions,
   sessionOwners,
   sessionQueues,
+  sessionSteeringIds,
   sessionSteeringMessages,
 } from '../agent/agentServer/runtimeState';
 
@@ -53,9 +56,9 @@ function deferred() {
   });
   return { promise, resolve };
 }
-function connect(server: ReturnType<typeof attachAgentWebSocketServer>) {
+function connect(server: ReturnType<typeof attachAgentWebSocketServer>, identity?: string) {
   const socket = new Socket();
-  server.emit('connection', socket, { headers: {} });
+  server.emit('connection', socket, { headers: identity ? { authorization: identity } : {} });
   return socket;
 }
 
@@ -65,6 +68,8 @@ beforeEach(() => {
   mocks.auth.mockResolvedValue(true);
   activeSessions.clear();
   sessionOwners.clear();
+  sessionActiveSubscriptions.clear();
+  sessionSteeringIds.clear();
   sessionQueues.clear();
   pendingShellScripts.clear();
   sessionSteeringMessages.clear();
@@ -176,5 +181,110 @@ describe('WebSocket turn ownership', () => {
     await vi.waitFor(() => expect(activeSessions.has('session')).toBe(false));
     expect(mocks.run).toHaveBeenCalledTimes(1);
     owner.close();
+  });
+});
+
+describe('WebSocket run subscription ownership', () => {
+  const frames = (socket: Socket) =>
+    socket.send.mock.calls.map(([raw]) => JSON.parse(raw as string) as Record<string, unknown>);
+
+  it('rejects steering, feedback and queued input from another subscription', async () => {
+    const checkpoint = deferred();
+    mocks.run.mockImplementationOnce(async () => checkpoint.promise);
+    const server = attachAgentWebSocketServer({} as never);
+    const owner = connect(server, 'sub-a');
+    owner.message('task');
+    await vi.waitFor(() => expect(mocks.run).toHaveBeenCalledTimes(1));
+    expect(sessionActiveSubscriptions.get('session')).toEqual({ subscriptionId: 'sub-a' });
+    const resolve = vi.fn();
+    pendingShellScripts.set('session', { resolve, filterKeywords: [] });
+
+    const foreign = connect(server, 'sub-b');
+    foreign.message('take over', { is_steering: true, steering_id: 'foreign-1' });
+    foreign.message('fake output', { is_terminal_output: true });
+    foreign.message('queued foreign task');
+    await vi.waitFor(() => expect(foreign.send).toHaveBeenCalledTimes(2));
+
+    const [steerFrame, inputFrame] = frames(foreign);
+    expect(steerFrame).toMatchObject({
+      session_id: 'session',
+      is_steering: true,
+      steering_id: 'foreign-1',
+      steering_status: 'rejected',
+      steering_pending_count: 0,
+      is_error: true,
+    });
+    expect(steerFrame.content).toBe(
+      'The current task finished before this update could be queued. Send it again as a follow-up.',
+    );
+    expect(inputFrame).toMatchObject({ session_id: 'session', is_error: true });
+    // Fixed frames only: no owner identity, skill refs or status leak out.
+    for (const frame of frames(foreign)) {
+      expect(JSON.stringify(frame)).not.toContain('sub-a');
+      expect(frame).not.toHaveProperty('skill_status');
+    }
+    expect(sessionSteeringMessages.has('session')).toBe(false);
+    expect(sessionSteeringIds.get('session')?.has('foreign-1')).toBe(false);
+    expect(sessionQueues.has('session')).toBe(false);
+    expect(resolve).not.toHaveBeenCalled();
+    expect(owner.send).not.toHaveBeenCalled();
+
+    checkpoint.resolve();
+    await vi.waitFor(() => expect(activeSessions.has('session')).toBe(false));
+    expect(mocks.run).toHaveBeenCalledTimes(1);
+    expect(sessionActiveSubscriptions.has('session')).toBe(false);
+    owner.close();
+    foreign.close();
+  });
+
+  it('accepts steering and queued input from another connection of the same subscription', async () => {
+    const checkpoint = deferred();
+    mocks.run.mockImplementationOnce(async () => checkpoint.promise).mockResolvedValue(undefined);
+    const server = attachAgentWebSocketServer({} as never);
+    const owner = connect(server, 'sub-a');
+    owner.message('task');
+    await vi.waitFor(() => expect(mocks.run).toHaveBeenCalledTimes(1));
+
+    const sibling = connect(server, 'sub-a');
+    sibling.message('narrow it', { is_steering: true, steering_id: 'same-1' });
+    await vi.waitFor(() => expect(sibling.send).toHaveBeenCalledTimes(1));
+    expect(frames(sibling)[0]).toMatchObject({
+      steering_id: 'same-1',
+      steering_status: 'received',
+    });
+    expect(sessionSteeringMessages.get('session')).toHaveLength(1);
+    sibling.message('follow-up');
+    await vi.waitFor(() => expect(sessionQueues.get('session')).toHaveLength(1));
+
+    checkpoint.resolve();
+    await vi.waitFor(() => expect(mocks.run).toHaveBeenCalledTimes(2));
+    expect(mocks.run.mock.calls[1][1]).toEqual({ id: 'sub-a' });
+    await vi.waitFor(() => expect(activeSessions.has('session')).toBe(false));
+    expect(sessionActiveSubscriptions.has('session')).toBe(false);
+    owner.close();
+    sibling.close();
+  });
+
+  it('clears the run owner after errors and lets another subscription start later', async () => {
+    mocks.run.mockRejectedValueOnce(new Error('boom')).mockResolvedValue(undefined);
+    const server = attachAgentWebSocketServer({} as never);
+    const first = connect(server, 'sub-a');
+    first.message('task');
+    await vi.waitFor(() => expect(mocks.run).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() =>
+      expect(mocks.log.error).toHaveBeenCalledWith('Queued agent turn failed', expect.anything()),
+    );
+    await vi.waitFor(() => expect(activeSessions.has('session')).toBe(false));
+    expect(sessionActiveSubscriptions.has('session')).toBe(false);
+    expect(sessionSteeringIds.has('session')).toBe(false);
+
+    const second = connect(server, 'sub-b');
+    second.message('own task');
+    await vi.waitFor(() => expect(mocks.run).toHaveBeenCalledTimes(2));
+    expect(mocks.run.mock.calls[1][1]).toEqual({ id: 'sub-b' });
+    await vi.waitFor(() => expect(activeSessions.has('session')).toBe(false));
+    expect(sessionActiveSubscriptions.has('session')).toBe(false);
+    first.close();
+    second.close();
   });
 });

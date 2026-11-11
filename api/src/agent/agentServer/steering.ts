@@ -2,7 +2,12 @@ import type { Logger } from 'winston';
 import { pushToSessionHistory, createUserContent } from '../utils';
 import type { AgentMessage, AgentSendFn, SessionState } from '../types';
 import type { PendingSteeringMessage } from './serverTypes';
-import { sessionSteeringMessages } from './runtimeState';
+import { sessionSteeringIds, sessionSteeringMessages } from './runtimeState';
+import {
+  commitSteeringSkills,
+  hasUnpreparedSteering,
+  prepareSteeringSkills,
+} from '../skillContext';
 
 export const MAX_STEERING_RESTARTS = 8;
 export const MAX_PENDING_STEERING_MESSAGES = 8;
@@ -15,6 +20,8 @@ export interface EnqueueSteeringResult {
   accepted: boolean;
   pendingCount: number;
   rejectionReason?: string;
+  // The steering_id was already seen (pending/applied/rejected) in this run.
+  duplicate?: boolean;
 }
 
 export interface SteeringRestartBudget {
@@ -104,7 +111,26 @@ export function enqueueSteeringMessage(
   sessionId: string,
   message: AgentMessage,
   log: Logger,
+  replyTo?: AgentSendFn,
 ): EnqueueSteeringResult {
+  // Per-run, synchronous ID dedup: a retried steering_id is never enqueued,
+  // applied or acknowledged twice. Legacy messages without an ID cannot be
+  // correlated and are not deduplicated.
+  const clientSteeringId =
+    typeof message.steering_id === 'string' ? message.steering_id.trim() : '';
+  const seenIds = sessionSteeringIds.get(sessionId);
+  if (clientSteeringId && seenIds) {
+    if (seenIds.has(clientSteeringId)) {
+      log.info('Ignored duplicate steering message for active agent turn', { sessionId });
+      return {
+        accepted: false,
+        duplicate: true,
+        pendingCount: sessionSteeringMessages.get(sessionId)?.length ?? 0,
+      };
+    }
+    seenIds.add(clientSteeringId);
+  }
+
   const content = normalizeSteeringContent(message.content ?? '');
   if (!content) {
     return { accepted: false, pendingCount: sessionSteeringMessages.get(sessionId)?.length ?? 0 };
@@ -142,6 +168,9 @@ export function enqueueSteeringMessage(
     platform: message.platform,
     groupName: message.group_name,
     receivedAt: new Date().toISOString(),
+    replyTo,
+    supportsSkillStatus: message.supports_skill_status === true,
+    skillsEligible: message.sender === 'client',
   });
   sessionSteeringMessages.set(sessionId, pending);
 
@@ -212,6 +241,36 @@ export function drainSteeringMessagesIntoHistory(
 
   const appliedIDs = new Set(cleaned.map((message) => message.steeringId));
   return pending.filter((message) => appliedIDs.has(message.steeringId));
+}
+
+/**
+ * Drain point used by every active-run path. For runs with Skills state, each
+ * pending steering input is first resolved FIFO (failures rejected alone);
+ * the synchronous check below guarantees nothing unresolved is drained. The
+ * resolved skills are committed only for steering actually applied.
+ */
+export async function drainSteeringMessagesForRun(
+  sessionId: string,
+  session: SessionState,
+  hasStoredPrompt: boolean,
+  log: Logger,
+): Promise<PendingSteeringMessage[]> {
+  // TTL-expired steering is dropped before and during preparation (seen IDs
+  // are kept), exactly as the synchronous drain below would drop it.
+  const discardExpired = () => {
+    const pending = sessionSteeringMessages.get(sessionId);
+    if (!pending?.length) return;
+    const fresh = freshPendingSteeringMessages(sessionId, log);
+    if (fresh.length === pending.length) return;
+    if (fresh.length > 0) sessionSteeringMessages.set(sessionId, fresh);
+    else sessionSteeringMessages.delete(sessionId);
+  };
+  while (hasUnpreparedSteering(sessionId, session)) {
+    await prepareSteeringSkills(sessionId, session, log, discardExpired);
+  }
+  const applied = drainSteeringMessagesIntoHistory(sessionId, session, hasStoredPrompt, log);
+  commitSteeringSkills(session, applied);
+  return applied;
 }
 
 export function getPendingSteeringMessageCount(sessionId: string): number {

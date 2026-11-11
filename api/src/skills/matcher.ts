@@ -320,6 +320,23 @@ export function matchSkills(
   snapshots: readonly SkillSnapshot[],
   stats?: SkillScanStats,
 ): SkillMatchResult {
+  const result = matchSkillsUnbudgeted(rawText, snapshots, stats);
+  enforceSkillActiveLimits(result.matches);
+  return result;
+}
+
+/**
+ * Same deterministic matching as `matchSkills` WITHOUT the active limits.
+ * Only for callers that validate a larger union themselves before use (agent
+ * steering: the first snapshot already active in a run must count, not the
+ * current stored revision). Callers must run `enforceSkillActiveLimits` on
+ * the deduplicated union before applying anything.
+ */
+export function matchSkillsUnbudgeted(
+  rawText: string,
+  snapshots: readonly SkillSnapshot[],
+  stats?: SkillScanStats,
+): SkillMatchResult {
   if (typeof rawText !== 'string') {
     throw new SkillError(400, 'VALIDATION_ERROR', SKILL_MATCH_MESSAGES.INVALID_TEXT, {
       text: SKILL_MATCH_MESSAGES.INVALID_TEXT,
@@ -408,6 +425,5 @@ export function matchSkills(
       a.offset - b.offset || b.length - a.length || compareCodePoints(a.snapshot.id, b.snapshot.id),
   );
   const matches = matched.map((entry) => entry.snapshot);
-  enforceSkillActiveLimits(matches);
   return { matches: Object.freeze(matches), warnings: frozenWarnings };
 }

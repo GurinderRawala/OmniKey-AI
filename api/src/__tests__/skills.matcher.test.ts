@@ -14,6 +14,7 @@ import {
   SKILL_MATCH_MESSAGES,
   enforceSkillActiveLimits,
   matchSkills,
+  matchSkillsUnbudgeted,
   stripSkillRoutingPrefix,
   type SkillScanStats,
 } from '../skills/matcher';
@@ -487,6 +488,28 @@ describe('active limits', () => {
       'CONTEXT_LIMIT_EXCEEDED',
       413,
     );
+  });
+
+  it('matchSkillsUnbudgeted applies identical matching but leaves limits to the caller', () => {
+    const nine = words.map((w) => skill(w, { instructions: 'x'.repeat(8_000) }));
+    const invalid = { ...skill('zulu'), id: 'bad', instructions: '' } as SkillSnapshot;
+    const text = `@omniagent ${[...words].reverse().join(' ')} zulu`;
+    const result = matchSkillsUnbudgeted(text, [...nine, invalid]);
+    expect(result.matches.map((s) => s.keyword)).toEqual([...words].reverse());
+    expect(result.warnings).toEqual([
+      {
+        code: 'INVALID_SKILL',
+        skillId: 'bad',
+        message: SKILL_MATCH_MESSAGES.INVALID_SKILL_WARNING,
+      },
+    ]);
+    expect(Object.isFrozen(result.matches)).toBe(true);
+    // Budgeted default still rejects the same input; caller-side enforcement does too.
+    expectSkillError(() => matchSkills(text, nine), 'ACTIVE_LIMIT_EXCEEDED', 413);
+    expectSkillError(() => enforceSkillActiveLimits(result.matches), 'ACTIVE_LIMIT_EXCEEDED', 413);
+    // Within limits both variants return the same matches.
+    const two = nine.slice(0, 2);
+    expect(matchSkillsUnbudgeted('alpha bravo', two)).toEqual(matchSkills('alpha bravo', two));
   });
 });
 

@@ -23,7 +23,6 @@ import {
   type SkillMatchPreview,
 } from './skills/contracts';
 import {
-  createSkillInputResolver,
   SKILL_ERROR_MESSAGES,
   getDefaultSkillStore,
   safeErrorMeta,
@@ -32,7 +31,7 @@ import {
   type SkillStoreLogger,
 } from './skills/skillStore';
 import { parseIfMatchRevision, parseSkillPreview, revisionETag } from './skills/validation';
-import { matchSkills } from './skills/matcher';
+import { createSkillResolver, resolveSkillsForInput } from './skills/resolveSkills';
 
 /** Serialized JSON cap; decoded preview text is limited separately. */
 export const SKILLS_JSON_BODY_LIMIT_BYTES = 2_500_000;
@@ -66,9 +65,13 @@ function isBodyParserError(err: unknown): err is { type: string; status: number 
 
 export function createSkillRouter(options: SkillRouterOptions = {}): express.Router {
   const router = express.Router();
+  // Default: the shared resolver used by agent activation. An injected store
+  // (tests, alternative deployments) gets the same resolver bound to it.
   const resolveSkills: ResolveSkillsForInput =
     options.resolveSkills ??
-    (async (owner, text) => createSkillInputResolver(await getStore(), matchSkills)(owner, text));
+    (options.store === undefined
+      ? resolveSkillsForInput
+      : createSkillResolver({ getStore: () => getStore() }));
   let fallbackLogger: SkillStoreLogger | undefined = options.logger;
 
   const getLogger = async (res: Response): Promise<SkillStoreLogger> => {

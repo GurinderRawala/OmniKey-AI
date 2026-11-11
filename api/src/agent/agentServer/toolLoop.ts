@@ -17,7 +17,7 @@ import { pendingShellScripts } from './runtimeState';
 import { persistSessionToDB } from './sessionStore';
 import {
   consumeSteeringRestart,
-  drainSteeringMessagesIntoHistory,
+  drainSteeringMessagesForRun,
   sendSteeringAppliedNotice,
   STEERING_RESTART_LIMIT_MESSAGE,
   type SteeringRestartBudget,
@@ -114,7 +114,7 @@ export async function runToolLoop(
     throwIfTurnCancelled(session.signal);
     toolIterations++;
 
-    const preToolSteeringMessages = drainSteeringMessagesIntoHistory(
+    const preToolSteeringMessages = await drainSteeringMessagesForRun(
       sessionId,
       session,
       hasStoredPrompt,
@@ -518,7 +518,7 @@ export async function runToolLoop(
       return toolLoopLimitResult(model, repeated);
     }
 
-    const steeringMessages = drainSteeringMessagesIntoHistory(
+    const steeringMessages = await drainSteeringMessagesForRun(
       sessionId,
       session,
       hasStoredPrompt,
@@ -572,7 +572,7 @@ export async function runToolLoop(
     await onUsage(result);
 
     for (;;) {
-      const lateSteeringMessages = drainSteeringMessagesIntoHistory(
+      const lateSteeringMessages = await drainSteeringMessagesForRun(
         sessionId,
         session,
         hasStoredPrompt,

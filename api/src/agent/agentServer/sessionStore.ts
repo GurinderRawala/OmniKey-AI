@@ -21,9 +21,20 @@ import { replaceNormalizedTranscript } from './transcriptStore';
 export async function persistSessionToDB(sessionId: string, state: SessionState): Promise<void> {
   try {
     const historyJson = JSON.stringify(state.history);
-    const estimatedPromptTokens = estimateHistoryTokens(
-      buildTrimmedHistoryForRequest(state, state.activeModel, sessionId),
-    );
+    // An active run's request-only Skills reservation (overlay + tool schemas)
+    // counts toward "context remaining" without ever entering stored history.
+    const skillReservation =
+      state.skillRun && !state.skillRun.closed ? (state.skillRun.reservedTokensHint ?? 0) : 0;
+    const estimatedPromptTokens =
+      estimateHistoryTokens(
+        buildTrimmedHistoryForRequest(
+          state,
+          state.activeModel,
+          sessionId,
+          undefined,
+          skillReservation,
+        ),
+      ) + skillReservation;
     const transcriptRevision = completedTranscriptRevision(buildTranscript(state.history));
     const [updatedRows] = await AgentSession.update(
       {
