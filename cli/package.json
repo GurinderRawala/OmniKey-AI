@@ -4,7 +4,7 @@
     "access": "public",
     "registry": "https://registry.npmjs.org/"
   },
-  "version": "1.8.16",
+  "version": "1.8.17",
   "description": "CLI for onboarding users to Omnikey AI and configuring OPENAI_API_KEY. Use Yarn for install/build.",
   "engines": {
     "node": ">=14.0.0",
@@ -21,7 +21,8 @@
     "clean": "rm -rf dist backend-dist telegram-client-dist",
     "format": "prettier --write \"src/**/*.ts\"",
     "test": "vitest run",
-    "lint": "eslint --config ../eslint.config.mjs \"src/**/*.ts\""
+    "lint": "eslint --config ../eslint.config.mjs \"src/**/*.ts\"",
+    "test:types": "tsc --noEmit --skipLibCheck --esModuleInterop --strict --target ES2017 --module commonjs --moduleResolution node src/__tests__/skills.test.ts"
   },
   "keywords": [
     "cli",

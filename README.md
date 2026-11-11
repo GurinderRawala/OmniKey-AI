@@ -102,6 +102,10 @@ Use `@omnikeyai` (without the agent prefix) for plain Q&A in the context of your
 
 ---
 
+## Skills
+
+Save keyword-triggered guidance once in the backend and manage it from macOS, Windows, or `omnikey skills`. Matching is deterministic; instructions apply only as temporary user-level context for the current agent run. CLI `skills match` previews without running an agent. Sharing requires the same backend and identity—independent installations do not sync. [Usage, limits, privacy and rollout](docs/skills.md).
+
 ## Developers
 
 OmniKey AI is a Yarn monorepo with three TypeScript workspaces (`api`, `cli`, `telegram`) plus native desktop clients in Swift (macOS) and C# (Windows). For setup, build/test workflows, and a tour of the main commands, see **[DEVELOPMENT.md](./DEVELOPMENT.md)**.
