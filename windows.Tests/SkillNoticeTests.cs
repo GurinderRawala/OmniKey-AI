@@ -15,6 +15,30 @@ namespace OmniKey.Windows.Tests
             "{\"session_id\":\"s1\",\"sender\":\"agent\",\"content\":\"" + content + "\",\"is_terminal_output\":false,\"is_error\":false,\"skill_status\":" + statusJson + "}";
 
         [Fact]
+        public void ExpandedNoticeShowsEveryAppliedNameOnOneSanitizedLine()
+        {
+            // Eight maximum-length names: far past the 120-character per-line
+            // cap the generic timeline summary applies.
+            var skills = new List<AppliedSkillRef>();
+            for (int i = 0; i < 8; i++)
+                skills.Add(new AppliedSkillRef("id" + i, $"Skill{i}-" + new string((char)('a' + i), SkillLimits.NameCodePoints - 7), "k" + i, 1));
+            string notice = SkillStatusPresentation.Text(
+                new SkillStatus("i1", SkillStatusKind.Applied, skills, new List<SkillWarning>()))!;
+            Assert.True(notice.Length > 600);
+
+            string expanded = SkillNoticeDisplay.Expanded(notice);
+
+            Assert.Equal(notice, expanded); // nothing hidden
+            for (int i = 0; i < 8; i++)
+                Assert.Contains($"Skill{i}-", expanded);
+            Assert.DoesNotContain("…", expanded);
+
+            // Still re-sanitized: one literal line, no controls or bidi overrides.
+            Assert.Equal("Skills applied: A B", SkillNoticeDisplay.Expanded("Skills applied: A\n‮B"));
+            Assert.Equal("", SkillNoticeDisplay.Expanded(null));
+        }
+
+        [Fact]
         public void ClassifiesContractAppliedFrame()
         {
             var c = SkillNoticeInterceptor.Classify(AppliedFrame);

@@ -56,7 +56,7 @@ namespace OmniKey.Windows
         }
     }
 
-    internal sealed class ChatMessage
+    internal sealed class ChatMessage : ISteeringBubble
     {
         public Guid Id { get; } = Guid.NewGuid();
         public ChatMessageRole Role { get; }
@@ -68,6 +68,13 @@ namespace OmniKey.Windows
         /// delivered, or the task ended first). Live-only; the bubble is kept
         /// so its text is never lost.</summary>
         public string? SteeringFailureReason { get; set; }
+
+        /// <summary>Live acknowledgement state of a steering bubble. Only
+        /// <see cref="SteeringBubbleState.Applied"/> may look accepted.</summary>
+        public SteeringBubbleState SteeringState { get; set; } = SteeringBubbleState.Pending;
+
+        /// <summary>No acknowledgement within the deadline; it may still apply.</summary>
+        public bool SteeringUnconfirmed { get; set; }
 
         private ChatMessage(
             ChatMessageRole role,
@@ -765,16 +772,37 @@ namespace OmniKey.Windows
                 return;
             }
 
-            try { await Task.Delay(SteeringAckTimeout); }
+            // Only time during which the run can actually read frames counts:
+            // while a shell command runs, an acknowledgement the server already
+            // sent sits unread in the socket.
+            try { await SteeringAckDeadline.WaitAsync(handle.Receive, SteeringAckTimeout, d => Task.Delay(d)); }
             catch { return; }
 
             RunOnUi(() =>
             {
-                if (sessionSt.Steering.FailIfUnacknowledged(steeringId) is { } unacknowledged)
-                    rejectSteering(sessionSt, unacknowledged,
-                        "The server did not acknowledge this update. Try again or send it as a follow-up.");
+                // Not failed: the entry stays routable, so a late received/
+                // applied/rejected still resolves this bubble. The text is not
+                // pushed back into the composer, since a retry could apply twice.
+                if (sessionSt.Steering.MarkUnconfirmedIfUnacknowledged(steeringId) is not { } unconfirmed)
+                    return;
+                SteeringBubbleTransition.MarkUnconfirmed(findMessage(sessionSt, unconfirmed.UserMessageId));
+                LastErrorMessage = SteeringBubbleTransition.BannerAfterUnconfirmed(
+                    LastErrorMessage, isActiveSession(sessionSt));
+                publishSteering(sessionSt);
             });
         }
+
+        private static ChatMessage? findMessage(ChatSessionState sessionSt, Guid id) =>
+            sessionSt.Messages.Find(m => m.Id == id);
+
+        private bool isActiveSession(ChatSessionState sessionSt) =>
+            ReferenceEquals(_states.GetValueOrDefault(activeStateKey), sessionSt);
+
+        /// <summary>Call after the ledger resolved an acknowledgement: clears
+        /// the "not confirmed" banner once no send is still unconfirmed.</summary>
+        private void clearResolvedUnconfirmedBanner(ChatSessionState sessionSt) =>
+            LastErrorMessage = SteeringBubbleTransition.BannerAfterAck(
+                LastErrorMessage, isActiveSession(sessionSt), sessionSt.Steering.Pending);
 
         /// <summary>Routes one server acknowledgement to its pending send by
         /// id. Unknown, stale or duplicate ids change nothing.</summary>
@@ -783,14 +811,22 @@ namespace OmniKey.Windows
             var outcome = sessionSt.Steering.Handle(ack);
             switch (outcome.Kind)
             {
+                case SteeringOutcomeKind.Received when outcome.Entry is { } queued:
+                    SteeringBubbleTransition.ApplyAck(findMessage(sessionSt, queued.UserMessageId), outcome.Kind);
+                    clearResolvedUnconfirmedBanner(sessionSt);
+                    publishSteering(sessionSt);
+                    break;
+
                 case SteeringOutcomeKind.CreateContinuation when outcome.Entry is { } applied:
                 {
+                    SteeringBubbleTransition.ApplyAck(findMessage(sessionSt, applied.UserMessageId), outcome.Kind);
                     int userIndex = sessionSt.Messages.FindIndex(m => m.Id == applied.UserMessageId);
                     var continuation = ChatMessage.Assistant();
                     sessionSt.Messages.Insert(
                         userIndex >= 0 ? userIndex + 1 : sessionSt.Messages.Count,
                         continuation);
                     sessionSt.Steering.AttachContinuation(applied, continuation.Id);
+                    clearResolvedUnconfirmedBanner(sessionSt);
                     publishSteering(sessionSt);
                     break;
                 }
@@ -815,11 +851,11 @@ namespace OmniKey.Windows
             if (entries.Count == 0)
                 return;
 
-            bool isActive = ReferenceEquals(_states.GetValueOrDefault(activeStateKey), sessionSt);
+            bool isActive = isActiveSession(sessionSt);
             var plan = SteeringFailureResolver.Resolve(
                 sessionSt.Messages,
                 m => m.Id,
-                (m, why) => m.SteeringFailureReason = why,
+                SteeringBubbleTransition.MarkFailed,
                 failed => ChatMessage.User(failed.Text, isSteering: true),
                 entries,
                 reason,
@@ -899,6 +935,14 @@ namespace OmniKey.Windows
         }
 
         private string activeStateKey => ActiveSessionId ?? PendingNewChatKey;
+
+        /// <summary>The assistant bubble of the on-screen session that live
+        /// output currently appends to (the ledger target, which is not
+        /// necessarily the last message: steering bubbles can follow it).</summary>
+        public Guid? StreamingMessageId =>
+            IsRunning && _states.GetValueOrDefault(activeStateKey) is { } state
+                ? state.Steering.StreamingTarget
+                : null;
 
         private ChatSessionState sessionState(string key)
         {

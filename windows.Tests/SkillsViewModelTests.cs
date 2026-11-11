@@ -578,6 +578,139 @@ namespace OmniKey.Windows.Tests
             Assert.True(vm.EditCommand.CanExecute(null));
         }
 
+        [Fact]
+        public async Task DetailGetOlderThanAConfirmedToggleIsRejected()
+        {
+            var svc = new FakeSkillsService();
+            var vm = new SkillsViewModel(svc);
+            var load = vm.RefreshAsync();
+            svc.LastPending("list").Succeed(Summaries(A));
+            await load;
+            vm.Select("a");
+            svc.LastPending("get").Succeed(A);
+
+            // Refresh: list + item GET both in flight.
+            var refresh = vm.RefreshAsync();
+            var staleGet = svc.LastPending("get");
+            svc.LastPending("list").Succeed(Summaries(A));
+
+            // Toggle succeeds and installs revision 2; its list reload lands first.
+            var toggle = vm.ToggleAsync(vm.Skills.Single(), false);
+            var v2 = A with { Enabled = false, Revision = 2 };
+            svc.LastPending("update").Succeed(v2);
+            svc.LastPending("list").Succeed(Summaries(v2));
+            await toggle;
+
+            // The older GET answers last.
+            staleGet.Succeed(A);
+            await refresh;
+
+            Assert.Equal(2, vm.Detail!.Revision);
+            Assert.True(vm.IsDetailCurrent);
+            Assert.False(vm.IsDetailLoading);
+            Assert.Equal("Alpha instructions.", vm.DetailInstructions);
+            Assert.True(vm.EditCommand.CanExecute(null));
+            Assert.Empty(svc.Pending("get"));
+        }
+
+        [Fact]
+        public async Task StaleDetailWithNothingCurrentReloadsOnceThenReportsInsteadOfSpinning()
+        {
+            var svc = new FakeSkillsService();
+            var vm = new SkillsViewModel(svc);
+            var load = vm.RefreshAsync();
+            svc.LastPending("list").Succeed(Summaries(A with { Revision = 3 }));
+            await load;
+
+            vm.Select("a");
+            svc.LastPending("get").Succeed(A); // revision 1 < row revision 3
+            var retry = Assert.Single(svc.Pending("get"));
+            retry.Succeed(A with { Revision = 3, Instructions = "v3" });
+
+            Assert.True(vm.IsDetailCurrent);
+            Assert.Equal("v3", vm.DetailInstructions);
+
+            // A backend that keeps answering an older revision: no endless loop.
+            var svc2 = new FakeSkillsService();
+            var vm2 = new SkillsViewModel(svc2);
+            var load2 = vm2.RefreshAsync();
+            svc2.LastPending("list").Succeed(Summaries(A with { Revision = 3 }));
+            await load2;
+            vm2.Select("a");
+            svc2.LastPending("get").Succeed(A);
+            svc2.LastPending("get").Succeed(A);
+            Assert.Empty(svc2.Pending("get"));
+            Assert.Equal(2, svc2.Count("get"));
+            Assert.True(vm2.HasDetailError);
+            Assert.False(vm2.IsDetailLoading);
+            Assert.Equal(SkillsViewModel.StaleDetailMessage, vm2.DetailError);
+        }
+
+        // ── Saving locks the draft ──────────────────────────────────────
+
+        [Fact]
+        public async Task DraftIsNotEditableWhileSaving()
+        {
+            var svc = new FakeSkillsService();
+            var vm = new SkillsViewModel(svc);
+            var load = vm.RefreshAsync();
+            svc.LastPending("list").Succeed(Summaries());
+            await load;
+            vm.StartCreate();
+            Assert.True(vm.IsDraftEditable);
+            vm.EditName = "N";
+            vm.EditKeyword = "k";
+            vm.EditInstructions = "i";
+
+            var save = vm.SaveAsync();
+            Assert.True(vm.IsSaving);
+            Assert.False(vm.IsDraftEditable);
+
+            svc.LastPending("create").Succeed(new SkillDto("n1", "N", "k", "i", true, 1));
+            svc.LastPending("list").Succeed(Summaries(new SkillDto("n1", "N", "k", "i", true, 1)));
+            await save;
+            Assert.False(vm.IsEditorOpen);
+            Assert.Equal(SkillsViewModel.CreatedMessage, vm.StatusMessage);
+        }
+
+        [Fact]
+        public async Task EditsThatLandDuringSaveAreKeptNotDiscarded()
+        {
+            var svc = new FakeSkillsService();
+            var vm = new SkillsViewModel(svc);
+            var load = vm.RefreshAsync();
+            svc.LastPending("list").Succeed(Summaries(A));
+            await load;
+            vm.Select("a");
+            svc.LastPending("get").Succeed(A);
+            vm.StartEdit();
+            vm.EditInstructions = "First edit.";
+
+            var save = vm.SaveAsync();
+            vm.EditInstructions = "Second edit."; // arrives after submission
+            var saved = A with { Instructions = "First edit.", Revision = 2 };
+            svc.LastPending("update").Succeed(saved);
+            svc.LastPending("list").Succeed(Summaries(saved));
+            await save;
+
+            Assert.True(vm.IsEditorOpen);
+            Assert.False(vm.IsCreateMode);
+            Assert.Equal("Second edit.", vm.EditInstructions);
+            Assert.Equal(SkillsViewModel.SavedWithLaterEditsNotice, vm.EditorNotice);
+            Assert.Equal(2, vm.Skills.Single().Revision);
+
+            // The next save applies the later edit on top of the saved revision.
+            var again = vm.SaveAsync();
+            var update = svc.LastPending("update");
+            Assert.Equal(2, update.Revision);
+            Assert.Equal(new SkillPatch(Instructions: "Second edit."), update.Patch);
+            update.Succeed(saved with { Instructions = "Second edit.", Revision = 3 });
+            svc.LastPending("list").Succeed(Summaries(saved with { Instructions = "Second edit.", Revision = 3 }));
+            await again;
+            Assert.False(vm.IsEditorOpen);
+            Assert.Equal("Second edit.", vm.DetailInstructions);
+        }
+
         // ── Delete ──────────────────────────────────────────────────────
 
         [Fact]

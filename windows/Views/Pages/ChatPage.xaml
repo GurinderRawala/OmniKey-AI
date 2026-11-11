@@ -273,7 +273,8 @@
                             <Setter Property="Background" Value="{StaticResource Nord.UserBubbleBrush}" />
                             <Setter Property="BorderBrush" Value="Transparent" />
                             <Style.Triggers>
-                                <DataTrigger Binding="{Binding IsSteering}" Value="True">
+                                <!-- Accent only once applied; pending/queued keep the plain bubble. -->
+                                <DataTrigger Binding="{Binding IsSteeringAccepted}" Value="True">
                                     <Setter Property="Background" Value="#296EC88C" />
                                     <Setter Property="BorderBrush" Value="#4D6EC88C" />
                                 </DataTrigger>
@@ -311,7 +312,31 @@
                         FontSize="10"
                         FontWeight="Medium"
                         Foreground="{StaticResource Nord.AccentGreenBrush}"
-                        Text="Steered current task" />
+                        Text="{Binding SteeringStatusText}" />
+                </StackPanel>
+                <!-- Sent or queued: not applied yet, so never accepted-looking. -->
+                <StackPanel
+                    MaxWidth="600"
+                    Margin="0,6,2,0"
+                    HorizontalAlignment="Right"
+                    AutomationProperties.Name="{Binding SteeringStatusText}"
+                    Orientation="Horizontal"
+                    Visibility="{Binding IsSteeringInFlight, Converter={StaticResource BooleanToVisibilityConverter}}">
+                    <ui:SymbolIcon
+                        Margin="0,0,4,0"
+                        VerticalAlignment="Center"
+                        FontSize="12"
+                        Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                        Symbol="Clock24" />
+                    <TextBlock
+                        VerticalAlignment="Center"
+                        FontFamily="{StaticResource OK.FontFamily}"
+                        FontSize="10"
+                        FontWeight="Medium"
+                        Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                        Text="{Binding SteeringStatusText}"
+                        TextTrimming="CharacterEllipsis"
+                        ToolTip="{Binding SteeringStatusText}" />
                 </StackPanel>
                 <StackPanel
                     MaxWidth="600"

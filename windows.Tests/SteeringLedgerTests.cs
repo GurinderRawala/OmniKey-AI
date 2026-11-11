@@ -208,17 +208,99 @@ namespace OmniKey.Windows.Tests
         }
 
         [Fact]
-        public void TimeoutFailsOnlyUnacknowledgedSends()
+        public void TimeoutMarksOnlyUnacknowledgedSendsUnconfirmedAndKeepsThemRoutable()
         {
             var (ledger, _) = Turn();
             ledger.Add("queued", Guid.NewGuid(), "q");
             ledger.Add("silent", Guid.NewGuid(), "s");
             ledger.Handle(new SteeringAck("queued", SteeringAckStatus.Received, false));
 
-            Assert.Null(ledger.FailIfUnacknowledged("queued")); // may wait for a running command
-            Assert.Equal("s", ledger.FailIfUnacknowledged("silent")!.Text);
-            Assert.Null(ledger.FailIfUnacknowledged("silent"));
-            Assert.Equal(new[] { "queued" }, ledger.Pending.Select(p => p.SteeringId));
+            Assert.Null(ledger.MarkUnconfirmedIfUnacknowledged("queued")); // may wait for a running command
+            var silent = ledger.MarkUnconfirmedIfUnacknowledged("silent");
+            Assert.Equal("s", silent!.Text);
+            Assert.True(silent.IsUnconfirmed);
+            Assert.Null(ledger.MarkUnconfirmedIfUnacknowledged("silent")); // reported once
+            // Not failed or removed: the server may already have queued it.
+            Assert.Equal(new[] { "queued", "silent" }, ledger.Pending.Select(p => p.SteeringId));
+        }
+
+        [Theory]
+        [InlineData((int)SteeringAckStatus.Received, (int)SteeringOutcomeKind.Received)]
+        [InlineData((int)SteeringAckStatus.Applied, (int)SteeringOutcomeKind.CreateContinuation)]
+        [InlineData((int)SteeringAckStatus.Rejected, (int)SteeringOutcomeKind.Rejected)]
+        public void LateAcknowledgementAfterTimeoutStillResolvesTheSend(int statusValue, int expectedValue)
+        {
+            var status = (SteeringAckStatus)statusValue;
+            var expected = (SteeringOutcomeKind)expectedValue;
+            var (ledger, root) = Turn();
+            var bubble = Guid.NewGuid();
+            ledger.Add("st-1", bubble, "late");
+            Assert.NotNull(ledger.MarkUnconfirmedIfUnacknowledged("st-1"));
+
+            var outcome = ledger.Handle(new SteeringAck("st-1", status, false, "r"));
+
+            Assert.Equal(expected, outcome.Kind);
+            Assert.Equal(bubble, outcome.Entry!.UserMessageId);
+            if (status == SteeringAckStatus.Received)
+            {
+                Assert.False(outcome.Entry.IsUnconfirmed);
+                Assert.Equal(root, ledger.StreamingTarget);
+            }
+            if (expected == SteeringOutcomeKind.CreateContinuation)
+            {
+                var continuation = Guid.NewGuid();
+                ledger.AttachContinuation(outcome.Entry, continuation);
+                Assert.Equal(continuation, ledger.StreamingTarget);
+                Assert.Empty(ledger.Pending);
+            }
+        }
+
+        [Fact]
+        public void UnconfirmedSendIsStillFailedWhenTheTurnEnds()
+        {
+            var (ledger, _) = Turn();
+            ledger.Add("st-1", Guid.NewGuid(), "late");
+            ledger.MarkUnconfirmedIfUnacknowledged("st-1");
+            Assert.Equal(new[] { "late" }, ledger.EndTurn().Select(p => p.Text));
+        }
+
+        // ── Bubble presentation ─────────────────────────────────────────
+
+        [Fact]
+        public void BubbleLooksAcceptedOnlyOnceApplied()
+        {
+            Assert.Equal(SteeringBubbleState.Received, SteeringPresentation.StateAfter(SteeringOutcomeKind.Received));
+            Assert.Equal(SteeringBubbleState.Applied, SteeringPresentation.StateAfter(SteeringOutcomeKind.CreateContinuation));
+            Assert.Equal(SteeringBubbleState.Failed, SteeringPresentation.StateAfter(SteeringOutcomeKind.Rejected));
+            Assert.Null(SteeringPresentation.StateAfter(SteeringOutcomeKind.None));
+
+            // A fresh bubble (default Pending, no failure reason) is not "Steered".
+            Assert.Equal(SteeringPresentation.PendingText,
+                SteeringPresentation.StatusText(SteeringBubbleState.Pending, null, unconfirmed: false));
+            Assert.Equal(SteeringPresentation.UnconfirmedText,
+                SteeringPresentation.StatusText(SteeringBubbleState.Pending, null, unconfirmed: true));
+            Assert.Equal(SteeringPresentation.ReceivedText,
+                SteeringPresentation.StatusText(SteeringBubbleState.Received, null, unconfirmed: false));
+            Assert.Equal(SteeringPresentation.AppliedText,
+                SteeringPresentation.StatusText(SteeringBubbleState.Applied, null, unconfirmed: false));
+            Assert.Equal("Not applied: blocked",
+                SteeringPresentation.StatusText(SteeringBubbleState.Received, "blocked", unconfirmed: false));
+            Assert.Equal(SteeringBubbleState.Failed, SteeringPresentation.Effective(SteeringBubbleState.Applied, "x"));
+            Assert.DoesNotContain("Steered", SteeringPresentation.UnconfirmedBanner);
+        }
+
+        [Fact]
+        public void LegacyReceiptIsTheAppliedFallback()
+        {
+            var (ledger, _) = Turn();
+            ledger.Add("st-1", Guid.NewGuid(), "one");
+            var outcome = ledger.Handle(new SteeringAck(null, SteeringAckStatus.Received, true));
+            Assert.Equal(SteeringBubbleState.Applied, SteeringPresentation.StateAfter(outcome.Kind));
+
+            var (correlated, _) = Turn();
+            correlated.Add("st-1", Guid.NewGuid(), "one");
+            var queued = correlated.Handle(new SteeringAck("st-1", SteeringAckStatus.Received, false));
+            Assert.Equal(SteeringBubbleState.Received, SteeringPresentation.StateAfter(queued.Kind));
         }
 
         [Fact]

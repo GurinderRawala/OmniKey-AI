@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using System.Windows.Media;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using OmniKey.Windows.Skills;
 
 namespace OmniKey.Windows.ViewModels
 {
@@ -784,11 +785,17 @@ namespace OmniKey.Windows.ViewModels
         private void ProjectMessages()
         {
             var src = _model.Messages;
-            int lastIndex = src.Count - 1;
+            bool isRunning = _model.IsRunning;
+            Guid? streamingTarget = _model.StreamingMessageId;
+
+            bool StreamingFor(ChatMessage m) =>
+                ChatRowRefresh.IsStreaming(isRunning, streamingTarget, m.Id, m.Role == ChatMessageRole.Assistant);
 
             // Fast path: counts match and all message Ids align in order.
-            // Only the streaming row (or a row whose block count changed)
-            // needs a refresh; everything else keeps its realized visuals.
+            // Rebuild only rows whose shown state changed (by id: the
+            // streaming target, an earlier assistant that just stopped
+            // streaming, a steering bubble whose status moved); everything
+            // else keeps its realized visuals.
             if (Messages.Count == src.Count)
             {
                 bool allMatch = true;
@@ -798,36 +805,15 @@ namespace OmniKey.Windows.ViewModels
                 }
                 if (allMatch)
                 {
-                    // A steering bubble marked failed in place (same id,
-                    // anywhere in the list) must show its new status.
                     for (int i = 0; i < src.Count; i++)
                     {
-                        if (Messages[i].SteeringFailureReason == src[i].SteeringFailureReason)
+                        bool streaming = StreamingFor(src[i]);
+                        if (!ChatRowRefresh.NeedsRebuild(Messages[i].Snapshot, ChatMessageRow.SnapshotOf(src[i], streaming)))
                             continue;
                         DetachRow(Messages[i]);
-                        var failedRow = ChatMessageRow.Create(src[i], Messages[i].IsStreaming);
-                        AttachExpansionTracking(failedRow);
-                        Messages[i] = failedRow;
-                    }
-
-                    if (lastIndex >= 0)
-                    {
-                        bool streaming = _model.IsRunning
-                            && src[lastIndex].Role == ChatMessageRole.Assistant;
-                        var existing = Messages[lastIndex];
-                        // The streaming row needs to be rebuilt when its
-                        // content (blocks) changed, OR when its streaming
-                        // flag flipped (run completed). Identity stays
-                        // stable for non-streaming rows.
-                        if (streaming
-                            || existing.IsStreaming
-                            || existing.Source.Blocks.Count != src[lastIndex].Blocks.Count)
-                        {
-                            DetachRow(existing);
-                            var row = ChatMessageRow.Create(src[lastIndex], streaming);
-                            AttachExpansionTracking(row);
-                            Messages[lastIndex] = row;
-                        }
+                        var row = ChatMessageRow.Create(src[i], streaming);
+                        AttachExpansionTracking(row);
+                        Messages[i] = row;
                     }
                     return;
                 }
@@ -839,9 +825,7 @@ namespace OmniKey.Windows.ViewModels
             Messages.Clear();
             for (int i = 0; i < src.Count; i++)
             {
-                bool streaming = _model.IsRunning && i == lastIndex
-                    && src[i].Role == ChatMessageRole.Assistant;
-                var row = ChatMessageRow.Create(src[i], streaming);
+                var row = ChatMessageRow.Create(src[i], StreamingFor(src[i]));
                 AttachExpansionTracking(row);
                 Messages.Add(row);
             }
@@ -1083,13 +1067,26 @@ namespace OmniKey.Windows.ViewModels
         public bool IsStreaming { get; }
         public bool IsSteering => Source.IsSteering;
 
-        /// <summary>Snapshot of <see cref="ChatMessage.SteeringFailureReason"/>
-        /// taken when the row was built; <see cref="ChatViewModel"/> rebuilds
-        /// the row when the model's value changes.</summary>
-        public string? SteeringFailureReason { get; }
-        public bool IsSteeringFailed => IsSteering && SteeringFailureReason is not null;
-        public bool IsSteeringAccepted => IsSteering && SteeringFailureReason is null;
-        public string SteeringFailureText => $"Not applied: {SteeringFailureReason}";
+        /// <summary>What this row was built from; <see cref="ChatViewModel"/>
+        /// rebuilds the row when the model's current values differ.</summary>
+        public ChatRowSnapshot Snapshot { get; }
+
+        public static ChatRowSnapshot SnapshotOf(ChatMessage m, bool isStreaming) => new(
+            m.Id, isStreaming, m.Blocks.Count, m.SteeringState, m.SteeringFailureReason, m.SteeringUnconfirmed);
+
+        public string? SteeringFailureReason => Snapshot.SteeringFailureReason;
+        private SteeringBubbleState SteeringState =>
+            SteeringPresentation.Effective(Snapshot.SteeringState, Snapshot.SteeringFailureReason);
+
+        public bool IsSteeringFailed => IsSteering && SteeringState == SteeringBubbleState.Failed;
+        /// <summary>Only once the server reports it applied (or a legacy receipt).</summary>
+        public bool IsSteeringAccepted => IsSteering && SteeringState == SteeringBubbleState.Applied;
+        /// <summary>Sent or queued; neither failed nor applied yet.</summary>
+        public bool IsSteeringInFlight =>
+            IsSteering && SteeringState is SteeringBubbleState.Pending or SteeringBubbleState.Received;
+        public string SteeringStatusText =>
+            SteeringPresentation.StatusText(Snapshot.SteeringState, Snapshot.SteeringFailureReason, Snapshot.SteeringUnconfirmed);
+        public string SteeringFailureText => SteeringStatusText;
 
         public bool IsUser => Role == ChatMessageRole.User;
         public bool IsAssistant => Role == ChatMessageRole.Assistant;
@@ -1155,7 +1152,7 @@ namespace OmniKey.Windows.ViewModels
         {
             Source = source;
             IsStreaming = isStreaming;
-            SteeringFailureReason = source.SteeringFailureReason;
+            Snapshot = SnapshotOf(source, isStreaming);
             var thinking = new List<ChatBlockRow>();
             ChatBlockRow? final = null;
             for (int i = 0; i < source.Blocks.Count; i++)
@@ -1221,8 +1218,12 @@ namespace OmniKey.Windows.ViewModels
         /// <summary>Concise preview for raw tool/script blocks.</summary>
         public string Summary => AgentTimelineSummarizer.CollapsedSummary(Kind, Text);
 
-        /// <summary>Expanded detail still shows a readable summary, not raw payload text.</summary>
-        public string ExpandedSummary => AgentTimelineSummarizer.ExpandedSummary(Kind, Text);
+        /// <summary>Expanded detail still shows a readable summary, not raw
+        /// payload text. A Skills notice expands to its full sanitized line so
+        /// every applied skill name is visible (collapsed stays a preview).</summary>
+        public string ExpandedSummary => IsSkillNotice
+            ? SkillNoticeDisplay.Expanded(Text)
+            : AgentTimelineSummarizer.ExpandedSummary(Kind, Text);
 
         public Brush AccentBrush => IsSkillNotice ? GetBrush("Nord.SecondaryTextBrush") : Kind switch
         {

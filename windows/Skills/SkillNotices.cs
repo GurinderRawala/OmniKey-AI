@@ -227,6 +227,20 @@ namespace OmniKey.Windows.Skills
         public static string DisplayName(string? raw) => SafeText.SingleLine(raw, SkillLimits.NameCodePoints, "Unnamed skill");
     }
 
+    /// <summary>Expanded timeline text for a live Skills notice. The generic
+    /// timeline summary caps each line at 120 characters, which hides later
+    /// applied skill names (up to 8 names of 80 characters each). Expansion
+    /// shows the whole notice, still re-sanitized to one literal line.</summary>
+    internal static class SkillNoticeDisplay
+    {
+        /// <summary>Comfortably above the longest notice the presenter can
+        /// build (prefix + 8 × 80-character names + separators).</summary>
+        public const int MaxExpandedCodePoints = 2000;
+
+        public static string Expanded(string? noticeText) =>
+            SafeText.SingleLine(noticeText, MaxExpandedCodePoints, "");
+    }
+
     internal static class SafeText
     {
         /// <summary>One-line literal text: Cc/Cf/Zl/Zp/whitespace → single

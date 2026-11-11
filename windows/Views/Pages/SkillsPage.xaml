@@ -514,6 +514,7 @@
                                 FontFamily="{StaticResource OK.FontFamily}"
                                 FontSize="{StaticResource OK.Font.Body}"
                                 PlaceholderText="e.g. SQL review"
+                                IsEnabled="{Binding IsDraftEditable}"
                                 Text="{Binding EditName, UpdateSourceTrigger=PropertyChanged}" />
                             <TextBlock Style="{StaticResource SkillsError}" Text="{Binding NameError}" />
                             <TextBlock Style="{StaticResource SkillsConflictNote}" Visibility="{Binding NameConflict, Converter={StaticResource BooleanToVisibilityConverter}}" />
@@ -538,6 +539,7 @@
                                 FontFamily="{StaticResource OK.MonoFontFamily}"
                                 FontSize="{StaticResource OK.Font.Body}"
                                 PlaceholderText="e.g. sql review"
+                                IsEnabled="{Binding IsDraftEditable}"
                                 Text="{Binding EditKeyword, UpdateSourceTrigger=PropertyChanged}" />
                             <TextBlock Style="{StaticResource SkillsError}" Text="{Binding KeywordError}" />
                             <TextBlock Style="{StaticResource SkillsConflictNote}" Visibility="{Binding KeywordConflict, Converter={StaticResource BooleanToVisibilityConverter}}" />
@@ -550,7 +552,8 @@
                                 <ui:ToggleSwitch
                                     Margin="0,0,8,0"
                                     AutomationProperties.Name="Enabled"
-                                    IsChecked="{Binding EditEnabled, Mode=TwoWay}" />
+                                    IsChecked="{Binding EditEnabled, Mode=TwoWay}"
+                                    IsEnabled="{Binding IsDraftEditable}" />
                                 <TextBlock
                                     VerticalAlignment="Center"
                                     FontFamily="{StaticResource OK.FontFamily}"
@@ -591,6 +594,7 @@
                                     FontFamily="{StaticResource OK.MonoFontFamily}"
                                     FontSize="{StaticResource OK.Font.Body}"
                                     PlaceholderText="Guidance the agent should follow when this keyword appears."
+                                    IsEnabled="{Binding IsDraftEditable}"
                                     Text="{Binding EditInstructions, UpdateSourceTrigger=PropertyChanged}"
                                     TextWrapping="Wrap"
                                     VerticalScrollBarVisibility="Auto" />

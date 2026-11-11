@@ -43,8 +43,12 @@ namespace OmniKey.Windows.ViewModels
         /// <summary>Concise preview shown when the row is collapsed.</summary>
         public string Summary => AgentTimelineSummarizer.CollapsedSummary(Kind, Text);
 
-        /// <summary>Expanded detail stays summarized so raw tool payloads do not dominate the UI.</summary>
-        public string ExpandedSummary => AgentTimelineSummarizer.ExpandedSummary(Kind, Text);
+        /// <summary>Expanded detail stays summarized so raw tool payloads do not
+        /// dominate the UI. A Skills notice expands to its full sanitized line
+        /// so every applied skill name is visible (collapsed stays a preview).</summary>
+        public string ExpandedSummary => Kind == TimelineKind.SkillNotice
+            ? OmniKey.Windows.Skills.SkillNoticeDisplay.Expanded(Text)
+            : AgentTimelineSummarizer.ExpandedSummary(Kind, Text);
 
         public AgentTimelineRow(TimelineKind kind, string text)
         {

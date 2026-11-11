@@ -265,7 +265,7 @@ namespace OmniKey.Windows.ViewModels
         /// <summary>Select by id (tests and keyboard helpers); null clears.</summary>
         public void Select(string? id) => SelectedRow = id is null ? null : Skills.FirstOrDefault(r => r.Id == id);
 
-        private async Task LoadDetailAsync(string id)
+        private async Task LoadDetailAsync(string id, bool reloadIfStale = true)
         {
             int generation = ++_detailGeneration;
             _detailCts?.Cancel();
@@ -294,11 +294,32 @@ namespace OmniKey.Windows.ViewModels
                 return;
             }
 
-            if (generation != _detailGeneration || SelectedRow?.Id != id) return;
+            if (generation != _detailGeneration || SelectedRow is not { } selected || selected.Id != id) return;
+
+            // A GET that was in flight while a toggle/save confirmed a newer
+            // revision must not roll the pane back to the older text.
+            int newest = Math.Max(selected.Summary.Revision, Detail?.Id == id ? Detail.Revision : 0);
+            if (skill.Revision < newest)
+            {
+                if (IsDetailCurrent)
+                    DetailState = SkillsLoadState.Loaded;
+                else if (reloadIfStale)
+                    _ = LoadDetailAsync(id, reloadIfStale: false); // nothing current on screen: fetch once more
+                else
+                {
+                    DetailState = SkillsLoadState.Failed;
+                    DetailError = StaleDetailMessage;
+                }
+                return;
+            }
+
             Detail = skill;
             DetailState = SkillsLoadState.Loaded;
             ReplaceSummary(skill.ToSummary());
         }
+
+        public const string StaleDetailMessage =
+            "Couldn't load the latest version of this skill. Refresh to try again.";
 
         // ── Editing ─────────────────────────────────────────────────────
 
@@ -437,8 +458,26 @@ namespace OmniKey.Windows.ViewModels
 
             if (generation != _editorGeneration || !IsEditorOpen) return;
             IsSaving = false;
-            CloseEditor();
-            StatusMessage = create ? CreatedMessage : SavedMessage;
+
+            // The view makes the draft read-only while saving, but if the
+            // draft still changed after it was submitted (e.g. a binding that
+            // updated late), never discard those edits: keep the editor open
+            // on top of the saved revision so the next save applies them.
+            bool editedWhileSaving = CurrentDraft() != draft;
+            if (editedWhileSaving)
+            {
+                _editBase = saved;
+                IsCreateMode = false;
+                HasConflict = false;
+                SetConflictFields(Array.Empty<SkillField>());
+                EditorNotice = SavedWithLaterEditsNotice;
+            }
+            else
+            {
+                CloseEditor();
+                StatusMessage = create ? CreatedMessage : SavedMessage;
+            }
+
             var row = ReplaceSummary(saved.ToSummary());
             _detailGeneration++;
             _detailCts?.Cancel();
@@ -450,6 +489,13 @@ namespace OmniKey.Windows.ViewModels
             DetailError = null;
             await ReloadListAsync();
         }
+
+        public const string SavedWithLaterEditsNotice =
+            "Saved. Changes made while saving are kept here and are not saved yet; save again to apply them.";
+
+        /// <summary>Draft fields accept input only while no request for the
+        /// editor is in flight (save or reload-latest).</summary>
+        public bool IsDraftEditable => IsEditorOpen && !IsSaving;
 
         [RelayCommand(CanExecute = nameof(CanReloadLatest))]
         private void ReloadLatest() => _ = ReloadLatestKeepingDraftAsync();
@@ -837,7 +883,7 @@ namespace OmniKey.Windows.ViewModels
             nameof(HasDetailError), nameof(DetailName), nameof(DetailKeyword), nameof(DetailInstructions),
             nameof(DetailMeta), nameof(ToggleSelectedLabel), nameof(EditorTitle), nameof(HasEditorError),
             nameof(HasEditorNotice), nameof(HasActionError), nameof(HasStatusMessage), nameof(HasPendingDelete),
-            nameof(DeleteConfirmText),
+            nameof(DeleteConfirmText), nameof(IsDraftEditable),
         };
 
         private void NotifyComputed()

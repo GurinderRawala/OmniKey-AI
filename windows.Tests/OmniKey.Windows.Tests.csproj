@@ -24,6 +24,7 @@
     <Compile Include="..\windows\AgentRunner.Wire.cs" Link="AppSources\AgentRunner.Wire.cs" />
     <Compile Include="..\windows\Skills\*.cs" Link="AppSources\Skills\%(Filename)%(Extension)" />
     <Compile Include="..\windows\ViewModels\SkillsViewModel.cs" Link="AppSources\ViewModels\SkillsViewModel.cs" />
+    <Compile Include="..\windows\ViewModels\ChatRowRefresh.cs" Link="AppSources\ViewModels\ChatRowRefresh.cs" />
   </ItemGroup>
 
   <ItemGroup>

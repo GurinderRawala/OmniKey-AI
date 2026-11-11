@@ -38,6 +38,11 @@ namespace OmniKey.Windows
         private CancellationTokenSource? _cancellationSource;
         private bool _isCancelledByUser;
 
+        /// <summary>Blocked while the receive loop awaits a shell command (and
+        /// its reply), when no frame — including a steering acknowledgement —
+        /// can be read. Steering deadlines only count unblocked time.</summary>
+        public ReceiveAvailability Receive { get; } = new();
+
         public bool IsCancelledByUser
         {
             get
@@ -379,28 +384,33 @@ namespace OmniKey.Windows
 
                         onBlock(new ChatBlock(ChatBlockKind.ShellCommand, script));
 
-                        var (output, exitCode) = await AgentRunner.ExecuteShellAsync(
-                            script,
-                            cts.Token,
-                            process => handle.AttachProcess(process));
-
-                        if (handle.IsCancelledByUser)
-                            throw new OperationCanceledException("Chat turn cancelled.");
-
-                        string statusLabel = exitCode == 0 ? "success" : $"error (exit code: {exitCode})";
-                        onBlock(new ChatBlock(ChatBlockKind.TerminalOutput, $"[terminal {statusLabel}]\n{output}"));
-
-                        var reply = new AgentRunner.AgentMessage
+                        // No frame is read until the command finishes and its
+                        // output is sent; pause steering ack deadlines meanwhile.
+                        using (handle.Receive.Block())
                         {
-                            session_id = msg?.session_id ?? sessionId,
-                            sender = "client",
-                            content = output,
-                            is_terminal_output = true,
-                            is_error = exitCode != 0,
-                            platform = "windows"
-                        };
+                            var (output, exitCode) = await AgentRunner.ExecuteShellAsync(
+                                script,
+                                cts.Token,
+                                process => handle.AttachProcess(process));
 
-                        await handle.SendWebSocketMessageAsync(reply, cts.Token);
+                            if (handle.IsCancelledByUser)
+                                throw new OperationCanceledException("Chat turn cancelled.");
+
+                            string statusLabel = exitCode == 0 ? "success" : $"error (exit code: {exitCode})";
+                            onBlock(new ChatBlock(ChatBlockKind.TerminalOutput, $"[terminal {statusLabel}]\n{output}"));
+
+                            var reply = new AgentRunner.AgentMessage
+                            {
+                                session_id = msg?.session_id ?? sessionId,
+                                sender = "client",
+                                content = output,
+                                is_terminal_output = true,
+                                is_error = exitCode != 0,
+                                platform = "windows"
+                            };
+
+                            await handle.SendWebSocketMessageAsync(reply, cts.Token);
+                        }
                         continue;
                     }
 

@@ -90,6 +90,10 @@ namespace OmniKey.Windows.Skills
         public Guid UserMessageId { get; }
         public string Text { get; }
         public SteeringPhase Phase { get; set; } = SteeringPhase.Pending;
+
+        /// <summary>The acknowledgement deadline passed with no <c>received</c>.
+        /// The send stays routable: a late acknowledgement still resolves it.</summary>
+        public bool IsUnconfirmed { get; set; }
     }
 
     /// <summary>What the chat model must do for one acknowledgement.</summary>
@@ -125,9 +129,10 @@ namespace OmniKey.Windows.Skills
     /// the server says <c>applied</c> (or a legacy server acknowledges);
     /// only then does a continuation bubble become the streaming target.
     /// <c>received</c> just marks the send queued. <c>rejected</c>, a send
-    /// failure, an acknowledgement timeout, or the turn ending first removes
-    /// the pending entry; nothing is ever treated as applied because the
-    /// transport send succeeded. Not thread-safe: use on the UI thread.
+    /// failure, or the turn ending first removes the pending entry. An
+    /// acknowledgement timeout only marks it unconfirmed (it stays routable
+    /// for a late acknowledgement). Nothing is ever treated as applied because
+    /// the transport send succeeded. Not thread-safe: use on the UI thread.
     /// </summary>
     internal sealed class SteeringLedger
     {
@@ -212,6 +217,7 @@ namespace OmniKey.Windows.Skills
 
                 case SteeringAckStatus.Received:
                     entry.Phase = SteeringPhase.Received;
+                    entry.IsUnconfirmed = false;
                     return new(SteeringOutcomeKind.Received, entry);
 
                 case SteeringAckStatus.Rejected:
@@ -241,11 +247,67 @@ namespace OmniKey.Windows.Skills
             return entry;
         }
 
-        /// <summary>Acknowledgement timeout: fails the send only if the server
-        /// never even queued it (a received send may legitimately wait for
-        /// the running command to finish).</summary>
-        public PendingSteering? FailIfUnacknowledged(string steeringId) =>
-            Find(steeringId) is { Phase: SteeringPhase.Pending } ? Fail(steeringId) : null;
+        /// <summary>Acknowledgement deadline (counted only while frames can be
+        /// received, see <see cref="ReceiveAvailability"/>). Marks the send
+        /// unconfirmed only if the server never even queued it; it is NOT
+        /// failed or removed, because the server may already have queued it
+        /// and a late <c>received</c>/<c>applied</c>/<c>rejected</c> must still
+        /// resolve it. Returns the entry the first time only.</summary>
+        public PendingSteering? MarkUnconfirmedIfUnacknowledged(string steeringId)
+        {
+            if (Find(steeringId) is not { Phase: SteeringPhase.Pending, IsUnconfirmed: false } entry)
+                return null;
+            entry.IsUnconfirmed = true;
+            return entry;
+        }
+    }
+
+    /// <summary>What a steering bubble shows. Only <see cref="Applied"/> may
+    /// look accepted.</summary>
+    internal enum SteeringBubbleState
+    {
+        /// <summary>Sent (or sending); no acknowledgement yet.</summary>
+        Pending,
+        /// <summary>Queued by the server; not applied yet.</summary>
+        Received,
+        /// <summary>Applied to the running task (or a legacy receipt).</summary>
+        Applied,
+        /// <summary>Not applied; the reason is shown.</summary>
+        Failed,
+    }
+
+    internal static class SteeringPresentation
+    {
+        public const string PendingText = "Sending to the current task…";
+        public const string UnconfirmedText = "Not confirmed yet. It may still apply.";
+        public const string ReceivedText = "Queued. Applies at the next safe point.";
+        public const string AppliedText = "Steered current task";
+        public const string UnconfirmedBanner =
+            "The server hasn't confirmed this update yet. It may still apply, so check before sending it again.";
+
+        /// <summary>The bubble state after an acknowledgement outcome, or null
+        /// when the outcome changes nothing.</summary>
+        public static SteeringBubbleState? StateAfter(SteeringOutcomeKind kind) => kind switch
+        {
+            SteeringOutcomeKind.Received => SteeringBubbleState.Received,
+            SteeringOutcomeKind.CreateContinuation => SteeringBubbleState.Applied,
+            SteeringOutcomeKind.Rejected => SteeringBubbleState.Failed,
+            _ => null,
+        };
+
+        /// <summary>A failure reason always wins, so a failed bubble never
+        /// looks pending or applied.</summary>
+        public static SteeringBubbleState Effective(SteeringBubbleState state, string? failureReason) =>
+            failureReason is not null ? SteeringBubbleState.Failed : state;
+
+        public static string StatusText(SteeringBubbleState state, string? failureReason, bool unconfirmed) =>
+            Effective(state, failureReason) switch
+            {
+                SteeringBubbleState.Failed => $"Not applied: {failureReason ?? SteeringAckParser.RejectedFallback}",
+                SteeringBubbleState.Applied => AppliedText,
+                SteeringBubbleState.Received => ReceivedText,
+                _ => unconfirmed ? UnconfirmedText : PendingText,
+            };
     }
 
     /// <summary>What <see cref="SteeringFailureResolver.Resolve{TMessage}"/>

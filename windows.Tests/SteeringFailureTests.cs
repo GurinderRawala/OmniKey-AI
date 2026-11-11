@@ -11,19 +11,27 @@ namespace OmniKey.Windows.Tests
     /// exact text and must never overwrite what they are typing.
     /// <see cref="SteeringFailureResolver"/> is the helper ChatModel calls for
     /// every failure path (rejected ack, send failure, ack timeout, turn end,
-    /// Stop). <see cref="Chat"/> reproduces ChatModel's glue around the ledger
-    /// and resolver (ChatModel itself needs WPF and isn't compiled here).
+    /// Stop). <see cref="Chat"/> mirrors ChatModel's call order (ChatModel
+    /// itself needs WPF and isn't compiled here), but every bubble/banner
+    /// change goes through <see cref="SteeringBubbleTransition"/>, the same
+    /// helper ChatModel calls.
     /// </summary>
     public class SteeringFailureTests
     {
-        private sealed class Msg
+        private sealed class Msg : ISteeringBubble
         {
             public Guid Id { get; } = Guid.NewGuid();
             public bool IsUser { get; init; }
             public bool IsSteering { get; init; }
             public string Text { get; init; } = "";
             public string? Failure { get; set; }
+            public SteeringBubbleState State { get; set; } = SteeringBubbleState.Pending;
+            public bool Unconfirmed { get; set; }
             public List<string> Blocks { get; } = new();
+
+            SteeringBubbleState ISteeringBubble.SteeringState { get => State; set => State = value; }
+            bool ISteeringBubble.SteeringUnconfirmed { get => Unconfirmed; set => Unconfirmed = value; }
+            string? ISteeringBubble.SteeringFailureReason { get => Failure; set => Failure = value; }
         }
 
         /// <summary>Same calls and order as ChatModel: SendCurrentInput,
@@ -63,12 +71,19 @@ namespace OmniKey.Windows.Tests
             {
                 if (!Steering.IsTurn(turnRoot)) return;
                 var outcome = Steering.Handle(ack);
-                if (outcome.Kind == SteeringOutcomeKind.CreateContinuation && outcome.Entry is { } applied)
+                if (outcome.Kind == SteeringOutcomeKind.Received && outcome.Entry is { } queued)
                 {
+                    SteeringBubbleTransition.ApplyAck(Find(queued.UserMessageId), outcome.Kind);
+                    Error = SteeringBubbleTransition.BannerAfterAck(Error, IsActive, Steering.Pending);
+                }
+                else if (outcome.Kind == SteeringOutcomeKind.CreateContinuation && outcome.Entry is { } applied)
+                {
+                    SteeringBubbleTransition.ApplyAck(Find(applied.UserMessageId), outcome.Kind);
                     int i = Messages.FindIndex(m => m.Id == applied.UserMessageId);
                     var continuation = new Msg();
-                    Messages.Insert(i + 1, continuation);
+                    Messages.Insert(i >= 0 ? i + 1 : Messages.Count, continuation);
                     Steering.AttachContinuation(applied, continuation.Id);
+                    Error = SteeringBubbleTransition.BannerAfterAck(Error, IsActive, Steering.Pending);
                 }
                 else if (outcome.Kind == SteeringOutcomeKind.Rejected && outcome.Entry is { } rejected)
                 {
@@ -89,13 +104,23 @@ namespace OmniKey.Windows.Tests
                 Reject(Steering.EndTurn(), reason);
             }
 
+            /// <summary>ChatModel's acknowledgement-deadline callback.</summary>
+            public void Timeout(string steeringId)
+            {
+                if (Steering.MarkUnconfirmedIfUnacknowledged(steeringId) is not { } entry) return;
+                SteeringBubbleTransition.MarkUnconfirmed(Find(entry.UserMessageId));
+                Error = SteeringBubbleTransition.BannerAfterUnconfirmed(Error, IsActive);
+            }
+
+            private Msg? Find(Guid id) => Messages.Find(m => m.Id == id);
+
             public void Stop() => Reject(Steering.EndTurn(), "stopped");
 
             public void Reject(IReadOnlyList<PendingSteering> entries, string reason)
             {
                 if (entries.Count == 0) return;
                 var plan = SteeringFailureResolver.Resolve(
-                    Messages, m => m.Id, (m, why) => m.Failure = why,
+                    Messages, m => m.Id, SteeringBubbleTransition.MarkFailed,
                     e => new Msg { IsUser = true, IsSteering = true, Text = e.Text },
                     entries, reason, IsActive, Composer);
                 if (plan.ComposerText is { } restored) Composer = restored;
@@ -230,6 +255,147 @@ namespace OmniKey.Windows.Tests
             Assert.Equal(new[] { "applied one", "rejected one", "later" }, steering);
             chat.Ack(root, new SteeringAck(c, SteeringAckStatus.Applied, false));
             Assert.Null(chat.Bubble("later").Failure);
+        }
+
+        [Fact]
+        public void AckTimeoutDoesNotInviteARetryAndALateApplyStillLands()
+        {
+            var chat = new Chat();
+            var root = chat.Send("task");
+            string a = chat.Steer("check the logs too");
+            Assert.Equal(SteeringBubbleState.Pending, chat.Bubble("check the logs too").State);
+
+            chat.Timeout(a);
+
+            var bubble = chat.Bubble("check the logs too");
+            Assert.True(bubble.Unconfirmed);
+            Assert.Null(bubble.Failure);          // not "Not applied"
+            Assert.Equal("", chat.Composer);      // text not pushed back for a duplicate retry
+            Assert.Equal(SteeringPresentation.UnconfirmedBanner, chat.Error);
+
+            // The server had queued it while a command blocked reception.
+            chat.Ack(root, new SteeringAck(a, SteeringAckStatus.Received, false));
+            Assert.Equal(SteeringBubbleState.Received, bubble.State);
+            Assert.False(bubble.Unconfirmed);
+            chat.Ack(root, new SteeringAck(a, SteeringAckStatus.Applied, false));
+            Assert.Equal(SteeringBubbleState.Applied, bubble.State);
+            chat.Block(root, "after apply");
+            Assert.Equal(new[] { "after apply" }, chat.Messages.Single(m => m.Id == chat.Steering.StreamingTarget).Blocks);
+        }
+
+        [Fact]
+        public void UnconfirmedUpdateThatNeverArrivesFailsWhenTheTurnEnds()
+        {
+            var chat = new Chat();
+            var root = chat.Send("task");
+            string a = chat.Steer("never acked");
+            chat.Timeout(a);
+
+            chat.Final(root, "ended");
+
+            var bubble = chat.Bubble("never acked");
+            Assert.Equal("ended", bubble.Failure);
+            Assert.Equal(SteeringBubbleState.Failed, bubble.State);
+            Assert.Equal("never acked", chat.Composer); // now it truly cannot apply
+        }
+
+        [Theory]
+        [InlineData("Received")]
+        [InlineData("Applied")]
+        [InlineData("Rejected")]
+        public void LateAckResolvesAnUnconfirmedBubble(string statusName)
+        {
+            var status = Enum.Parse<SteeringAckStatus>(statusName);
+            var chat = new Chat();
+            var root = chat.Send("task");
+            string a = chat.Steer("late one");
+            chat.Timeout(a);
+            Assert.Equal(SteeringPresentation.UnconfirmedBanner, chat.Error);
+
+            chat.Ack(root, new SteeringAck(a, status, false, status == SteeringAckStatus.Rejected ? "nope" : ""));
+
+            var bubble = chat.Bubble("late one");
+            Assert.False(bubble.Unconfirmed);
+            switch (status)
+            {
+                case SteeringAckStatus.Received:
+                    Assert.Equal(SteeringBubbleState.Received, bubble.State);
+                    Assert.Null(bubble.Failure);
+                    Assert.Null(chat.Error);
+                    Assert.Single(chat.Steering.Pending);
+                    break;
+                case SteeringAckStatus.Applied:
+                    Assert.Equal(SteeringBubbleState.Applied, bubble.State);
+                    Assert.Null(bubble.Failure);
+                    Assert.Null(chat.Error);
+                    Assert.Empty(chat.Steering.Pending);
+                    break;
+                default:
+                    Assert.Equal(SteeringBubbleState.Failed, bubble.State);
+                    Assert.Equal("nope", bubble.Failure);
+                    Assert.Equal("nope", chat.Error); // the reason replaces the warning
+                    Assert.Equal("late one", chat.Composer); // rejected: it truly cannot apply
+                    break;
+            }
+        }
+
+        [Theory]
+        [InlineData("Received")]
+        [InlineData("Applied")]
+        public void BannerStaysUntilNoSendIsUnconfirmed(string statusName)
+        {
+            var status = Enum.Parse<SteeringAckStatus>(statusName);
+            var chat = new Chat();
+            var root = chat.Send("task");
+            string a = chat.Steer("first");
+            string b = chat.Steer("second");
+            chat.Timeout(a);
+            chat.Timeout(b);
+
+            chat.Ack(root, new SteeringAck(a, status, false));
+            Assert.Equal(SteeringPresentation.UnconfirmedBanner, chat.Error);
+            Assert.True(chat.Bubble("second").Unconfirmed);
+
+            chat.Ack(root, new SteeringAck(b, status, false));
+            Assert.Null(chat.Error);
+        }
+
+        [Fact]
+        public void AckNeverClearsAnUnrelatedBannerOrABackgroundOne()
+        {
+            var chat = new Chat();
+            var root = chat.Send("task");
+            string a = chat.Steer("x");
+            chat.Timeout(a);
+            chat.Error = "Something else failed.";
+            chat.Ack(root, new SteeringAck(a, SteeringAckStatus.Received, false));
+            Assert.Equal("Something else failed.", chat.Error);
+
+            var background = new Chat { IsActive = false };
+            var root2 = background.Send("task");
+            string c = background.Steer("y");
+            background.Timeout(c);
+            Assert.Null(background.Error);
+            background.Error = SteeringPresentation.UnconfirmedBanner; // from the session on screen
+            background.Ack(root2, new SteeringAck(c, SteeringAckStatus.Applied, false));
+            Assert.Equal(SteeringPresentation.UnconfirmedBanner, background.Error);
+        }
+
+        [Fact]
+        public void TransitionNeverRevivesAFailedBubble()
+        {
+            var bubble = new Msg { IsUser = true, IsSteering = true, Text = "t" };
+            SteeringBubbleTransition.MarkFailed(bubble, "ended");
+
+            Assert.False(SteeringBubbleTransition.ApplyAck(bubble, SteeringOutcomeKind.CreateContinuation));
+            Assert.False(SteeringBubbleTransition.MarkUnconfirmed(bubble));
+            Assert.Equal(SteeringBubbleState.Failed, bubble.State);
+            Assert.False(bubble.Unconfirmed);
+
+            var queued = new Msg { IsUser = true, IsSteering = true, Text = "q", State = SteeringBubbleState.Received };
+            Assert.False(SteeringBubbleTransition.MarkUnconfirmed(queued));
+            Assert.False(SteeringBubbleTransition.ApplyAck(null, SteeringOutcomeKind.Received));
+            Assert.False(SteeringBubbleTransition.ApplyAck(queued, SteeringOutcomeKind.None));
         }
 
         [Fact]
