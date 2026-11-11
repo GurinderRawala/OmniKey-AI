@@ -351,6 +351,32 @@ struct SkillsView: View {
     }
 }
 
+/// Height of the instructions editor inside the scrolling Skills form.
+enum SkillEditorLayout {
+    /// Preferred minimum when the viewport has room for it.
+    static let minimumEditorHeight: CGFloat = 200
+    /// Absolute floor, so the editor stays usable in tiny viewports.
+    static let floorEditorHeight: CGFloat = 60
+    /// Most of the form viewport the editor may take when the form has to
+    /// scroll. The editor is a nested scroll view that keeps wheel events
+    /// while its text overflows, so the rest of the viewport must stay
+    /// outer form under the pointer, to scroll back to Name and Keyword.
+    static let maximumViewportFraction: CGFloat = 0.6
+
+    /// Fills the space left by `chrome` (the rest of the form) when that
+    /// is at least the preferred minimum. Otherwise the form scrolls, and
+    /// the editor gets the preferred minimum capped to a fraction of the
+    /// viewport (never below the floor).
+    static func instructionsHeight(viewport: CGFloat, chrome: CGFloat) -> CGFloat {
+        let viewport = viewport.isFinite ? max(0, viewport) : 0
+        let chrome = chrome.isFinite ? max(0, chrome) : 0
+        let fill = (viewport - chrome).rounded(.down)
+        if fill >= minimumEditorHeight { return fill }
+        let cap = (viewport * maximumViewportFraction).rounded(.down)
+        return max(floorEditorHeight, min(minimumEditorHeight, cap))
+    }
+}
+
 /// Create/edit form. Drafts live in the view model so failures never lose text.
 private struct SkillEditorForm: View {
     @Environment(\.colorScheme) private var colorScheme
@@ -369,7 +395,36 @@ private struct SkillEditorForm: View {
         )
     }
 
+    /// Measured height of everything in the scrolling form except the
+    /// instructions editor, so the editor can fill the rest of the viewport.
+    @State private var formHeight: CGFloat = 0
+    @State private var editorHeight: CGFloat = 0
+
+    private func targetEditorHeight(viewport: CGFloat) -> CGFloat {
+        SkillEditorLayout.instructionsHeight(viewport: viewport, chrome: max(0, formHeight - editorHeight))
+    }
+
+    /// Fields scroll; the Save/Cancel bar stays pinned below them, so both
+    /// remain reachable in the smallest supported window (640×400 display).
     var body: some View {
+        VStack(spacing: 0) {
+            GeometryReader { viewport in
+                ScrollView(.vertical) {
+                    form(editorHeight: targetEditorHeight(viewport: viewport.size.height))
+                        .padding(20)
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { formHeight = $0 }
+                }
+                .scrollIndicators(.automatic)
+            }
+            Rectangle().fill(NordTheme.border(colorScheme)).frame(height: 1)
+            actionBar
+                .padding(.horizontal, 20)
+                .padding(.vertical, 10)
+        }
+    }
+
+    private func form(editorHeight target: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(isCreate ? "New Skill" : "Edit Skill")
                 .font(.system(size: 16, weight: .semibold))
@@ -406,6 +461,7 @@ private struct SkillEditorForm: View {
                         .accessibilityLabel("Trigger keyword")
                 }
             }
+            .disabled(editor.isSaving)
 
             Text("Matches whole words in the text you type, ignoring case and extra spaces. “sql” matches “(SQL)” but not “nosql”. Quoted text and code count too, so prefer a distinctive phrase.")
                 .font(.system(size: 11))
@@ -414,6 +470,7 @@ private struct SkillEditorForm: View {
 
             Toggle("Enabled", isOn: binding(\.enabled))
                 .toggleStyle(.switch)
+                .disabled(editor.isSaving)
             if let enabledNote = message(for: .enabled) {
                 Text(enabledNote)
                     .font(.system(size: 11))
@@ -428,31 +485,50 @@ private struct SkillEditorForm: View {
                     colorScheme: colorScheme,
                     editorLabel: "Skill instructions"
                 )
-                .frame(maxWidth: .infinity, minHeight: 200, maxHeight: .infinity)
+                .frame(maxWidth: .infinity)
+                .frame(height: target)
                 .background(NordTheme.editorBackground(colorScheme))
                 .cornerRadius(6)
                 .overlay(RoundedRectangle(cornerRadius: 6).stroke(NordTheme.border(colorScheme), lineWidth: 1))
-            }
-
-            HStack {
-                let count = (model.editor?.draft.instructions ?? editor.draft.instructions).codePointCount
-                Text("\(count) / \(SkillLimits.instructionCodePoints) characters")
-                    .font(.system(size: 10).monospacedDigit())
-                    .foregroundColor(count > SkillLimits.instructionCodePoints ? .red : NordTheme.secondaryText(colorScheme))
-                Spacer()
-                if editor.isSaving { ProgressView().controlSize(.small) }
-                Button("Cancel", action: model.requestCloseEditor)
-                    .keyboardShortcut(.cancelAction)
-                    .disabled(editor.isSaving)
-                Button(isCreate ? "Create Skill" : "Save Changes", action: model.save)
-                    .buttonStyle(.borderedProminent)
-                    .tint(NordTheme.accent(colorScheme))
-                    .keyboardShortcut("s", modifiers: .command)
-                    .disabled(editor.isSaving)
-                    .help("Save (⌘S)")
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { editorHeight = $0 }
             }
         }
-        .padding(20)
+    }
+
+    /// Count and actions side by side, or stacked when the pane is narrow,
+    /// so the buttons are never clipped.
+    private var actionBar: some View {
+        let count = (model.editor?.draft.instructions ?? editor.draft.instructions).codePointCount
+        let counter = Text("\(count) / \(SkillLimits.instructionCodePoints) characters")
+            .font(.system(size: 10).monospacedDigit())
+            .foregroundColor(count > SkillLimits.instructionCodePoints ? .red : NordTheme.secondaryText(colorScheme))
+        return ViewThatFits(in: .horizontal) {
+            HStack {
+                counter
+                Spacer(minLength: 8)
+                actionButtons
+            }
+            VStack(alignment: .trailing, spacing: 6) {
+                counter.frame(maxWidth: .infinity, alignment: .leading)
+                actionButtons
+            }
+        }
+    }
+
+    private var actionButtons: some View {
+        HStack(spacing: 8) {
+            if editor.isSaving { ProgressView().controlSize(.small) }
+            Button("Cancel", action: model.requestCloseEditor)
+                .keyboardShortcut(.cancelAction)
+                .disabled(editor.isSaving)
+            Button(isCreate ? "Create Skill" : "Save Changes", action: model.save)
+                .buttonStyle(.borderedProminent)
+                .tint(NordTheme.accent(colorScheme))
+                .keyboardShortcut("s", modifiers: .command)
+                .disabled(editor.isSaving)
+                .help("Save (⌘S)")
+        }
+        .fixedSize()
     }
 
     /// Server/local field error first, then a same-field conflict note.

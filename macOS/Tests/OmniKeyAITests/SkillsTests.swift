@@ -699,7 +699,7 @@ private final class Counter: @unchecked Sendable {
     var value: Int { lock.withLock { count } }
     var currentToken: String? { lock.withLock { token } }
     func increment() { lock.withLock { count += 1 } }
-    func setToken(_ value: String) { lock.withLock { token = value } }
+    func setToken(_ value: String?) { lock.withLock { token = value } }
 }
 
 private enum Identities {
@@ -723,7 +723,7 @@ private final class FakeAccount: @unchecked Sendable {
         self.tokens = tokens
     }
 
-    func switchTo(_ identity: SubscriptionIdentity?, baseURL: URL? = nil, token: String) {
+    func switchTo(_ identity: SubscriptionIdentity?, baseURL: URL? = nil, token: String?) {
         lock.withLock {
             self.identity = identity
             if let baseURL { self.baseURL = baseURL }
@@ -902,6 +902,94 @@ final class SkillsAPITests: XCTestCase {
         let api = makeAPI(reauth: { .failed })
         _ = await expectError(.unauthenticated) { _ = try await api.list() }
         XCTAssertEqual(state.requests.count, 1)
+    }
+
+    func testTransientReauthFailureIsRetryableNotUnauthenticated() async {
+        let finals = Counter()
+        state.enqueue(.http(401, "Unauthorized"))
+        let api = makeAPI(reauth: { .unavailable }, onFinal: { finals.increment() })
+        let error = await expectError(.network) { _ = try await api.list() }
+        XCTAssertEqual(error, SkillsAPI.reauthUnavailable)
+        XCTAssertEqual(state.requests.count, 1, "no retry with the rejected token")
+        XCTAssertEqual(finals.value, 0, "no final-unauthorized handling")
+    }
+
+    func testTransientReauthFailureAfterIdentityChangeReportsAccountChanged() async {
+        let tokens = Counter(token: "a")
+        let account = FakeAccount(tokens: tokens)
+        state.enqueue(.http(401, "Unauthorized"))
+        let api = makeAPI(account: account, reauth: {
+            account.switchTo(Identities.hosted("key-b"), token: "b")
+            return .unavailable
+        })
+        _ = await expectError(.accountChanged) { _ = try await api.list() }
+        XCTAssertEqual(state.requests.count, 1)
+    }
+
+    // MARK: Superseded re-authentication
+
+    func testSupersededReauthSameIdentityRetriesOnceWithNewerToken() async throws {
+        let tokens = Counter(token: "a-old")
+        let account = FakeAccount(tokens: tokens)
+        let finals = Counter()
+        state.enqueue(.http(401, "Unauthorized"), .http(200, #"{"skills":[]}"#))
+        let api = makeAPI(account: account, reauth: {
+            // The same key was accepted again meanwhile: new generation, new token.
+            account.switchTo(Identities.hosted("key-a"), token: "a-new")
+            return .superseded
+        }, onFinal: { finals.increment() })
+        let skills = try await api.list()
+        XCTAssertEqual(skills, [])
+        XCTAssertEqual(state.requests.map { $0.headers["Authorization"] }, ["Bearer a-old", "Bearer a-new"])
+        XCTAssertEqual(finals.value, 0)
+    }
+
+    func testSupersededReauthRetriesOnlyOnceThenReportsUnauthorized() async {
+        let tokens = Counter(token: "a-old")
+        let account = FakeAccount(tokens: tokens)
+        let reauths = Counter()
+        let finals = Counter()
+        state.enqueue(.http(401, "Unauthorized"), .http(401, "Unauthorized"))
+        let api = makeAPI(account: account, reauth: {
+            reauths.increment()
+            account.switchTo(Identities.hosted("key-a"), token: "a-new")
+            return .superseded
+        }, onFinal: { finals.increment() })
+        _ = await expectError(.unauthenticated) { _ = try await api.list() }
+        XCTAssertEqual(reauths.value, 1, "no second re-authentication")
+        XCTAssertEqual(state.requests.count, 2)
+        XCTAssertEqual(finals.value, 1, "the newer token itself was rejected")
+    }
+
+    func testSupersededReauthWithoutNewerTokenIsRetryableNotUnauthorized() async {
+        for newToken: String? in [nil, "a-old"] {
+            state = StubState()
+            SkillsStubProtocol.state = state
+            let tokens = Counter(token: "a-old")
+            let account = FakeAccount(tokens: tokens)
+            let finals = Counter()
+            state.enqueue(.http(401, "Unauthorized"))
+            let api = makeAPI(account: account, reauth: {
+                account.switchTo(Identities.hosted("key-a"), token: newToken)
+                return .superseded
+            }, onFinal: { finals.increment() })
+            let error = await expectError(.network) { _ = try await api.list() }
+            XCTAssertEqual(error, SkillsAPI.reauthUnavailable, "token \(String(describing: newToken))")
+            XCTAssertEqual(state.requests.count, 1, "never resend a rejected or missing token")
+            XCTAssertEqual(finals.value, 0)
+        }
+    }
+
+    func testSupersededReauthForAnotherIdentityReportsAccountChanged() async {
+        let tokens = Counter(token: "a")
+        let account = FakeAccount(tokens: tokens)
+        state.enqueue(.http(401, "Unauthorized"))
+        let api = makeAPI(account: account, reauth: {
+            account.switchTo(Identities.hosted("key-b"), token: "b")
+            return .superseded
+        })
+        _ = await expectError(.accountChanged) { _ = try await api.list() }
+        XCTAssertEqual(state.requests.count, 1, "nothing sent for key-b")
     }
 
     func testNetworkFailureMapsToNetwork() async {
@@ -1301,6 +1389,177 @@ final class SubscriptionAuthStateTests: XCTestCase {
         let persisted = AuthHarness(key: "key-a")
         XCTAssertEqual(persisted.manager.currentIdentity, a)
     }
+
+    // MARK: Explicit key activations (updateUserKey)
+
+    /// Starts `updateUserKey(key)` and leaves its `/activate` pending.
+    private func beginUpdate(_ h: AuthHarness, _ key: String) -> (index: Int, result: LockedValue<Result<Void, Error>>) {
+        let index = h.activator.count
+        let result = LockedValue<Result<Void, Error>>()
+        h.manager.updateUserKey(key) { result.value = $0 }
+        XCTAssertEqual(h.activator.call(index).key, key)
+        return (index, result)
+    }
+
+    private func assertSuperseded(_ result: Result<Void, Error>?, file: StaticString = #filePath, line: UInt = #line) {
+        guard case let .failure(error as NSError)? = result else {
+            return XCTFail("expected supersededError, got \(String(describing: result))", file: file, line: line)
+        }
+        XCTAssertEqual(error, SubscriptionManager.supersededError, file: file, line: line)
+    }
+
+    func testLateExplicitSuccessAfterClearIsNotInstalledOrPersisted() {
+        for key in ["key-b", "key-a"] { // a new key, and the cleared key itself
+            let h = AuthHarness()
+            h.signIn("key-a", token: "a-1")
+            let pending = beginUpdate(h, key)
+            h.manager.clearSubscription()
+            h.activator.succeed(pending.index, token: "late")
+            assertSuperseded(pending.result.value)
+            XCTAssertNil(h.storedKey, "\(key): the cleared subscription stays cleared on disk")
+            XCTAssertNil(h.manager.userKey)
+            XCTAssertNil(h.manager.currentIdentity)
+            XCTAssertNil(h.manager.jwtToken)
+            XCTAssertTrue(h.posted.isEmpty)
+        }
+    }
+
+    func testLateExplicitSuccessCannotReplaceANewerAcceptedKey() {
+        let h = AuthHarness()
+        let pendingA = beginUpdate(h, "key-a")
+        h.signIn("key-b", token: "b-1")
+        h.activator.succeed(pendingA.index, token: "a-late")
+        assertSuperseded(pendingA.result.value)
+        XCTAssertEqual(h.storedKey, "key-b")
+        XCTAssertEqual(h.manager.currentIdentity, b)
+        XCTAssertEqual(h.manager.jwtToken, "b-1")
+    }
+
+    func testExplicitSuccessAfterBackendSwitchIsNotInstalled() {
+        let h = AuthHarness()
+        let pending = beginUpdate(h, "key-a")
+        XCTAssertEqual(h.activator.call(pending.index).baseURL, Identities.backend)
+        h.switchBackend(BackendSelection(baseURL: Identities.otherBackend, isSelfHosted: false))
+        h.activator.succeed(pending.index, token: "issued-by-first-backend")
+        assertSuperseded(pending.result.value)
+        XCTAssertNil(h.storedKey)
+        XCTAssertNil(h.manager.jwtToken)
+    }
+
+    func testLateExplicitExpiryAfterClearPostsNoUnscopedNotice() {
+        let h = AuthHarness()
+        h.signIn("key-a", token: "a-1")
+        let pending = beginUpdate(h, "key-b")
+        h.manager.clearSubscription()
+        h.signIn("key-c", token: "c-1")
+        h.activator.fail(pending.index, status: 403)
+        assertSuperseded(pending.result.value)
+        XCTAssertTrue(h.posted.isEmpty, "an unscoped expiry would clear key-c")
+        XCTAssertEqual(h.storedKey, "key-c")
+        XCTAssertEqual(h.manager.jwtToken, "c-1")
+    }
+
+    func testCurrentExplicitFailuresAreReportedWithoutNotices() {
+        let h = AuthHarness()
+        let expired = beginUpdate(h, "key-a")
+        h.activator.fail(expired.index, status: 403)
+        guard case let .failure(error as NSError)? = expired.result.value else { return XCTFail("expected failure") }
+        XCTAssertEqual(error, SubscriptionManager.enteredKeyExpiredError)
+        XCTAssertEqual(error.code, 403)
+        XCTAssertTrue(error.localizedDescription.contains("expired"))
+        XCTAssertTrue(h.posted.isEmpty, "the license window reports it; no notice clears auth")
+        let rejected = beginUpdate(h, "key-b")
+        h.activator.fail(rejected.index, status: 401)
+        guard case let .failure(invalid as NSError)? = rejected.result.value else { return XCTFail("expected failure") }
+        XCTAssertEqual(invalid.code, 401)
+        XCTAssertNil(h.storedKey)
+        XCTAssertTrue(h.posted.isEmpty)
+    }
+
+    /// Low 5: an entered key's expiry used to post an unscoped expiry notice
+    /// after the lock-held currency check, so a key accepted in between was
+    /// cleared on delivery. Now nothing is posted: the current subscription
+    /// (here A, signed in before and still valid) is never touched.
+    func testEnteredKeyExpiryNeverClearsTheCurrentSubscription() {
+        let h = AuthHarness()
+        h.signIn("key-a", token: "a-1")
+        let expired = beginUpdate(h, "key-b")
+        h.activator.fail(expired.index, status: 403)
+        guard case let .failure(error as NSError)? = expired.result.value else { return XCTFail("expected failure") }
+        XCTAssertEqual(error, SubscriptionManager.enteredKeyExpiredError)
+        XCTAssertTrue(h.posted.isEmpty)
+        XCTAssertEqual(h.storedKey, "key-a")
+        XCTAssertEqual(h.manager.currentIdentity, a)
+        XCTAssertEqual(h.manager.jwtToken, "a-1")
+
+        // Through the real NotificationCenter too: nothing reaches observers.
+        let observed = DefaultCenterAuthNotices()
+        let live = SubscriptionManager(
+            keyStore: SubscriptionKeyStore(load: { nil }, save: { _ in }),
+            backend: { AuthHarness.hosted },
+            activator: { _, _, completion in
+                completion(.failure(NSError(domain: "SubscriptionManager", code: 403)))
+            }
+        )
+        var liveResult: Result<Void, Error>?
+        live.updateUserKey("key-x") { liveResult = $0 }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        guard case .failure? = liveResult else { return XCTFail("expected failure") }
+        XCTAssertTrue(observed.posted.isEmpty)
+    }
+
+    // MARK: Same key accepted again starts a new generation (no clear)
+
+    func testSameKeyReacceptedSupersedesPendingStoredActivationFailure() {
+        let h = AuthHarness()
+        h.signIn("key-a", token: "a-1")
+        let stored = LockedValue<Bool>()
+        h.manager.activateStoredKey { stored.value = $0 }
+        let storedIndex = h.activator.count - 1
+        h.signIn("key-a", token: "a-2") // no clearSubscription in between
+        h.activator.fail(storedIndex, status: 500)
+        XCTAssertEqual(stored.value, true, "reports the newer, authorized state")
+        XCTAssertEqual(h.manager.jwtToken, "a-2", "the late failure must not clear the new token")
+        XCTAssertEqual(h.storedKey, "key-a")
+        XCTAssertTrue(h.posted.isEmpty)
+    }
+
+    func testSameKeyReacceptedSupersedesPendingReactivationExpiry() {
+        let h = AuthHarness()
+        h.signIn("key-a", token: "a-1")
+        let (index, outcome) = h.reactivate()
+        h.signIn("key-a", token: "a-2")
+        h.activator.fail(index, status: 403)
+        XCTAssertTrue(isSuperseded(outcome()), "never .expired for the newly authorized state")
+        XCTAssertEqual(h.manager.jwtToken, "a-2")
+        XCTAssertTrue(h.posted.isEmpty)
+    }
+
+    func testSameKeyReacceptedSupersedesPendingReactivationSuccess() {
+        let h = AuthHarness()
+        h.signIn("key-a", token: "a-1")
+        let (index, outcome) = h.reactivate()
+        h.signIn("key-a", token: "a-2")
+        h.activator.succeed(index, token: "a-older")
+        XCTAssertTrue(isSuperseded(outcome()))
+        XCTAssertEqual(h.manager.jwtToken, "a-2")
+    }
+
+    func testCredentialRejectionIsOnlyA401FromActivate() {
+        XCTAssertTrue(SubscriptionManager.isCredentialRejection(NSError(domain: "SubscriptionManager", code: 401)))
+        for error: Error in [
+            NSError(domain: "SubscriptionManager", code: 500),
+            NSError(domain: "SubscriptionManager", code: 503),
+            NSError(domain: "SubscriptionManager", code: -1), // invalid/empty response
+            NSError(domain: "SubscriptionManager", code: 403), // expiry has its own flow
+            URLError(.notConnectedToInternet),
+            URLError(.timedOut),
+            NSError(domain: "APIClient", code: 401),
+            DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "bad json")),
+        ] {
+            XCTAssertFalse(SubscriptionManager.isCredentialRejection(error), "\(error)")
+        }
+    }
 }
 
 /// `.superseded` through the real manager and the real callers' helpers
@@ -1427,7 +1686,7 @@ final class SupersededReactivationTests: XCTestCase {
         h.signIn("key-b", token: "b-1")
         h.activator.succeed(index, token: "a-2")
         let outcome = await task.value
-        XCTAssertEqual(outcome, .failed)
+        XCTAssertEqual(outcome, .superseded)
         XCTAssertEqual(h.manager.authSnapshot().identity, b)
         XCTAssertEqual(h.manager.jwtToken, "b-1")
         XCTAssertEqual(h.storedKey, "key-b")
@@ -1446,6 +1705,220 @@ final class SupersededReactivationTests: XCTestCase {
         let outcome = await task.value
         XCTAssertEqual(outcome, .retry)
         XCTAssertEqual(api.credentials().token, "a-2")
+    }
+
+    /// M1: a real `SubscriptionManager` and live Skills client. The request's
+    /// re-activation is pending when the user accepts the same key again
+    /// (a new generation, without a clear). That re-activation is superseded,
+    /// and the request is retried once with the newly accepted token, not
+    /// failed as "not authorized".
+    private func liveListDuringSameKeyReaccept(
+        secondStatus: Int, secondBody: String
+    ) async -> (h: AuthHarness, state: StubState, result: Result<[SkillSummary], Error>, notices: DefaultCenterAuthNotices) {
+        let h = AuthHarness()
+        h.signIn("key-a", token: "a-1")
+        let state = StubState()
+        SkillsStubProtocol.state = state
+        state.enqueue(.http(401, "Unauthorized"), .http(secondStatus, secondBody))
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [SkillsStubProtocol.self]
+        var api = SkillsAPI.live(for: a, manager: h.manager)
+        api.session = URLSession(configuration: config)
+        let notices = DefaultCenterAuthNotices()
+        let index = h.activator.count
+        let client = api
+        let task = Task { () -> Result<[SkillSummary], Error> in
+            do { return .success(try await client.list()) } catch { return .failure(error) }
+        }
+        await waitUntil { h.activator.count > index }
+        XCTAssertEqual(h.activator.call(index).key, "key-a", "the request's stored-key re-activation is pending")
+        h.signIn("key-a", token: "a-3") // same key accepted again: new generation
+        h.activator.succeed(index, token: "a-2") // the request's late re-activation
+        let result = await task.value
+        await drainMainQueue()
+        return (h, state, result, notices)
+    }
+
+    func testSkillsLiveSameKeyReacceptedDuringReauthRetriesWithNewToken() async throws {
+        let run = await liveListDuringSameKeyReaccept(secondStatus: 200, secondBody: #"{"skills":[]}"#)
+        XCTAssertEqual(try run.result.get(), [])
+        XCTAssertEqual(run.state.requests.map { $0.headers["Authorization"] }, ["Bearer a-1", "Bearer a-3"],
+                       "retried once with the newly accepted token; the superseded a-2 is never used")
+        XCTAssertEqual(run.h.manager.jwtToken, "a-3")
+        XCTAssertEqual(run.h.manager.currentIdentity, a)
+        XCTAssertEqual(run.h.storedKey, "key-a")
+        XCTAssertTrue(run.notices.posted.isEmpty, "no false unauthorized/expired notice")
+        XCTAssertTrue(run.h.posted.isEmpty)
+    }
+
+    func testSkillsLiveSameKeyReacceptRetryRejectedReportsUnauthorizedOnce() async {
+        let run = await liveListDuringSameKeyReaccept(secondStatus: 401, secondBody: "Unauthorized")
+        guard case let .failure(error as SkillsAPIError) = run.result else { return XCTFail("expected failure") }
+        XCTAssertEqual(error.kind, .unauthenticated)
+        XCTAssertEqual(run.state.requests.count, 2, "exactly one retry")
+        XCTAssertEqual(run.h.activator.count, 3, "sign-in, re-activation, re-accept: no second re-activation")
+        XCTAssertNil(run.h.manager.jwtToken, "the newer token itself was rejected")
+        XCTAssertEqual(run.notices.posted, [.subscriptionUnauthorized])
+    }
+
+    /// Lets main-queue notice deliveries scheduled so far run.
+    private func drainMainQueue() async {
+        await withCheckedContinuation { continuation in DispatchQueue.main.async { continuation.resume() } }
+    }
+
+    private func liveReauth(
+        _ h: AuthHarness, answer: (Int) -> Void
+    ) async -> SkillsReauthOutcome {
+        let api = SkillsAPI.live(for: a, manager: h.manager)
+        let index = h.activator.count
+        let task = Task { await api.reauthenticate() }
+        await waitUntil { h.activator.count > index }
+        answer(index)
+        return await task.value
+    }
+
+    func testSkillsLiveReauthTransientActivationFailureDoesNotSignOut() async {
+        let transient: [Error] = [
+            NSError(domain: "SubscriptionManager", code: 500),
+            NSError(domain: "SubscriptionManager", code: -1),
+            URLError(.notConnectedToInternet),
+        ]
+        for error in transient {
+            let h = AuthHarness()
+            h.signIn("key-a", token: "a-1")
+            let notices = DefaultCenterAuthNotices()
+            let outcome = await liveReauth(h) { h.activator.call($0).completion(.failure(error)) }
+            await drainMainQueue()
+            XCTAssertEqual(outcome, .unavailable, "\(error)")
+            XCTAssertTrue(notices.posted.isEmpty, "\(error): no unauthorized/expired notice, so no forced logout")
+            XCTAssertEqual(h.manager.currentIdentity, a)
+            XCTAssertEqual(h.storedKey, "key-a")
+            XCTAssertTrue(h.posted.isEmpty)
+        }
+    }
+
+    func testSkillsLiveReauthConfirmedRejectionSignsOut() async {
+        let h = AuthHarness()
+        h.signIn("key-a", token: "a-1")
+        let notices = DefaultCenterAuthNotices()
+        let outcome = await liveReauth(h) { h.activator.fail($0, status: 401) }
+        await drainMainQueue()
+        XCTAssertEqual(outcome, .failed)
+        XCTAssertNil(h.manager.jwtToken)
+        XCTAssertEqual(notices.posted, [.subscriptionUnauthorized])
+    }
+}
+
+/// Chat turns connect with the backend, identity and token they started
+/// for, through the production resolver and the injected manager.
+@MainActor
+final class ChatConnectionResolutionTests: XCTestCase {
+    private let a = Identities.hosted("key-a")
+
+    private final class ResultBox: @unchecked Sendable {
+        var value: Result<ChatSessionRunner.ChatConnection, Error>?
+    }
+
+    private func resolve(_ h: AuthHarness) -> (ResultBox, XCTestExpectation) {
+        let box = ResultBox()
+        let done = expectation(description: "resolved")
+        ChatSessionRunner.resolveConnection(manager: h.manager) { result in
+            box.value = result
+            done.fulfill()
+        }
+        return (box, done)
+    }
+
+    private func assertFails(
+        _ box: ResultBox, with expected: NSError, secrets: [String],
+        file: StaticString = #filePath, line: UInt = #line
+    ) {
+        guard case let .failure(error as NSError)? = box.value else {
+            return XCTFail("expected failure, got \(String(describing: box.value))", file: file, line: line)
+        }
+        XCTAssertEqual(error, expected, file: file, line: line)
+        let text = "\(error) \(error.localizedDescription)"
+        for secret in secrets {
+            XCTAssertFalse(text.contains(secret), "error must not carry \(secret)", file: file, line: line)
+        }
+    }
+
+    func testExistingTokenConnectsInlineWithItsOwnBackend() async {
+        let h = AuthHarness()
+        h.signIn("key-a", token: "a-1")
+        let activations = h.activator.count
+        let (box, done) = resolve(h)
+        XCTAssertNotNil(box.value, "completes inline, before any queued hop")
+        await fulfillment(of: [done], timeout: 2)
+        guard case let .success(connection)? = box.value else { return XCTFail("expected success") }
+        XCTAssertEqual(connection.identity, a)
+        XCTAssertEqual(connection.token, "a-1")
+        XCTAssertEqual(connection.baseURL, Identities.backend)
+        XCTAssertEqual(
+            ChatSessionRunner.makeAgentWebSocketURL(baseURL: connection.baseURL)?.absoluteString,
+            "ws://skills.test:7071/ws/omni-agent"
+        )
+        XCTAssertEqual(h.activator.count, activations, "no activation needed")
+    }
+
+    func testQueuedConnectionUsesTheActivatedCredentials() async {
+        let h = AuthHarness(key: "key-a")
+        let (box, done) = resolve(h)
+        XCTAssertEqual(h.activator.call(0).key, "key-a")
+        h.activator.succeed(0, token: "a-1")
+        await fulfillment(of: [done], timeout: 2)
+        guard case let .success(connection)? = box.value else { return XCTFail("expected success") }
+        XCTAssertEqual(connection.identity, a)
+        XCTAssertEqual(connection.token, "a-1")
+        XCTAssertEqual(connection.baseURL, Identities.backend)
+    }
+
+    /// The change lands after activation succeeded but before the queued
+    /// main-thread hop that would connect.
+    func testQueuedConnectionFailsIfSubscriptionChangesBeforeConnect() async {
+        let changes: [(String, (AuthHarness) -> Void)] = [
+            ("sign-out", { $0.manager.clearSubscription() }),
+            ("other key", { $0.signIn("key-b", token: "b-1") }),
+            ("backend switch", { $0.switchBackend(BackendSelection(baseURL: Identities.otherBackend, isSelfHosted: false)) }),
+        ]
+        for (label, change) in changes {
+            let h = AuthHarness(key: "key-a")
+            let (box, done) = resolve(h)
+            h.activator.succeed(0, token: "a-1")
+            XCTAssertNil(box.value, "\(label): the connect hop is still queued")
+            change(h)
+            await fulfillment(of: [done], timeout: 2)
+            assertFails(box, with: SubscriptionManager.supersededError, secrets: ["a-1", "key-a"])
+        }
+    }
+
+    func testChangeDuringActivationIsSuperseded() async {
+        let h = AuthHarness(key: "key-a")
+        let (box, done) = resolve(h)
+        h.signIn("key-b", token: "b-1")
+        h.activator.succeed(0, token: "a-late")
+        await fulfillment(of: [done], timeout: 2)
+        assertFails(box, with: SubscriptionManager.supersededError, secrets: ["a-late", "b-1"])
+        XCTAssertEqual(h.manager.jwtToken, "b-1")
+    }
+
+    func testSignedOutNeverActivatesOrConnects() async {
+        let h = AuthHarness()
+        let (box, done) = resolve(h)
+        await fulfillment(of: [done], timeout: 2)
+        assertFails(box, with: ChatSessionRunner.notActiveError, secrets: [])
+        XCTAssertEqual(h.activator.count, 0)
+    }
+
+    func testTransientActivationFailureIsReportedWithoutSigningOut() async {
+        let h = AuthHarness(key: "key-a")
+        let (box, done) = resolve(h)
+        h.activator.fail(0, status: 500)
+        await fulfillment(of: [done], timeout: 2)
+        guard case let .failure(error as NSError)? = box.value else { return XCTFail("expected failure") }
+        XCTAssertEqual(error.code, 500)
+        XCTAssertEqual(h.storedKey, "key-a")
+        XCTAssertTrue(h.posted.isEmpty)
     }
 }
 
@@ -2257,6 +2730,53 @@ final class SkillsViewModelTests: XCTestCase {
         service.resolve(4, .skill(a2))
         await waitFor("current") { model.isDetailCurrent }
         XCTAssertEqual(model.detail?.instructions, "New")
+    }
+
+    /// A list read carrying revision 1 that lands after the toggle committed
+    /// revision 2 must not step the row back, or the next action would
+    /// target the superseded revision.
+    func testOlderListAfterNewerDetailKeepsTheHigherKnownSummary() async throws {
+        let service = makeService()
+        let a1 = Fixture.skill(id: "a", enabled: true, revision: 1)
+        let a2 = Fixture.skill(id: "a", enabled: false, revision: 2)
+        let model = await loaded(service, skills: [a1])
+        model.select("a")
+        await waitFor("get") { service.calls.count == 2 }
+        service.resolve(1, .skill(a1))
+        await waitFor("detail") { model.isDetailCurrent }
+
+        model.toggleEnabled(a1.summary)
+        await waitFor("update") { service.calls.count == 3 }
+        service.resolve(2, .skill(a2))
+        await waitFor("follow-up list") { service.calls.count == 4 }
+        XCTAssertEqual(service.calls[3], .list)
+        XCTAssertEqual(model.detail, a2)
+        service.resolve(3, .list([a1.summary])) // stale list read
+        await waitFor("list applied") { model.listState == .loaded }
+
+        XCTAssertEqual(model.selectedSummary, a2.summary)
+        XCTAssertEqual(model.selectedSummary?.enabled, false)
+        XCTAssertTrue(model.isDetailCurrent)
+        XCTAssertEqual(service.calls.count, 4, "nothing to refetch")
+        model.toggleEnabled(try XCTUnwrap(model.selectedSummary))
+        await waitFor("next toggle") { service.calls.count == 5 }
+        XCTAssertEqual(service.calls[4], .update("a", 2, SkillPatch(enabled: true)), "targets the known revision")
+    }
+
+    func testListMergeKeepsMembershipButNeverLowersARevision() {
+        let a1 = Fixture.skill(id: "a", revision: 1).summary
+        let a3 = Fixture.skill(id: "a", revision: 3).summary
+        let b2 = Fixture.skill(id: "b", revision: 2).summary
+        let b5 = Fixture.skill(id: "b", revision: 5).summary
+        let c1 = Fixture.skill(id: "c", revision: 1).summary
+        let d4 = Fixture.skill(id: "d", revision: 4)
+        let merged = SkillsViewModel.mergeKeepingNewer(
+            [b5, a1, Fixture.skill(id: "d", revision: 2).summary],
+            known: [a3, b2, c1],
+            detail: d4
+        )
+        XCTAssertEqual(merged, [b5, a3, d4.summary], "list order/membership, newest revision per row; deleted c dropped")
+        XCTAssertEqual(SkillsViewModel.mergeKeepingNewer([a1], known: [], detail: nil), [a1])
     }
 
     // MARK: Closing the editor reconciles a deferred detail fetch

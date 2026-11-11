@@ -57,6 +57,16 @@ struct SkillsAPIError: Error, Equatable, LocalizedError, Sendable {
 enum SkillsReauthOutcome: Sendable {
     case retry
     case failed
+    /// Re-activation failed transiently (network, 5xx, bad response): the
+    /// credentials were not rejected, so nothing is invalidated and the
+    /// request fails with a retryable error.
+    case unavailable
+    /// The re-activation result was discarded because a newer key generation
+    /// (or another subscription/backend) became current meanwhile. Nothing
+    /// was invalidated. If the bound identity is still current with a newer
+    /// token (the same key was accepted again), the request is retried once
+    /// with it; otherwise it fails without a false "not authorized" error.
+    case superseded
 }
 
 /// Operations the Skills UI needs. Abstracted so view-model tests can drive
@@ -114,15 +124,20 @@ struct SkillsAPI: SkillsService {
                     // The retry re-checks the identity before sending.
                     continuation.resume(returning: .retry)
                 case .superseded:
-                    // Another subscription/backend is current now: no retry,
-                    // no invalidation, no notice. The send then reports
-                    // accountChanged (or unauthenticated if the same key was
-                    // re-entered as a new generation).
-                    continuation.resume(returning: .failed)
+                    // A newer generation is current: no invalidation, no
+                    // notice. `send` decides between accountChanged and a
+                    // single retry with the newer token for this identity.
+                    continuation.resume(returning: .superseded)
                 case .noStoredKey, .expired:
                     SubscriptionManager.postNotice(.subscriptionExpired, identity: identity)
                     continuation.resume(returning: .failed)
-                case .failure:
+                case let .failure(error):
+                    // Only a confirmed credential rejection signs the user
+                    // out; a transient failure must not force a logout.
+                    guard SubscriptionManager.isCredentialRejection(error) else {
+                        continuation.resume(returning: .unavailable)
+                        return
+                    }
                     if manager.invalidateToken(ifCurrent: identity) {
                         SubscriptionManager.postNotice(.subscriptionUnauthorized, identity: identity)
                     }
@@ -205,7 +220,8 @@ struct SkillsAPI: SkillsService {
         endpoint: Endpoint
     ) async throws -> (Data, HTTPURLResponse) {
         let bodyData = try body.map { try JSONSerialization.data(withJSONObject: $0) }
-        let attempt = { () async throws -> (Data, HTTPURLResponse) in
+        // Returns the token it sent, so a retry can require a newer one.
+        let attempt = { () async throws -> (Data, HTTPURLResponse, String?) in
             let snapshot = try boundCredentials()
             var request = URLRequest(url: Self.makeURL(baseURL: snapshot.baseURL, path: path), timeoutInterval: timeout)
             request.httpMethod = method
@@ -217,19 +233,36 @@ struct SkillsAPI: SkillsService {
             if let revision {
                 request.setValue(Self.ifMatch(revision), forHTTPHeaderField: "If-Match")
             }
-            return try await perform(request, token: snapshot.token)
+            let (data, response) = try await perform(request, token: snapshot.token)
+            return (data, response, snapshot.token)
         }
 
-        var (data, response) = try await attempt()
+        let first = try await attempt()
+        var (data, response) = (first.0, first.1)
+        let sentToken = first.2
         if response.statusCode == 401 || response.statusCode == 403 {
             // Re-authenticate only for the bound identity; the retry is
             // refused if the subscription or backend changed meanwhile.
             _ = try boundCredentials()
-            guard await reauthenticate() == .retry else {
+            switch await reauthenticate() {
+            case .retry:
+                break
+            case .unavailable:
+                _ = try boundCredentials()
+                throw Self.reauthUnavailable
+            case .superseded:
+                // Another identity: accountChanged. Same identity: retry once
+                // only with a token newer than the rejected one; without
+                // one, fail retryably rather than as "not authorized".
+                let current = try boundCredentials()
+                guard let token = current.token, !token.isEmpty, token != sentToken else {
+                    throw Self.reauthUnavailable
+                }
+            case .failed:
                 _ = try boundCredentials()
                 throw Self.unauthenticated(status: response.statusCode)
             }
-            (data, response) = try await attempt()
+            (data, response, _) = try await attempt()
             if response.statusCode == 401 || response.statusCode == 403 {
                 if (try? boundCredentials()) != nil { onFinalUnauthorized() }
                 throw Self.unauthenticated(status: response.statusCode)
@@ -276,6 +309,12 @@ struct SkillsAPI: SkillsService {
             throw SkillsAPIError(kind: .invalidResponse, message: "The backend returned an unexpected Skills response.")
         }
     }
+
+    /// Retryable: the session could not be refreshed, but it was not rejected.
+    static let reauthUnavailable = SkillsAPIError(
+        kind: .network,
+        message: "Couldn't refresh your OmniKey session. Check that the backend is running, then retry."
+    )
 
     private static func unauthenticated(status: Int) -> SkillsAPIError {
         SkillsAPIError(

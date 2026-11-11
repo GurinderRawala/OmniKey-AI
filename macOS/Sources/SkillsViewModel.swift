@@ -152,7 +152,7 @@ final class SkillsViewModel: ObservableObject {
         guard !isRetired, generation == listGeneration else { return }
         switch result {
         case let .success(list):
-            skills = list
+            skills = Self.mergeKeepingNewer(list, known: skills, detail: detail)
             listState = .loaded
             if let selectedID, !list.contains(where: { $0.id == selectedID }), editor == nil {
                 self.selectedID = nil
@@ -626,6 +626,25 @@ final class SkillsViewModel: ObservableObject {
     private func showsStaleDetail(for summary: SkillSummary) -> Bool {
         guard summary.id == selectedID, let detail, detail.id == summary.id else { return false }
         return detail.revision < summary.revision
+    }
+
+    /// The fetched list decides membership and order, but a list read issued
+    /// before a mutation/detail read can carry an older revision of a row
+    /// than one already known (from a mutation result or loaded detail).
+    /// Keep the newer one so the row never steps back and toggles/deletes
+    /// never target a superseded revision.
+    static func mergeKeepingNewer(_ list: [SkillSummary], known: [SkillSummary], detail: SkillDTO?) -> [SkillSummary] {
+        var newest: [String: SkillSummary] = [:]
+        for summary in known where summary.revision > (newest[summary.id]?.revision ?? Int.min) {
+            newest[summary.id] = summary
+        }
+        if let detail, detail.revision > (newest[detail.id]?.revision ?? Int.min) {
+            newest[detail.id] = detail.summary
+        }
+        return list.map { listed in
+            if let newer = newest[listed.id], newer.revision > listed.revision { return newer }
+            return listed
+        }
     }
 
     private func replaceSummary(_ summary: SkillSummary) {

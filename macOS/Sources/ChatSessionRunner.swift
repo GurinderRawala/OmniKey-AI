@@ -217,63 +217,101 @@ final class ChatSessionRunner {
     ) -> ChatSessionRunHandle {
         let handle = ChatSessionRunHandle()
 
-        // Acquire a JWT first (same flow as `AgentRunner.startSession`).
-        if let token = SubscriptionManager.shared.jwtToken, !token.isEmpty {
-            connect(
-                sessionId: sessionId,
-                jwt: token,
-                userText: userText,
-                groupName: groupName,
-                model: model,
-                allowReauth: true,
-                handle: handle,
-                onBlock: onBlock,
-                onSteeringEvent: onSteeringEvent,
-                onFinal: onFinal,
-                onError: onError
-            )
-            return handle
-        }
-
-        SubscriptionManager.shared.reactivateStoredKeyIfNeeded { outcome in
-            switch outcome {
-            case .success:
-                let jwt = SubscriptionManager.shared.jwtToken ?? ""
-                DispatchQueue.main.async {
-                    self.connect(
-                        sessionId: sessionId,
-                        jwt: jwt,
-                        userText: userText,
-                        groupName: groupName,
-                        model: model,
-                        allowReauth: false,
-                        handle: handle,
-                        onBlock: onBlock,
-                        onSteeringEvent: onSteeringEvent,
-                        onFinal: onFinal,
-                        onError: onError
-                    )
+        // Acquire credentials first (same rules as `AgentRunner.startSession`).
+        Self.resolveConnection(manager: .shared) { result in
+            switch result {
+            case let .success(connection):
+                // A turn stopped while credentials were pending never connects.
+                guard !handle.isCancelledByUser else {
+                    onError(NSError(
+                        domain: "ChatSessionRunner",
+                        code: -9999,
+                        userInfo: [NSLocalizedDescriptionKey: "Chat turn cancelled."]
+                    ))
+                    return
                 }
-
-            case .superseded:
-                // The subscription/backend changed while activating: fail
-                // without connecting as the newer subscription.
-                DispatchQueue.main.async { onError(SubscriptionManager.supersededError) }
-
-            case .noStoredKey, .expired:
-                let error = NSError(
-                    domain: "ChatSessionRunner",
-                    code: 401,
-                    userInfo: [NSLocalizedDescriptionKey: "Subscription is not active."]
+                self.connect(
+                    sessionId: sessionId,
+                    connection: connection,
+                    userText: userText,
+                    groupName: groupName,
+                    model: model,
+                    handle: handle,
+                    onBlock: onBlock,
+                    onSteeringEvent: onSteeringEvent,
+                    onFinal: onFinal,
+                    onError: onError
                 )
-                DispatchQueue.main.async { onError(error) }
-
             case let .failure(error):
-                DispatchQueue.main.async { onError(error) }
+                onError(error)
             }
         }
 
         return handle
+    }
+
+    /// The backend, identity and token one chat turn connects with, taken
+    /// from a single snapshot. Never logged (the token is a credential).
+    struct ChatConnection: Sendable {
+        let identity: SubscriptionIdentity
+        let baseURL: URL
+        let token: String
+    }
+
+    static let notActiveError = NSError(
+        domain: "ChatSessionRunner",
+        code: 401,
+        userInfo: [NSLocalizedDescriptionKey: "Subscription is not active."]
+    )
+
+    /// Resolves the credentials for a turn bound to the identity current
+    /// when it starts. With a token for that identity it completes inline;
+    /// otherwise it re-activates and hops to the main queue. The connection
+    /// is refused with `supersededError` if, by the time it would be used,
+    /// the subscription or backend differs from the one the turn started
+    /// for, so a queued turn never connects (or sends its text) as another
+    /// subscription or to another backend. Completion runs on the main actor.
+    static func resolveConnection(
+        manager: SubscriptionManager,
+        completion: @escaping @MainActor @Sendable (Result<ChatConnection, Error>) -> Void
+    ) {
+        let initial = manager.authSnapshot()
+        let start = initial.identity
+        if let start, let first = AgentAuthRetry.credentials(for: start, from: initial) {
+            completion(.success(ChatConnection(identity: start, baseURL: first.baseURL, token: first.token)))
+            return
+        }
+
+        manager.reactivateStoredKeyIfNeeded { outcome in
+            let result: Result<ChatConnection, Error>
+            switch outcome {
+            case .success:
+                if let start, let next = AgentAuthRetry.credentials(for: start, from: manager.authSnapshot()) {
+                    result = .success(ChatConnection(identity: start, baseURL: next.baseURL, token: next.token))
+                } else {
+                    result = .failure(SubscriptionManager.supersededError)
+                }
+            case .superseded:
+                // Fail without connecting as the newer subscription.
+                result = .failure(SubscriptionManager.supersededError)
+            case .noStoredKey, .expired:
+                result = .failure(notActiveError)
+            case let .failure(error):
+                result = .failure(error)
+            }
+
+            DispatchQueue.main.async {
+                // Re-check at the moment of use: the queued hop can run
+                // after a sign-out, key change or backend switch.
+                if case let .success(connection) = result,
+                   !AgentAuthRetry.mayReplay(startedFor: connection.identity, current: manager.currentIdentity)
+                {
+                    completion(.failure(SubscriptionManager.supersededError))
+                    return
+                }
+                completion(result)
+            }
+        }
     }
 
     func sendSteeringMessage(
@@ -323,18 +361,18 @@ final class ChatSessionRunner {
 
     private func connect(
         sessionId: String,
-        jwt: String,
+        connection: ChatConnection,
         userText: String,
         groupName: String?,
         model: String? = nil,
-        allowReauth: Bool,
         handle: ChatSessionRunHandle,
         onBlock: @escaping @MainActor @Sendable (ChatBlock) -> Void,
         onSteeringEvent: @escaping @MainActor @Sendable (SteeringServerEvent) -> Void,
         onFinal: @escaping @MainActor @Sendable (String) -> Void,
         onError: @escaping @MainActor @Sendable (Error) -> Void
     ) {
-        guard let url = ChatSessionRunner.makeAgentWebSocketURL() else {
+        // The backend the token was issued for, not a fresh config read.
+        guard let url = ChatSessionRunner.makeAgentWebSocketURL(baseURL: connection.baseURL) else {
             let error = NSError(
                 domain: "ChatSessionRunner",
                 code: -1,
@@ -349,11 +387,11 @@ final class ChatSessionRunner {
         startAgentWebSocketSession(
             url: url,
             sessionID: sessionId,
-            jwt: jwt,
+            jwt: connection.token,
             originalText: userText,
             groupName: groupName,
             model: model,
-            allowReauth: allowReauth,
+            allowReauth: false,
             handle: handle,
             onBlock: onBlock,
             onSteeringEvent: onSteeringEvent,
@@ -835,8 +873,8 @@ final class ChatSessionRunner {
 
     /// Mirror of `AgentRunner.makeAgentWebSocketURL` — kept private here so
     /// this file does not depend on a non-public helper.
-    private static func makeAgentWebSocketURL() -> URL? {
-        guard var components = URLComponents(url: APIClient.baseURL, resolvingAgainstBaseURL: false) else {
+    static func makeAgentWebSocketURL(baseURL: URL) -> URL? {
+        guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
             return nil
         }
 

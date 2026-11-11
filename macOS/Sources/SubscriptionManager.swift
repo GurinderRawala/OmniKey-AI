@@ -66,9 +66,9 @@ final class SubscriptionAuthState: @unchecked Sendable {
     private var key: String?
     private var token: String?
     private var tokenIdentity: SubscriptionIdentity?
-    /// Bumped whenever the key changes or the subscription is cleared, so an
-    /// activation started earlier can't install its result afterwards (even
-    /// if the same key is entered again).
+    /// Bumped whenever a key is accepted (even the same key again) or the
+    /// subscription is cleared, so an activation started earlier can't
+    /// install its result afterwards.
     private var epoch = 0
 
     init(key: String? = nil) {
@@ -126,14 +126,38 @@ final class SubscriptionAuthState: @unchecked Sendable {
         }
     }
 
-    /// A newly entered key was accepted: store it with its token. The token
-    /// stays bound to the backend that issued it.
-    func install(key newKey: String, token newToken: String, for ticket: SubscriptionActivationTicket) {
+    /// An explicit (newly entered) key ticket is current while no clear or
+    /// other accepted key happened since it was issued and the backend is
+    /// unchanged. The stored key is irrelevant: the ticket is for `newKey`.
+    private func isExplicitCurrentLocked(_ ticket: SubscriptionActivationTicket, backend: BackendSelection) -> Bool {
+        epoch == ticket.epoch && backend == ticket.backend
+    }
+
+    /// Whether an explicit key ticket may still report its result.
+    func isExplicitCurrent(_ ticket: SubscriptionActivationTicket, backend: BackendSelection) -> Bool {
+        lock.withLock { isExplicitCurrentLocked(ticket, backend: backend) }
+    }
+
+    /// A newly entered key was accepted: store it with its token, bound to
+    /// the backend that issued it. Refused (nothing changes) if the
+    /// subscription was cleared, another key was accepted, or the backend
+    /// changed since `ticket` was issued. Every accepted key, even the same
+    /// key again, starts a new generation so older tickets can't commit.
+    /// `persist` runs under the lock so a concurrent clear can't be undone
+    /// by a late save.
+    @discardableResult
+    func install(
+        key newKey: String, token newToken: String, for ticket: SubscriptionActivationTicket,
+        backend: BackendSelection, persist: (String) -> Void = { _ in }
+    ) -> Bool {
         lock.withLock {
-            if key != newKey { epoch += 1 }
+            guard isExplicitCurrentLocked(ticket, backend: backend) else { return false }
+            epoch += 1
             key = newKey
             token = newToken
             tokenIdentity = ticket.identity
+            persist(newKey)
+            return true
         }
     }
 
@@ -159,30 +183,42 @@ final class SubscriptionAuthState: @unchecked Sendable {
         }
     }
 
-    func clear() {
+    /// `persist` runs under the lock (see `install`).
+    func clear(persist: () -> Void = {}) {
         lock.withLock {
             epoch += 1
             key = nil
             token = nil
             tokenIdentity = nil
+            persist()
         }
     }
 
     /// Clear only if `identity` is still the current one.
     @discardableResult
-    func clear(ifCurrent identity: SubscriptionIdentity?, backend: BackendSelection) -> Bool {
+    func clear(ifCurrent identity: SubscriptionIdentity?, backend: BackendSelection, persist: () -> Void = {}) -> Bool {
         lock.withLock {
             guard let identity, SubscriptionIdentity.make(backend: backend, userKey: key) == identity else { return false }
             epoch += 1
             key = nil
             token = nil
             tokenIdentity = nil
+            persist()
             return true
         }
     }
 }
 
 /// Persistence for the subscription key (injectable for tests).
+///
+/// No re-entry: `save` runs while `SubscriptionAuthState` holds its
+/// non-reentrant lock, so that a late save can't undo a concurrent clear.
+/// Neither `save` nor anything it triggers synchronously may read
+/// `SubscriptionManager` or `SubscriptionAuthState` (`userKey`,
+/// `authSnapshot`, `currentIdentity`, ...) on the same thread, or it
+/// deadlocks. `UserDefaults` posts `didChangeNotification` synchronously on
+/// the writing thread, so an observer of that notification must not read
+/// subscription state inline. It must hop to another queue first.
 struct SubscriptionKeyStore: @unchecked Sendable {
     var load: () -> String?
     var save: (String?) -> Void
@@ -302,16 +338,31 @@ final class SubscriptionManager: @unchecked Sendable {
 
             switch result {
             case let .success(token):
-                self.state.install(key: trimmed, token: token, for: ticket)
-                self.keyStore.save(trimmed)
+                // A result for a cleared, replaced or other-backend attempt
+                // is not installed, persisted or reported as success.
+                let keyStore = self.keyStore
+                guard self.state.install(
+                    key: trimmed, token: token, for: ticket, backend: self.backend(), persist: { keyStore.save($0) }
+                ) else {
+                    completion(.failure(Self.supersededError))
+                    return
+                }
                 completion(.success(()))
 
             case let .failure(error as NSError):
+                guard self.state.isExplicitCurrent(ticket, backend: self.backend()) else {
+                    completion(.failure(Self.supersededError))
+                    return
+                }
+                // An entered key is not the current subscription (it was never
+                // installed), so its failure, expiry (403) included, is only
+                // reported to the caller: the license window shows it. No
+                // subscription notice is posted. A notice would clear whatever
+                // subscription is current when it is delivered, and that may
+                // be newer than this attempt.
                 if error.domain == "SubscriptionManager", error.code == 403 {
-                    // Subscription has expired for this key – notify the app
-                    // so it can present the subscription window / purchase link.
-                    // Unscoped: entering an expired key keeps its existing flow.
-                    self.post(.subscriptionExpired, nil)
+                    completion(.failure(Self.enteredKeyExpiredError))
+                    return
                 }
                 completion(.failure(error))
             }
@@ -370,12 +421,31 @@ final class SubscriptionManager: @unchecked Sendable {
         case superseded
     }
 
+    /// Whether an `/activate` failure is the backend rejecting the
+    /// credentials (401: unknown key). Transport errors, 5xx, malformed
+    /// responses and the like are transient and must not sign the user out;
+    /// 403 (expired) has its own flow.
+    static func isCredentialRejection(_ error: Error) -> Bool {
+        let error = error as NSError
+        return error.domain == "SubscriptionManager" && error.code == 401
+    }
+
     /// Returned to the original caller when its re-activation was superseded.
     /// Not `AgentRunner/401`, so it is never replayed.
     static let supersededError = NSError(
         domain: "SubscriptionManager",
         code: -409,
         userInfo: [NSLocalizedDescriptionKey: "Your OmniKey subscription or backend changed. Please try again."]
+    )
+
+    /// `updateUserKey` result for an entered key the backend reports as
+    /// expired (403). Keeps domain and code; the current subscription is left
+    /// untouched.
+    static let enteredKeyExpiredError = NSError(
+        domain: "SubscriptionManager",
+        code: 403,
+        userInfo: [NSLocalizedDescriptionKey:
+            "This subscription key has expired. Purchase a new subscription to continue using OmniKey."]
     )
 
     /// Re-activate using the stored key (if any). This is used when
@@ -433,8 +503,8 @@ final class SubscriptionManager: @unchecked Sendable {
     /// Completely forget the subscription, removing the stored key
     /// and any in-memory token.
     func clearSubscription() {
-        state.clear()
-        keyStore.save(nil)
+        let keyStore = keyStore
+        state.clear(persist: { keyStore.save(nil) })
     }
 
     /// Handle an expiry notice: clears when it is unscoped or scoped to the
@@ -445,9 +515,8 @@ final class SubscriptionManager: @unchecked Sendable {
             clearSubscription()
             return true
         }
-        guard state.clear(ifCurrent: scope, backend: backend()) else { return false }
-        keyStore.save(nil)
-        return true
+        let keyStore = keyStore
+        return state.clear(ifCurrent: scope, backend: backend(), persist: { keyStore.save(nil) })
     }
 
     // MARK: - Networking
