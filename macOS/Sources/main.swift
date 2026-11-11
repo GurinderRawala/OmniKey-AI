@@ -18,6 +18,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     private var scheduledJobsMenuItem: NSMenuItem?
     private var mcpServersWindowController: MCPServersWindowController?
     private var mcpServersMenuItem: NSMenuItem?
+    private var skillsWindowController: SkillsWindowController?
+    private var skillsMenuItem: NSMenuItem?
     private var settingsWindowController: SettingsWindowController?
     private var settingsMenuItem: NSMenuItem?
     private var chatWindowController: ChatWindowController?
@@ -99,14 +101,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
 
         NotificationCenter.default.addObserver(
             self,
-            selector: #selector(handleSubscriptionUnauthorizedNotification),
+            selector: #selector(handleSubscriptionUnauthorizedNotification(_:)),
             name: .subscriptionUnauthorized,
             object: nil
         )
 
         NotificationCenter.default.addObserver(
             self,
-            selector: #selector(handleSubscriptionExpiredNotification),
+            selector: #selector(handleSubscriptionExpiredNotification(_:)),
             name: .subscriptionExpired,
             object: nil
         )
@@ -268,6 +270,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         instructionsItem.isEnabled = false
         menu.addItem(instructionsItem)
         taskInstructionsMenuItem = instructionsItem
+        let skillsItem = NSMenuItem(title: "Skills", action: #selector(showSkillsWindowFromMenu), keyEquivalent: "")
+        skillsItem.target = self
+        skillsItem.isEnabled = false
+        menu.addItem(skillsItem)
+        skillsMenuItem = skillsItem
         let agentItem = NSMenuItem(title: "OmniAgent Session", action: #selector(showAgentThinkingWindowFromMenu), keyEquivalent: "")
         agentItem.target = self
         agentItem.isEnabled = true
@@ -422,6 +429,38 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         taskInstructionsWindowController?.showWindow(nil)
     }
 
+    @objc private func showSkillsWindowFromMenu() {
+        showSkillsWindow()
+    }
+
+    func showSkillsWindow() {
+        guard requireTermsAccepted() else { return }
+        guard isAuthorized else { showLicenseWindow(); return }
+        let identity = SubscriptionManager.shared.currentIdentity
+        retireSkillsWindowIfIdentityChanged(current: identity)
+        if skillsWindowController == nil {
+            skillsWindowController = SkillsWindowController(identity: identity)
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        skillsWindowController?.showWindow(nil)
+    }
+
+    /// Skills state (list, drafts, pending completions) belongs to one
+    /// backend + subscription. Drop it when that changes so nothing typed
+    /// for one subscription can be saved into another. A JWT refresh for
+    /// the same subscription keeps the window and its draft.
+    private func retireSkillsWindowIfIdentityChanged(
+        current: SubscriptionIdentity? = SubscriptionManager.shared.currentIdentity
+    ) {
+        guard let controller = skillsWindowController,
+              !SkillsWindowController.canReuse(boundTo: controller.identity, for: current)
+        else { return }
+        skillsWindowController = nil
+        // Cancel reads, drop drafts and fence late completions first.
+        controller.retire()
+        controller.close()
+    }
+
     @objc private func showScheduledJobsWindowFromMenu() {
         showScheduledJobsWindow()
     }
@@ -509,6 +548,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     /// from the license window.
     func handleSuccessfulAuthorization() {
         isAuthorized = true
+        retireSkillsWindowIfIdentityChanged()
         updateAuthStatusUI()
         startMonitoringIfNeeded()
         licenseWindowController?.close()
@@ -543,6 +583,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         statusMenuItem?.title = title
         licenseMenuItem?.isHidden = APIClient.isSelfHosted
         taskInstructionsMenuItem?.isEnabled = isAuthorized
+        skillsMenuItem?.isEnabled = isAuthorized
         scheduledJobsMenuItem?.isEnabled = isAuthorized
         mcpServersMenuItem?.isEnabled = isAuthorized
     }
@@ -558,15 +599,52 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         // Nothing to do — window and menu item remain available.
     }
 
-    @objc private func handleSubscriptionUnauthorizedNotification() {
+    /// Auth notices can be posted from URLSession queues (legacy APIClient
+    /// paths). Everything they touch (scope check, clear, Skills retire,
+    /// menu, windows) must run on the main thread: inline when already
+    /// there, otherwise dispatched.
+    nonisolated static func onMainThread(_ body: @escaping @MainActor @Sendable () -> Void) {
+        if Thread.isMainThread {
+            MainActor.assumeIsolated { body() }
+        } else {
+            DispatchQueue.main.async { body() }
+        }
+    }
+
+    @objc nonisolated private func handleSubscriptionUnauthorizedNotification(_ notification: Notification) {
+        // Only the Sendable scope crosses threads; the whole handler runs on main.
+        let scope = SubscriptionManager.noticeIdentity(notification)
+        Self.onMainThread { [weak self] in
+            self?.applySubscriptionUnauthorizedNotice(
+                SubscriptionManager.notice(.subscriptionUnauthorized, identity: scope)
+            )
+        }
+    }
+
+    @objc nonisolated private func handleSubscriptionExpiredNotification(_ notification: Notification) {
+        let scope = SubscriptionManager.noticeIdentity(notification)
+        Self.onMainThread { [weak self] in
+            self?.applySubscriptionExpiredNotice(
+                SubscriptionManager.notice(.subscriptionExpired, identity: scope)
+            )
+        }
+    }
+
+    private func applySubscriptionUnauthorizedNotice(_ notification: Notification) {
+        // A notice scoped to a previous subscription/backend is stale.
+        guard SubscriptionManager.shared.noticeApplies(notification) else { return }
         isAuthorized = false
+        retireSkillsWindowIfIdentityChanged()
         updateAuthStatusUI()
         showLicenseWindow()
     }
 
-    @objc private func handleSubscriptionExpiredNotification() {
+    private func applySubscriptionExpiredNotice(_ notification: Notification) {
+        // Clears only the subscription the notice is about (unscoped legacy
+        // notices clear unconditionally); a stale notice changes nothing.
+        guard SubscriptionManager.shared.clearSubscription(forNotice: notification) else { return }
         isAuthorized = false
-        SubscriptionManager.shared.clearSubscription()
+        retireSkillsWindowIfIdentityChanged()
         updateAuthStatusUI()
 
         DispatchQueue.main.async { [weak self] in

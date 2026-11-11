@@ -236,7 +236,8 @@ export async function backfillSessionTaskInstructions(logger: Logger): Promise<v
           taskInstructionId: hit.id,
           taskInstructionHeading: hit.heading,
         },
-        { where: { id: session.id } },
+        // Owner-scoped: the template matched belongs to this subscription.
+        { where: { id: session.id, subscriptionId: session.subscriptionId } },
       );
       matched += 1;
     } catch (err) {

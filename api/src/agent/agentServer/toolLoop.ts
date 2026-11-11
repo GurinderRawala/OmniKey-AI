@@ -17,7 +17,7 @@ import { pendingShellScripts } from './runtimeState';
 import { persistSessionToDB } from './sessionStore';
 import {
   consumeSteeringRestart,
-  drainSteeringMessagesIntoHistory,
+  drainSteeringMessagesForRun,
   sendSteeringAppliedNotice,
   STEERING_RESTART_LIMIT_MESSAGE,
   type SteeringRestartBudget,
@@ -114,11 +114,12 @@ export async function runToolLoop(
     throwIfTurnCancelled(session.signal);
     toolIterations++;
 
-    const preToolSteeringMessages = drainSteeringMessagesIntoHistory(
+    const preToolSteeringMessages = await drainSteeringMessagesForRun(
       sessionId,
       session,
       hasStoredPrompt,
       log,
+      tools,
     );
     if (preToolSteeringMessages.length > 0) {
       await persistSessionToDB(sessionId, session);
@@ -518,11 +519,23 @@ export async function runToolLoop(
       return toolLoopLimitResult(model, repeated);
     }
 
-    const steeringMessages = drainSteeringMessagesIntoHistory(
+    // Include fixed progress guidance before the steering candidate is budgeted.
+    const hasWebFailure = toolResults.some(
+      (result) => isWebTool(result.name) && isToolFailureResult(result.result),
+    );
+    const recoveryPrompt = hasWebFailure ? undefined : progressGuard.takeRecoveryPrompt();
+    if (recoveryPrompt) {
+      pushToSessionHistory(logger, session, { role: 'user', content: recoveryPrompt });
+      await persistSessionToDB(sessionId, session);
+      log.info('Added agent progress recovery checkpoint', { sessionId, toolIterations });
+    }
+
+    const steeringMessages = await drainSteeringMessagesForRun(
       sessionId,
       session,
       hasStoredPrompt,
       log,
+      tools,
     );
     if (steeringMessages.length > 0) {
       await persistSessionToDB(sessionId, session);
@@ -550,13 +563,6 @@ export async function runToolLoop(
       return webToolFailureInterruptResult(model);
     }
 
-    const recoveryPrompt = progressGuard.takeRecoveryPrompt();
-    if (recoveryPrompt) {
-      pushToSessionHistory(logger, session, { role: 'user', content: recoveryPrompt });
-      await persistSessionToDB(sessionId, session);
-      log.info('Added agent progress recovery checkpoint', { sessionId, toolIterations });
-    }
-
     // Call the AI again with the tool results in history to get the next response.
     result = await completeWithContextRecovery(
       session,
@@ -572,11 +578,12 @@ export async function runToolLoop(
     await onUsage(result);
 
     for (;;) {
-      const lateSteeringMessages = drainSteeringMessagesIntoHistory(
+      const lateSteeringMessages = await drainSteeringMessagesForRun(
         sessionId,
         session,
         hasStoredPrompt,
         log,
+        tools,
       );
       if (lateSteeringMessages.length === 0) break;
 

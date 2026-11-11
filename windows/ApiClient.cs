@@ -307,6 +307,23 @@ namespace OmniKey.Windows
             return req;
         }
 
+        // ─── Skills ───────────────────────────────────────────────────
+
+        // Dedicated client: per-request 30 s timeouts are enforced by the
+        // service itself, so the shared 60 s client limit does not apply.
+        private static readonly HttpClient SkillsHttp = new() { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
+
+        /// <summary>Authenticated <c>/api/skills</c> client for the same backend
+        /// (<see cref="BaseUrl"/>) and identity as every other call. A 401/403
+        /// re-activates the stored key once; a second failure clears the token.
+        /// Skills are stored only on the backend — never locally.</summary>
+        public static Skills.ISkillsService CreateSkillsService() => new Skills.SkillsHttpService(
+            SkillsHttp,
+            baseUrl: () => BaseUrl,
+            token: () => SubscriptionManager.Instance.JwtToken,
+            reauthenticate: () => SubscriptionManager.Instance.ReactivateStoredKeyIfNeededAsync(),
+            onFinalUnauthorized: () => SubscriptionManager.Instance.InvalidateToken());
+
         // ─── Enhance / Grammar / Custom-task ─────────────────────────
 
         public async Task<string> SendAsync(string text, EnhanceCommand command)

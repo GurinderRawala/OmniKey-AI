@@ -108,6 +108,205 @@ func resolvedLoginShell() -> String {
 /// handler more than once across URLSession WebSocket callbacks.
 final class BoolBox: @unchecked Sendable { var value = false }
 
+/// Wire message for the hotkey (`@omniAgent`) WebSocket session.
+struct HotkeyAgentMessage: Codable, Equatable, Sendable {
+    let sessionID: String
+    let sender: String
+    let content: String
+    let isTerminalOutput: Bool?
+    let isError: Bool?
+    let isWebCall: Bool?
+    let isImageRendering: Bool?
+    let isMcpCall: Bool?
+    let platform: String?
+    /// Opt-in for Skills notices; sent only on the user's input.
+    let supportsSkillStatus: Bool?
+
+    init(
+        sessionID: String,
+        sender: String,
+        content: String,
+        isTerminalOutput: Bool? = nil,
+        isError: Bool? = nil,
+        isWebCall: Bool? = nil,
+        isImageRendering: Bool? = nil,
+        isMcpCall: Bool? = nil,
+        platform: String? = nil,
+        supportsSkillStatus: Bool? = nil
+    ) {
+        self.sessionID = sessionID
+        self.sender = sender
+        self.content = content
+        self.isTerminalOutput = isTerminalOutput
+        self.isError = isError
+        self.isWebCall = isWebCall
+        self.isImageRendering = isImageRendering
+        self.isMcpCall = isMcpCall
+        self.platform = platform
+        self.supportsSkillStatus = supportsSkillStatus
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case sessionID = "session_id"
+        case sender
+        case content
+        case isTerminalOutput = "is_terminal_output"
+        case isError = "is_error"
+        case isWebCall = "is_web_call"
+        case isImageRendering = "is_image_rendering"
+        case isMcpCall = "is_mcp_call"
+        case platform
+        case supportsSkillStatus = "supports_skill_status"
+    }
+}
+
+/// Pure decision for one inbound hotkey-agent frame. `AgentRunner`'s
+/// receive loop calls this for every text frame and only performs the side
+/// effects (UI, shell, completion) the action names, so the ordering —
+/// Skills notices first, before decode, shell or final-answer parsing — is
+/// testable without a socket.
+enum HotkeyAgentFrame {
+    enum Disposition: Equatable, Sendable {
+        case runShellScript(String)
+        case finalAnswer(String)
+        /// No tags: this runner treats the text as the final answer.
+        case implicitFinalAnswer(String)
+        /// A terminal frame marked `is_error` (e.g. Skills blocked the run).
+        /// Completes with an error and is never pasted into the document.
+        /// The string is a sanitized single line safe for an alert.
+        case failure(String)
+        /// The backend rejected the connection's credentials before
+        /// processing the message (legacy untagged frame: `is_error`, empty
+        /// `session_id`, `Unauthorized:` text). The only replay-safe failure.
+        case unauthorized
+    }
+
+    /// The backend's pre-processing auth rejection (agentServer/websocket.ts).
+    /// It has no error code, so match its fixed shape exactly.
+    static func isAuthRejection(_ message: HotkeyAgentMessage) -> Bool {
+        message.isError == true && message.sessionID.isEmpty && message.sender == "agent"
+            && message.content.hasPrefix("Unauthorized:")
+    }
+
+    static let genericFailureText = "The agent could not complete this request."
+    static let failureTextLimit = 300
+
+    /// Single-line, length-capped failure text: the cleaned server message
+    /// without markup, controls or bidi/format characters, or a fixed
+    /// fallback when nothing readable remains.
+    static func safeFailureText(from raw: String) -> String {
+        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.hasPrefix("**Error:**") { text = String(text.dropFirst("**Error:**".count)) }
+        var scalars = String.UnicodeScalarView()
+        var lastWasSpace = false
+        for scalar in text.unicodeScalars {
+            let category = scalar.properties.generalCategory
+            let breaking = category == .control || category == .format
+                || category == .lineSeparator || category == .paragraphSeparator
+                || scalar.properties.isWhitespace
+            if breaking {
+                if !lastWasSpace { scalars.append(" ") }
+                lastWasSpace = true
+            } else {
+                scalars.append(scalar)
+                lastWasSpace = false
+            }
+        }
+        var line = String(scalars).trimmingCharacters(in: .whitespaces)
+        if line.count > failureTextLimit { line = String(line.prefix(failureTextLimit)) + "…" }
+        return line.isEmpty ? genericFailureText : line
+    }
+
+    enum Action: Equatable, Sendable {
+        /// A Skills notice (valid, duplicate or malformed). Never executes
+        /// or completes; `display` is literal live-only text, or nil.
+        case skillNotice(display: String?)
+        case undecodable
+        case webCall(String)
+        case imageRendering(String)
+        case mcpCall(String)
+        case agentText(HotkeyAgentMessage, display: String, disposition: Disposition)
+    }
+
+    static func action(for data: Data, tracker: SkillStatusTracker) -> Action {
+        if case let .consumed(display) = SkillNoticeInterceptor.intercept(data, tracker: tracker) {
+            return .skillNotice(display: display)
+        }
+        guard let message = try? JSONDecoder().decode(HotkeyAgentMessage.self, from: data) else {
+            return .undecodable
+        }
+        let content = message.content
+        if message.isWebCall == true { return .webCall(content) }
+        if message.isImageRendering == true { return .imageRendering(content) }
+        if message.isMcpCall == true { return .mcpCall(content) }
+
+        let display = AgentRunner.cleanedDisplayText(from: content)
+        let disposition: Disposition
+        if isAuthRejection(message) {
+            disposition = .unauthorized
+        } else if let script = AgentRunner.extractShellScript(from: content) {
+            disposition = .runShellScript(script)
+        } else if let final = AgentRunner.extractFinalAnswer(from: content) {
+            // Server-generated terminal failures (e.g. Skills blocked) are
+            // final answers with is_error; never deliver them as the answer.
+            disposition = message.isError == true ? .failure(safeFailureText(from: final)) : .finalAnswer(final)
+        } else {
+            disposition = .implicitFinalAnswer(display.isEmpty ? content : display)
+        }
+        return .agentText(message, display: display, disposition: disposition)
+    }
+}
+
+/// When a failed hotkey run may re-authenticate and resend the original
+/// message. Replaying re-runs the whole request, so it is allowed only when
+/// the backend provably did no work: its credentials were rejected (WebSocket
+/// handshake 401/403, or the pre-processing `Unauthorized:` frame). Terminal
+/// agent errors (`AgentRunner/-3`), transport and provider failures can
+/// follow completed tool work and are reported, never replayed. The replay
+/// must also stay on the identity the run started with; a refreshed JWT for
+/// the same backend + subscription is fine.
+enum AgentAuthRetry {
+    static let domain = "AgentRunner"
+    static let code = 401
+
+    static func authenticationError() -> NSError {
+        NSError(
+            domain: domain, code: code,
+            userInfo: [NSLocalizedDescriptionKey: "Subscription is not active. Please re-activate your key."]
+        )
+    }
+
+    static func isAuthenticationFailure(_ error: Error) -> Bool {
+        let error = error as NSError
+        return error.domain == domain && error.code == code
+    }
+
+    /// A socket error, reclassified as an auth failure if the server
+    /// refused the WebSocket upgrade for credentials.
+    static func socketError(_ error: Error, handshakeStatus: Int?) -> Error {
+        handshakeStatus == 401 || handshakeStatus == 403 ? authenticationError() : error
+    }
+
+    static func shouldReauthenticate(after error: Error, allowReauth: Bool) -> Bool {
+        allowReauth && isAuthenticationFailure(error)
+    }
+
+    static func mayReplay(startedFor started: SubscriptionIdentity?, current: SubscriptionIdentity?) -> Bool {
+        started != nil && started == current
+    }
+
+    /// Token and backend for a send of a run that started for `started`:
+    /// only from one snapshot, only for that identity, never empty.
+    static func credentials(
+        for started: SubscriptionIdentity?, from snapshot: SubscriptionAuthSnapshot
+    ) -> (token: String, baseURL: URL)? {
+        guard mayReplay(startedFor: started, current: snapshot.identity),
+              let token = snapshot.token, !token.isEmpty
+        else { return nil }
+        return (token, snapshot.baseURL)
+    }
+}
+
 /// Box that holds an optional closure so it can be captured by reference
 /// inside @Sendable closures without triggering data-race warnings.
 final class ClosureBox<T>: @unchecked Sendable { var call: T? }
@@ -301,15 +500,24 @@ final class AgentRunner {
         completion: @escaping @Sendable (Result<String, Error>) -> Void
     ) {
         let chosenSessionId = AgentThinkingModel.shared.selectedSessionId ?? UUID().uuidString
+        // One snapshot: the identity this run acts for, and (if issued for
+        // it) the token and backend of the first send.
+        let initial = SubscriptionManager.shared.authSnapshot()
+        let startIdentity = initial.identity
+        let notActive = NSError(
+            domain: "AgentRunner",
+            code: 401,
+            userInfo: [NSLocalizedDescriptionKey: "Subscription is not active."]
+        )
 
         // Pre-load prior turns so the view can show a compact history banner.
         if AgentThinkingModel.shared.selectedSessionId != nil {
             AgentThinkingModel.shared.fetchSessionHistory(for: chosenSessionId)
         }
 
-        let sessionBox = ClosureBox<@MainActor @Sendable (String, Bool) -> Void>()
-        sessionBox.call = { [self] jwt, allowReauth in
-            self.connectAndRun(originalText: originalText, sessionId: chosenSessionId, jwt: jwt) { result in
+        let sessionBox = ClosureBox<@MainActor @Sendable (String, URL, Bool) -> Void>()
+        sessionBox.call = { [self] jwt, baseURL, allowReauth in
+            self.connectAndRun(originalText: originalText, sessionId: chosenSessionId, jwt: jwt, baseURL: baseURL) { result in
                 // If the user pressed Cancel, surface a dedicated
                 // cancellation error and skip any re-auth logic.
                 Task { @MainActor in
@@ -330,7 +538,9 @@ final class AgentRunner {
                     completion(result)
 
                 case let .failure(error):
-                    guard allowReauth else {
+                    // Only a credentials rejection is replayed; anything
+                    // else may follow completed tool work.
+                    guard AgentAuthRetry.shouldReauthenticate(after: error, allowReauth: allowReauth) else {
                         completion(.failure(error))
                         return
                     }
@@ -338,9 +548,22 @@ final class AgentRunner {
                     SubscriptionManager.shared.reactivateStoredKeyIfNeeded { outcome in
                         switch outcome {
                         case .success:
-                            let newJwt = SubscriptionManager.shared.jwtToken ?? ""
                             DispatchQueue.main.async {
-                                sessionBox.call?(newJwt, false)
+                                // Never resend this request as another subscription.
+                                guard let next = AgentAuthRetry.credentials(
+                                    for: startIdentity, from: SubscriptionManager.shared.authSnapshot()
+                                ) else {
+                                    completion(.failure(error))
+                                    return
+                                }
+                                sessionBox.call?(next.token, next.baseURL, false)
+                            }
+
+                        case .superseded:
+                            // Another subscription/backend is current: never
+                            // replay this run as it.
+                            DispatchQueue.main.async {
+                                completion(.failure(SubscriptionManager.supersededError))
                             }
 
                         case .noStoredKey, .expired:
@@ -361,27 +584,33 @@ final class AgentRunner {
 
         // Ensure we have (or can obtain) a JWT before
         // attempting to connect to the agent.
-        if let token = SubscriptionManager.shared.jwtToken, !token.isEmpty {
-            sessionBox.call?(token, true)
+        if let first = AgentAuthRetry.credentials(for: startIdentity, from: initial) {
+            sessionBox.call?(first.token, first.baseURL, true)
             return
         }
 
         SubscriptionManager.shared.reactivateStoredKeyIfNeeded { outcome in
             switch outcome {
             case .success:
-                let jwt = SubscriptionManager.shared.jwtToken ?? ""
                 DispatchQueue.main.async {
-                    sessionBox.call?(jwt, false)
+                    // Only send for the identity this run started with.
+                    guard let first = AgentAuthRetry.credentials(
+                        for: startIdentity, from: SubscriptionManager.shared.authSnapshot()
+                    ) else {
+                        completion(.failure(notActive))
+                        return
+                    }
+                    sessionBox.call?(first.token, first.baseURL, false)
+                }
+
+            case .superseded:
+                DispatchQueue.main.async {
+                    completion(.failure(SubscriptionManager.supersededError))
                 }
 
             case .noStoredKey, .expired:
-                let error = NSError(
-                    domain: "AgentRunner",
-                    code: 401,
-                    userInfo: [NSLocalizedDescriptionKey: "Subscription is not active."]
-                )
                 DispatchQueue.main.async {
-                    completion(.failure(error))
+                    completion(.failure(notActive))
                 }
 
             case let .failure(error):
@@ -408,6 +637,11 @@ final class AgentRunner {
                 let jwt = SubscriptionManager.shared.jwtToken ?? ""
                 self.connectAndCheck(jwt: jwt, completion: completion)
 
+            case .superseded:
+                DispatchQueue.main.async {
+                    completion(.failure(SubscriptionManager.supersededError))
+                }
+
             case .noStoredKey, .expired:
                 let error = NSError(
                     domain: "AgentRunner",
@@ -430,9 +664,11 @@ final class AgentRunner {
         originalText: String,
         sessionId: String,
         jwt: String,
+        baseURL: URL,
         completion: @escaping @Sendable (Result<String, Error>) -> Void
     ) {
-        guard let url = makeAgentWebSocketURL() else {
+        // The backend the token was issued for, not a fresh config read.
+        guard let url = makeAgentWebSocketURL(baseURL: baseURL) else {
             let error = NSError(
                 domain: "AgentRunner",
                 code: -1,
@@ -513,56 +749,13 @@ final class AgentRunner {
         let session = URLSession(configuration: .default)
         let task = session.webSocketTask(with: request)
 
-        struct AgentMessage: Codable {
-            let sessionID: String
-            let sender: String
-            let content: String
-            let isTerminalOutput: Bool?
-            let isError: Bool?
-            let isWebCall: Bool?
-            let isImageRendering: Bool?
-            let isMcpCall: Bool?
-            let platform: String?
-
-            init(
-                sessionID: String,
-                sender: String,
-                content: String,
-                isTerminalOutput: Bool? = nil,
-                isError: Bool? = nil,
-                isWebCall: Bool? = nil,
-                isImageRendering: Bool? = nil,
-                isMcpCall: Bool? = nil,
-                platform: String? = nil
-            ) {
-                self.sessionID = sessionID
-                self.sender = sender
-                self.content = content
-                self.isTerminalOutput = isTerminalOutput
-                self.isError = isError
-                self.isWebCall = isWebCall
-                self.isImageRendering = isImageRendering
-                self.isMcpCall = isMcpCall
-                self.platform = platform
-            }
-
-            enum CodingKeys: String, CodingKey {
-                case sessionID = "session_id"
-                case sender
-                case content
-                case isTerminalOutput = "is_terminal_output"
-                case isError = "is_error"
-                case isWebCall = "is_web_call"
-                case isImageRendering = "is_image_rendering"
-                case isMcpCall = "is_mcp_call"
-                case platform
-            }
-        }
+        typealias AgentMessage = HotkeyAgentMessage
 
         let encoder = JSONEncoder()
-        let decoder = JSONDecoder()
 
         let finalAnswerDelivered = BoolBox()
+        // Live-only Skills feedback, deduplicated for this run alone.
+        let skillNotices = SkillStatusTracker()
 
         func receiveNext() {
             task.receive { result in
@@ -570,8 +763,11 @@ final class AgentRunner {
                 case let .failure(error):
                     print("[AgentRunner] WebSocket receive failed: \(error.localizedDescription)")
                     if !finalAnswerDelivered.value {
+                        let mapped = AgentAuthRetry.socketError(
+                            error, handshakeStatus: (task.response as? HTTPURLResponse)?.statusCode
+                        )
                         DispatchQueue.main.async {
-                            completion(.failure(error))
+                            completion(.failure(mapped))
                         }
                     }
                     task.cancel(with: .goingAway, reason: nil)
@@ -589,43 +785,71 @@ final class AgentRunner {
 
                     print("[AgentRunner] Received WebSocket text message (length: \(text.count))")
 
-                    guard let data = text.data(using: .utf8),
-                          let response = try? decoder.decode(AgentMessage.self, from: data)
-                    else {
+                    // Every frame goes through the pure classifier, which
+                    // consumes Skills notices before any decode, shell or
+                    // final-answer handling (this runner otherwise treats
+                    // untagged text as the final answer).
+                    let action = HotkeyAgentFrame.action(for: Data(text.utf8), tracker: skillNotices)
+
+                    let response: AgentMessage
+                    let displayText: String
+                    let disposition: HotkeyAgentFrame.Disposition
+                    switch action {
+                    case let .skillNotice(display):
+                        if let display {
+                            DispatchQueue.main.async {
+                                AgentThinkingModel.shared.append(display)
+                            }
+                        }
+                        receiveNext()
+                        return
+
+                    case .undecodable:
                         print("[AgentRunner] Failed to decode AgentMessage from text payload.")
                         receiveNext()
                         return
-                    }
 
-                    let content = response.content
-
-                    // Web call notification: show it in the thinking view and
-                    // keep listening — this is not a final answer.
-                    if response.isWebCall == true {
+                    // Web/image/MCP notifications: show them in the thinking
+                    // view and keep listening — they are not final answers.
+                    case let .webCall(content):
                         DispatchQueue.main.async {
                             AgentThinkingModel.shared.appendWebCall(content)
                         }
                         receiveNext()
                         return
-                    }
 
-                    // Image rendering notification: show it in the thinking view and
-                    // keep listening — this is not a final answer.
-                    if response.isImageRendering == true {
+                    case let .imageRendering(content):
                         DispatchQueue.main.async {
                             AgentThinkingModel.shared.appendImageRendering(content)
                         }
                         receiveNext()
                         return
-                    }
 
-                    // MCP call notification: show it in the thinking view and
-                    // keep listening — this is not a final answer.
-                    if response.isMcpCall == true {
+                    case let .mcpCall(content):
                         DispatchQueue.main.async {
                             AgentThinkingModel.shared.appendMcpCall(content)
                         }
                         receiveNext()
+                        return
+
+                    case let .agentText(message, display, kind):
+                        response = message
+                        displayText = display
+                        disposition = kind
+                    }
+
+                    // Credentials rejected before any work: fail as an auth
+                    // error (the caller may refresh and replay once).
+                    if case .unauthorized = disposition {
+                        print("[AgentRunner] Agent rejected credentials; completing with auth failure.")
+                        finalAnswerDelivered.value = true
+                        DispatchQueue.main.async {
+                            completion(.failure(AgentAuthRetry.authenticationError()))
+                        }
+                        task.cancel(with: .goingAway, reason: nil)
+                        Task {
+                            await AgentSessionState.shared.registerWebSocketTask(nil)
+                        }
                         return
                     }
 
@@ -633,7 +857,6 @@ final class AgentRunner {
                     // the agent's message (without XML-like tags)
                     // directly to the shared thinking model so the
                     // UI can display a streaming transcript.
-                    let displayText = AgentRunner.cleanedDisplayText(from: content)
                     if !displayText.isEmpty {
                         DispatchQueue.main.async {
                             AgentThinkingModel.shared.append(displayText)
@@ -643,7 +866,7 @@ final class AgentRunner {
                     // If the agent wants us to run a shell script,
                     // execute it and stream the output back as a
                     // terminal_output message.
-                    if let script = AgentRunner.extractShellScript(from: content) {
+                    if case let .runShellScript(script) = disposition {
                         print("[AgentRunner] Detected <shell_script> block in agent response. Script length: \(script.count)")
                         DispatchQueue.global(qos: .userInitiated).async {
                             let (output, status) = runShellCommandWithStatus(script)
@@ -729,7 +952,7 @@ final class AgentRunner {
 
                     // If we received a final answer, surface it to the
                     // caller and close the stream.
-                    if let final = AgentRunner.extractFinalAnswer(from: content) {
+                    if case let .finalAnswer(final) = disposition {
                         print("[AgentRunner] Detected <final_answer> block in agent response. Length: \(final.count)")
                         finalAnswerDelivered.value = true
                         DispatchQueue.main.async {
@@ -743,12 +966,31 @@ final class AgentRunner {
                         return
                     }
 
+                    // Server-reported terminal error: fail the run so the
+                    // caller shows an alert instead of pasting the text.
+                    if case let .failure(reason) = disposition {
+                        print("[AgentRunner] Agent reported an error; completing with failure.")
+                        finalAnswerDelivered.value = true
+                        DispatchQueue.main.async {
+                            completion(.failure(NSError(
+                                domain: "AgentRunner",
+                                code: -3,
+                                userInfo: [NSLocalizedDescriptionKey: reason]
+                            )))
+                        }
+                        task.cancel(with: .goingAway, reason: nil)
+                        Task {
+                            await AgentSessionState.shared.registerWebSocketTask(nil)
+                        }
+                        return
+                    }
+
                     // If there is no shell script to run and no
                     // <final_answer> tag present, treat this message
                     // as the final answer as well and close the
                     // connection. This allows simpler agents that
                     // just stream plain text without special tags.
-                    let answerText = !displayText.isEmpty ? displayText : content
+                    guard case let .implicitFinalAnswer(answerText) = disposition else { return }
                     print("[AgentRunner] Treating agent message as implicit final answer. Length: \(answerText.count)")
                     finalAnswerDelivered.value = true
                     DispatchQueue.main.async {
@@ -773,7 +1015,8 @@ final class AgentRunner {
             content: originalText,
             isTerminalOutput: false,
             isError: false,
-            platform: "macos"
+            platform: "macos",
+            supportsSkillStatus: true
         )
 
         if let data = try? encoder.encode(initial),
@@ -783,8 +1026,11 @@ final class AgentRunner {
             task.send(.string(json)) { error in
                 if let error, !finalAnswerDelivered.value {
                     print("[AgentRunner] Failed to send initial WebSocket message: \(error.localizedDescription)")
+                    let mapped = AgentAuthRetry.socketError(
+                        error, handshakeStatus: (task.response as? HTTPURLResponse)?.statusCode
+                    )
                     DispatchQueue.main.async {
-                        completion(.failure(error))
+                        completion(.failure(mapped))
                     }
                     task.cancel(with: .goingAway, reason: nil)
                     return
@@ -843,8 +1089,8 @@ final class AgentRunner {
     /// Construct the WebSocket URL for the agent endpoint based on the
     /// configured HTTP API base URL. This mirrors the backend's
     /// /ws/omni-agent path.
-    private func makeAgentWebSocketURL() -> URL? {
-        guard var components = URLComponents(url: APIClient.baseURL, resolvingAgainstBaseURL: false) else {
+    private func makeAgentWebSocketURL(baseURL: URL = APIClient.baseURL) -> URL? {
+        guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
             return nil
         }
 

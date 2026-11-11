@@ -17,7 +17,7 @@ The CLI ships **all three TypeScript services in one package**: at build time `c
 
 - Node.js **22.12.0+ within the 22.x line, or 24.0.0+** (`^22.12.0 || >=24.0.0`) is the project baseline for installing the full development dependencies and monorepo work, including lint. The published API/CLI package metadata still declares Node ≥14 for runtime compatibility; that does not describe the development toolchain.
 - **Yarn 1.22+** (`npm install -g yarn` if you don't have it). Yarn is the supported package manager for the monorepo; the only `package-lock.json` in the repo is `cli/package-lock.json`, which exists so the published npm package carries a lockfile.
-- For the native clients: Xcode 15+ (macOS) or .NET 8 SDK + Visual Studio 2022 (Windows). Neither is required to work on the TypeScript services.
+- For the native clients: Xcode 15+ (macOS) or .NET 10 SDK + Visual Studio 2022 (Windows). Neither is required to work on the TypeScript services.
 
 ## Getting started
 
@@ -76,7 +76,7 @@ Telegram needs `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `.env` — see [`t
 | `yarn build:api` / `:telegram` / `:cli` | Build a single workspace.                                                                                                   |
 | `yarn dev`                              | Start the API in watch mode.                                                                                                |
 | `yarn start`                            | Run the compiled API (`api/dist/index.js`).                                                                                 |
-| `yarn test`                             | Run vitest across every workspace (currently 431 tests in `api`; `cli`/`telegram` are no-ops).                              |
+| `yarn test`                             | Run vitest across every workspace (API and CLI execute real suites; Telegram currently has no tests).                              |
 | `yarn lint`                             | Run ESLint across all three TypeScript workspaces; typed rules are deferred.                                                |
 | `yarn format`                           | Run Prettier across every workspace's `src/**`.                                                                             |
 | `yarn clean`                            | Remove every `dist/`, `backend-dist/`, and `telegram-client-dist/`.                                                         |
@@ -151,3 +151,21 @@ Installs and builds are Yarn throughout; only the final publish step uses `npm p
 - **Windows** (`windows/`) — open the `.sln` in Visual Studio or run `dotnet build` / `dotnet run` from the directory. Same local API contract.
 
 Neither client has a hard dependency on the TypeScript services for compiling — you can iterate on them independently as long as the API daemon is running.
+
+## Skills development and release checks
+
+Read [Skills v1 contract](docs/skills-contract.md), [user guide](docs/skills.md), and [verification matrix](docs/skills-verification.md). API and CLI use one backend store/matcher; native tests cover transport and presentation, not separate matching implementations.
+
+```sh
+yarn workspace omnikey-ai-api run test
+yarn workspace omnikey-cli run test
+yarn workspace omnikey-cli run test:types
+dotnet build windows/OmniKey.Windows.csproj
+dotnet test windows.Tests/OmniKey.Windows.Tests.csproj
+```
+
+Windows requires the .NET **10** SDK. The test project links platform-neutral production source and runs on macOS/Linux; it does not replace Windows WPF runtime tests. CI runs it on Windows. macOS uses `swift build && swift test`. When developing inside the running OmniKey app, never restart its backend or write its build outputs: use isolated scratch/worktree build directories and disposable databases.
+
+PostgreSQL tests are opt-in: set `SKILLS_TEST_PG_URL` to a **disposable** PostgreSQL database (or `SKILLS_TEST_PG_SOCKET` for the private local test socket on port 55439), then run `yarn workspace omnikey-ai-api run test src/__tests__/skills.postgres.test.ts`. The test creates/drops a unique schema and never reads `DATABASE_URL`; absent explicit test settings, it skips. SQLite migration/restart tests always use isolated temporary files.
+
+Native manual checks remain required before release: shared-daemon CRUD with CLI, refresh after external edits, old backend, chat/hotkey/steering activation, blocked limits, stop/reconnect, keyboard/VoiceOver/Narrator. Live application feedback is not durable audit history. Backend-first rollout, backup DB, retain table data on code rollback. CLI/API patch versions must move together because merging `cli/**` to main publishes the CLI.

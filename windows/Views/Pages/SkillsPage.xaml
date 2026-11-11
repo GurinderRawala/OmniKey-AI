@@ -1,0 +1,691 @@
+<Page
+    x:Class="OmniKey.Windows.Views.Pages.SkillsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+    Title="Skills"
+    AutomationProperties.Name="Skills"
+    Background="Transparent"
+    d:DesignHeight="700"
+    d:DesignWidth="1100"
+    KeyboardNavigation.TabNavigation="Cycle"
+    ScrollViewer.CanContentScroll="False"
+    mc:Ignorable="d">
+
+    <!--  All skill values (names, keywords, instructions) are shown with
+          TextBlock/TextBox only: literal text, never Markdown or HTML.  -->
+    <Page.InputBindings>
+        <KeyBinding Command="{Binding NewSkillCommand}" Gesture="Ctrl+N" />
+        <KeyBinding Command="{Binding RefreshCommand}" Gesture="F5" />
+        <KeyBinding Command="{Binding RefreshCommand}" Gesture="Ctrl+R" />
+        <KeyBinding Command="{Binding EditCommand}" Gesture="Ctrl+E" />
+        <KeyBinding Command="{Binding SaveCommand}" Gesture="Ctrl+S" />
+    </Page.InputBindings>
+
+    <Page.Resources>
+        <Style x:Key="SkillsFieldLabel" TargetType="TextBlock">
+            <Setter Property="Margin" Value="0,0,0,4" />
+            <Setter Property="FontFamily" Value="{StaticResource OK.FontFamily}" />
+            <Setter Property="FontSize" Value="{StaticResource OK.Font.CaptionSmall}" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="{StaticResource Nord.SecondaryTextBrush}" />
+        </Style>
+        <Style x:Key="SkillsHint" TargetType="TextBlock">
+            <Setter Property="Margin" Value="0,5,0,0" />
+            <Setter Property="FontFamily" Value="{StaticResource OK.FontFamily}" />
+            <Setter Property="FontSize" Value="{StaticResource OK.Font.CaptionSmall}" />
+            <Setter Property="Foreground" Value="{StaticResource Nord.SecondaryTextBrush}" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+        <Style x:Key="SkillsError" TargetType="TextBlock" BasedOn="{StaticResource SkillsHint}">
+            <Setter Property="Foreground" Value="{StaticResource PaletteRedBrush}" />
+            <Style.Triggers>
+                <Trigger Property="Text" Value="">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                </Trigger>
+                <Trigger Property="Text" Value="{x:Null}">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="SkillsConflictNote" TargetType="TextBlock" BasedOn="{StaticResource SkillsHint}">
+            <Setter Property="Foreground" Value="{StaticResource Nord.AccentAmberBrush}" />
+            <Setter Property="Text" Value="Also changed elsewhere — your version is kept." />
+        </Style>
+        <Style x:Key="SkillsPanel" TargetType="Border">
+            <Setter Property="Background" Value="{StaticResource Nord.PanelBackgroundBrush}" />
+            <Setter Property="CornerRadius" Value="14" />
+            <Setter Property="Effect">
+                <Setter.Value>
+                    <DropShadowEffect
+                        BlurRadius="22"
+                        Direction="270"
+                        Opacity="0.45"
+                        ShadowDepth="6"
+                        Color="Black" />
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Page.Resources>
+
+    <Grid Margin="24,20,24,20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- ────────────────── Header ────────────────── -->
+        <Grid Grid.Row="0" Margin="0,0,0,14">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <StackPanel Grid.Column="0">
+                <StackPanel Orientation="Horizontal">
+                    <ui:SymbolIcon
+                        Margin="0,0,10,0"
+                        VerticalAlignment="Center"
+                        FontSize="20"
+                        Foreground="{StaticResource Nord.AccentBrush}"
+                        Symbol="Sparkle24" />
+                    <TextBlock
+                        VerticalAlignment="Center"
+                        FontFamily="{StaticResource OK.FontFamily}"
+                        FontSize="{StaticResource OK.Font.Title}"
+                        FontWeight="SemiBold"
+                        Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                        Text="Skills" />
+                </StackPanel>
+                <TextBlock
+                    MaxWidth="760"
+                    Margin="0,4,0,0"
+                    HorizontalAlignment="Left"
+                    FontFamily="{StaticResource OK.FontFamily}"
+                    FontSize="{StaticResource OK.Font.Body}"
+                    Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                    Text="When a message you send to the agent contains a skill's keyword or phrase (whole words, case-insensitive), its instructions are added as guidance for that task only. Enabled instructions are sent to your selected AI provider when they match. Skills never grant extra tool or terminal permissions."
+                    TextWrapping="Wrap" />
+            </StackPanel>
+
+            <ui:Button
+                Grid.Column="1"
+                VerticalAlignment="Top"
+                Appearance="Primary"
+                AutomationProperties.Name="New skill"
+                Command="{Binding NewSkillCommand}"
+                Content="New skill"
+                Icon="{ui:SymbolIcon Symbol=Add24}"
+                ToolTip="New skill (Ctrl+N)" />
+        </Grid>
+
+        <Border
+            Grid.Row="1"
+            Height="1"
+            Margin="0,0,0,14"
+            Background="{StaticResource Nord.BorderBrush}" />
+
+        <!-- Old backend: list 404 means "update required", never "empty". -->
+        <Border
+            Grid.Row="2"
+            Margin="0,0,0,14"
+            Padding="14,10"
+            Background="{StaticResource Nord.AmberSectionFillBrush}"
+            BorderBrush="{StaticResource Nord.AmberSectionBorderBrush}"
+            BorderThickness="1"
+            CornerRadius="10"
+            Visibility="{Binding IsUpgradeRequired, Converter={StaticResource BooleanToVisibilityConverter}}">
+            <StackPanel>
+                <TextBlock
+                    FontFamily="{StaticResource OK.FontFamily}"
+                    FontSize="{StaticResource OK.Font.Body}"
+                    FontWeight="SemiBold"
+                    Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                    Text="Backend update required" />
+                <TextBlock
+                    Margin="0,2,0,0"
+                    FontFamily="{StaticResource OK.FontFamily}"
+                    FontSize="{StaticResource OK.Font.Caption}"
+                    Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                    Text="{Binding ListError}"
+                    TextWrapping="Wrap" />
+            </StackPanel>
+        </Border>
+
+        <!-- ────────────────── Master-detail body ────────────────── -->
+        <Grid Grid.Row="3">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="320" MinWidth="260" />
+                <ColumnDefinition Width="14" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <!-- Left: list of skills -->
+            <Border Grid.Column="0" Padding="6" Style="{StaticResource SkillsPanel}">
+                <Grid>
+                    <ListBox
+                        x:Name="SkillsList"
+                        AutomationProperties.Name="Skills list"
+                        Background="Transparent"
+                        BorderThickness="0"
+                        HorizontalContentAlignment="Stretch"
+                        IsEnabled="{Binding IsListInteractive}"
+                        ItemsSource="{Binding Skills}"
+                        ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                        ScrollViewer.VerticalScrollBarVisibility="Auto"
+                        SelectedItem="{Binding SelectedRow, Mode=TwoWay}">
+                        <ListBox.InputBindings>
+                            <KeyBinding Key="Delete" Command="{Binding RequestDeleteCommand}" />
+                            <KeyBinding Key="Enter" Command="{Binding EditCommand}" />
+                        </ListBox.InputBindings>
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="Padding" Value="10,8" />
+                                <Setter Property="Margin" Value="0,2" />
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                <Setter Property="AutomationProperties.Name" Value="{Binding AutomationName}" />
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+
+                                    <ui:ToggleSwitch
+                                        Grid.Column="0"
+                                        Margin="0,2,10,0"
+                                        VerticalAlignment="Top"
+                                        AutomationProperties.Name="{Binding Name, StringFormat='Enable {0}'}"
+                                        IsChecked="{Binding IsEnabled, Mode=TwoWay}"
+                                        IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBooleanConverter}}" />
+
+                                    <StackPanel Grid.Column="1">
+                                        <TextBlock
+                                            FontFamily="{StaticResource OK.FontFamily}"
+                                            FontSize="{StaticResource OK.Font.Body}"
+                                            FontWeight="SemiBold"
+                                            Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                                            Text="{Binding Name}"
+                                            TextTrimming="CharacterEllipsis" />
+                                        <StackPanel Margin="0,2,0,0" Orientation="Horizontal">
+                                            <Border
+                                                Padding="6,1"
+                                                VerticalAlignment="Center"
+                                                Background="{StaticResource Nord.EditorBackgroundBrush}"
+                                                BorderBrush="{StaticResource Nord.BorderBrush}"
+                                                BorderThickness="1"
+                                                CornerRadius="6">
+                                                <TextBlock
+                                                    FontFamily="{StaticResource OK.MonoFontFamily}"
+                                                    FontSize="{StaticResource OK.Font.CaptionSmall}"
+                                                    Foreground="{StaticResource Nord.AccentBlueBrush}"
+                                                    Text="{Binding Keyword}"
+                                                    TextTrimming="CharacterEllipsis" />
+                                            </Border>
+                                            <TextBlock
+                                                Margin="8,0,0,0"
+                                                VerticalAlignment="Center"
+                                                FontFamily="{StaticResource OK.FontFamily}"
+                                                FontSize="{StaticResource OK.Font.CaptionSmall}"
+                                                Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                                                Text="{Binding StateText}" />
+                                        </StackPanel>
+                                    </StackPanel>
+
+                                    <ui:ProgressRing
+                                        Grid.Column="2"
+                                        Width="14"
+                                        Height="14"
+                                        Margin="6,0,0,0"
+                                        IsIndeterminate="True"
+                                        Visibility="{Binding IsBusy, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                                </Grid>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+
+                    <!-- Empty state -->
+                    <StackPanel
+                        Margin="16"
+                        VerticalAlignment="Center"
+                        Visibility="{Binding IsEmptyStateVisible, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <TextBlock
+                            HorizontalAlignment="Center"
+                            FontFamily="{StaticResource OK.FontFamily}"
+                            FontSize="{StaticResource OK.Font.Headline}"
+                            FontWeight="SemiBold"
+                            Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                            Text="No skills yet" />
+                        <TextBlock
+                            Margin="0,6,0,0"
+                            FontFamily="{StaticResource OK.FontFamily}"
+                            FontSize="{StaticResource OK.Font.Caption}"
+                            Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                            Text="Create a skill with a distinctive keyword, such as “sql review”. Skills created with the omnikey CLI on this backend appear here after Refresh."
+                            TextAlignment="Center"
+                            TextWrapping="Wrap" />
+                    </StackPanel>
+
+                    <!-- List load error (not shown for "update required") -->
+                    <StackPanel
+                        Margin="16"
+                        VerticalAlignment="Center"
+                        Visibility="{Binding HasListError, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <TextBlock
+                            FontFamily="{StaticResource OK.FontFamily}"
+                            FontSize="{StaticResource OK.Font.Caption}"
+                            Foreground="{StaticResource PaletteRedBrush}"
+                            Text="{Binding ListError, StringFormat='Could not refresh: {0}'}"
+                            TextAlignment="Center"
+                            TextWrapping="Wrap" />
+                    </StackPanel>
+
+                    <ui:ProgressRing
+                        Width="22"
+                        Height="22"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        IsIndeterminate="True"
+                        Visibility="{Binding IsListLoading, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                </Grid>
+            </Border>
+
+            <!-- Right: detail / editor / delete confirmation -->
+            <Border Grid.Column="2" Padding="20" Style="{StaticResource SkillsPanel}">
+                <Grid>
+                    <!-- No selection -->
+                    <StackPanel
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        Visibility="{Binding ShowNoSelection, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <ui:SymbolIcon
+                            HorizontalAlignment="Center"
+                            FontSize="40"
+                            Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                            Symbol="Sparkle24" />
+                        <TextBlock
+                            Margin="0,12,0,14"
+                            HorizontalAlignment="Center"
+                            FontFamily="{StaticResource OK.FontFamily}"
+                            FontSize="{StaticResource OK.Font.Body}"
+                            Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                            Text="Select a skill to view its instructions, or create a new one." />
+                    </StackPanel>
+
+                    <!-- Detail (read-only) -->
+                    <Grid Visibility="{Binding ShowDetail, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+
+                        <!-- Delete confirmation -->
+                        <Border
+                            x:Name="DeleteConfirmPanel"
+                            Grid.Row="0"
+                            Margin="0,0,0,14"
+                            Padding="14,12"
+                            AutomationProperties.LiveSetting="Assertive"
+                            Background="{StaticResource Nord.DangerSoftBrush}"
+                            BorderBrush="{StaticResource PaletteRedBrush}"
+                            BorderThickness="1"
+                            CornerRadius="10"
+                            Visibility="{Binding HasPendingDelete, Converter={StaticResource BooleanToVisibilityConverter}}">
+                            <StackPanel>
+                                <TextBlock
+                                    FontFamily="{StaticResource OK.FontFamily}"
+                                    FontSize="{StaticResource OK.Font.Body}"
+                                    Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                                    Text="{Binding DeleteConfirmText}"
+                                    TextWrapping="Wrap" />
+                                <StackPanel Margin="0,10,0,0" Orientation="Horizontal">
+                                    <ui:Button
+                                        Margin="0,0,8,0"
+                                        Appearance="Danger"
+                                        Command="{Binding ConfirmDeleteCommand}"
+                                        Content="Delete"
+                                        Icon="{ui:SymbolIcon Symbol=Delete24}" />
+                                    <ui:Button
+                                        x:Name="CancelDeleteButton"
+                                        Command="{Binding CancelDeleteCommand}"
+                                        Content="Cancel"
+                                        ToolTip="Cancel (Esc)" />
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+
+                        <StackPanel Grid.Row="1" Margin="0,0,0,10">
+                            <TextBlock
+                                FontFamily="{StaticResource OK.FontFamily}"
+                                FontSize="{StaticResource OK.Font.Headline}"
+                                FontWeight="SemiBold"
+                                Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                                Text="{Binding DetailName}"
+                                TextWrapping="Wrap" />
+                            <TextBlock
+                                Margin="0,2,0,0"
+                                FontFamily="{StaticResource OK.FontFamily}"
+                                FontSize="{StaticResource OK.Font.CaptionSmall}"
+                                Foreground="{StaticResource Nord.SecondaryTextBrush}"
+                                Text="{Binding DetailMeta}" />
+                        </StackPanel>
+
+                        <StackPanel Grid.Row="2" Margin="0,0,0,10">
+                            <TextBlock Style="{StaticResource SkillsFieldLabel}" Text="KEYWORD" />
+                            <TextBlock
+                                FontFamily="{StaticResource OK.MonoFontFamily}"
+                                FontSize="{StaticResource OK.Font.Body}"
+                                Foreground="{StaticResource Nord.AccentBlueBrush}"
+                                Text="{Binding DetailKeyword}"
+                                TextWrapping="Wrap" />
+                        </StackPanel>
+
+                        <Grid Grid.Row="3">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+                            <TextBlock Grid.Row="0" Style="{StaticResource SkillsFieldLabel}" Text="INSTRUCTIONS" />
+                            <Border
+                                Grid.Row="1"
+                                BorderBrush="{StaticResource Nord.BorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="8">
+                                <Grid>
+                                    <TextBox
+                                        AutomationProperties.Name="Skill instructions"
+                                        Background="{StaticResource Nord.EditorBackgroundBrush}"
+                                        BorderThickness="0"
+                                        FontFamily="{StaticResource OK.MonoFontFamily}"
+                                        FontSize="{StaticResource OK.Font.Body}"
+                                        Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                                        IsReadOnly="True"
+                                        IsReadOnlyCaretVisible="True"
+                                        Padding="8"
+                                        Text="{Binding DetailInstructions, Mode=OneWay}"
+                                        TextWrapping="Wrap"
+                                        VerticalScrollBarVisibility="Auto" />
+                                    <ui:ProgressRing
+                                        Width="22"
+                                        Height="22"
+                                        IsIndeterminate="True"
+                                        Visibility="{Binding IsDetailLoading, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                                    <TextBlock
+                                        Margin="12"
+                                        VerticalAlignment="Center"
+                                        Style="{StaticResource SkillsError}"
+                                        Text="{Binding DetailError}"
+                                        TextAlignment="Center" />
+                                </Grid>
+                            </Border>
+                        </Grid>
+
+                        <TextBlock
+                            Grid.Row="4"
+                            Style="{StaticResource SkillsHint}"
+                            Text="Changes affect the next message you send. A running task keeps the skills it started with; use Stop to end it." />
+                    </Grid>
+
+                    <!-- Editor -->
+                    <ScrollViewer
+                        HorizontalScrollBarVisibility="Disabled"
+                        VerticalScrollBarVisibility="Auto"
+                        Visibility="{Binding IsEditorOpen, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <StackPanel>
+                            <TextBlock
+                                Margin="0,0,0,14"
+                                FontFamily="{StaticResource OK.FontFamily}"
+                                FontSize="{StaticResource OK.Font.Headline}"
+                                FontWeight="SemiBold"
+                                Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                                Text="{Binding EditorTitle}" />
+
+                            <!-- Conflict / notice / error banners -->
+                            <Border
+                                Margin="0,0,0,12"
+                                Padding="12,10"
+                                AutomationProperties.LiveSetting="Assertive"
+                                Background="{StaticResource Nord.AmberSectionFillBrush}"
+                                BorderBrush="{StaticResource Nord.AmberSectionBorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="8"
+                                Visibility="{Binding HasConflict, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                <StackPanel>
+                                    <TextBlock
+                                        FontFamily="{StaticResource OK.FontFamily}"
+                                        FontSize="{StaticResource OK.Font.Caption}"
+                                        Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                                        Text="Your edits are kept. Reload the latest version, review, then save again."
+                                        TextWrapping="Wrap" />
+                                    <ui:Button
+                                        Margin="0,8,0,0"
+                                        Command="{Binding ReloadLatestCommand}"
+                                        Content="Reload latest (keep my edits)"
+                                        Icon="{ui:SymbolIcon Symbol=ArrowSync24}" />
+                                </StackPanel>
+                            </Border>
+                            <TextBlock
+                                Margin="0,0,0,10"
+                                AutomationProperties.LiveSetting="Polite"
+                                FontFamily="{StaticResource OK.FontFamily}"
+                                FontSize="{StaticResource OK.Font.Caption}"
+                                Foreground="{StaticResource Nord.AccentAmberBrush}"
+                                Text="{Binding EditorNotice}"
+                                TextWrapping="Wrap"
+                                Visibility="{Binding HasEditorNotice, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                            <TextBlock
+                                Margin="0,0,0,10"
+                                AutomationProperties.LiveSetting="Assertive"
+                                Style="{StaticResource SkillsError}"
+                                Text="{Binding EditorError}" />
+                            <TextBlock
+                                Margin="0,0,0,10"
+                                Style="{StaticResource SkillsError}"
+                                Text="{Binding FormError}" />
+
+                            <!-- Name -->
+                            <Label
+                                Padding="0"
+                                Content="_NAME"
+                                Target="{Binding ElementName=NameBox}">
+                                <Label.Template>
+                                    <ControlTemplate TargetType="Label">
+                                        <TextBlock Style="{StaticResource SkillsFieldLabel}">
+                                            <AccessText Text="{TemplateBinding Content}" />
+                                        </TextBlock>
+                                    </ControlTemplate>
+                                </Label.Template>
+                            </Label>
+                            <ui:TextBox
+                                x:Name="NameBox"
+                                AutomationProperties.Name="Name"
+                                FontFamily="{StaticResource OK.FontFamily}"
+                                FontSize="{StaticResource OK.Font.Body}"
+                                PlaceholderText="e.g. SQL review"
+                                IsEnabled="{Binding IsDraftEditable}"
+                                Text="{Binding EditName, UpdateSourceTrigger=PropertyChanged}" />
+                            <TextBlock Style="{StaticResource SkillsError}" Text="{Binding NameError}" />
+                            <TextBlock Style="{StaticResource SkillsConflictNote}" Visibility="{Binding NameConflict, Converter={StaticResource BooleanToVisibilityConverter}}" />
+
+                            <!-- Keyword -->
+                            <Label
+                                Margin="0,12,0,0"
+                                Padding="0"
+                                Content="_KEYWORD OR PHRASE"
+                                Target="{Binding ElementName=KeywordBox}">
+                                <Label.Template>
+                                    <ControlTemplate TargetType="Label">
+                                        <TextBlock Style="{StaticResource SkillsFieldLabel}">
+                                            <AccessText Text="{TemplateBinding Content}" />
+                                        </TextBlock>
+                                    </ControlTemplate>
+                                </Label.Template>
+                            </Label>
+                            <ui:TextBox
+                                x:Name="KeywordBox"
+                                AutomationProperties.Name="Keyword or phrase"
+                                FontFamily="{StaticResource OK.MonoFontFamily}"
+                                FontSize="{StaticResource OK.Font.Body}"
+                                PlaceholderText="e.g. sql review"
+                                IsEnabled="{Binding IsDraftEditable}"
+                                Text="{Binding EditKeyword, UpdateSourceTrigger=PropertyChanged}" />
+                            <TextBlock Style="{StaticResource SkillsError}" Text="{Binding KeywordError}" />
+                            <TextBlock Style="{StaticResource SkillsConflictNote}" Visibility="{Binding KeywordConflict, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                            <TextBlock
+                                Style="{StaticResource SkillsHint}"
+                                Text="Matches whole words in the text you type, ignoring case and extra spaces. “sql” matches “(SQL)” but not “nosql”. Quoted text and code count too, so prefer a distinctive phrase." />
+
+                            <!-- Enabled -->
+                            <StackPanel Margin="0,12,0,0" Orientation="Horizontal">
+                                <ui:ToggleSwitch
+                                    Margin="0,0,8,0"
+                                    AutomationProperties.Name="Enabled"
+                                    IsChecked="{Binding EditEnabled, Mode=TwoWay}"
+                                    IsEnabled="{Binding IsDraftEditable}" />
+                                <TextBlock
+                                    VerticalAlignment="Center"
+                                    FontFamily="{StaticResource OK.FontFamily}"
+                                    FontSize="{StaticResource OK.Font.Body}"
+                                    Foreground="{StaticResource Nord.PrimaryTextBrush}"
+                                    Text="Enabled" />
+                            </StackPanel>
+                            <TextBlock Style="{StaticResource SkillsError}" Text="{Binding EnabledError}" />
+                            <TextBlock Style="{StaticResource SkillsConflictNote}" Visibility="{Binding EnabledConflict, Converter={StaticResource BooleanToVisibilityConverter}}" />
+
+                            <!-- Instructions -->
+                            <Label
+                                Margin="0,12,0,0"
+                                Padding="0"
+                                Content="_INSTRUCTIONS (plain text or Markdown)"
+                                Target="{Binding ElementName=InstructionsBox}">
+                                <Label.Template>
+                                    <ControlTemplate TargetType="Label">
+                                        <TextBlock Style="{StaticResource SkillsFieldLabel}">
+                                            <AccessText Text="{TemplateBinding Content}" />
+                                        </TextBlock>
+                                    </ControlTemplate>
+                                </Label.Template>
+                            </Label>
+                            <Border
+                                BorderBrush="{StaticResource Nord.BorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="8">
+                                <ui:TextBox
+                                    x:Name="InstructionsBox"
+                                    MinHeight="220"
+                                    MaxHeight="520"
+                                    AcceptsReturn="True"
+                                    AcceptsTab="False"
+                                    AutomationProperties.Name="Instructions"
+                                    Background="{StaticResource Nord.EditorBackgroundBrush}"
+                                    BorderThickness="0"
+                                    FontFamily="{StaticResource OK.MonoFontFamily}"
+                                    FontSize="{StaticResource OK.Font.Body}"
+                                    PlaceholderText="Guidance the agent should follow when this keyword appears."
+                                    IsEnabled="{Binding IsDraftEditable}"
+                                    Text="{Binding EditInstructions, UpdateSourceTrigger=PropertyChanged}"
+                                    TextWrapping="Wrap"
+                                    VerticalScrollBarVisibility="Auto" />
+                            </Border>
+                            <TextBlock Style="{StaticResource SkillsHint}" Text="{Binding InstructionsCounter}" />
+                            <TextBlock Style="{StaticResource SkillsError}" Text="{Binding InstructionsError}" />
+                            <TextBlock Style="{StaticResource SkillsConflictNote}" Visibility="{Binding InstructionsConflict, Converter={StaticResource BooleanToVisibilityConverter}}" />
+
+                            <StackPanel Margin="0,16,0,0" Orientation="Horizontal">
+                                <ui:Button
+                                    Margin="0,0,8,0"
+                                    Appearance="Primary"
+                                    Command="{Binding SaveCommand}"
+                                    Content="Save"
+                                    Icon="{ui:SymbolIcon Symbol=Save24}"
+                                    ToolTip="Save (Ctrl+S)" />
+                                <ui:Button
+                                    Command="{Binding CancelEditCommand}"
+                                    Content="Cancel"
+                                    ToolTip="Cancel (Esc)" />
+                                <ui:ProgressRing
+                                    Width="16"
+                                    Height="16"
+                                    Margin="10,0,0,0"
+                                    IsIndeterminate="True"
+                                    Visibility="{Binding IsSaving, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                            </StackPanel>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <!-- ────────────────── Bottom bar ────────────────── -->
+        <Grid Grid.Row="4" Margin="0,14,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <StackPanel
+                Grid.Column="0"
+                Orientation="Horizontal"
+                Visibility="{Binding ShowDetail, Converter={StaticResource BooleanToVisibilityConverter}}">
+                <ui:Button
+                    Margin="0,0,6,0"
+                    Command="{Binding EditCommand}"
+                    Content="Edit"
+                    Icon="{ui:SymbolIcon Symbol=Edit24}"
+                    ToolTip="Edit (Ctrl+E or Enter)" />
+                <ui:Button
+                    Margin="0,0,6,0"
+                    Command="{Binding ToggleSelectedCommand}"
+                    Content="{Binding ToggleSelectedLabel}" />
+                <ui:Button
+                    Command="{Binding RequestDeleteCommand}"
+                    Content="Delete…"
+                    Icon="{ui:SymbolIcon Symbol=Delete24}"
+                    Style="{StaticResource OK.DangerGhostButtonStyle}"
+                    ToolTip="Delete (Del)" />
+            </StackPanel>
+
+            <StackPanel
+                Grid.Column="1"
+                Margin="14,0,0,0"
+                VerticalAlignment="Center"
+                AutomationProperties.LiveSetting="Polite"
+                Orientation="Vertical">
+                <TextBlock
+                    FontFamily="{StaticResource OK.FontFamily}"
+                    FontSize="{StaticResource OK.Font.CaptionSmall}"
+                    Foreground="{StaticResource Nord.AccentGreenBrush}"
+                    Text="{Binding StatusMessage}"
+                    TextTrimming="CharacterEllipsis"
+                    Visibility="{Binding HasStatusMessage, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                <TextBlock
+                    FontFamily="{StaticResource OK.FontFamily}"
+                    FontSize="{StaticResource OK.Font.CaptionSmall}"
+                    Foreground="{StaticResource PaletteRedBrush}"
+                    Text="{Binding ActionError}"
+                    TextWrapping="Wrap"
+                    Visibility="{Binding HasActionError, Converter={StaticResource BooleanToVisibilityConverter}}" />
+            </StackPanel>
+
+            <ui:Button
+                Grid.Column="2"
+                Command="{Binding RefreshCommand}"
+                Content="Refresh"
+                Icon="{ui:SymbolIcon Symbol=ArrowSync24}"
+                ToolTip="Refresh (F5)" />
+        </Grid>
+    </Grid>
+</Page>

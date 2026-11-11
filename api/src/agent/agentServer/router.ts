@@ -71,6 +71,7 @@ async function loadNormalizedOrLegacyTranscript(
       sessionId,
       legacy.historyJson,
       legacy.transcriptRevision,
+      subscriptionId,
     ),
     historyBytes: Buffer.byteLength(legacy.historyJson || '[]', 'utf8'),
   };

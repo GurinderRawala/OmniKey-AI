@@ -1,5 +1,7 @@
 import { AIMessage } from '../ai-client';
 import { Subscription } from '../models/subscription';
+import type { SkillStatus } from '../skills/contracts';
+import type { SkillRunState } from './skillContext';
 
 // In-memory conversation state per session.
 export interface SessionState {
@@ -30,6 +32,9 @@ export interface SessionState {
   // True when the user explicitly chose this session's group. Locked sessions
   // are never (re)classified — we only ever attach them to the chosen group.
   groupLocked?: boolean;
+  // Runtime-only Skills state of the outer run this invocation belongs to.
+  // Never persisted, never part of history; applied only to provider request copies.
+  skillRun?: SkillRunState;
 }
 
 export interface AgentMessage {
@@ -51,6 +56,11 @@ export interface AgentMessage {
   group_name?: string;
   // Per-turn model override; never updates the shared provider settings.
   model?: string;
+  // Client -> server: opt in to nonterminal Skills notices for THIS input only
+  // (literal true). Snapshotted per input; never persisted as a preference.
+  supports_skill_status?: boolean;
+  // Server -> client: Skills status metadata (refs only, never instructions).
+  skill_status?: SkillStatus;
 }
 
 export type AgentSendFn = (msg: AgentMessage) => void;
