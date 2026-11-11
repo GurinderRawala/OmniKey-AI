@@ -798,6 +798,18 @@ namespace OmniKey.Windows.ViewModels
                 }
                 if (allMatch)
                 {
+                    // A steering bubble marked failed in place (same id,
+                    // anywhere in the list) must show its new status.
+                    for (int i = 0; i < src.Count; i++)
+                    {
+                        if (Messages[i].SteeringFailureReason == src[i].SteeringFailureReason)
+                            continue;
+                        DetachRow(Messages[i]);
+                        var failedRow = ChatMessageRow.Create(src[i], Messages[i].IsStreaming);
+                        AttachExpansionTracking(failedRow);
+                        Messages[i] = failedRow;
+                    }
+
                     if (lastIndex >= 0)
                     {
                         bool streaming = _model.IsRunning
@@ -1071,6 +1083,14 @@ namespace OmniKey.Windows.ViewModels
         public bool IsStreaming { get; }
         public bool IsSteering => Source.IsSteering;
 
+        /// <summary>Snapshot of <see cref="ChatMessage.SteeringFailureReason"/>
+        /// taken when the row was built; <see cref="ChatViewModel"/> rebuilds
+        /// the row when the model's value changes.</summary>
+        public string? SteeringFailureReason { get; }
+        public bool IsSteeringFailed => IsSteering && SteeringFailureReason is not null;
+        public bool IsSteeringAccepted => IsSteering && SteeringFailureReason is null;
+        public string SteeringFailureText => $"Not applied: {SteeringFailureReason}";
+
         public bool IsUser => Role == ChatMessageRole.User;
         public bool IsAssistant => Role == ChatMessageRole.Assistant;
         public bool IsSystem => Role == ChatMessageRole.System;
@@ -1135,6 +1155,7 @@ namespace OmniKey.Windows.ViewModels
         {
             Source = source;
             IsStreaming = isStreaming;
+            SteeringFailureReason = source.SteeringFailureReason;
             var thinking = new List<ChatBlockRow>();
             ChatBlockRow? final = null;
             for (int i = 0; i < source.Blocks.Count; i++)
@@ -1168,7 +1189,11 @@ namespace OmniKey.Windows.ViewModels
 
         [ObservableProperty] private bool isExpanded;
 
-        public string Label => Kind switch
+        /// <summary>Live Skills notice (marked by ChatSessionRunner). Shown
+        /// with a neutral "Skills" label instead of "Reasoning".</summary>
+        public bool IsSkillNotice { get; }
+
+        public string Label => IsSkillNotice ? "Skills" : Kind switch
         {
             ChatBlockKind.AgentReasoning => "Reasoning",
             ChatBlockKind.ShellCommand => "Command",
@@ -1181,7 +1206,7 @@ namespace OmniKey.Windows.ViewModels
         };
 
         /// <summary>Fluent system icon name for the block kind.</summary>
-        public string IconGlyph => Kind switch
+        public string IconGlyph => IsSkillNotice ? "Info24" : Kind switch
         {
             ChatBlockKind.AgentReasoning => "BrainCircuit24",
             ChatBlockKind.ShellCommand => "WindowConsole20",
@@ -1199,7 +1224,7 @@ namespace OmniKey.Windows.ViewModels
         /// <summary>Expanded detail still shows a readable summary, not raw payload text.</summary>
         public string ExpandedSummary => AgentTimelineSummarizer.ExpandedSummary(Kind, Text);
 
-        public Brush AccentBrush => Kind switch
+        public Brush AccentBrush => IsSkillNotice ? GetBrush("Nord.SecondaryTextBrush") : Kind switch
         {
             ChatBlockKind.AgentReasoning => GetBrush("Nord.AccentPurpleBrush"),
             ChatBlockKind.ShellCommand => GetBrush("Nord.AccentBrush"),
@@ -1212,7 +1237,7 @@ namespace OmniKey.Windows.ViewModels
         };
 
         public bool IsCode => Kind is ChatBlockKind.ShellCommand or ChatBlockKind.TerminalOutput;
-        public bool IsReasoning => Kind == ChatBlockKind.AgentReasoning;
+        public bool IsReasoning => Kind == ChatBlockKind.AgentReasoning && !IsSkillNotice;
         public bool IsFinalAnswer => Kind == ChatBlockKind.FinalAnswer;
         public bool IsExternalCall => Kind is ChatBlockKind.WebCall or ChatBlockKind.McpCall;
         public bool IsImage => Kind == ChatBlockKind.ImageRendering;
@@ -1221,6 +1246,7 @@ namespace OmniKey.Windows.ViewModels
         {
             Source = source;
             IsActive = isActive;
+            IsSkillNotice = SkillNoticeBlocks.IsNotice(source);
         }
 
         [RelayCommand]

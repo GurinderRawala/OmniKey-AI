@@ -18,6 +18,8 @@ namespace OmniKey.Windows.ViewModels
         Web,
         Mcp,
         Terminal,
+        /// <summary>Live Skills notice: literal, neutral status text.</summary>
+        SkillNotice,
     }
 
     /// <summary>
@@ -54,6 +56,7 @@ namespace OmniKey.Windows.ViewModels
                 TimelineKind.Web       => ("Web search",      SymbolRegular.Globe24,         ResolveBrush("Nord.AccentBrush",       Brushes.SteelBlue)),
                 TimelineKind.Mcp       => ("MCP tool call",   SymbolRegular.Server24,        ResolveBrush("Nord.AccentGreenBrush",  Brushes.MediumSeaGreen)),
                 TimelineKind.Terminal  => ("Terminal output", SymbolRegular.WindowConsole20, ResolveBrush("Nord.AccentAmberBrush",  Brushes.Goldenrod)),
+                TimelineKind.SkillNotice => ("Skills",        SymbolRegular.Info24,          ResolveBrush("Nord.SecondaryTextBrush", Brushes.Gray)),
                 _                      => ("Step",            SymbolRegular.Circle24,        Brushes.Gray),
             };
         }

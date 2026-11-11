@@ -77,6 +77,13 @@
                     </ui:NavigationViewItem.Icon>
                 </ui:NavigationViewItem>
                 <ui:NavigationViewItem
+                    Content="Skills"
+                    TargetPageType="{x:Type pages:SkillsPage}">
+                    <ui:NavigationViewItem.Icon>
+                        <ui:SymbolIcon Symbol="Sparkle24" />
+                    </ui:NavigationViewItem.Icon>
+                </ui:NavigationViewItem>
+                <ui:NavigationViewItem
                     Content="Scheduled Jobs"
                     TargetPageType="{x:Type pages:ScheduledJobsPage}">
                     <ui:NavigationViewItem.Icon>

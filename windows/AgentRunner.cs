@@ -5,10 +5,11 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using OmniKey.Windows.Skills;
 
 namespace OmniKey.Windows
 {
-    internal static class AgentRunner
+    internal static partial class AgentRunner
     {
         // Tracks the active WebSocket so CancelCurrentSession() can abort it
         // immediately, mirroring macOS AgentSessionState.cancelCurrentSession().
@@ -96,17 +97,23 @@ namespace OmniKey.Windows
                 ? Guid.NewGuid().ToString()
                 : selectedSessionId;
 
-            // Send initial message
+            // Send initial message. supports_skill_status: this receive loop
+            // routes every frame through AgentFrameRouter, which consumes
+            // skill_status notices before any shell/final parsing.
             var initial = new AgentMessage
             {
                 session_id = sessionId,
                 sender = "client",
                 content = originalText,
                 is_terminal_output = false,
-                is_error = false
+                is_error = false,
+                supports_skill_status = true,
             };
 
             await SendMessageAsync(ws, initial, ct);
+
+            // Fresh per run: notice dedup never survives a new run.
+            var skillTracker = new SkillStatusTracker();
 
             // Receive loop
             while (ws.State == WebSocketState.Open && !ct.IsCancellationRequested)
@@ -114,58 +121,55 @@ namespace OmniKey.Windows
                 string? raw = await ReceiveTextAsync(ws, ct);
                 if (raw == null) break;
 
-                AgentMessage? msg;
-                try
+                var action = AgentFrameRouter.ForHotkey(raw, skillTracker);
+                switch (action.Kind)
                 {
-                    msg = JsonSerializer.Deserialize<AgentMessage>(raw, JsonOptions);
+                    case AgentFrameKind.SkillNotice:
+                        // Live-only, literal text. Never executed, never final.
+                        if (action.Display is { Length: > 0 } notice)
+                        {
+                            if (thinkingForm is ISkillNoticeSink sink) sink.AppendSkillNotice(notice);
+                            else thinkingForm.AppendAgentMessage(notice);
+                        }
+                        continue;
+
+                    case AgentFrameKind.Ignored:
+                        continue;
+
+                    // Web call notification: show it in the thinking window and
+                    // keep listening — this is not a final answer (mirrors macOS).
+                    case AgentFrameKind.WebCall:
+                        thinkingForm.AppendWebCall(action.Text);
+                        continue;
+
+                    // MCP tool call notification: show in thinking window and keep listening.
+                    case AgentFrameKind.McpCall:
+                        thinkingForm.AppendMcpCall(action.Text);
+                        continue;
+
+                    // Terminal error frame (e.g. a blocked Skills input): fail
+                    // the run so it is shown as an error, never as the answer.
+                    case AgentFrameKind.Failure:
+                        _activeWebSocket = null;
+                        await CloseWebSocketAsync(ws);
+                        throw new InvalidOperationException(action.Text);
                 }
-                catch
-                {
-                    // Not parseable – skip this frame and keep listening,
-                    // matching macOS behaviour (receiveNext() on decode failure).
-                    continue;
-                }
-
-                if (msg == null) continue;
-
-                string content = msg.content ?? "";
-
-                // Web call notification: show it in the thinking window and
-                // keep listening — this is not a final answer (mirrors macOS).
-                if (msg.is_web_call == true)
-                {
-                    thinkingForm.AppendWebCall(content);
-                    continue;
-                }
-
-                // MCP tool call notification: show in thinking window and keep listening.
-                if (msg.is_mcp_call == true)
-                {
-                    thinkingForm.AppendMcpCall(content);
-                    continue;
-                }
-
-                string displayText = CleanDisplayText(content);
 
                 // Show the message in the thinking window (not terminal output)
-                if (!string.IsNullOrWhiteSpace(displayText))
-                {
-                    if (!displayText.StartsWith("[terminal ", StringComparison.OrdinalIgnoreCase))
-                        thinkingForm.AppendAgentMessage(displayText);
-                }
+                if (action.Display is { } displayText)
+                    thinkingForm.AppendAgentMessage(displayText);
 
                 // Execute <shell_script> if present
-                string? script = ExtractShellScript(content);
-                if (script != null)
+                if (action.Kind == AgentFrameKind.ShellScript)
                 {
-                    var (output, exitCode) = await ExecuteShellAsync(script, ct);
+                    var (output, exitCode) = await ExecuteShellAsync(action.Text, ct);
 
                     string statusLabel = exitCode == 0 ? "success" : $"error (exit code: {exitCode})";
                     thinkingForm.AppendTerminalOutput($"[terminal {statusLabel}]\n{output}");
 
                     var reply = new AgentMessage
                     {
-                        session_id = msg.session_id ?? sessionId,
+                        session_id = action.Message?.session_id ?? sessionId,
                         sender = "client",
                         content = output,
                         is_terminal_output = true,
@@ -176,20 +180,10 @@ namespace OmniKey.Windows
                     continue;
                 }
 
-                // Extract <final_answer>
-                string? finalAnswer = ExtractFinalAnswer(content);
-                if (finalAnswer != null)
-                {
-                    _activeWebSocket = null;
-                    await CloseWebSocketAsync(ws);
-                    return finalAnswer;
-                }
-
-                // Implicit final answer (no tags)
-                string answer = !string.IsNullOrWhiteSpace(displayText) ? displayText : content;
+                // <final_answer>, or implicit final answer (no tags)
                 _activeWebSocket = null;
                 await CloseWebSocketAsync(ws);
-                return answer;
+                return action.Text;
             }
 
             _activeWebSocket = null;
@@ -446,63 +440,7 @@ namespace OmniKey.Windows
             return wsUrl.TrimEnd('/') + "/ws/omni-agent";
         }
 
-        // ─── Tag parsing ─────────────────────────────────────────────
-
-        internal static string? ExtractShellScript(string text)
-        {
-            int start = text.IndexOf("<shell_script>", StringComparison.Ordinal);
-            if (start < 0) return null;
-            start += "<shell_script>".Length;
-            int end = text.IndexOf("</shell_script>", start, StringComparison.Ordinal);
-            if (end < 0) return null;
-            return text[start..end].Trim();
-        }
-
-        internal static string? ExtractFinalAnswer(string text)
-        {
-            int start = text.IndexOf("<final_answer>", StringComparison.Ordinal);
-            if (start < 0) return null;
-            start += "<final_answer>".Length;
-            int end = text.IndexOf("</final_answer>", start, StringComparison.Ordinal);
-            if (end < 0) return null;
-            return text[start..end].Trim();
-        }
-
-        internal static string CleanDisplayText(string text)
-        {
-            return text
-                .Replace("<shell_script>", "")
-                .Replace("</shell_script>", "")
-                .Replace("<final_answer>", "")
-                .Replace("</final_answer>", "")
-                .Trim();
-        }
-
-        // ─── JSON ─────────────────────────────────────────────────────
-
-        internal static readonly JsonSerializerOptions JsonOptions = new()
-        {
-            PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower
-        };
-
-        internal sealed class AgentMessage
-        {
-            public string? session_id { get; set; }
-            public string? sender { get; set; }
-            public string? content { get; set; }
-            public bool is_terminal_output { get; set; }
-            public bool is_error { get; set; }
-            public bool? is_web_call { get; set; }
-            public bool? is_image_rendering { get; set; }
-            public bool? is_mcp_call { get; set; }
-            public bool? is_steering { get; set; }
-            public string platform { get; set; } = "windows";
-            // Project group selected in the composer. Sent on the initial
-            // outbound message; the backend stamps the new session with it
-            // so the resumed session shows up under the right group header.
-            // Wire format matches macOS ChatSessionRunner.AgentMessage —
-            // see snake_case `group_name` on that side.
-            public string? group_name { get; set; }
-        }
+        // Tag parsing, JSON options and the AgentMessage wire type live in
+        // AgentRunner.Wire.cs (platform-neutral, shared with windows.Tests).
     }
 }

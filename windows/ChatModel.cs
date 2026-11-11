@@ -7,6 +7,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using OmniKey.Windows.Skills;
 
 namespace OmniKey.Windows
 {
@@ -63,6 +64,11 @@ namespace OmniKey.Windows
         public List<ChatBlock> Blocks { get; set; }
         public bool IsSteering { get; }
 
+        /// <summary>Set when a steering update was not applied (rejected, not
+        /// delivered, or the task ended first). Live-only; the bubble is kept
+        /// so its text is never lost.</summary>
+        public string? SteeringFailureReason { get; set; }
+
         private ChatMessage(
             ChatMessageRole role,
             string text,
@@ -87,8 +93,11 @@ namespace OmniKey.Windows
         public int TrimmedOlderMessageCount { get; set; }
         public bool IsRunning { get; set; }
         public ChatSessionRunHandle? RunHandle { get; set; }
-        public int? StreamingAssistantIndex { get; set; }
-        public Dictionary<int, int> AssistantIndexRedirects { get; } = new();
+
+        /// <summary>Which assistant bubble live output streams into, plus the
+        /// unresolved steering sends of the running turn (ID-based, so
+        /// removing a rejected bubble never shifts the streaming target).</summary>
+        public SteeringLedger Steering { get; } = new();
     }
 
     internal sealed class ChatModel
@@ -594,10 +603,12 @@ namespace OmniKey.Windows
                 sessionSt = currentState;
             }
 
+            var assistantMessage = ChatMessage.Assistant();
+            Guid turnRoot = assistantMessage.Id;
             sessionSt.Messages.Add(ChatMessage.User(text));
-            sessionSt.Messages.Add(ChatMessage.Assistant());
+            sessionSt.Messages.Add(assistantMessage);
             enforceMessageCap(sessionSt);
-            sessionSt.StreamingAssistantIndex = sessionSt.Messages.Count - 1;
+            sessionSt.Steering.BeginTurn(turnRoot);
             sessionSt.IsRunning = true;
 
             Messages = new List<ChatMessage>(sessionSt.Messages);
@@ -637,14 +648,28 @@ namespace OmniKey.Windows
                 sessionId,
                 text,
                 _selectedGroup?.GroupName,
-                block => RunOnUi(() => appendBlock(block, sessionSt)),
+                // Every callback is ignored once this turn is no longer the
+                // session's current one (Stop, then a new send): a late frame
+                // or completion from the old run must not touch the new turn.
+                block => RunOnUi(() =>
+                {
+                    if (sessionSt.Steering.IsTurn(turnRoot))
+                        appendBlock(block, sessionSt);
+                }),
+                ack => RunOnUi(() =>
+                {
+                    if (sessionSt.Steering.IsTurn(turnRoot))
+                        handleSteeringAck(ack, sessionSt);
+                }),
                 finalText => RunOnUi(() =>
                 {
+                    if (!sessionSt.Steering.IsTurn(turnRoot))
+                        return;
                     appendBlock(new ChatBlock(ChatBlockKind.FinalAnswer, finalText), sessionSt);
+                    endTurnSteering(sessionSt, turnRoot,
+                        "The task finished before this update was applied. Send it again as a follow-up.");
                     sessionSt.IsRunning = false;
                     sessionSt.RunHandle = null;
-                    sessionSt.StreamingAssistantIndex = null;
-                    sessionSt.AssistantIndexRedirects.Clear();
                     if (ReferenceEquals(_states.GetValueOrDefault(activeStateKey), sessionSt))
                         IsRunning = false;
                     NotifyStateChanged();
@@ -663,11 +688,12 @@ namespace OmniKey.Windows
                 }),
                 error => RunOnUi(() =>
                 {
+                    if (!sessionSt.Steering.IsTurn(turnRoot))
+                        return;
                     appendBlock(new ChatBlock(ChatBlockKind.FinalAnswer, $"**Error:** {error.Message}"), sessionSt);
+                    endTurnSteering(sessionSt, turnRoot, "The task ended before this update was applied.");
                     sessionSt.IsRunning = false;
                     sessionSt.RunHandle = null;
-                    sessionSt.StreamingAssistantIndex = null;
-                    sessionSt.AssistantIndexRedirects.Clear();
                     if (ReferenceEquals(_states.GetValueOrDefault(activeStateKey), sessionSt))
                         IsRunning = false;
                     LastErrorMessage = error.Message;
@@ -687,104 +713,143 @@ namespace OmniKey.Windows
                 return;
             }
 
-            int assistantIndex = sessionSt.StreamingAssistantIndex
-                ?? sessionSt.Messages.FindLastIndex(m => m.Role == ChatMessageRole.Assistant);
-
-            if (assistantIndex < 0 || assistantIndex >= sessionSt.Messages.Count)
+            int anchorIndex = sessionSt.Steering.InsertionAnchor is Guid anchor
+                ? sessionSt.Messages.FindIndex(m => m.Id == anchor)
+                : -1;
+            if (anchorIndex < 0)
             {
                 LastErrorMessage = "The current task has no active response to steer.";
                 InputText = text;
                 return;
             }
 
-            int redirectKey = assistantIndex;
-            foreach (var pair in sessionSt.AssistantIndexRedirects)
-            {
-                if (pair.Value == assistantIndex)
-                {
-                    redirectKey = pair.Key;
-                    break;
-                }
-            }
+            // Keep earlier failed updates above the new one (chronological).
+            while (anchorIndex + 1 < sessionSt.Messages.Count
+                && sessionSt.Messages[anchorIndex + 1] is { IsSteering: true, SteeringFailureReason: not null })
+                anchorIndex++;
 
-            bool hadPreviousRedirect = sessionSt.AssistantIndexRedirects.TryGetValue(
-                redirectKey,
-                out int previousRedirectTarget);
+            // Optimistic bubble only. Output keeps streaming into the current
+            // assistant bubble until the server reports the update applied
+            // (handleSteeringAck); a successful transport send is not that.
+            string steeringId = ChatSessionRunner.NewSteeringId();
             var steeringMessage = ChatMessage.User(text, isSteering: true);
-            var continuationMessage = ChatMessage.Assistant();
-            int insertIndex = Math.Min(assistantIndex + 1, sessionSt.Messages.Count);
+            sessionSt.Messages.Insert(anchorIndex + 1, steeringMessage);
+            sessionSt.Steering.Add(steeringId, steeringMessage.Id, text);
+            publishSteering(sessionSt);
 
-            sessionSt.Messages.Insert(insertIndex, steeringMessage);
-            sessionSt.Messages.Insert(insertIndex + 1, continuationMessage);
-            sessionSt.StreamingAssistantIndex = insertIndex + 1;
-            sessionSt.AssistantIndexRedirects[redirectKey] = insertIndex + 1;
-
-            if (ReferenceEquals(_states.GetValueOrDefault(activeStateKey), sessionSt))
-            {
-                Messages = new List<ChatMessage>(sessionSt.Messages);
-                TrimmedOlderMessageCount = sessionSt.TrimmedOlderMessageCount;
-                NotifyStateChanged();
-            }
-
-            _ = SendSteeringInputAsync(
-                sessionId,
-                text,
-                handle,
-                sessionSt,
-                steeringMessage,
-                continuationMessage,
-                assistantIndex,
-                redirectKey,
-                hadPreviousRedirect,
-                previousRedirectTarget);
+            _ = SendSteeringInputAsync(sessionId, steeringId, text, handle, sessionSt);
         }
+
+        /// <summary>How long a sent update may go without even a <c>received</c>
+        /// acknowledgement before it is reported as not delivered (macOS: 12 s).</summary>
+        private static readonly TimeSpan SteeringAckTimeout = TimeSpan.FromSeconds(12);
 
         private async Task SendSteeringInputAsync(
             string sessionId,
+            string steeringId,
             string text,
             ChatSessionRunHandle handle,
-            ChatSessionState sessionSt,
-            ChatMessage steeringMessage,
-            ChatMessage continuationMessage,
-            int previousAssistantIndex,
-            int redirectKey,
-            bool hadPreviousRedirect,
-            int previousRedirectTarget)
+            ChatSessionState sessionSt)
         {
             try
             {
-                await ChatSessionRunner.Shared.SendSteeringMessageAsync(sessionId, text, handle);
+                await ChatSessionRunner.Shared.SendSteeringMessageAsync(sessionId, steeringId, text, handle);
             }
             catch (Exception ex)
             {
                 RunOnUi(() =>
                 {
-                    bool continuationHasContent = sessionSt.Messages.Any(m =>
-                        m.Id == continuationMessage.Id &&
-                        (!string.IsNullOrEmpty(m.Text) || m.Blocks.Count > 0));
-
-                    if (!continuationHasContent)
-                    {
-                        sessionSt.Messages.RemoveAll(m =>
-                            m.Id == steeringMessage.Id || m.Id == continuationMessage.Id);
-                        sessionSt.StreamingAssistantIndex = previousAssistantIndex;
-                        if (hadPreviousRedirect)
-                            sessionSt.AssistantIndexRedirects[redirectKey] = previousRedirectTarget;
-                        else
-                            sessionSt.AssistantIndexRedirects.Remove(redirectKey);
-                        InputText = text;
-                    }
-
-                    if (ReferenceEquals(_states.GetValueOrDefault(activeStateKey), sessionSt))
-                    {
-                        Messages = new List<ChatMessage>(sessionSt.Messages);
-                        TrimmedOlderMessageCount = sessionSt.TrimmedOlderMessageCount;
-                    }
-
-                    LastErrorMessage = $"Couldn't steer the current task: {ex.Message}";
-                    NotifyStateChanged();
+                    if (sessionSt.Steering.Fail(steeringId) is { } failed)
+                        rejectSteering(sessionSt, failed, $"Couldn't steer the current task: {ex.Message}");
                 });
+                return;
             }
+
+            try { await Task.Delay(SteeringAckTimeout); }
+            catch { return; }
+
+            RunOnUi(() =>
+            {
+                if (sessionSt.Steering.FailIfUnacknowledged(steeringId) is { } unacknowledged)
+                    rejectSteering(sessionSt, unacknowledged,
+                        "The server did not acknowledge this update. Try again or send it as a follow-up.");
+            });
+        }
+
+        /// <summary>Routes one server acknowledgement to its pending send by
+        /// id. Unknown, stale or duplicate ids change nothing.</summary>
+        private void handleSteeringAck(SteeringAck ack, ChatSessionState sessionSt)
+        {
+            var outcome = sessionSt.Steering.Handle(ack);
+            switch (outcome.Kind)
+            {
+                case SteeringOutcomeKind.CreateContinuation when outcome.Entry is { } applied:
+                {
+                    int userIndex = sessionSt.Messages.FindIndex(m => m.Id == applied.UserMessageId);
+                    var continuation = ChatMessage.Assistant();
+                    sessionSt.Messages.Insert(
+                        userIndex >= 0 ? userIndex + 1 : sessionSt.Messages.Count,
+                        continuation);
+                    sessionSt.Steering.AttachContinuation(applied, continuation.Id);
+                    publishSteering(sessionSt);
+                    break;
+                }
+
+                case SteeringOutcomeKind.Rejected when outcome.Entry is { } rejected:
+                    rejectSteering(sessionSt, rejected, outcome.Reason);
+                    break;
+            }
+        }
+
+        private void rejectSteering(ChatSessionState sessionSt, PendingSteering entry, string reason) =>
+            rejectSteering(sessionSt, new[] { entry }, reason);
+
+        /// <summary>Reports sends that were not applied (same as macOS
+        /// <c>failSteering</c>): each bubble is kept and marked failed with the
+        /// reason, so its text is never lost and never looks applied. An
+        /// unapplied send has no continuation, so no streamed block is touched.
+        /// The text is restored for retry only into an empty composer of the
+        /// session on screen (<see cref="SteeringFailureResolver"/>).</summary>
+        private void rejectSteering(ChatSessionState sessionSt, IReadOnlyList<PendingSteering> entries, string reason)
+        {
+            if (entries.Count == 0)
+                return;
+
+            bool isActive = ReferenceEquals(_states.GetValueOrDefault(activeStateKey), sessionSt);
+            var plan = SteeringFailureResolver.Resolve(
+                sessionSt.Messages,
+                m => m.Id,
+                (m, why) => m.SteeringFailureReason = why,
+                failed => ChatMessage.User(failed.Text, isSteering: true),
+                entries,
+                reason,
+                isActive,
+                InputText);
+
+            if (plan.ComposerText is { } restored)
+                InputText = restored;
+            if (plan.ShowReason)
+                LastErrorMessage = reason;
+
+            publishSteering(sessionSt);
+        }
+
+        private void endTurnSteering(ChatSessionState sessionSt, Guid turnRoot, string reason)
+        {
+            if (!sessionSt.Steering.IsTurn(turnRoot))
+                return;
+
+            rejectSteering(sessionSt, sessionSt.Steering.EndTurn(), reason);
+        }
+
+        private void publishSteering(ChatSessionState sessionSt)
+        {
+            if (!ReferenceEquals(_states.GetValueOrDefault(activeStateKey), sessionSt))
+                return;
+
+            Messages = new List<ChatMessage>(sessionSt.Messages);
+            TrimmedOlderMessageCount = sessionSt.TrimmedOlderMessageCount;
+            NotifyStateChanged();
         }
 
         public bool RecallLastUserMessage()
@@ -811,10 +876,9 @@ namespace OmniKey.Windows
                 return;
 
             state.RunHandle?.Cancel();
+            rejectSteering(state, state.Steering.EndTurn(), "The task was stopped before this update was applied.");
             state.IsRunning = false;
             state.RunHandle = null;
-            state.StreamingAssistantIndex = null;
-            state.AssistantIndexRedirects.Clear();
             IsRunning = false;
             NotifyStateChanged();
         }
@@ -1148,15 +1212,11 @@ namespace OmniKey.Windows
 
         private void appendBlock(ChatBlock block, ChatSessionState state)
         {
-            if (state.StreamingAssistantIndex is not int index)
-            {
+            if (state.Steering.StreamingTarget is not Guid target)
                 return;
-            }
 
-            int targetIndex = state.AssistantIndexRedirects.TryGetValue(index, out int redirected)
-                ? redirected
-                : index;
-            if (targetIndex < 0 || targetIndex >= state.Messages.Count)
+            int targetIndex = state.Messages.FindIndex(m => m.Id == target);
+            if (targetIndex < 0)
                 return;
 
             var message = state.Messages[targetIndex];

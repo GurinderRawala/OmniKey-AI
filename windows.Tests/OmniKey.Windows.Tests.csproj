@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Cross-platform tests for the Windows app's non-visual Skills contracts:
+    DTO/HTTP mapping, live notice interception and frame routing, and the
+    Skills view-model state machine.
+
+    The app itself targets net10.0-windows (WPF/WinForms), which cannot run on
+    macOS/Linux, so this project does NOT reference it. Instead it compiles the
+    app's platform-neutral source files directly (they use no WPF, WinForms or
+    registry types). WPF rendering, navigation and keyboard behaviour still
+    need manual validation on Windows.
+
+    Run: dotnet test windows.Tests/OmniKey.Windows.Tests.csproj
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <RootNamespace>OmniKey.Windows.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\windows\AgentRunner.Wire.cs" Link="AppSources\AgentRunner.Wire.cs" />
+    <Compile Include="..\windows\Skills\*.cs" Link="AppSources\Skills\%(Filename)%(Extension)" />
+    <Compile Include="..\windows\ViewModels\SkillsViewModel.cs" Link="AppSources\ViewModels\SkillsViewModel.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Same version as windows/OmniKey.Windows.csproj (source generators). -->
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+</Project>

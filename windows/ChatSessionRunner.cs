@@ -1,12 +1,34 @@
 using System;
 using System.Diagnostics;
 using System.Net.WebSockets;
-using System.Text.Json;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
+using OmniKey.Windows.Skills;
 
 namespace OmniKey.Windows
 {
+    /// <summary>
+    /// Marks chat timeline blocks created from live Skills notices so the
+    /// transcript can label them "Skills" without a new persisted block kind.
+    /// Only blocks created here are ever marked (server/history text cannot
+    /// spoof it), and the weak table never keeps a block alive.
+    /// </summary>
+    internal static class SkillNoticeBlocks
+    {
+        private static readonly ConditionalWeakTable<ChatBlock, object> Marked = new();
+        private static readonly object Marker = new();
+
+        public static ChatBlock Create(string literalText)
+        {
+            var block = new ChatBlock(ChatBlockKind.AgentReasoning, literalText);
+            Marked.AddOrUpdate(block, Marker);
+            return block;
+        }
+
+        public static bool IsNotice(ChatBlock block) => Marked.TryGetValue(block, out _);
+    }
+
     internal sealed class ChatSessionRunHandle
     {
         private readonly object _lock = new();
@@ -153,6 +175,7 @@ namespace OmniKey.Windows
             string userText,
             string? groupName,
             Action<ChatBlock> onBlock,
+            Action<SteeringAck> onSteering,
             Action<string> onFinal,
             Action<Exception> onError)
         {
@@ -193,6 +216,7 @@ namespace OmniKey.Windows
                         allowReauth: hadToken,
                         handle,
                         onBlock,
+                        onSteering,
                         DeliverFinal);
                 }
                 catch (Exception ex)
@@ -207,8 +231,14 @@ namespace OmniKey.Windows
             return handle;
         }
 
+        /// <param name="steeringId">Created by the caller once per user send
+        /// (<see cref="NewSteeringId"/>) so the server's received/applied/
+        /// rejected acknowledgements route back to that send. A user retry
+        /// is a new send with a new id (the backend treats a seen id as a
+        /// duplicate for the rest of the run).</param>
         public Task SendSteeringMessageAsync(
             string sessionId,
+            string steeringId,
             string text,
             ChatSessionRunHandle handle)
         {
@@ -221,10 +251,14 @@ namespace OmniKey.Windows
                 is_error = false,
                 is_steering = true,
                 platform = "windows",
+                steering_id = steeringId,
+                supports_skill_status = true,
             };
 
             return handle.SendWebSocketMessageAsync(message);
         }
+
+        internal static string NewSteeringId() => Guid.NewGuid().ToString("D");
 
         private static async Task ConnectAndRunAsync(
             string sessionId,
@@ -233,6 +267,7 @@ namespace OmniKey.Windows
             bool allowReauth,
             ChatSessionRunHandle handle,
             Action<ChatBlock> onBlock,
+            Action<SteeringAck> onSteering,
             Action<string> onFinal)
         {
             if (handle.IsCancelledByUser)
@@ -258,7 +293,7 @@ namespace OmniKey.Windows
                 if (!ok)
                     throw new InvalidOperationException("Subscription is not active.");
 
-                await ConnectAndRunAsync(sessionId, userText, groupName, false, handle, onBlock, onFinal);
+                await ConnectAndRunAsync(sessionId, userText, groupName, false, handle, onBlock, onSteering, onFinal);
                 return;
             }
 
@@ -273,9 +308,15 @@ namespace OmniKey.Windows
                     is_error = false,
                     platform = "windows",
                     group_name = string.IsNullOrWhiteSpace(groupName) ? null : groupName,
+                    // Every frame below goes through AgentFrameRouter, which
+                    // consumes skill_status notices before shell/final parsing.
+                    supports_skill_status = true,
                 };
 
                 await handle.SendWebSocketMessageAsync(initial, cts.Token);
+
+                // Fresh per turn: notice dedup never survives a new turn.
+                var skillTracker = new SkillStatusTracker();
 
                 while (ws.State == WebSocketState.Open && !cts.Token.IsCancellationRequested)
                 {
@@ -288,53 +329,50 @@ namespace OmniKey.Windows
                         throw new OperationCanceledException("Agent session ended without a final answer.");
                     }
 
-                    AgentRunner.AgentMessage? msg;
-                    try
+                    var action = AgentFrameRouter.ForChat(raw, skillTracker);
+                    var msg = action.Message;
+
+                    switch (action.Kind)
                     {
-                        msg = JsonSerializer.Deserialize<AgentRunner.AgentMessage>(raw, AgentRunner.JsonOptions);
-                    }
-                    catch
-                    {
-                        continue;
-                    }
+                        case AgentFrameKind.SkillNotice:
+                            // Live-only, literal text; never executed or final.
+                            if (action.Display is { Length: > 0 } notice)
+                                onBlock(SkillNoticeBlocks.Create(notice));
+                            continue;
 
-                    if (msg == null)
-                        continue;
+                        case AgentFrameKind.Ignored:
+                            continue;
 
-                    string content = msg.content ?? "";
+                        case AgentFrameKind.SteeringAck:
+                            // Routed by steering_id to its pending send; never
+                            // executed and never ends the turn.
+                            if (action.Steering is { } ack)
+                                onSteering(ack);
+                            continue;
 
-                    if (msg.is_steering == true)
-                        continue;
+                        case AgentFrameKind.WebCall:
+                            onBlock(new ChatBlock(ChatBlockKind.WebCall, action.Text));
+                            continue;
 
-                    if (msg.is_web_call == true)
-                    {
-                        onBlock(new ChatBlock(ChatBlockKind.WebCall, content));
-                        continue;
-                    }
+                        case AgentFrameKind.ImageRendering:
+                            onBlock(new ChatBlock(ChatBlockKind.ImageRendering, action.Text));
+                            continue;
 
-                    if (msg.is_image_rendering == true)
-                    {
-                        onBlock(new ChatBlock(ChatBlockKind.ImageRendering, content));
-                        continue;
-                    }
+                        case AgentFrameKind.McpCall:
+                            onBlock(new ChatBlock(ChatBlockKind.McpCall, action.Text));
+                            continue;
 
-                    if (msg.is_mcp_call == true)
-                    {
-                        onBlock(new ChatBlock(ChatBlockKind.McpCall, content));
-                        continue;
-                    }
-
-                    string? finalAnswer = AgentRunner.ExtractFinalAnswer(content);
-                    if (finalAnswer != null)
-                    {
-                        await AgentRunner.CloseWebSocketAsync(ws);
-                        onFinal(finalAnswer);
-                        return;
+                        case AgentFrameKind.FinalAnswer:
+                            await AgentRunner.CloseWebSocketAsync(ws);
+                            onFinal(action.Text);
+                            return;
                     }
 
-                    string? script = AgentRunner.ExtractShellScript(content);
-                    if (script != null)
+                    string content = msg?.content ?? "";
+
+                    if (action.Kind == AgentFrameKind.ShellScript)
                     {
+                        string script = action.Text;
                         string reasoning = CleanedTextRemovingShellScript(content);
                         if (reasoning.Length > 0)
                             onBlock(new ChatBlock(ChatBlockKind.AgentReasoning, reasoning));
@@ -354,7 +392,7 @@ namespace OmniKey.Windows
 
                         var reply = new AgentRunner.AgentMessage
                         {
-                            session_id = msg.session_id ?? sessionId,
+                            session_id = msg?.session_id ?? sessionId,
                             sender = "client",
                             content = output,
                             is_terminal_output = true,
@@ -366,12 +404,8 @@ namespace OmniKey.Windows
                         continue;
                     }
 
-                    string displayText = AgentRunner.CleanDisplayText(content);
-                    if (!string.IsNullOrWhiteSpace(displayText) &&
-                        !displayText.StartsWith("[terminal ", StringComparison.OrdinalIgnoreCase))
-                    {
+                    if (action.Display is { } displayText)
                         onBlock(new ChatBlock(ChatBlockKind.AgentReasoning, displayText));
-                    }
                 }
 
                 if (handle.IsCancelledByUser)
