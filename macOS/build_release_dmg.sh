@@ -101,7 +101,7 @@ xcrun actool \
   --compile "${APP_BUNDLE}/Contents/Resources" \
   --platform macosx \
   --target-device mac \
-  --minimum-deployment-target 13.0 \
+  --minimum-deployment-target 15.0 \
   --app-icon AppIcon \
   --product-type com.apple.product-type.application \
   --output-partial-info-plist "${PARTIAL_PLIST}" \
@@ -139,13 +139,13 @@ cat > "${INFO_PLIST}" <<EOF
     <key>CFBundleIdentifier</key>
     <string>${BUNDLE_ID}</string>
     <key>CFBundleVersion</key>
-    <string>74</string>
+    <string>75</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.9.14</string>
+    <string>1.9.15</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>LSMinimumSystemVersion</key>
-    <string>13.0</string>
+    <string>15.0</string>
 
     <!-- Backend base URL used by APIClient (can be overridden by env OMNIKEY_BACKEND_URL) -->
     <key>OMNIKEY_BACKEND_URL</key>

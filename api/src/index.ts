@@ -172,8 +172,8 @@ app.get('/macos/appcast', (req, res) => {
 
   // These should match the values embedded into the macOS app
   // Info.plist in macOS/build_release_dmg.sh.
-  const bundleVersion = '74';
-  const shortVersion = '1.9.14';
+  const bundleVersion = '75';
+  const shortVersion = '1.9.15';
 
   const xml = `<?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0"
@@ -186,7 +186,7 @@ app.get('/macos/appcast', (req, res) => {
     <language>en</language>
     <item>
       <title>Version ${shortVersion}</title>
-      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
       <enclosure
         url="${downloadUrl}"
         sparkle:version="${bundleVersion}"
