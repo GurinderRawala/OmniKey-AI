@@ -104,6 +104,15 @@ struct AgentTaskStep: Identifiable, Equatable {
     let createdAt: Date
     /// A live Skills notice row: neutral, no activities, not a milestone.
     var isSkillNotice: Bool = false
+
+    /// Milestone titles repeat the opening of their progress message. Only
+    /// non-milestone Skills notices keep their distinct category heading.
+    var displayedHeading: String? { isSkillNotice ? title : nil }
+
+    var progressAccessibilityLabel: String {
+        guard let displayedHeading else { return outcome ?? "" }
+        return "\(displayedHeading): \(outcome ?? "")"
+    }
 }
 
 /// Owned by one timeline view, never shared across sessions. Equality includes

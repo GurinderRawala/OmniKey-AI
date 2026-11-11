@@ -183,9 +183,11 @@ private struct AgentTaskStepRow: View, Equatable {
                     .accessibilityHidden(step.isSkillNotice)
 
                 VStack(alignment: .leading, spacing: 5) {
-                    Text(step.title)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(NordTheme.primaryText(colorScheme).opacity(0.92))
+                    if let heading = step.displayedHeading {
+                        Text(heading)
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(NordTheme.primaryText(colorScheme).opacity(0.92))
+                    }
 
                     Text(outcome)
                         .font(.system(size: 13))
@@ -234,7 +236,7 @@ private struct AgentTaskStepRow: View, Equatable {
                 .padding(.bottom, isLast ? 2 : 16)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .accessibilityElement(children: .combine)
-                .accessibilityLabel("\(step.title): \(outcome)")
+                .accessibilityLabel(step.progressAccessibilityLabel)
             }
             .overlay(alignment: .topLeading) {
                 if !isLast {
