@@ -17,10 +17,17 @@ final class SessionDiffLayoutTests: XCTestCase {
         XCTAssertEqual(counter.count, 1)
     }
 
-    func testNarrowComposerUsesIconMenusToKeepSendReachable() {
+    func testNarrowComposerWrapsLabeledMenusToKeepSendReachable() {
         XCTAssertTrue(ComposerToolbarLayout.isCompact(width: 356))
         XCTAssertTrue(ComposerToolbarLayout.isCompact(width: 567))
         XCTAssertFalse(ComposerToolbarLayout.isCompact(width: 740))
+        // Compact mode wraps to two rows with visible (truncating) titles
+        // rather than icon-only pills; full names live in tooltips.
+        for width: CGFloat in [356, 420, 567, 740, 1100] {
+            let widths = ComposerToolbarLayout.titleWidths(width: width)
+            XCTAssertGreaterThanOrEqual(widths.task, ComposerToolbarLayout.minimumTitleWidth)
+            XCTAssertGreaterThanOrEqual(widths.model, ComposerToolbarLayout.minimumTitleWidth)
+        }
     }
 
     func testBannerFillsAvailableMessageColumn() {

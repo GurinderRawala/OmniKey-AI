@@ -30,13 +30,19 @@ enum GitShellCommandAnalyzer {
     static func analyze(_ script: String, initialDirectory: String?, homeDirectory: String = NSHomeDirectory()) -> Analysis {
         var analysis = Analysis()
         guard let commands = splitCommands(script) else {
-            // Unbalanced quoting etc.: only disqualify if git is mentioned.
+            // Unbalanced quoting, malformed heredocs etc.: only disqualify
+            // if git is mentioned.
             if script.contains("git") { analysis.hasDisqualifyingGitActivity = true }
             return analysis
         }
         var cwd = initialDirectory
         for words in commands {
             var words = words
+            // `$(git …)` / backticks run Git out of sight of this reader;
+            // they are never counted as a commit and forbid attribution.
+            if words.contains(where: { ($0.contains("$(") || $0.contains("`")) && mentionsGit($0) }) {
+                analysis.hasDisqualifyingGitActivity = true
+            }
             // Git environment overrides can redirect repository identity.
             // Do not attribute a command whose effective Git target is opaque.
             while let first = words.first, isAssignment(first) {
@@ -147,15 +153,25 @@ enum GitShellCommandAnalyzer {
     /// Splits into simple commands on newlines, `;`, `&&`, `||`, `|`, `&`,
     /// honouring single/double quotes and backslash escapes. Words with
     /// expansions stay marked by keeping their `$`/backtick characters, so
-    /// `isLiteral` rejects them. Returns nil for unbalanced quotes or
-    /// heredocs (whose bodies cannot be read safely).
+    /// `isLiteral` rejects them.
+    ///
+    /// Heredoc bodies are skipped, never parsed as commands: text such as
+    /// `git commit` inside a body is data, not an invocation. The scanner
+    /// is deliberately narrower than a shell and returns nil (fail closed)
+    /// for anything it cannot delimit exactly: unbalanced quotes, here-
+    /// strings, non-literal or exotic delimiters, a missing terminator,
+    /// CR-terminated delimiter lines, line continuations around a pending
+    /// heredoc, and unquoted bodies containing command/parameter
+    /// substitution (`$(`, `${`, `$[`, backticks), which the shell would
+    /// expand and could therefore mutate the repository.
     static func splitCommands(_ script: String) -> [[String]]? {
         var commands: [[String]] = []
         var words: [String] = []
         var word = ""
         var inWord = false
         var quote: Character? = nil
-        var chars = Array(script)
+        var pending: [PendingHeredoc] = []
+        let chars = Array(script)
         var i = 0
 
         func endWord() {
@@ -168,15 +184,38 @@ enum GitShellCommandAnalyzer {
             if !words.isEmpty { commands.append(words) }
             words = []
         }
+        /// The command a heredoc operator belongs to, ignoring assignments.
+        func currentCommandName() -> String? {
+            let all = inWord ? words + [word] : words
+            return all.first(where: { !isAssignment($0) }).map { ($0 as NSString).lastPathComponent }
+        }
 
         while i < chars.count {
             let c = chars[i]
             if let q = quote {
                 if c == q {
                     quote = nil
+                } else if c == "\n" && !pending.isEmpty {
+                    // Only `"$(cat <<X …` can reach here (see below); the body
+                    // starts after this newline and is excluded from the word.
+                    guard q == "\"", let next = consumeHeredocBodies(chars, from: i + 1, pending) else { return nil }
+                    pending = []
+                    word.append("\n")
+                    i = next
+                    continue
                 } else if q == "\"" && c == "\\" && i + 1 < chars.count {
                     i += 1
+                    if chars[i] == "\n" && !pending.isEmpty { return nil }
                     word.append(chars[i])
+                } else if q == "\"" && c == "<" && i + 1 < chars.count && chars[i + 1] == "<" && word.contains("$(") {
+                    // Heredoc inside a command substitution inside double
+                    // quotes, e.g. `git commit -m "$(cat <<'EOF' … EOF\n)"`.
+                    // Its body may contain quotes that must not close ours.
+                    guard let (doc, next) = parseHeredocOperator(chars, at: i, command: currentCommandName() == "git" && word.range(of: #"\$\(cat[ \t]+$"#, options: .regularExpression) != nil ? "cat" : nil) else { return nil }
+                    pending.append(doc)
+                    word.append(contentsOf: chars[i..<next])
+                    i = next
+                    continue
                 } else {
                     word.append(c)
                 }
@@ -189,15 +228,33 @@ enum GitShellCommandAnalyzer {
                 inWord = true
             case "\\":
                 if i + 1 < chars.count {
-                    if chars[i + 1] == "\n" { i += 1 } else { i += 1; word.append(chars[i]); inWord = true }
+                    if chars[i + 1] == "\n" {
+                        // A continuation would move where pending bodies start.
+                        if !pending.isEmpty { return nil }
+                        i += 1
+                    } else { i += 1; word.append(chars[i]); inWord = true }
                 }
             case "#" where !inWord:
                 while i < chars.count && chars[i] != "\n" { i += 1 }
                 endCommand()
-            case "\n", ";", "&", "|":
+                continue // let the newline (if any) start pending bodies
+            case "\n":
+                endCommand()
+                if !pending.isEmpty {
+                    guard let next = consumeHeredocBodies(chars, from: i + 1, pending) else { return nil }
+                    pending = []
+                    i = next
+                    continue
+                }
+            case ";", "&", "|":
                 endCommand()
             case "<" where i + 1 < chars.count && chars[i + 1] == "<":
-                return nil
+                let command = currentCommandName()
+                endWord()
+                guard let (doc, next) = parseHeredocOperator(chars, at: i, command: command) else { return nil }
+                pending.append(doc)
+                i = next
+                continue
             case " ", "\t", "\r":
                 endWord()
             default:
@@ -206,10 +263,132 @@ enum GitShellCommandAnalyzer {
             }
             i += 1
         }
-        guard quote == nil else { return nil }
+        guard quote == nil, pending.isEmpty else { return nil }
         endCommand()
-        chars.removeAll()
         return commands
+    }
+
+    private struct PendingHeredoc {
+        let delimiter: String
+        let stripsTabs: Bool
+        /// Unquoted delimiter: the shell expands the body.
+        let expands: Bool
+        /// The body is shell code run by a nested interpreter.
+        let feedsShell: Bool
+        let command: String?
+        let hasPipe: Bool
+    }
+
+    static let shellInterpreters: Set<String> = ["sh", "bash", "zsh", "dash", "ksh", "mksh", "fish", "eval", "source", "."]
+
+    /// Parses `<<[-]WORD` starting at the first `<`; returns the heredoc and
+    /// the index just past WORD. Delimiters are limited to `[A-Za-z0-9_.-]`
+    /// after quote removal; anything else (expansions, CR, empty) is nil.
+    private static func parseHeredocOperator(_ chars: [Character], at start: Int, command: String?) -> (PendingHeredoc, Int)? {
+        var i = start + 2
+        if i < chars.count && chars[i] == "<" { return nil } // here-string
+        var stripsTabs = false
+        if i < chars.count && chars[i] == "-" { stripsTabs = true; i += 1 }
+        while i < chars.count && (chars[i] == " " || chars[i] == "\t") { i += 1 }
+        var delimiter = ""
+        var quoted = false
+        scan: while i < chars.count {
+            let c = chars[i]
+            switch c {
+            case "'", "\"":
+                guard let close = chars[(i + 1)...].firstIndex(of: c) else { return nil }
+                quoted = true
+                delimiter.append(contentsOf: chars[(i + 1)..<close])
+                i = close + 1
+            case "\\":
+                guard i + 1 < chars.count, chars[i + 1] != "\n" else { return nil }
+                quoted = true
+                delimiter.append(chars[i + 1])
+                i += 2
+            case " ", "\t", "\n", ";", "&", "|", "<", ">", ")":
+                break scan
+            default:
+                delimiter.append(c)
+                i += 1
+            }
+        }
+        guard !delimiter.isEmpty,
+              delimiter.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || "_.-".contains($0)) })
+        else { return nil }
+        let feedsShell = command.map { shellInterpreters.contains($0) } ?? false
+        let lineEnd = chars[i...].firstIndex(of: "\n") ?? chars.count
+        let hasPipe = chars[i..<lineEnd].contains("|")
+        return (PendingHeredoc(delimiter: delimiter, stripsTabs: stripsTabs, expands: !quoted,
+                               feedsShell: feedsShell, command: command, hasPipe: hasPipe), i)
+    }
+
+    /// Skips queued heredoc bodies in order, starting at `start` (the first
+    /// character after the operator line's newline). Returns the index after
+    /// the last terminator line, or nil when a body cannot be delimited
+    /// exactly or is unsafe to leave unread.
+    private static func consumeHeredocBodies(_ chars: [Character], from start: Int, _ pending: [PendingHeredoc]) -> Int? {
+        var i = start
+        for doc in pending {
+            var body = ""
+            while true {
+                guard i < chars.count else { return nil } // missing terminator
+                var end = i
+                while end < chars.count && chars[end] != "\n" { end += 1 }
+                var line = chars[i..<end]
+                if doc.stripsTabs { line = line.drop(while: { $0 == "\t" }) }
+                let text = String(line)
+                if text == doc.delimiter {
+                    i = min(end + 1, chars.count)
+                    break
+                }
+                // The shell would not end the body here (CR is literal); a
+                // reader that did would misplace every later command.
+                if text == doc.delimiter + "\r" { return nil }
+                if doc.expands {
+                    // Unquoted bodies join backslash-newline and expand.
+                    if text.hasSuffix("\\") || !isInertExpansionText(text) { return nil }
+                }
+                body += text + "\n"
+                guard end < chars.count else { return nil }
+                i = end + 1
+            }
+            if mentionsGit(body) {
+                let dataSink = (doc.command == "cat" || doc.command == "tee") && !doc.hasPipe
+                let verification = (doc.command == "python3" || doc.command == "python")
+                    && !doc.hasPipe && isReadOnlyGitVerification(body)
+                guard dataSink || verification else { return nil }
+            }
+        }
+        return i
+    }
+
+    /// Narrow support for the actual staged-file Python verification shape.
+    /// All Git references must be literal read-only `git diff --cached
+    /// --name-only` arrays. Arbitrary interpreter Git commands fail closed.
+    private static func isReadOnlyGitVerification(_ body: String) -> Bool {
+        let withoutComments = body.split(separator: "\n", omittingEmptySubsequences: false)
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("#") }.joined(separator: "\n")
+        let pattern = #"\[\s*["']git["']\s*,\s*["']diff["']\s*,\s*["']--cached["']\s*,\s*["']--name-only["']\s*\]"#
+        let stripped = withoutComments.replacingOccurrences(of: pattern, with: "READ_ONLY_GIT_ARGUMENTS", options: .regularExpression)
+        guard stripped != withoutComments, !mentionsGit(stripped) else { return false }
+        return !["eval(", "exec(", "os.system", "shell=True", "__import__", "getattr("].contains(where: stripped.contains)
+    }
+
+    /// True when unquoted heredoc text can only expand plain `$name`
+    /// parameters (no command, arithmetic or nested parameter evaluation).
+    private static func isInertExpansionText(_ text: String) -> Bool {
+        if text.contains("`") { return false }
+        let scalars = Array(text)
+        for index in scalars.indices where scalars[index] == "$" {
+            let next = index + 1 < scalars.count ? scalars[index + 1] : " "
+            if "({[".contains(next) { return false }
+        }
+        return true
+    }
+
+    /// `git` as a standalone token (not `.gitignore`, `github`, `digit`).
+    static func mentionsGit(_ text: String) -> Bool {
+        text.range(of: #"(^|[^A-Za-z0-9_.-])git($|[^A-Za-z0-9_-])"#, options: .regularExpression) != nil
     }
 }
 
@@ -286,6 +465,10 @@ struct GitProvenanceTracker: Sendable {
                   reflogShowsCommit(root: root, oid: after, runner: runner, deadline: deadline)
             else { continue }
             if let before {
+                guard let parent = try? runner.run(["rev-parse", after + "^"], in: root, maxStdout: 256, deadline: deadline),
+                      parent.status == 0,
+                      String(decoding: parent.stdout, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines) == before
+                else { continue }
                 guard let ancestry = try? runner.run(
                     ["merge-base", "--is-ancestor", before, after], in: root, maxStdout: 1024, deadline: deadline
                 ), ancestry.status == 0 else { continue }

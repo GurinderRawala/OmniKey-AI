@@ -312,3 +312,17 @@ Provenance writes are best-effort with a two-second deadline. A failed/timed-out
 write disables previous-run commit fallback for that session for the rest of the
 API process lifetime; current-run observations still work. After restart only
 persisted barriers are available; an unpersisted run cannot be reconstructed.
+
+## Heredoc commit detection (1.9.17)
+
+The native literal-command scanner skips supported heredoc bodies and can observe
+`git commit` after a Python verification heredoc, or a quoted heredoc used as a
+commit-message argument. Body text is never treated as a shell command. Delimiters
+must be literal; missing/CRLF delimiters, unsafe unquoted expansion and opaque
+Git invocation remain fail-closed. The unchanged HEAD/reflog/ancestry checks are
+still required. This does not retrospectively assign provenance to older sessions.
+
+Heredoc bodies that feed shell/interpreter Git commands fail closed. The staged-file
+Python verifier is recognized narrowly (`git diff --cached --name-only` literal
+arguments). Commit observations require a direct parent match to the captured HEAD,
+so a hidden pull/merge followed by a commit cannot borrow the earlier baseline.
