@@ -27,6 +27,8 @@ export interface AgentTurnOptions {
   // Notice capability of the connection that sent this input (and receives
   // its frames). Literal-true opt-in, per input.
   supportsSkillStatus?: boolean;
+  // Literal-true Git snapshot capability of the connection that sent this input.
+  supportsGitDiff?: boolean;
 }
 
 export interface QueuedMessage {
@@ -56,6 +58,8 @@ export interface PendingSteeringMessage {
 }
 
 export type PendingShellScript = {
-  resolve: (output: string, isError: boolean | undefined) => void;
+  // `gitCommitObservations` is the raw, unvalidated reply field; the tool
+  // loop validates it against the shell request it issued.
+  resolve: (output: string, isError: boolean | undefined, gitCommitObservations?: unknown) => void;
   filterKeywords: string[];
 };

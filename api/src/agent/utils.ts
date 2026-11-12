@@ -5,7 +5,7 @@ import {
   getMaxMessageContentLength,
   providerSupportsImageGeneration,
 } from '../ai-client';
-import { AgentSendFn, SessionState } from './types';
+import { AgentMessage, AgentSendFn, SessionState } from './types';
 import { config } from '../config';
 import { Logger } from 'winston';
 import { IMAGE_GENERATE_TOOL } from './imageTool';
@@ -153,6 +153,7 @@ export function sendFinalAnswer(
   sessionId: string,
   message: string,
   isError: boolean,
+  metadata?: Pick<AgentMessage, 'session_diff'>,
 ): void {
   send({
     session_id: sessionId,
@@ -160,6 +161,7 @@ export function sendFinalAnswer(
     content: `<final_answer>\n${message}\n</final_answer>`,
     is_terminal_output: false,
     is_error: isError,
+    ...(metadata?.session_diff ? { session_diff: metadata.session_diff } : {}),
   });
 }
 

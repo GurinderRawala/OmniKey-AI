@@ -24,6 +24,14 @@ import {
   readNormalizedBlockContent,
   readOrBackfillNormalizedTranscript,
 } from './transcriptStore';
+import { loadSessionDiffPayload } from '../gitDiff/coordinator';
+import {
+  DiffRenderTimeoutError,
+  renderSessionDiffHtml,
+  type DiffTheme,
+} from '../gitDiff/ssrRenderer';
+
+const SESSION_DIFF_ID_RE = /^sdiff_[A-Za-z0-9]{8,64}$/;
 
 const CONTEXT_WINDOW_CACHE_TTL_MS = 5_000;
 let contextWindowCache: { value: number; expiresAt: number; settingsVersion: number } | null = null;
@@ -527,6 +535,60 @@ export function createAgentRouter(): express.Router {
       }
     },
   );
+
+  // GET /api/agent/sessions/:sessionId/diffs/:diffId?theme=dark|light
+  // Server-rendered (Pierre SSR) HTML of one immutable Git snapshot. Owner
+  // and session scoped; a foreign/missing session or snapshot is a 404.
+  // Patch content is never logged.
+  router.get('/sessions/:sessionId/diffs/:diffId', async (req, res: Response<any, AuthLocals>) => {
+    const { subscription, logger: log } = res.locals;
+    const { sessionId, diffId } = req.params;
+    if (
+      !sessionId ||
+      typeof sessionId !== 'string' ||
+      sessionId.length > 128 ||
+      typeof diffId !== 'string' ||
+      !SESSION_DIFF_ID_RE.test(diffId)
+    ) {
+      res.status(400).json({ error: 'Invalid diff request' });
+      return;
+    }
+    const themeQuery = req.query.theme;
+    if (themeQuery !== undefined && themeQuery !== 'dark' && themeQuery !== 'light') {
+      res.status(400).json({ error: 'Invalid theme' });
+      return;
+    }
+    const theme: DiffTheme = themeQuery === 'light' ? 'light' : 'dark';
+    try {
+      const session = await AgentSession.findOne({
+        where: { id: sessionId, subscriptionId: subscription.id },
+        attributes: ['id'],
+      });
+      if (!session) {
+        res.status(404).json({ error: 'Diff not found' });
+        return;
+      }
+      const stored = await loadSessionDiffPayload(sessionId, subscription.id, diffId);
+      if (!stored) {
+        res.status(404).json({ error: 'Diff not found' });
+        return;
+      }
+      const html = await renderSessionDiffHtml(stored.row.id, stored.payload, theme);
+      res.setHeader('Cache-Control', 'private, no-store');
+      res.json({ id: stored.row.id, html });
+    } catch (err) {
+      if (err instanceof DiffRenderTimeoutError) {
+        res.status(503).json({ error: 'Diff rendering timed out' });
+        return;
+      }
+      log.error('Failed to render session diff', {
+        sessionId,
+        diffId,
+        error: err instanceof Error ? err.name : 'error',
+      });
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
 
   // GET /api/agent/groups
   // Returns distinct group names and descriptions for the authenticated

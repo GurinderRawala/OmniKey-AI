@@ -27,6 +27,7 @@ import { completeWithContextRecovery } from './completionRecovery';
 import { extractProgressSummary } from './progressSummary';
 import { ToolProgressGuard } from './toolProgressGuard';
 import { throwIfTurnCancelled } from './turnCancellation';
+import { planShellGitContext, recordShellGitResult } from '../gitDiff/shellContext';
 
 export { extractProgressSummary } from './progressSummary';
 
@@ -397,12 +398,22 @@ export async function runToolLoop(
           scriptLength: script.length,
           filterKeywords,
         });
+        // Git evidence is collected only for capable interactive clients.
+        const gitPlan = planShellGitContext(session.gitRun, args, script);
+        if (gitPlan.error) {
+          return {
+            id: tc.id,
+            name: tc.name,
+            result: `COMMAND ERROR: ${gitPlan.error} Script was not executed.`,
+          };
+        }
         const terminalOutput = await new Promise<string>((resolve) => {
-          const finish = (output: string) => {
+          const finish = (output: string, _isError?: boolean, gitCommitObservations?: unknown) => {
             session.signal?.removeEventListener('abort', cancel);
             if (pendingShellScripts.get(sessionId)?.resolve === finish) {
               pendingShellScripts.delete(sessionId);
             }
+            recordShellGitResult(session.gitRun, gitPlan, script, output, gitCommitObservations);
             resolve(output);
           };
           const cancel = () =>
@@ -424,6 +435,8 @@ export async function runToolLoop(
             is_error: false,
             activity_id: tc.id,
             activity_phase: 'started',
+            ...(gitPlan.workingDirectory ? { working_directory: gitPlan.workingDirectory } : {}),
+            ...(gitPlan.context ? { git_diff_context: gitPlan.context } : {}),
           });
         });
         return {

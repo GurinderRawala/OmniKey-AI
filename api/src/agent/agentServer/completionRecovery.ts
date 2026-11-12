@@ -2,6 +2,7 @@ import type { Logger } from 'winston';
 import { config } from '../../config';
 import { logger } from '../../logger';
 import { aiClient, AITool, AICompletionResult, CompletionOptions } from '../../ai-client';
+import { stripProviderMetadata } from '../gitDiff/providerMetadata';
 import { pushToSessionHistory } from '../utils';
 import { isInjectedUserPrompt } from '../injectedUserPrompts';
 import type { SessionState } from '../types';
@@ -117,7 +118,11 @@ export async function completeWithContextRecovery(
   for (;;) {
     try {
       throwIfTurnCancelled(session.signal);
-      const result = await aiClient.complete(model, requestHistory, requestOptions);
+      const result = await aiClient.complete(
+        model,
+        stripProviderMetadata(requestHistory),
+        requestOptions,
+      );
       throwIfTurnCancelled(session.signal);
       // The run's deferred input checkpoint (if any) is written only once a
       // request was actually accepted by the provider.

@@ -8,6 +8,15 @@ import Textual
 enum ChatLayoutMetrics {
     static let sidebarExpandedWidth: CGFloat = 264
     static let sidebarCollapsedWidth: CGFloat = 52
+    static let conversationMinWidth: CGFloat = 420
+    static let inspectorMinWidth: CGFloat = 340
+    static let inspectorIdealWidth: CGFloat = 480
+
+    /// Sidebar + conversation + inspector must fit; below this the
+    /// expanded sidebar yields to the rail while the inspector is open.
+    static func usesCompactSidebar(windowWidth: CGFloat, inspectorOpen: Bool) -> Bool {
+        inspectorOpen && windowWidth < sidebarExpandedWidth + 1 + conversationMinWidth + inspectorIdealWidth
+    }
 }
 
 struct ChatView: View {
@@ -37,21 +46,45 @@ struct ChatView: View {
     var body: some View {
         ZStack {
             NordTheme.windowBackground(colorScheme).ignoresSafeArea()
-            HStack(spacing: 0) {
-                Group {
-                    if sidebarCollapsed {
-                        ChatSidebarRailView(model: model, onExpand: toggleSidebar)
-                    } else {
-                        ChatSidebarView(model: model, onCollapse: toggleSidebar)
+            GeometryReader { proxy in
+                let inspector = model.inspectedSessionDiff
+                // With the inspector open in a narrow window, show the rail
+                // without changing the user's saved sidebar preference.
+                let compact = ChatLayoutMetrics.usesCompactSidebar(
+                    windowWidth: proxy.size.width, inspectorOpen: inspector != nil
+                )
+                let collapsed = sidebarCollapsed || compact
+                HStack(spacing: 0) {
+                    Group {
+                        if collapsed {
+                            ChatSidebarRailView(model: model, onExpand: {
+                                if sidebarCollapsed { toggleSidebar() } else { model.closeSessionDiff() }
+                            })
+                        } else {
+                            ChatSidebarView(model: model, onCollapse: toggleSidebar)
+                        }
+                    }
+                    .frame(width: collapsed
+                        ? ChatLayoutMetrics.sidebarCollapsedWidth
+                        : ChatLayoutMetrics.sidebarExpandedWidth)
+
+                    Rectangle()
+                        .fill(NordTheme.border(colorScheme))
+                        .frame(width: 1)
+                    // Keep the conversation at the same structural location
+                    // when opening/closing a saved snapshot inspector.
+                    HSplitView {
+                        ChatConversationView(model: model, onToggleSidebar: toggleSidebar)
+                            .frame(minWidth: ChatLayoutMetrics.conversationMinWidth,
+                                   maxWidth: .infinity, maxHeight: .infinity)
+                        if let inspector {
+                            SessionDiffInspectorView(model: model, selection: inspector)
+                                .frame(minWidth: ChatLayoutMetrics.inspectorMinWidth,
+                                       idealWidth: ChatLayoutMetrics.inspectorIdealWidth,
+                                       maxWidth: .infinity, maxHeight: .infinity)
+                        }
                     }
                 }
-                .frame(width: sidebarWidth)
-
-                Rectangle()
-                    .fill(NordTheme.border(colorScheme))
-                    .frame(width: 1)
-                ChatConversationView(model: model, onToggleSidebar: toggleSidebar)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .onAppear {
@@ -3090,7 +3123,7 @@ struct AssistantMessageView: View {
 
     private var thinkingBlocks: [ChatBlock] {
         message.blocks.filter { block in
-            guard block.kind != .finalAnswer else { return false }
+            guard block.kind != .finalAnswer, block.kind != .sessionDiff else { return false }
             // Only genuine reasoning is subject to the noise filter. A block
             // that reclassifies to a tool kind is a real step and must be
             // kept — it is shown as that tool, not as reasoning.
@@ -3104,6 +3137,10 @@ struct AssistantMessageView: View {
 
     private var finalBlock: ChatBlock? {
         message.blocks.first { $0.kind == .finalAnswer }
+    }
+
+    private var sessionDiffBlocks: [ChatBlock] {
+        ChatSessionDiffPlacement.cards(beforeFinalIn: message.blocks)
     }
 
     var body: some View {
@@ -3127,6 +3164,12 @@ struct AssistantMessageView: View {
                     )
                 }
                 if let final = finalBlock {
+                    // Snapshot cards bound to this final render right before it.
+                    ForEach(sessionDiffBlocks) { block in
+                        if let diff = block.sessionDiff {
+                            SessionDiffCardView(diff: diff)
+                        }
+                    }
                     FinalAnswerView(block: final)
                 }
             }

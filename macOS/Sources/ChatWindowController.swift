@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import WebKit
 
 /// Custom NSWindow subclass that forwards common Cmd-key shortcuts to the
 /// active NSTextView — mirrors the pattern used by `MCPServersWindow` so that
@@ -14,8 +15,19 @@ final class ChatWindow: NSWindow {
         return nil
     }
 
+    /// A focused web view (the diff inspector) keeps its own Cmd-C / Cmd-A;
+    /// they must never be redirected to the composer's text view.
+    static func isInsideWebView(_ responder: NSResponder?) -> Bool {
+        var view = responder as? NSView
+        while let current = view {
+            if current is WKWebView { return true }
+            view = current.superview
+        }
+        return false
+    }
+
     override func sendEvent(_ event: NSEvent) {
-        if event.type == .keyDown {
+        if event.type == .keyDown, !ChatWindow.isInsideWebView(firstResponder) {
             let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
             if flags.contains(.command), let chars = event.charactersIgnoringModifiers {
                 let targetTextView: NSTextView?

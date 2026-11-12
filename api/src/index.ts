@@ -22,6 +22,7 @@ import './models/appDownload';
 // Importing models ensures they are registered with Sequelize before initDatabase().
 import './models/agentSession';
 import './models/agentTranscriptMessage';
+import './models/agentSessionDiff';
 import './models/scheduledJob';
 import './models/mcpServer';
 import './models/subscriptionTaskTemplate';

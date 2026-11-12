@@ -1,3 +1,4 @@
+import type { SessionDiffSummary } from './agent/gitDiff/contracts';
 import * as https from 'https';
 import { Readable } from 'stream';
 import OpenAI from 'openai';
@@ -21,6 +22,11 @@ export interface AIMessage {
   tool_call_id?: string;
   /** Name of the tool that produced this result (used by some providers) */
   tool_name?: string;
+  /**
+   * Presentation metadata on a final assistant message (Git snapshot summary).
+   * Never sent to a provider: see agent/gitDiff/providerMetadata.ts.
+   */
+  session_diff?: SessionDiffSummary;
 }
 
 export interface AIToolCall {
