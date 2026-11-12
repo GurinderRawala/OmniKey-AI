@@ -228,6 +228,20 @@ struct GitSnapshotCollector: Sendable {
         let excludedCount: Int
     }
 
+    /// Dispatches on the v3 `phase`; a request without one is the unchanged
+    /// legacy collection. `turnStore` is this run's client-side record of the
+    /// first HEAD captured per repository (never overwritten).
+    func collect(_ request: GitDiffRequestPayload, turnStore: GitTurnBaselineStore?) -> GitDiffResponsePayload {
+        if request.hasUnsupportedPhase {
+            return GitDiffResponsePayload(requestID: request.requestID, status: .unavailable, reason: "Unsupported Git diff request.")
+        }
+        switch request.phase {
+        case .none: return collect(request)
+        case .baseline: return collectBaseline(request, store: turnStore)
+        case .final: return collectTurn(request, store: turnStore)
+        }
+    }
+
     func collect(_ request: GitDiffRequestPayload) -> GitDiffResponsePayload {
         let requestID = request.requestID
         guard let runner else {
@@ -426,6 +440,41 @@ struct GitSnapshotCollector: Sendable {
         return RepositoryCapture(root: root, patch: patch, scope: .commit, commit: head, excludedCount: committed.excluded)
     }
 
+    func emptyTreeOID(root: String, runner: GitCommandRunner, deadline: Date) throws -> String {
+        try emptyTree(root: root, runner: runner, deadline: deadline)
+    }
+
+    /// `base` (a commit or tree) -> current working tree for tracked files,
+    /// plus every eligible untracked file, in one patch. Uses the same
+    /// hardened flags as the legacy working-tree capture.
+    func worktreePatch(
+        base: String, root: String, runner: GitCommandRunner, budget: inout Int, deadline: Date
+    ) throws -> (text: String, excluded: Int) {
+        let changed = try changedPaths(
+            ["diff", base, "--name-status", "-z", "-M", "--no-ext-diff", "--no-textconv"],
+            root: root, runner: runner, deadline: deadline
+        )
+        guard changed.allowed.count + changed.excluded <= limits.maxTrackedFiles else {
+            throw CollectionError.unavailable("Too many changed files.")
+        }
+        let untracked = try untrackedFiles(root: root, runner: runner, deadline: deadline)
+        var excluded = changed.excluded
+        var patch = ""
+        if !changed.allowed.isEmpty {
+            patch += try diffText(
+                ["--literal-pathspecs", "diff", base, "-M", "--no-ext-diff", "--no-textconv", "--no-color",
+                 "--submodule=short", "--"] + changed.allowed,
+                root: root, runner: runner, budget: &budget, deadline: deadline, acceptedStatuses: [0]
+            )
+        }
+        let eligibleUntracked = untracked.filter { !GitSensitivePathPolicy.isSensitive($0) }
+        excluded += untracked.count - eligibleUntracked.count
+        for path in eligibleUntracked {
+            patch += try untrackedPatch(path, root: root, runner: runner, budget: &budget, deadline: deadline)
+        }
+        return (patch, excluded)
+    }
+
     private func emptyTree(root: String, runner: GitCommandRunner, deadline: Date) throws -> String {
         // Hashes (without writing) the empty tree in this repo's object format.
         let result = try runner.run(["hash-object", "-t", "tree", "--stdin"], in: root, maxStdout: 256, deadline: deadline)
@@ -525,5 +574,297 @@ struct GitSnapshotCollector: Sendable {
         guard bytes <= budget else { throw GitCommandRunner.Failure.outputLimitExceeded }
         budget -= bytes
         return text
+    }
+}
+
+// MARK: - Turn mode (v3)
+
+/// Client-side, per-run record of the first verified HEAD per canonical
+/// repository root. A root is recorded once and never rebased: a repeated
+/// baseline request for the same repository (or an alias of it) gets the
+/// originally captured value back. A fresh run starts with a fresh store,
+/// so the next turn always reads a new HEAD.
+final class GitTurnBaselineStore: @unchecked Sendable {
+    static let maxRoots = 8
+    private let lock = NSLock()
+    private var entries: [String: GitTurnBaseline] = [:]
+    private var order: [String] = []
+
+    /// Returns the recorded baseline for `canonicalRoot`, recording
+    /// `make()` first if none exists yet. Nil once the store is full.
+    func recordOnce(canonicalRoot: String, _ make: () throws -> GitTurnBaseline) rethrows -> GitTurnBaseline? {
+        try lock.withLock {
+            if let existing = entries[canonicalRoot] { return existing }
+            guard entries.count < Self.maxRoots else { return nil }
+            let baseline = try make()
+            entries[canonicalRoot] = baseline
+            order.append(canonicalRoot)
+            return baseline
+        }
+    }
+
+    func baseline(forCanonicalRoot root: String) -> GitTurnBaseline? {
+        lock.withLock { entries[root] }
+    }
+
+    var count: Int { lock.withLock { entries.count } }
+}
+
+extension GitSnapshotCollector {
+    enum HeadState: Equatable {
+        case born(String)
+        case unborn
+    }
+
+    /// Strict HEAD read: distinguishes a genuinely unborn branch (symbolic
+    /// HEAD whose ref does not exist yet) from a corrupt/unreadable HEAD,
+    /// which throws instead of being mistaken for "empty history".
+    static func headState(root: String, runner: GitCommandRunner, deadline: Date) throws -> HeadState {
+        if let oid = try headOID(root: root, runner: runner, deadline: deadline) { return .born(oid) }
+        let symbolic = try runner.run(["symbolic-ref", "-q", "HEAD"], in: root, maxStdout: 4096, deadline: deadline)
+        guard symbolic.status == 0,
+              let ref = String(data: symbolic.stdout, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              ref.hasPrefix("refs/")
+        else { throw CollectionError.unavailable("Could not read the repository HEAD.") }
+        let exists = try runner.run(["show-ref", "--verify", "--quiet", ref], in: root, maxStdout: 4096, deadline: deadline)
+        guard exists.status != 0 else { throw CollectionError.unavailable("Could not read the repository HEAD.") }
+        return .unborn
+    }
+
+    static func oid(_ state: HeadState) -> String? {
+        if case let .born(oid) = state { return oid }
+        return nil
+    }
+
+    private func failure(_ requestID: String, _ error: Error) -> GitDiffResponsePayload {
+        switch error {
+        case let CollectionError.unavailable(reason):
+            return GitDiffResponsePayload(requestID: requestID, status: .unavailable, reason: reason)
+        case GitCommandRunner.Failure.timedOut:
+            return GitDiffResponsePayload(requestID: requestID, status: .unavailable, reason: "Git snapshot timed out.")
+        case GitCommandRunner.Failure.outputLimitExceeded:
+            return GitDiffResponsePayload(requestID: requestID, status: .unavailable, reason: "Changes exceed the snapshot size limit.")
+        default:
+            return GitDiffResponsePayload(requestID: requestID, status: .unavailable, reason: "Git snapshot failed.")
+        }
+    }
+
+    // MARK: Baseline phase
+
+    /// Reads HEAD (or unborn) for each repository behind the candidates.
+    /// Read-only: no index refresh, no object writes.
+    func collectBaseline(_ request: GitDiffRequestPayload, store: GitTurnBaselineStore?) -> GitDiffResponsePayload {
+        let requestID = request.requestID
+        guard let runner else {
+            return GitDiffResponsePayload(requestID: requestID, status: .unavailable, baselines: [], reason: "Git is not installed.")
+        }
+        guard request.candidatePaths.count <= limits.maxCandidates else {
+            return GitDiffResponsePayload(requestID: requestID, status: .unavailable, baselines: [], reason: "Too many candidate paths.")
+        }
+        let source = request.baselineSource ?? .turnStart
+        let deadline = Date().addingTimeInterval(min(limits.timeout, 4))
+        do {
+            let roots = try resolveRoots(request.candidatePaths, runner: runner, deadline: deadline)
+            guard !roots.isEmpty else {
+                return GitDiffResponsePayload(requestID: requestID, status: .notRepository, baselines: [])
+            }
+            guard roots.count <= limits.maxRepositories else {
+                return GitDiffResponsePayload(requestID: requestID, status: .unavailable, baselines: [], reason: "Too many repositories.")
+            }
+            var baselines: [GitTurnBaseline] = []
+            for root in roots {
+                let make: () throws -> GitTurnBaseline = {
+                    // Two reads bracket the capture: a HEAD moving between
+                    // them is a concurrent writer, never a valid baseline.
+                    let before = try Self.headState(root: root, runner: runner, deadline: deadline)
+                    let capturedAt = GitTurnBaseline.timestamp()
+                    let after = try Self.headState(root: root, runner: runner, deadline: deadline)
+                    guard before == after else { throw CollectionError.unavailable("HEAD moved while capturing the turn baseline.") }
+                    return GitTurnBaseline(
+                        root: Self.reportedRoot(root, candidates: request.candidatePaths),
+                        head: Self.oid(before), capturedAt: capturedAt, source: source
+                    )
+                }
+                let baseline: GitTurnBaseline?
+                if let store {
+                    baseline = try store.recordOnce(canonicalRoot: root, make)
+                } else {
+                    baseline = try make()
+                }
+                guard let baseline else {
+                    throw CollectionError.unavailable("Too many repositories in this turn.")
+                }
+                baselines.append(baseline)
+            }
+            return GitDiffResponsePayload(requestID: requestID, status: .ok, baselines: baselines)
+        } catch {
+            let failed = failure(requestID, error)
+            return GitDiffResponsePayload(requestID: requestID, status: .unavailable, baselines: [], reason: failed.reason)
+        }
+    }
+
+    // MARK: Final phase
+
+    private struct TurnTarget {
+        let canonicalRoot: String
+        let baseline: GitTurnBaseline?
+    }
+
+    /// Picks one baseline per canonical repository: a turn-start capture
+    /// beats a later before-tool one; within a source the earliest wins.
+    /// Aliases (symlinked spellings) of the same repository collapse.
+    func resolveTurnBaselines(
+        _ baselines: [GitTurnBaseline], runner: GitCommandRunner, deadline: Date
+    ) throws -> [String: GitTurnBaseline] {
+        var chosen: [String: (GitTurnBaseline, Int)] = [:]
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let plain = ISO8601DateFormatter()
+        func date(_ raw: String) -> Date { formatter.date(from: raw) ?? plain.date(from: raw) ?? .distantFuture }
+        func rank(_ b: GitTurnBaseline) -> Int { b.source == .turnStart ? 0 : 1 }
+        for (index, baseline) in baselines.prefix(limits.maxRepositories * 2).enumerated() {
+            guard baseline.isWellFormed else { throw CollectionError.unavailable("Invalid turn baseline.") }
+            guard let directory = Self.canonicalDirectory(baseline.root),
+                  let root = try Self.repositoryRoot(of: directory, runner: runner, deadline: deadline)
+            else { continue }
+            if let (existing, existingIndex) = chosen[root] {
+                let lhs = (rank(baseline), date(baseline.capturedAt), index)
+                let rhs = (rank(existing), date(existing.capturedAt), existingIndex)
+                if lhs < rhs { chosen[root] = (baseline, index) }
+            } else {
+                chosen[root] = (baseline, index)
+            }
+        }
+        return chosen.mapValues(\.0)
+    }
+
+    /// Net change from each repository's turn baseline HEAD to its current
+    /// working tree in one patch: every commit made since, plus staged,
+    /// unstaged and eligible untracked files. Uncommitted edits that already
+    /// existed at the baseline are included by design. A repository without
+    /// a baseline is reported as `working_tree` (uncommitted only) with a
+    /// notice — never guessed from history.
+    func collectTurn(_ request: GitDiffRequestPayload, store: GitTurnBaselineStore?) -> GitDiffResponsePayload {
+        let requestID = request.requestID
+        guard let runner else {
+            return GitDiffResponsePayload(requestID: requestID, status: .unavailable, reason: "Git is not installed.")
+        }
+        let baselines = request.baselines ?? []
+        guard request.candidatePaths.count <= limits.maxCandidates,
+              baselines.count <= limits.maxRepositories * 2
+        else {
+            return GitDiffResponsePayload(requestID: requestID, status: .unavailable, reason: "Too many candidate paths.")
+        }
+        let deadline = Date().addingTimeInterval(limits.timeout)
+        do {
+            let byRoot = try resolveTurnBaselines(baselines, runner: runner, deadline: deadline)
+            var roots = try resolveRoots(request.candidatePaths, runner: runner, deadline: deadline)
+            let home = URL(fileURLWithPath: homeDirectory).resolvingSymlinksInPath().path
+            for root in byRoot.keys.sorted() where !roots.contains(root) && root != "/" && root != home {
+                roots.append(root)
+            }
+            guard !roots.isEmpty else {
+                return GitDiffResponsePayload(requestID: requestID, status: .notRepository)
+            }
+            guard roots.count <= limits.maxRepositories else {
+                return GitDiffResponsePayload(requestID: requestID, status: .unavailable, reason: "Too many repositories.")
+            }
+            var budget = limits.maxPatchBytes
+            var repositories: [GitDiffRepositoryPatch] = []
+            var excluded = 0
+            var missingBaseline = 0
+            for root in roots {
+                let baseline = byRoot[root]
+                if let baseline, let local = store?.baseline(forCanonicalRoot: root), local.head != baseline.head {
+                    // The server echoed a different HEAD than this client
+                    // captured for the same repository this turn.
+                    throw CollectionError.unavailable("Turn baseline does not match the one captured on this Mac.")
+                }
+                guard let baseline else {
+                    missingBaseline += 1
+                    let capture = try captureUncommitted(root: root, runner: runner, budget: &budget, deadline: deadline)
+                    excluded += capture.excluded
+                    if !capture.patch.isEmpty {
+                        repositories.append(GitDiffRepositoryPatch(
+                            root: Self.reportedRoot(root, candidates: request.candidatePaths), patch: capture.patch
+                        ))
+                    }
+                    continue
+                }
+                let capture = try captureTurn(root: root, baseline: baseline, runner: runner, budget: &budget, deadline: deadline)
+                excluded += capture.excluded
+                if !capture.patch.isEmpty {
+                    repositories.append(GitDiffRepositoryPatch(
+                        root: baseline.root, patch: capture.patch, baseline: baseline, head: capture.head
+                    ))
+                }
+            }
+            var notices: [String] = []
+            if missingBaseline > 0 {
+                notices.append("Turn baseline unavailable for \(missingBaseline) \(missingBaseline == 1 ? "repository" : "repositories"); showing uncommitted changes only.")
+            }
+            if excluded > 0 {
+                notices.append("Excluded \(excluded) sensitive \(excluded == 1 ? "file" : "files") from the snapshot.")
+            }
+            return GitDiffResponsePayload(
+                requestID: requestID, status: .ok, repositories: repositories,
+                reason: notices.isEmpty ? nil : notices.joined(separator: " ")
+            )
+        } catch {
+            return failure(requestID, error)
+        }
+    }
+
+    private func captureTurn(
+        root: String, baseline: GitTurnBaseline, runner: GitCommandRunner, budget: inout Int, deadline: Date
+    ) throws -> (patch: String, head: String?, excluded: Int) {
+        let headBefore = try Self.headState(root: root, runner: runner, deadline: deadline)
+        let current = Self.oid(headBefore)
+        let base: String
+        if let baseHead = baseline.head {
+            guard let current else {
+                throw CollectionError.unavailable("Turn baseline is unavailable: HEAD no longer descends from it.")
+            }
+            // The baseline object must exist and be HEAD or an ancestor of it.
+            // A reset/rebase/branch switch away from it fails closed — never
+            // falls back to a newer commit.
+            let exists = try runner.run(["cat-file", "-e", baseHead + "^{commit}"], in: root, maxStdout: 1024, deadline: deadline)
+            guard exists.status == 0 else {
+                throw CollectionError.unavailable("Turn baseline commit is no longer available.")
+            }
+            if baseHead != current {
+                let ancestry = try runner.run(["merge-base", "--is-ancestor", baseHead, current], in: root, maxStdout: 1024, deadline: deadline)
+                switch ancestry.status {
+                case 0: break
+                case 1: throw CollectionError.unavailable("Turn baseline is unavailable: history was reset or diverged.")
+                default: throw CollectionError.unavailable("Could not verify the turn baseline.")
+                }
+            }
+            base = baseHead
+        } else {
+            // Unborn at baseline: everything reachable now is new this turn.
+            base = try emptyTreeOID(root: root, runner: runner, deadline: deadline)
+        }
+
+        let patch = try worktreePatch(base: base, root: root, runner: runner, budget: &budget, deadline: deadline)
+        let headAfter = try Self.headState(root: root, runner: runner, deadline: deadline)
+        guard headAfter == headBefore else {
+            throw CollectionError.unavailable("HEAD moved while capturing turn changes.")
+        }
+        return (patch.text, current, patch.excluded)
+    }
+
+    /// Uncommitted-only capture for a repository with no turn baseline.
+    private func captureUncommitted(
+        root: String, runner: GitCommandRunner, budget: inout Int, deadline: Date
+    ) throws -> (patch: String, excluded: Int) {
+        let headBefore = try Self.headState(root: root, runner: runner, deadline: deadline)
+        let base = try Self.oid(headBefore) ?? emptyTreeOID(root: root, runner: runner, deadline: deadline)
+        let patch = try worktreePatch(base: base, root: root, runner: runner, budget: &budget, deadline: deadline)
+        let headAfter = try Self.headState(root: root, runner: runner, deadline: deadline)
+        guard headAfter == headBefore else {
+            throw CollectionError.unavailable("HEAD moved while capturing changes.")
+        }
+        return (patch.text, patch.excluded)
     }
 }

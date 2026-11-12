@@ -477,9 +477,18 @@ final class ChatModel: ObservableObject {
     /// When set, the group description is prepended to each outgoing message.
     @Published var selectedGroup: AgentGroupInfo? = nil
 
-    /// Shared APIClient used for ancillary chat-page fetches (task
-    /// instruction template list + default-template mutations).
-    private let apiClient = APIClient()
+    /// Ancillary chat-page fetches (task instruction templates, default
+    /// template mutations, provider/model settings). Injected for tests.
+    private let selectionService: ChatSelectionService
+    private let authToken: @MainActor () -> String?
+    private func hasAuthToken() -> Bool { !(authToken() ?? "").isEmpty }
+    private let startTurn: ChatTurnStarter
+
+    /// Generation guards: a response is applied only if no newer fetch or
+    /// mutation of the same selection started after it was requested, so a
+    /// slow/out-of-order callback can never clobber the current selection.
+    private var taskTemplateGeneration = 0
+    private var agentModelFetchGeneration = 0
 
     /// The session metadata for the currently-active chat, if it has
     /// been hydrated into `sessions` yet. Used to drive the context
@@ -497,9 +506,45 @@ final class ChatModel: ObservableObject {
         activeSessionId == nil && messages.isEmpty && !isRunning && !isLoadingSessionHistory
     }
 
+    /// Until provider settings load, the turn is sent without a model and
+    /// the server picks its configured one, so never show the local
+    /// placeholder id as if it were the real selection.
     var activeAgentModelLabel: String {
-        activeAgentModelOptions.first(where: { $0.id == activeAgentModel })?.label
-        ?? prettyModelLabel(activeAgentModel)
+        guard hasLoadedAgentModelOptions else { return "Server default model" }
+        return activeAgentModelOptions.first(where: { $0.id == activeAgentModel })?.label
+            ?? ModelDisplayName.label(for: activeAgentModel)
+    }
+
+    var agentModelHelp: String {
+        guard hasLoadedAgentModelOptions else {
+            return "Model: the server's configured default (settings are still loading)"
+        }
+        let label = activeAgentModelLabel
+        let id = label == activeAgentModel ? "" : " (\(activeAgentModel))"
+        let lock = isRunning ? " — locked while a turn is running" : ""
+        return "Model for this chat: \(label)\(id) · \(activeAIProvider)\(lock)"
+    }
+
+    var displayedTaskInstructionHelp: String {
+        guard hasDisplayedTaskInstruction else {
+            return canChangeSessionSetup
+                ? "No task instructions will be applied. Choose one before sending."
+                : "No task instructions are locked to this session."
+        }
+        let heading = displayedTaskInstructionTitle
+        let templateID = canChangeSessionSetup ? defaultTaskTemplate?.id : activeSession?.taskInstructionId
+        let template = availableTaskTemplates.first { $0.id == templateID && $0.heading == heading }
+            ?? (canChangeSessionSetup ? defaultTaskTemplate : nil)
+        return TaskInstructionHelp.text(
+            heading: heading, instructions: template?.instructions, isLocked: !canChangeSessionSetup)
+    }
+
+    var displayedProjectHelp: String {
+        if canChangeSessionSetup {
+            return hasDisplayedProject ? "Project: \(displayedProjectName) — applies when this chat starts" : "Choose project"
+        }
+        return hasDisplayedProject
+            ? "Project: \(displayedProjectName) — locked to this session" : "No project — locked to this session"
     }
 
 
@@ -539,7 +584,10 @@ final class ChatModel: ObservableObject {
         if canChangeSessionSetup {
             return selectedGroup?.groupName ?? "Select project"
         }
-        return activeSession?.groupName ?? selectedGroup?.groupName ?? "No project"
+        // `selectedGroup` belongs to the pending new chat only; never let it
+        // leak into an existing session's label.
+        if let name = activeSession?.groupName, !name.isEmpty { return name }
+        return "No project"
     }
 
     var hasDisplayedTaskInstruction: Bool {
@@ -610,7 +658,7 @@ final class ChatModel: ObservableObject {
 
     private func performSessionSearch(query: String, generation: Int) {
         guard generation == sessionSearchGeneration,
-              let token = SubscriptionManager.shared.jwtToken, !token.isEmpty
+              let token = authToken(), !token.isEmpty
         else { return }
         var components = URLComponents(url: APIClient.baseURL
             .appendingPathComponent("api/agent/sessions/search"), resolvingAgainstBaseURL: false)
@@ -659,9 +707,17 @@ final class ChatModel: ObservableObject {
     private var sessionModels: [String: [String: String]]
     private var defaultAgentModel: String = "gpt-5.5"
 
-    init(modelDefaults: UserDefaults = .standard) {
+    init(
+        modelDefaults: UserDefaults = .standard,
+        selectionService: ChatSelectionService = APIClient(),
+        authToken: @escaping @MainActor () -> String? = { SubscriptionManager.shared.jwtToken },
+        startTurn: @escaping ChatTurnStarter = ChatTurnStarters.live
+    ) {
         self.readingStore = ChatReadingStore(defaults: modelDefaults)
         self.modelDefaults = modelDefaults
+        self.selectionService = selectionService
+        self.authToken = authToken
+        self.startTurn = startTurn
         self.sessionModels = modelDefaults.dictionary(forKey: "chatSessionModels") as? [String: [String: String]] ?? [:]
         self.inputText = readingStore.draft(for: pendingNewChatKey).text
     }
@@ -748,7 +804,7 @@ final class ChatModel: ObservableObject {
 
     /// Fetch the current user's existing sessions.
     func refreshSessions(completion: (@Sendable () -> Void)? = nil) {
-        guard let token = SubscriptionManager.shared.jwtToken, !token.isEmpty else {
+        guard let token = authToken(), !token.isEmpty else {
             completion?()
             return
         }
@@ -792,16 +848,25 @@ final class ChatModel: ObservableObject {
         lastErrorMessage = nil
         isLoadingSessionHistory = false
 
-        // Replace the pending-new-chat state with a fresh, empty one.
-        sessionModels.removeValue(forKey: pendingNewChatKey)
+        // Deliberate reset vs. resuming an unsent draft: see
+        // `SessionSelectionPolicy.newChatSetup`. A sidebar group's project is
+        // honored immediately, before the first message creates the session.
+        let setup = SessionSelectionPolicy.newChatSetup(
+            explicitGroup: group,
+            pendingGroup: selectedGroup,
+            pendingDraftText: readingStore.draft(for: pendingNewChatKey).text
+        )
+        if !setup.keepsPendingModel {
+            sessionModels.removeValue(forKey: pendingNewChatKey)
+        }
         let fresh = ChatSessionState()
         states[pendingNewChatKey] = fresh
         loadState(fresh)
+        selectedGroup = setup.group
 
-        // A chat started from a sidebar group should inherit that project
-        // immediately, before its first message creates the backend session.
-        selectedGroup = group
-        defaultTaskTemplate = nil
+        // Keep the cached default task instruction visible while it
+        // refreshes; clearing it made a quick first send lock "No
+        // instruction" even though the server applied the default.
         activeSessionTaskInstructionTitle = nil
         fetchDefaultTaskTemplate()
     }
@@ -852,7 +917,6 @@ final class ChatModel: ObservableObject {
             loadSessionHistory(sessionId: session.id)
         }
 
-        defaultTaskTemplate = nil
         activeSessionTaskInstructionTitle = session.taskInstructionHeading
         fetchDefaultTaskTemplate()
     }
@@ -860,7 +924,7 @@ final class ChatModel: ObservableObject {
     /// Fetch the compact message transcript for the given session and
     /// hydrate `messages`.
     private func loadSessionHistory(sessionId: String) {
-        guard let token = SubscriptionManager.shared.jwtToken, !token.isEmpty else {
+        guard let token = authToken(), !token.isEmpty else {
             isLoadingSessionHistory = false
             lastErrorMessage = "Sign in to load this chat history."
             return
@@ -955,7 +1019,7 @@ final class ChatModel: ObservableObject {
     /// while older messages are inserted at the front.
     func loadOlderMessages() {
         guard let sessionId = activeSessionId,
-              let token = SubscriptionManager.shared.jwtToken, !token.isEmpty
+              let token = authToken(), !token.isEmpty
         else { return }
         let state = sessionState(for: sessionId)
         guard state.hasMoreBefore, !state.isLoadingOlder, let cursor = state.oldestCursor else { return }
@@ -1055,7 +1119,7 @@ final class ChatModel: ObservableObject {
         guard block.previewText != nil,
               let contentID = block.fullContentID,
               let sessionId = activeSessionId,
-              let token = SubscriptionManager.shared.jwtToken, !token.isEmpty
+              let token = authToken(), !token.isEmpty
         else {
             completion?(block.text)
             return
@@ -1393,7 +1457,7 @@ final class ChatModel: ObservableObject {
         sessions[index] = updated
         if activeSessionId == session.id, let title { activeSessionTitle = title }
 
-        guard let token = SubscriptionManager.shared.jwtToken, !token.isEmpty else {
+        guard let token = authToken(), !token.isEmpty else {
             sessions[index] = original
             if activeSessionId == session.id { activeSessionTitle = original.title }
             return
@@ -1432,7 +1496,7 @@ final class ChatModel: ObservableObject {
         states[session.id]?.runHandles.forEach { $0.cancel() }
         runningSessionIds.remove(session.id)
 
-        guard let token = SubscriptionManager.shared.jwtToken, !token.isEmpty else { return }
+        guard let token = authToken(), !token.isEmpty else { return }
         let url = APIClient.baseURL
             .appendingPathComponent("api/agent/sessions")
             .appendingPathComponent(session.id)
@@ -1472,6 +1536,12 @@ final class ChatModel: ObservableObject {
     func sendCurrentInput() {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
+        // The backend chooses the saved default when creating the session.
+        // Do not send an optimistic label before that preference is persisted.
+        guard activeSessionId != nil || !isUpdatingDefaultTaskTemplate else {
+            lastErrorMessage = "Wait for task instructions to finish saving before sending."
+            return
+        }
 
         let currentState = sessionState(for: activeStateKey)
         lastErrorMessage = nil
@@ -1486,6 +1556,7 @@ final class ChatModel: ObservableObject {
         }
 
         // Determine (or create) the session ID for this turn.
+        let isNewSession = activeSessionId == nil
         let sessionId = activeSessionId ?? UUID().uuidString
 
         // For brand-new chats, migrate from the pending-key state to a
@@ -1552,11 +1623,7 @@ final class ChatModel: ObservableObject {
 
         sentMessageID = sessionSt.messages.last(where: { $0.role == .user })?.id
 
-        let handle = ChatSessionRunner.shared.run(
-            sessionId: sessionId,
-            userText: text,
-            groupName: selectedGroup?.groupName,
-            model: modelForCurrentTurn,
+        let handle = startTurn(turnRequest(sessionId: sessionId, text: text, isNewSession: isNewSession), ChatTurnCallbacks(
             onBlock: { [weak self] block in
                 guard let self else { return }
                 self.appendBlock(block, toSession: sessionSt, messageID: capturedAssistantMessageID)
@@ -1631,9 +1698,19 @@ final class ChatModel: ObservableObject {
                 }
                 self.fetchGroups()
             }
-        )
+        ))
 
         sessionSt.runHandles.append(handle)
+    }
+
+    /// The project/model a turn in the active chat sends. A new chat sends
+    /// the pending project choice; an existing session sends its own stored
+    /// project (or nil so the server keeps it) — never another chat's.
+    func turnRequest(sessionId: String, text: String, isNewSession: Bool) -> ChatTurnRequest {
+        let groupName = isNewSession
+            ? selectedGroup?.groupName
+            : sessions.first(where: { $0.id == sessionId })?.groupName
+        return ChatTurnRequest(sessionId: sessionId, userText: text, groupName: groupName, model: modelForCurrentTurn)
     }
 
     private func sendSteeringInput(_ text: String, to sessionSt: ChatSessionState) {
@@ -1933,23 +2010,13 @@ final class ChatModel: ObservableObject {
         }
     }
 
-    private func prettyModelLabel(_ model: String) -> String {
-        if model.isEmpty { return "Model" }
-        if model.hasPrefix("gpt-") {
-            return model.replacingOccurrences(of: "gpt-", with: "GPT ")
-        }
-        if model.hasPrefix("nvidia/") { return model }
-        if model.contains("opus") { return "Opus" }
-        if model.contains("fable") { return "Fable" }
-        if model.contains("sonnet") { return "Sonnet" }
-        return model
-    }
-
     func fetchAgentModelOptions() {
-        guard let token = SubscriptionManager.shared.jwtToken, !token.isEmpty else { return }
-        apiClient.fetchAIProviders { [weak self] result in
+        guard hasAuthToken() else { return }
+        agentModelFetchGeneration += 1
+        let generation = agentModelFetchGeneration
+        selectionService.fetchAIProviders { [weak self] result in
             Task { @MainActor in
-                guard let self else { return }
+                guard let self, generation == self.agentModelFetchGeneration else { return }
                 switch result {
                 case .success(let response):
                     let provider = response.activeProvider
@@ -1987,7 +2054,7 @@ final class ChatModel: ObservableObject {
     /// `availableGroups`. Called on `ChatView.onAppear` so the composer
     /// dropdown is ready before the user types.
     func fetchGroups() {
-        guard let token = SubscriptionManager.shared.jwtToken, !token.isEmpty else { return }
+        guard let token = authToken(), !token.isEmpty else { return }
         let url = APIClient.baseURL.appendingPathComponent("api/agent/groups")
         var request = URLRequest(url: url)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -2008,21 +2075,28 @@ final class ChatModel: ObservableObject {
     /// rendered beneath the chat input. Failures are silent — the
     /// dropdown simply shows "None" if we can't load templates.
     func fetchDefaultTaskTemplate() {
-        guard let token = SubscriptionManager.shared.jwtToken, !token.isEmpty else {
+        guard hasAuthToken() else {
+            taskTemplateGeneration += 1
             self.defaultTaskTemplate = nil
             self.availableTaskTemplates = []
             return
         }
-        apiClient.fetchTaskTemplates { [weak self] result in
+        taskTemplateGeneration += 1
+        let generation = taskTemplateGeneration
+        selectionService.fetchTaskTemplates { [weak self] result in
             Task { @MainActor in
-                guard let self else { return }
+                // Drop responses superseded by a newer fetch or by a default
+                // change made after this request was sent.
+                guard let self, generation == self.taskTemplateGeneration,
+                      !self.isUpdatingDefaultTaskTemplate else { return }
                 switch result {
                 case .success(let templates):
                     self.availableTaskTemplates = templates
                     self.defaultTaskTemplate = templates.first(where: { $0.isDefault })
                 case .failure:
-                    self.availableTaskTemplates = []
-                    self.defaultTaskTemplate = nil
+                    // Keep the cached selection: a transient refresh failure is
+                    // not evidence that the default changed.
+                    break
                 }
             }
         }
@@ -2071,6 +2145,7 @@ final class ChatModel: ObservableObject {
         }
 
         isUpdatingDefaultTaskTemplate = true
+        taskTemplateGeneration += 1
 
         let rollback: @MainActor () -> Void = { [weak self] in
             guard let self else { return }
@@ -2079,10 +2154,11 @@ final class ChatModel: ObservableObject {
         }
 
         if let id = id {
-            apiClient.setDefaultTaskTemplate(id: id) { [weak self] result in
+            selectionService.setDefaultTaskTemplate(id: id) { [weak self] result in
                 Task { @MainActor in
                     guard let self else { return }
                     self.isUpdatingDefaultTaskTemplate = false
+                    self.taskTemplateGeneration += 1
                     switch result {
                     case .success(let updated):
                         self.availableTaskTemplates = self.availableTaskTemplates.map { tpl in
@@ -2102,10 +2178,11 @@ final class ChatModel: ObservableObject {
                 }
             }
         } else {
-            apiClient.clearDefaultTaskTemplate { [weak self] result in
+            selectionService.clearDefaultTaskTemplate { [weak self] result in
                 Task { @MainActor in
                     guard let self else { return }
                     self.isUpdatingDefaultTaskTemplate = false
+                    self.taskTemplateGeneration += 1
                     switch result {
                     case .success:
                         self.availableTaskTemplates = self.availableTaskTemplates.map { tpl in

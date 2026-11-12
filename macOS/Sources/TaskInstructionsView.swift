@@ -196,6 +196,7 @@ struct TaskInstructionsView: View {
                         clearDefaultTemplate()
                     }
                     .disabled(!savedTemplates.contains(where: { $0.isDefault }))
+                    .help("Stop automatically applying a default template to Cmd+T tasks")
 
                     Button("Use for Cmd+T") {
                         setCurrentTemplateAsDefault()

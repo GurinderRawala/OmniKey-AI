@@ -82,6 +82,19 @@ export function planShellGitContext(
 }
 
 /**
+ * Directories a shell demonstrably targets before it runs (structured
+ * `working_directory`, literal leading `cd`, literal `git -C`). Discovered
+ * `pwd` output is never included: it is only known after the script ran.
+ */
+export function baselinePathsForShell(plan: ShellGitPlan, script: string): string[] {
+  const structured = acceptDirectoryCandidate(plan.workingDirectory);
+  return [...(structured ? [structured] : []), ...literalScriptDirectories(script)].slice(
+    0,
+    GIT_DIFF_MAX_CANDIDATES,
+  );
+}
+
+/**
  * Evidence AFTER the outstanding shell reply: `pwd` output lines and HEAD
  * transitions. Observations are accepted only for this exact request's
  * candidates and only when the script literally invoked `git commit`.

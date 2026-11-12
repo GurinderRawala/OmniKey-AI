@@ -127,6 +127,7 @@ struct SkillsView: View {
                 .frame(maxWidth: 460)
             Button("Check Again", action: model.refresh)
                 .buttonStyle(.bordered)
+                .help("Check whether the backend now supports skills")
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .combine)

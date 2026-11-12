@@ -32,7 +32,7 @@ final class GitShellCommandAnalyzerTests: XCTestCase {
             "git commit --amend -m x",
             "git --git-dir=/x/.git commit -m x",
             "xargs git commit -m x",
-            "cat <<EOF\nx\nEOF\ngit commit -m x",
+            "cat <<EOF\nx\ngit commit -m x",
             "git commit -m 'unterminated",
             "./commit.sh",
         ]
