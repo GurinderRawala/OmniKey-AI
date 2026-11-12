@@ -538,7 +538,8 @@ final class ChatSessionRunner {
         socket: (any ChatSessionSocket)? = nil,
         executeShell: @escaping @Sendable (String, @escaping @Sendable (Process?) -> Void) -> (output: String, status: Int32) = {
             runShellCommandWithStatus($0, processRegistrar: $1)
-        }
+        },
+        changeTracker: SessionChangeTracker? = .shared
     ) {
         var request = URLRequest(url: url)
         request.addValue("Bearer \(jwt)", forHTTPHeaderField: "Authorization")
@@ -723,6 +724,15 @@ final class ChatSessionRunner {
                             // `AgentSessionState.shared.shellProcess` slot is
                             // intentionally untouched here.
                             guard !completion.isFinished, !handle.isCancelledByUser else { return }
+                            // Session Changes: snapshot opted-in roots before the
+                            // tool runs and reconcile after it returns (success,
+                            // failure or cancellation). No-op for untracked
+                            // sessions; runs on this worker thread, never main.
+                            changeTracker?.beforeTool(sessionID: sessionID)
+                            guard !completion.isFinished, !handle.isCancelledByUser else {
+                                changeTracker?.afterTool(sessionID: sessionID)
+                                return
+                            }
                             let (output, status) = executeShell(
                                 script,
                                 { process in
@@ -734,6 +744,7 @@ final class ChatSessionRunner {
                                 }
                             )
 
+                            changeTracker?.afterTool(sessionID: sessionID)
                             completion.setShellRunning(false)
                             guard !completion.isFinished else { return }
 

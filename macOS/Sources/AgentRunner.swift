@@ -869,7 +869,11 @@ final class AgentRunner {
                     if case let .runShellScript(script) = disposition {
                         print("[AgentRunner] Detected <shell_script> block in agent response. Script length: \(script.count)")
                         DispatchQueue.global(qos: .userInitiated).async {
+                            // Session Changes capture for the legacy hotkey flow:
+                            // only sessions with opted-in roots are captured.
+                            SessionChangeTracker.shared.beforeTool(sessionID: sessionID)
                             let (output, status) = runShellCommandWithStatus(script)
+                            SessionChangeTracker.shared.afterTool(sessionID: sessionID)
 
                             // If the user cancelled while the command was running, discard
                             // the output instead of sending stale terminal results back to

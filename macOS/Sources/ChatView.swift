@@ -1740,6 +1740,8 @@ struct ChatHeaderBar: View {
 
             Spacer()
 
+            SessionChangesHeaderButton(model: model)
+
             if let session = model.activeSession {
                 ChatSessionInfoCard(
                     session: session,

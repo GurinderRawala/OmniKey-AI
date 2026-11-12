@@ -767,6 +767,8 @@ final class ChatModel: ObservableObject {
 
         // Replace the pending-new-chat state with a fresh, empty one.
         sessionModels.removeValue(forKey: pendingNewChatKey)
+        // Tracked folders chosen for an unsent chat belong to that chat only.
+        SessionChangeTracker.shared.discardPending()
         let fresh = ChatSessionState()
         states[pendingNewChatKey] = fresh
         loadState(fresh)
@@ -1391,6 +1393,7 @@ final class ChatModel: ObservableObject {
                 guard let self else { return }
                 if success {
                     self.readingStore.removeSession(session.id)
+                    SessionChangeTracker.shared.deleteAfterChatRemoval(sessionID: session.id)
                     self.states.removeValue(forKey: session.id)
                     self.sessionModels.removeValue(forKey: session.id)
                     self.persistSessionModels()
@@ -1442,6 +1445,8 @@ final class ChatModel: ObservableObject {
             states[sessionId] = sessionSt
             states.removeValue(forKey: pendingNewChatKey)
             migratePendingSessionModel(to: sessionId)
+            // Queued before the turn starts, so the first tool capture sees it.
+            SessionChangeTracker.shared.migratePending(to: sessionId)
         } else {
             sessionSt = currentState
         }
@@ -1497,6 +1502,7 @@ final class ChatModel: ObservableObject {
 
         sentMessageID = sessionSt.messages.last(where: { $0.role == .user })?.id
 
+        let changesTurnID = SessionChangeTracker.shared.beginTurn(sessionID: sessionId)
         let handle = ChatSessionRunner.shared.run(
             sessionId: sessionId,
             userText: text,
@@ -1520,6 +1526,7 @@ final class ChatModel: ObservableObject {
                     in: sessionSt,
                     reason: "The task finished before this update was applied. Send it again as a follow-up."
                 )
+                SessionChangeTracker.shared.reconcileEndOfTurn(sessionID: sessionId, turnID: changesTurnID)
                 sessionSt.runCount = max(0, sessionSt.runCount - 1)
                 if sessionSt.runCount == 0 {
                     sessionSt.runHandles = []
@@ -1555,6 +1562,7 @@ final class ChatModel: ObservableObject {
                     in: sessionSt,
                     reason: "The task ended before this update was applied."
                 )
+                SessionChangeTracker.shared.reconcileEndOfTurn(sessionID: sessionId, turnID: changesTurnID)
                 sessionSt.runCount = max(0, sessionSt.runCount - 1)
                 if sessionSt.runCount == 0 {
                     sessionSt.runHandles = []
@@ -1830,8 +1838,22 @@ final class ChatModel: ObservableObject {
         s?.streamingAssistantMessageID = nil
         s?.assistantRedirects.removeAll()
         s?.steeringRedirectRecords.removeAll()
-        if let id = activeSessionId { runningSessionIds.remove(id) }
+        if let id = activeSessionId {
+            runningSessionIds.remove(id)
+            SessionChangeTracker.shared.reconcileEndOfTurn(sessionID: id)
+        }
         isRunning = false
+    }
+
+    /// Key used by the Changes sheet: the real session ID, or the pending
+    /// key for an unsent chat (migrated on first send).
+    var changesSessionKey: String { activeSessionId ?? SessionChangeTracker.pendingSessionKey }
+
+    /// True once the active session has at least one turn, so tracking
+    /// enabled now is labelled "tracking start" rather than "session start".
+    var activeSessionHasTurns: Bool {
+        guard activeSessionId != nil else { return false }
+        return messages.contains { $0.role == .user } || (activeSession?.turns ?? 0) > 0
     }
 
     // MARK: - Agent model selection

@@ -19,6 +19,9 @@ let package = Package(
         // Native WYSIWYG-style Markdown editing for the chat composer,
         // including rendered GFM tables and fenced code blocks.
         .package(path: "Vendor/MarkdownEngine"),
+        // Read-only, selectable diff text for the session Changes sheet
+        // (MIT). Pinned exactly so its transitive graph stays reviewable.
+        .package(url: "https://github.com/CodeEditApp/CodeEditTextView", exact: "0.9.1"),
     ],
     targets: [
         .executableTarget(
@@ -28,6 +31,7 @@ let package = Package(
                 .product(name: "Textual", package: "textual"),
                 .product(name: "MarkdownEngine", package: "MarkdownEngine"),
                 .product(name: "MarkdownEngineCodeBlocks", package: "MarkdownEngine"),
+                .product(name: "CodeEditTextView", package: "CodeEditTextView"),
             ],
             path: "Sources",
             linkerSettings: [
