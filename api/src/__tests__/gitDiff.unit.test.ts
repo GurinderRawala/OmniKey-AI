@@ -490,3 +490,11 @@ describe('unhydrated split scroll containment', () => {
     }
   });
 });
+
+describe('commit detector complexity', () => {
+  it('rejects non-commit quoted option chains without exponential backtracking', () => {
+    const start = performance.now();
+    expect(scriptInvokesGitCommit('git ' + '-C "a" '.repeat(100) + 'status')).toBe(false);
+    expect(performance.now() - start).toBeLessThan(500);
+  });
+});

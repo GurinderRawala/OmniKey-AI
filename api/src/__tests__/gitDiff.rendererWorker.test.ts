@@ -124,8 +124,12 @@ describe('real SSR in the worker', () => {
       ticks += 1;
     }, 5);
     const started = Date.now();
-    const html = await renderSessionDiffHtml('sdiff_large', payloadOf(patch), 'dark', 120_000);
-    clearInterval(interval);
+    let html: string;
+    try {
+      html = await renderSessionDiffHtml('sdiff_large', payloadOf(patch), 'dark', 120_000);
+    } finally {
+      clearInterval(interval);
+    }
     const elapsed = Date.now() - started;
     expect(html).toContain('<template shadowrootmode="open">');
     expect(Buffer.byteLength(html, 'utf8')).toBeLessThanOrEqual(SSR_MAX_HTML_BYTES);

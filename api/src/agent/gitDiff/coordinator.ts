@@ -206,6 +206,8 @@ function parseCandidates(json: string | null | undefined): string[] {
 export async function previousRunProvenance(
   run: GitRunState,
 ): Promise<{ commits: GitCommitObservation[]; candidates: string[] }> {
+  if (allProvenanceUncertain || uncertainProvenance.has(provenanceKey(run)))
+    return { commits: [], candidates: [] };
   const row = await AgentSessionGitRun.findOne({
     where: {
       sessionId: run.sessionId,
@@ -227,54 +229,81 @@ export async function previousRunProvenance(
 const MAX_SAVED_RUNS_PER_SESSION = 10;
 
 /** Persist this run's observed provenance (also when empty). Idempotent per run. */
-export async function persistGitRunProvenance(run: GitRunState, log: Logger): Promise<void> {
+const uncertainProvenance = new Set<string>();
+let allProvenanceUncertain = false;
+const provenanceKey = (run: GitRunState) => `${run.subscriptionId}:${run.sessionId}`;
+
+export async function persistGitRunProvenance(
+  run: GitRunState,
+  log: Logger,
+  timeoutMs = 2000,
+): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let expired = false;
   try {
-    // An ownership-refused/deleted session must not leave provenance rows.
-    const owner = await AgentSession.findOne({
-      where: { id: run.sessionId, subscriptionId: run.subscriptionId },
-      attributes: ['id'],
-    });
-    if (!owner) return;
-    const commitsJson = JSON.stringify(run.observations.slice(-GIT_MAX_COMMIT_OBSERVATIONS));
-    const candidatesJson = JSON.stringify(run.candidates.list(GIT_DIFF_MAX_CANDIDATES));
-    const existing = await AgentSessionGitRun.findOne({
-      where: { id: run.runId, sessionId: run.sessionId, subscriptionId: run.subscriptionId },
-      attributes: ['id'],
-    });
-    if (existing) {
-      await AgentSessionGitRun.update(
-        { commitsJson, candidatesJson },
-        { where: { id: run.runId, subscriptionId: run.subscriptionId } },
-      );
-    } else {
-      await AgentSessionGitRun.create({
-        id: run.runId,
-        sessionId: run.sessionId,
-        subscriptionId: run.subscriptionId,
-        commitsJson,
-        candidatesJson,
-      });
-      const stale = await AgentSessionGitRun.findAll({
-        where: { sessionId: run.sessionId, subscriptionId: run.subscriptionId },
-        order: [
-          ['createdAt', 'DESC'],
-          ['id', 'DESC'],
-        ],
-        offset: MAX_SAVED_RUNS_PER_SESSION,
-        attributes: ['id'],
-      });
-      if (stale.length) {
-        await AgentSessionGitRun.destroy({
-          where: { id: stale.map((r) => r.id), subscriptionId: run.subscriptionId },
-        });
-      }
-    }
+    await Promise.race([
+      writeGitRunProvenance(run, () => expired),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          expired = true;
+          reject(new Error('ProvenanceDeadline'));
+        }, timeoutMs);
+      }),
+    ]);
   } catch (err) {
-    // A deleted session (FK) or DB failure only loses provenance, never the final.
+    if (uncertainProvenance.size < 1024) uncertainProvenance.add(provenanceKey(run));
+    else allProvenanceUncertain = true;
     log.warn('Failed to persist git run provenance', {
       sessionId: run.sessionId,
       error: err instanceof Error ? err.name : 'error',
     });
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function writeGitRunProvenance(run: GitRunState, expired: () => boolean): Promise<void> {
+  // An ownership-refused/deleted session must not leave provenance rows.
+  const owner = await AgentSession.findOne({
+    where: { id: run.sessionId, subscriptionId: run.subscriptionId },
+    attributes: ['id'],
+  });
+  if (!owner || expired()) return;
+  const commitsJson = JSON.stringify(run.observations.slice(-GIT_MAX_COMMIT_OBSERVATIONS));
+  const candidatesJson = JSON.stringify(run.candidates.list(GIT_DIFF_MAX_CANDIDATES));
+  const existing = await AgentSessionGitRun.findOne({
+    where: { id: run.runId, sessionId: run.sessionId, subscriptionId: run.subscriptionId },
+    attributes: ['id'],
+  });
+  if (expired()) return;
+  if (existing) {
+    await AgentSessionGitRun.update(
+      { commitsJson, candidatesJson },
+      { where: { id: run.runId, subscriptionId: run.subscriptionId } },
+    );
+  } else {
+    await AgentSessionGitRun.create({
+      id: run.runId,
+      sessionId: run.sessionId,
+      subscriptionId: run.subscriptionId,
+      commitsJson,
+      candidatesJson,
+    });
+    if (expired()) return;
+    const stale = await AgentSessionGitRun.findAll({
+      where: { sessionId: run.sessionId, subscriptionId: run.subscriptionId },
+      order: [
+        ['createdAt', 'DESC'],
+        ['id', 'DESC'],
+      ],
+      offset: MAX_SAVED_RUNS_PER_SESSION,
+      attributes: ['id'],
+    });
+    if (!expired() && stale.length) {
+      await AgentSessionGitRun.destroy({
+        where: { id: stale.map((r) => r.id), subscriptionId: run.subscriptionId },
+      });
+    }
   }
 }
 
@@ -386,7 +415,8 @@ export async function captureSessionDiffBeforeFinal(
     }));
     run.candidates.addAll(previous.candidates, 'previous_run');
     const eligible = eligibleCommitsFor(run.observations, previous.commits);
-    for (const commit of eligible) run.candidates.add(commit.root, 'command');
+    for (const commit of previous.commits) run.candidates.add(commit.root, 'previous_run');
+    for (const commit of run.observations) run.candidates.add(commit.root, 'command');
     const candidatePaths = run.candidates.list(GIT_DIFF_MAX_CANDIDATES);
     if (!candidatePaths.length) return undefined;
 

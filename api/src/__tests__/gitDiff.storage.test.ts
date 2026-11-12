@@ -385,6 +385,39 @@ describe('commit provenance', () => {
     expect(summary?.commit).toBeUndefined();
   });
 
+  it('does not promote previous-run roots above a fresh user candidate', async () => {
+    await newSession('s-candidate-priority');
+    const prior = runWithClient('s-candidate-priority', okWorkingTree).run;
+    for (let i = 0; i < 8; i++) {
+      recordCommitObservations(prior, [
+        { root: `/Users/dev/old${i}`, before: OID_1, after: OID_2 },
+      ]);
+    }
+    await persistGitRunProvenance(prior, log);
+    const current = runWithClient('s-candidate-priority', () => ({
+      status: 'ok',
+      repositories: [],
+    }));
+    current.run.candidates.add('/Users/dev/current', 'user_input');
+    await captureSessionDiffBeforeFinal(current.run, [], undefined, log);
+    expect(
+      current.frames.find((f) => f.git_diff_request)?.git_diff_request?.candidate_paths[0],
+    ).toBe('/Users/dev/current');
+  });
+
+  it('bounds a stalled provenance write and suppresses stale fallback', async () => {
+    await newSession('s-stalled-write');
+    const { run } = runWithClient('s-stalled-write', okWorkingTree);
+    const stalled = vi
+      .spyOn(AgentSession, 'findOne')
+      .mockImplementationOnce(() => new Promise(() => {}) as any);
+    const start = Date.now();
+    await persistGitRunProvenance(run, log, 20);
+    expect(Date.now() - start).toBeLessThan(500);
+    stalled.mockRestore();
+    expect((await previousRunProvenance(run)).commits).toEqual([]);
+  });
+
   it('cascades snapshots and provenance with the owning session', async () => {
     await newSession('s-cascade');
     const { run } = runWithClient('s-cascade', okWorkingTree);

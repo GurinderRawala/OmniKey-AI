@@ -231,7 +231,8 @@ export async function renderSnapshotDocument(
         ? `${escapeHtml(repo.root)} · commit <code class="oid">${escapeHtml(repo.commit.slice(0, 12))}</code>`
         : `${escapeHtml(repo.root)} · working tree vs HEAD`;
     // Always keep room to close the section we open.
-    if (!tryPush(`<section class="repo"><h2>${title}</h2>`)) {
+    const sectionOpen = `<section class="repo"><h2>${title}</h2>`;
+    if (bytes(sectionOpen) + bytes(sectionClose) > remaining || !tryPush(sectionOpen)) {
       skippedFiles += sections.length;
       continue;
     }

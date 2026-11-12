@@ -2111,12 +2111,23 @@ struct ContextWindowIndicator: View {
 /// context-window indicator, a keyboard-hint, and a circular send /
 /// stop button. The whole surface uses a real fill + soft drop shadow
 /// so it reads as a self-contained card lifted above the transcript.
+private struct CompactComposerKey: EnvironmentKey { static let defaultValue = false }
+private extension EnvironmentValues {
+    var compactComposer: Bool {
+        get { self[CompactComposerKey.self] }
+        set { self[CompactComposerKey.self] = newValue }
+    }
+}
+enum ComposerToolbarLayout {
+    static func isCompact(width: CGFloat) -> Bool { width < 660 }
+}
 private struct LandingInputComposer: View {
     @ObservedObject var model: ChatModel
     @Environment(\.colorScheme) private var colorScheme
     @State private var isFocused = false
     @State private var inputHeight: CGFloat = ChatComposerMetrics.minimumHeight
     @State private var isSendHovered = false
+    @State private var composerWidth: CGFloat = 0
 
     private var inputIsEmpty: Bool {
         model.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -2372,6 +2383,11 @@ private struct LandingInputComposer: View {
             .animation(.easeInOut(duration: 0.12), value: isFocused)
             .animation(.easeInOut(duration: 0.12), value: inputIsEmpty)
         }
+        .environment(\.compactComposer, ComposerToolbarLayout.isCompact(width: composerWidth))
+        .background(GeometryReader { geometry in
+            Color.clear.onAppear { composerWidth = geometry.size.width }
+                .onChange(of: geometry.size.width) { _, width in composerWidth = width }
+        })
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(surfaceFill)
@@ -2537,6 +2553,7 @@ private struct AgentModelMenu: View {
 /// visually consistent and gives the composer a tighter, more
 /// production-ready look.
 private struct ComposerPillLabel: View {
+    @Environment(\.compactComposer) private var compact
     let icon: String
     let title: String
     let isActive: Bool
@@ -2556,18 +2573,21 @@ private struct ComposerPillLabel: View {
         HStack(spacing: 5) {
             Image(systemName: icon)
                 .font(.system(size: 10, weight: .semibold))
+            if !compact {
             Text(title)
                 .font(.system(size: 11.5, weight: .medium))
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .frame(maxWidth: maxTitleWidth, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
+            }
             if showsChevron {
                 Image(systemName: "chevron.down")
                     .font(.system(size: 8, weight: .semibold))
                     .opacity(0.65)
             }
         }
+        .accessibilityLabel(title)
         .foregroundColor(
             isActive
                 ? activeColor

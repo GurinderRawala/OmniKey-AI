@@ -57,8 +57,7 @@ private final class SessionDiffNoRedirect: NSObject, URLSessionTaskDelegate, @un
 /// Fetches the server-rendered HTML with the bearer token in a header only.
 /// The web view never sees the API URL or the token.
 struct SessionDiffHTTPFetcher: SessionDiffFetching {
-    var baseURL: @Sendable () -> URL = { APIClient.baseURL }
-    var token: @Sendable () -> String? = { SubscriptionManager.shared.jwtToken }
+    var authSnapshot: @Sendable () -> SubscriptionAuthSnapshot = { SubscriptionManager.shared.authSnapshot() }
     var session: URLSession = .shared
 
     static func requestURL(baseURL: URL, sessionId: String, diffId: String, theme: SessionDiffTheme, layout: SessionDiffLayout = .unified) -> URL? {
@@ -76,10 +75,11 @@ struct SessionDiffHTTPFetcher: SessionDiffFetching {
     }
 
     func fetch(sessionId: String, diffId: String, theme: SessionDiffTheme, layout: SessionDiffLayout) async throws -> SessionDiffHTMLResponse {
-        guard let token = token(), !token.isEmpty else { throw SessionDiffFetchError.notSignedIn }
+        let auth = authSnapshot()
+        guard let token = auth.token, !token.isEmpty else { throw SessionDiffFetchError.notSignedIn }
         guard SavedSessionDiff(id: diffId, fileCount: 0, repositoryCount: 1, createdAt: "").hasSafeID,
               !sessionId.isEmpty, !sessionId.contains("/"),
-              let url = Self.requestURL(baseURL: baseURL(), sessionId: sessionId, diffId: diffId, theme: theme, layout: layout)
+              let url = Self.requestURL(baseURL: auth.baseURL, sessionId: sessionId, diffId: diffId, theme: theme, layout: layout)
         else { throw SessionDiffFetchError.invalidIdentifier }
         var request = URLRequest(url: url)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")

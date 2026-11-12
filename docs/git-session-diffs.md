@@ -188,9 +188,9 @@ owning connection. It drops every observation unless all of these hold:
 Checkouts, resets, cherry-picks, pulls, scripted or aliased commits, commits made outside
 a shell, and author/time/message matching are **never** attributed.
 
-Each outer run stores one `agent_session_git_runs` row, even when the row is empty. Eligible
+Each outer run attempts to store one `agent_session_git_runs` row, even when the row is empty. Eligible
 commits for a capture are the current run's observations plus those of the **immediately
-previous** saved run only, so an older commit can never come back. This records observed
+previous** saved run only. Failed writes can leave a missing barrier after restart (see the failure policy below). This records observed
 agent execution. It is not proof of authorship if something else writes to the repository
 at the same time.
 
@@ -277,7 +277,7 @@ commits and amended histories fail closed rather than guessing authorship.
 
 ## Local verification and provenance boundaries
 
-No app/daemon or E2E run is needed for validation. Local tests create temporary
+Automated validation used local checks, not live app/daemon or E2E testing. Live UI acceptance remains with the user. Local tests create temporary
 Git repositories and isolated in-memory SQLite databases. The SSR tests exercise
 real Pierre rendering, main-thread timer responsiveness, queue limits and worker
 termination, plus compiled API/CLI module layouts.
@@ -307,3 +307,8 @@ JavaScript, a scoped shadow-root CSS override restores bounded scroll containers
 in its dehydrated split markup. Long lines scroll within their old/new pane;
 line-number gutters remain sticky, and the page wrapper cannot pan into blank
 space. Hunk/buffer row metadata is preserved. No client-side scripts are enabled.
+
+Provenance writes are best-effort with a two-second deadline. A failed/timed-out
+write disables previous-run commit fallback for that session for the rest of the
+API process lifetime; current-run observations still work. After restart only
+persisted barriers are available; an unpersisted run cannot be reconstructed.

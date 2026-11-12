@@ -225,7 +225,7 @@ struct GitProvenanceTracker: Sendable {
     static let maxRepositories = 8
 
     struct Baseline: Sendable {
-        fileprivate let entries: [(root: String, head: String?)]
+        fileprivate let entries: [(root: String, head: String?, reportedRoot: String)]
         var isEmpty: Bool { entries.isEmpty }
     }
 
@@ -252,7 +252,7 @@ struct GitProvenanceTracker: Sendable {
         guard analysis.canAttribute else { return Baseline(entries: []) }
         let deadline = Date().addingTimeInterval(timeout)
         let home = URL(fileURLWithPath: homeDirectory).resolvingSymlinksInPath().path
-        var entries: [(String, String?)] = []
+        var entries: [(String, String?, String)] = []
         var seen = Set<String>()
         // Only literal commit target directories can yield attribution.
         // Structured context paths are never used to guess where an
@@ -267,7 +267,7 @@ struct GitProvenanceTracker: Sendable {
             else { continue }
             do {
                 let head = try GitSnapshotCollector.headOID(root: root, runner: runner, deadline: deadline)
-                entries.append((root, head))
+                entries.append((root, head, GitSnapshotCollector.reportedRoot(root, candidates: [directory])))
             } catch {
                 continue
             }
@@ -280,7 +280,7 @@ struct GitProvenanceTracker: Sendable {
         guard let runner, !baseline.isEmpty else { return [] }
         let deadline = Date().addingTimeInterval(timeout)
         var result: [GitCommitObservation] = []
-        for (root, before) in baseline.entries {
+        for (root, before, reportedRoot) in baseline.entries {
             guard let after = try? GitSnapshotCollector.headOID(root: root, runner: runner, deadline: deadline),
                   after != before,
                   reflogShowsCommit(root: root, oid: after, runner: runner, deadline: deadline)
@@ -290,7 +290,7 @@ struct GitProvenanceTracker: Sendable {
                     ["merge-base", "--is-ancestor", before, after], in: root, maxStdout: 1024, deadline: deadline
                 ), ancestry.status == 0 else { continue }
             }
-            result.append(GitCommitObservation(root: root, before: before, after: after))
+            result.append(GitCommitObservation(root: reportedRoot, before: before, after: after))
         }
         return result
     }

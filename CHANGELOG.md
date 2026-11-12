@@ -8,6 +8,8 @@
 - Clean repositories can show the latest commit when it matches observed agent execution in the current or immediately previous session run; unrelated user commits are not inferred from author or time.
 
 ### Fixed
+- Backend-bound authentication snapshots prevent credential/URL races; commit detection avoids exponential regex backtracking and provenance persistence has a bounded deadline.
+- Compact chat composer menus remain usable beside the diff inspector; symlinked project roots retain verifiable identities across client/server capture.
 - Side-by-side horizontal scrolling stays inside the old/new code panes instead of moving the page into blank space. Diff banners match the message column width.
 - Git capture honors validated execution directories, includes staged/unstaged and eligible untracked changes, and preserves each final answer's immutable snapshot identity.
 - Rendering runs in bounded, terminable workers so syntax highlighting cannot stall the API event loop. Authenticated snapshots are owner/session scoped, script-free, and isolated in the macOS WebView.

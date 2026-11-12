@@ -213,8 +213,9 @@ export function validateGitDiffResponse(
 export function scriptInvokesGitCommit(script: string): boolean {
   // `git [-C <path>]... [-c k=v]... commit` at a command position. Scripted
   // or indirect commits (aliases, functions, eval, sub-scripts) never match.
+  if (script.length > 128 * 1024) return false;
   const commandStart = String.raw`(?:^|[;&|(\n]|&&|\|\||\bthen\b|\bdo\b)\s*`;
-  const globalOpt = String.raw`(?:\s+(?:-C\s+(?:"[^"\n]*"|'[^'\n]*'|[^\s;&|]+)|-c\s+[^\s;&|]+|--no-pager))*`;
+  const globalOpt = String.raw`(?:\s+(?:-C\s+(?:"[^"\n]*"|'[^'\n]*'|[^\s;&|"']+)|-c\s+[^\s;&|"']+|--no-pager))*`;
   const re = new RegExp(`${commandStart}git${globalOpt}\\s+commit(?=\\s|$|;|&|\\|)`, 'm');
   return re.test(script);
 }

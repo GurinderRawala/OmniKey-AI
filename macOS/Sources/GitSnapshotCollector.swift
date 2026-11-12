@@ -258,7 +258,7 @@ struct GitSnapshotCollector: Sendable {
             }
             let excluded = captures.reduce(0) { $0 + $1.excludedCount }
             let repositories = captures.filter { !$0.patch.isEmpty }.map {
-                GitDiffRepositoryPatch(root: $0.root, patch: $0.patch, scope: $0.scope, commit: $0.commit)
+                GitDiffRepositoryPatch(root: Self.reportedRoot($0.root, candidates: request.candidatePaths), patch: $0.patch, scope: $0.scope, commit: $0.commit)
             }
             let reason = excluded > 0
                 ? "Excluded \(excluded) sensitive \(excluded == 1 ? "file" : "files") from the snapshot."
@@ -276,6 +276,24 @@ struct GitSnapshotCollector: Sendable {
     }
 
     // MARK: Roots
+
+    /// Wire paths keep the candidate's symlink spelling; canonical roots are
+    /// used only for local Git calls and deduplication.
+    static func reportedRoot(_ root: String, candidates: [String]) -> String {
+        for raw in candidates {
+            guard let canonical = canonicalDirectory(raw),
+                  canonical == root || canonical.hasPrefix(root + "/") else { continue }
+            var original = URL(fileURLWithPath: raw).standardizedFileURL.path
+            var isDirectory: ObjCBool = false
+            if FileManager.default.fileExists(atPath: original, isDirectory: &isDirectory), !isDirectory.boolValue {
+                original = (original as NSString).deletingLastPathComponent
+            }
+            let levels = canonical.dropFirst(root.count).split(separator: "/").count
+            for _ in 0..<levels { original = (original as NSString).deletingLastPathComponent }
+            return original
+        }
+        return root
+    }
 
     static func eligibleMap(_ commits: [GitEligibleCommit]) -> [String: Set<String>] {
         var map: [String: Set<String>] = [:]

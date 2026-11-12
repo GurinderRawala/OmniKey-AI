@@ -240,6 +240,20 @@ final class GitSnapshotCollectorTests: XCTestCase {
         XCTAssertEqual(response.repositories.map(\.root), [repo.root])
     }
 
+    func testSymlinkOnlyCandidateKeepsServerRecognizableRoot() throws {
+        let repo = try GitTestRepo()
+        try repo.write("src/a.txt", "before\n")
+        _ = try repo.commitAll()
+        try repo.write("src/a.txt", "after\n")
+        let link = URL(fileURLWithPath: repo.root).deletingLastPathComponent().appendingPathComponent("link-\(UUID().uuidString)")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: URL(fileURLWithPath: repo.root))
+        defer { try? FileManager.default.removeItem(at: link) }
+        let response = collect([link.appendingPathComponent("src").path])
+        XCTAssertEqual(response.status, .ok)
+        XCTAssertEqual(response.repositories.first?.root, link.path)
+        XCTAssertTrue(response.repositories.first?.patch.contains("after") == true)
+    }
+
     func testWorktreeIsItsOwnRoot() throws {
         let repo = try GitTestRepo()
         try repo.write("a.txt", "a\n")
