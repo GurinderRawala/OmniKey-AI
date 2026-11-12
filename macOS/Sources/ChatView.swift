@@ -2112,18 +2112,15 @@ struct ContextWindowIndicator: View {
 /// stop button. The whole surface uses a real fill + soft drop shadow
 /// so it reads as a self-contained card lifted above the transcript.
 enum ComposerToolbarLayout {
-    /// Below this width the selection pills move to their own row above the
-    /// model menu and Send/Stop, instead of collapsing to bare icons.
+    /// Compact widths omit optional hints, never move a selection to another row.
     static func isCompact(width: CGFloat) -> Bool { width < 660 }
-
-    /// Pill chrome around the title: horizontal padding, icon, chevron, gaps.
     static let pillChrome: CGFloat = 52
     static let sendButtonWidth: CGFloat = 32
     static let contextIndicatorWidth: CGFloat = 34
     static let keyboardHintWidth: CGFloat = 76
     static let spacing: CGFloat = 8
     static let horizontalPadding: CGFloat = 20
-    static let minimumTitleWidth: CGFloat = 56
+    static let minimumTitleWidth: CGFloat = 24
 
     struct TitleWidths: Equatable {
         let task: CGFloat
@@ -2131,30 +2128,17 @@ enum ComposerToolbarLayout {
         let model: CGFloat
     }
 
-    /// Caps for each pill title so the row(s) never exceed `width` and
-    /// Send/Stop always stays on screen. Long titles truncate (the full
-    /// name is in the tooltip and accessibility value).
     static func titleWidths(width: CGFloat) -> TitleWidths {
         let available = max(0, width - horizontalPadding)
-        func clamp(_ value: CGFloat, max upper: CGFloat) -> CGFloat {
-            min(upper, max(minimumTitleWidth, value.rounded(.down)))
-        }
-        if isCompact(width: width) {
-            // Row 1: task · project.  Row 2: model … context · send.
-            let pair = (available - spacing - 2 * pillChrome) / 2
-            let model = available - pillChrome - 2 * spacing - contextIndicatorWidth - sendButtonWidth
-            return TitleWidths(task: clamp(pair, max: 240), project: clamp(pair, max: 240),
-                               model: clamp(model, max: 260))
-        }
-        let fixed = 5 * spacing + sendButtonWidth + contextIndicatorWidth + keyboardHintWidth + 3 * pillChrome
-        let each = clamp((available - fixed) / 3, max: 200)
+        let optional = isCompact(width: width) ? 0 : contextIndicatorWidth + keyboardHintWidth + 2 * spacing
+        let fixed = 4 * spacing + sendButtonWidth + 3 * pillChrome + optional
+        let each = min(200, max(minimumTitleWidth, ((available - fixed) / 3).rounded(.down)))
         return TitleWidths(task: each, project: each, model: each)
     }
 }
 
-/// Task-instruction, project and model selection plus Send/Stop. Lives
-/// beside (not around) the text editor so switching between the one-row
-/// and two-row layouts never recreates the editor or loses focus/draft.
+/// All three selection menus share one row at every supported width. Full
+/// values remain in tooltips/accessibility while visible titles truncate.
 struct ComposerSelectionToolbar<SendButton: View>: View {
     @ObservedObject var model: ChatModel
     let width: CGFloat
@@ -2164,30 +2148,16 @@ struct ComposerSelectionToolbar<SendButton: View>: View {
 
     var body: some View {
         let widths = ComposerToolbarLayout.titleWidths(width: width)
-        if ComposerToolbarLayout.isCompact(width: width) {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 8) {
-                    taskPill(maxTitleWidth: widths.task)
-                    projectPill(maxTitleWidth: widths.project)
-                    Spacer(minLength: 0)
-                }
-                HStack(spacing: 8) {
-                    AgentModelMenu(model: model, maxTitleWidth: widths.model)
-                    Spacer(minLength: 0)
-                    contextIndicator
-                    sendButton()
-                }
-            }
-        } else {
-            HStack(spacing: 8) {
-                taskPill(maxTitleWidth: widths.task)
-                projectPill(maxTitleWidth: widths.project)
-                Spacer(minLength: 0)
+        HStack(spacing: ComposerToolbarLayout.spacing) {
+            taskPill(maxTitleWidth: widths.task)
+            projectPill(maxTitleWidth: widths.project)
+            AgentModelMenu(model: model, maxTitleWidth: widths.model)
+            Spacer(minLength: 0)
+            if !ComposerToolbarLayout.isCompact(width: width) {
                 contextIndicator
                 if showsKeyboardHint { keyboardHint }
-                AgentModelMenu(model: model, maxTitleWidth: widths.model)
-                sendButton()
             }
+            sendButton()
         }
     }
 
@@ -2409,7 +2379,7 @@ private struct LandingInputComposer: View {
             // not click those controls until they resized the window
             // wider. Titles are now capped per available width by
             // `ComposerToolbarLayout.titleWidths`, and narrow composers
-            // wrap the pills onto a second row instead of hiding labels.
+            // keep all three selectors on one row with readable fitted titles.
             ComposerSelectionToolbar(
                 model: model,
                 width: composerWidth,
@@ -2458,7 +2428,7 @@ private struct LandingInputComposer: View {
             .animation(.easeInOut(duration: 0.12), value: inputIsEmpty)
         }
         .background(GeometryReader { geometry in
-            Color.clear.onAppear { composerWidth = geometry.size.width }
+            Color.clear.allowsHitTesting(false).onAppear { composerWidth = geometry.size.width }
                 .onChange(of: geometry.size.width) { _, width in composerWidth = width }
         })
         .background(
@@ -2474,6 +2444,7 @@ private struct LandingInputComposer: View {
                         : NordTheme.border(colorScheme),
                     lineWidth: isFocused ? 1.4 : 1
                 )
+                .allowsHitTesting(false)
         )
         .shadow(
             color: .black.opacity(

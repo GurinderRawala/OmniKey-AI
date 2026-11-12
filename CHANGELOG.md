@@ -4,7 +4,7 @@
 
 ### Fixed
 - New chats retain the cached task instruction while refreshing; stale task/model responses no longer overwrite newer selections. Unsent drafts restore their project/model choices, and existing sessions no longer inherit another chat's project.
-- Task, project and model names stay visible in a compact two-row composer. Full names and task-instruction excerpts are available in help text, and custom model labels retain their version identifiers.
+- Task, project and model names stay visible in a compact single-row composer. Full names and task-instruction excerpts are available in help text, and custom model labels retain their version identifiers.
 - First sends wait for pending task-default changes to finish, preserving the draft rather than starting with mismatched instructions.
 - Commit detection skips heredoc data and recognizes literal commits outside supported heredocs, including Python staged-file verification. Decoy commits inside heredoc data, unsafe expansions and malformed delimiters do not grant commit eligibility.
 - Clearer hover hints on management refresh/default controls.
