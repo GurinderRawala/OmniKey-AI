@@ -2356,6 +2356,14 @@ const SCRATCH = '/private/tmp/omni-scratch';
 const SCRATCH_APPEND = `printf 'more\\n' >> ${SCRATCH}/notes.txt`;
 
 describe('task bookkeeping and Python Path variable classification', () => {
+  it('a printed TASK_DIR label is data and does not invalidate task provenance', () => {
+    const result = classifyShellWrites(TASK_BOOTSTRAP + '\nprintf \'TASK_DIR=%s\\n\' "$TASK_DIR"', {
+      cwd: ROOT,
+      status: 'succeeded',
+    });
+    expect(result?.unresolved).toBe(false);
+  });
+
   const ok = { cwd: ROOT, status: 'succeeded' as const };
   const classify = (script: string, input: Parameters<typeof classifyShellWrites>[1] = ok) =>
     classifyShellWrites(script, input)!;

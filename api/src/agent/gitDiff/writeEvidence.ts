@@ -257,11 +257,16 @@ function taskDirectoryVariables(text: string): Set<string> {
     return new Set();
   const proven = new Set<string>();
   const ids = new Set<string>();
+  // A literal printf format is data, not a variable declaration. Keep its
+  // arguments and every other command intact for the rebinding proof.
+  const countText = text
+    .replace(/\bprintf\s+('(?:[^'\n]*)'|"(?:[^"\n$`]*)")/g, 'printf FORMAT')
+    .replace(/['"\\]/g, '');
   const singlyAssigned = (name: string) => {
     // Every bare occurrence must be the one declaration. References are
     // allowed, but quoted exports, array assignments and hidden rebinding
     // all contribute another bare occurrence and therefore fail closed.
-    const referencesRemoved = dequoted.replace(
+    const referencesRemoved = countText.replace(
       new RegExp(`\\$\\{${name}\\}|\\$${name}(?!\\w)`, 'g'),
       '',
     );
