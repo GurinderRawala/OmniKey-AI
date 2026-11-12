@@ -18,6 +18,7 @@ import { compressString, decompressString } from '../../compression';
 import { AgentSessionDiff, AgentSessionGitRun } from '../../models/agentSessionDiff';
 import type { AgentMessage, AgentSendFn } from '../types';
 import { CandidateSet, projectContextDirectory } from './candidates';
+import type { ShellWriteEvidence } from './writeEvidence';
 import {
   comparablePath,
   countPatchFiles,
@@ -94,6 +95,13 @@ export interface DiffRecoveryRunState {
   attempted: boolean;
   /** Trimmed text of this run's own user input (never prior history). */
   input?: string;
+  /** Write-like shells of this run, recorded only after the client replied. */
+  writes: ShellWriteEvidence[];
+  priorNonShellTool?: boolean;
+  /** Write-like shells dropped because the per-run evidence budget was full. */
+  writesOmitted?: number;
+  /** Roots the normal capture authoritatively reported net-empty. */
+  revertedRoots: string[];
 }
 
 export function createGitRunState(input: {
@@ -125,6 +133,8 @@ export function createGitRunState(input: {
             issuedToolCalls: new Set(),
             omitted: 0,
             attempted: false,
+            writes: [],
+            revertedRoots: [],
           },
         }
       : {}),
@@ -442,6 +452,10 @@ export async function saveSessionDiff(
           displayLimit: GIT_DIFF_DISPLAY_LIMIT,
           recovered: true,
           recoveryIncomplete: !recovery.complete,
+          recoveryMethod:
+            recovery.kind === 'ai_reconstructed'
+              ? ('ai_reconstructed' as const)
+              : ('checkpoint' as const),
         }
       : {}),
   };

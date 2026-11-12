@@ -84,14 +84,22 @@ export interface GitDiffRecoveryReply {
   omitted: number;
 }
 
-/** Provenance stored on an agent-assisted recovered snapshot payload. */
+/**
+ * Provenance stored on a recovered snapshot payload. `agent_assisted` replays
+ * verified native checkpoints; `ai_reconstructed` is an unverified model
+ * reconstruction from this turn's write-like shell scripts (never complete).
+ */
 export interface SessionDiffRecoveryProvenance {
-  kind: 'agent_assisted';
+  kind: 'agent_assisted' | 'ai_reconstructed';
   turnId: string;
   evidenceIds: string[];
   complete: boolean;
   limitations: string[];
+  /** ai_reconstructed only: the write-like tool calls offered as evidence. */
+  toolCallIds?: string[];
 }
+
+export type SessionDiffRecoveryMethod = 'checkpoint' | 'ai_reconstructed';
 
 /** Outcome of the normal (automatic) capture before a final answer. */
 export type SessionDiffCaptureStatus =
@@ -139,6 +147,8 @@ export interface SessionDiffSummary {
   recovered?: boolean;
   /** v4: the recovered snapshot is known to be partial. */
   recoveryIncomplete?: boolean;
+  /** v4: how a recovered snapshot was produced. */
+  recoveryMethod?: SessionDiffRecoveryMethod;
 }
 
 export interface EligibleCommit {
@@ -597,6 +607,10 @@ export function cleanSessionDiffSummary(value: unknown): SessionDiffSummary | un
     ...(value.recovered === true ? { recovered: true } : {}),
     ...(value.recovered === true && typeof value.recoveryIncomplete === 'boolean'
       ? { recoveryIncomplete: value.recoveryIncomplete }
+      : {}),
+    ...(value.recovered === true &&
+    (value.recoveryMethod === 'checkpoint' || value.recoveryMethod === 'ai_reconstructed')
+      ? { recoveryMethod: value.recoveryMethod }
       : {}),
   };
 }

@@ -50,6 +50,35 @@ final class DiffRecoveryTests: XCTestCase {
         XCTAssertTrue(final.repositories.isEmpty)
     }
 
+    func testTmpSymlinkLiteralCreateThenAppendProducesRecovery() throws {
+        let directory = "/tmp/diff-recovery-regression-" + UUID().uuidString
+        try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: directory) }
+        let path = directory + "/note.md"
+        let store = DiffRecoveryStore()
+        let first = try XCTUnwrap(shell(store, "printf 'first\\n' > \(q(path))") {
+            try "first\n".write(toFile: path, atomically: true, encoding: .utf8)
+        })
+        let second = try XCTUnwrap(shell(store, "printf 'second\\n' >> \(q(path))", tool: "call-2") {
+            try "first\nsecond\n".write(toFile: path, atomically: true, encoding: .utf8)
+        })
+        XCTAssertEqual(first.records.first?.id, second.records.first?.id)
+        let patch = try XCTUnwrap(recover(store, ids: second.records.map(\.id)).repositories.first?.patch)
+        XCTAssertTrue(patch.contains("+first"))
+        XCTAssertTrue(patch.contains("+second"))
+        XCTAssertTrue(second.records[0].root.hasPrefix("/private/tmp/"))
+    }
+
+    func testAIReconstructionLabelsNeverClaimNativeVerification() throws {
+        let summary = SavedSessionDiff(id: "sdiff_ai", fileCount: 1, repositoryCount: 1, createdAt: "t",
+            recovered: true, recoveryIncomplete: true, recoveryMethod: "ai_reconstructed")
+        XCTAssertEqual(summary.headerTitle, "AI-reconstructed turn changes")
+        XCTAssertTrue(summary.detailText.contains("unverified"))
+        XCTAssertTrue(summary.helpText.contains("not a verified filesystem diff"))
+        let roundtrip = try JSONDecoder().decode(SavedSessionDiff.self, from: JSONEncoder().encode(summary))
+        XCTAssertEqual(roundtrip.recoveryMethod, "ai_reconstructed")
+    }
+
     func testRenameEvidenceIncludesBothPaths() throws {
         let repo = try GitTestRepo()
         try repo.write("old.txt", "original\n")

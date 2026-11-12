@@ -471,6 +471,8 @@ struct SavedSessionDiff: Codable, Equatable, Hashable, Sendable {
     /// turn capture); `recoveryIncomplete` marks an honest partial result.
     let recovered: Bool?
     let recoveryIncomplete: Bool?
+    /// AI reconstruction is not a verified native before/after checkpoint.
+    let recoveryMethod: String?
 
     init(
         id: String,
@@ -483,7 +485,8 @@ struct SavedSessionDiff: Codable, Equatable, Hashable, Sendable {
         baselineSource: GitTurnBaselineSource? = nil,
         baselineUnavailable: Bool? = nil,
         recovered: Bool? = nil,
-        recoveryIncomplete: Bool? = nil
+        recoveryIncomplete: Bool? = nil,
+        recoveryMethod: String? = nil
     ) {
         self.id = id
         self.fileCount = fileCount
@@ -496,6 +499,7 @@ struct SavedSessionDiff: Codable, Equatable, Hashable, Sendable {
         self.baselineUnavailable = baselineUnavailable
         self.recovered = recovered
         self.recoveryIncomplete = recoveryIncomplete
+        self.recoveryMethod = recoveryMethod
     }
 
     init(from decoder: Decoder) throws {
@@ -516,6 +520,8 @@ struct SavedSessionDiff: Codable, Equatable, Hashable, Sendable {
         baselineUnavailable = (try? c.decodeIfPresent(Bool.self, forKey: .baselineUnavailable)) ?? nil
         recovered = (try? c.decodeIfPresent(Bool.self, forKey: .recovered)) ?? nil
         recoveryIncomplete = (try? c.decodeIfPresent(Bool.self, forKey: .recoveryIncomplete)) ?? nil
+        let method = (try? c.decodeIfPresent(String.self, forKey: .recoveryMethod)) ?? nil
+        recoveryMethod = ["checkpoint", "ai_reconstructed"].contains(method ?? "") ? method : nil
     }
 
     /// Valid IDs are opaque, short and URL-path safe; anything else is
@@ -534,13 +540,16 @@ struct SavedSessionDiff: Codable, Equatable, Hashable, Sendable {
     var isTurnSnapshot: Bool { scope == .turn || displayLimit != nil || baselineUnavailable == true }
 
     var isRecovered: Bool { recovered == true }
+    var isAIReconstructed: Bool { isRecovered && recoveryMethod == "ai_reconstructed" }
 
     var recoveryWarning: String? {
+        if isAIReconstructed { return "AI reconstruction · unverified and potentially incomplete" }
         guard isRecovered, recoveryIncomplete == true else { return nil }
         return "partial: some changes could not be recovered"
     }
 
     var buttonTitle: String {
+        if isAIReconstructed { return "View AI-reconstructed changes" }
         if isRecovered { return "View recovered turn changes" }
         if isTurnSnapshot { return "View turn changes" }
         switch scope {
@@ -551,6 +560,7 @@ struct SavedSessionDiff: Codable, Equatable, Hashable, Sendable {
     }
 
     var headerTitle: String {
+        if isAIReconstructed { return "AI-reconstructed turn changes" }
         if isRecovered { return "Recovered turn changes" }
         if isTurnSnapshot { return "Turn changes" }
         switch scope {
@@ -572,7 +582,7 @@ struct SavedSessionDiff: Codable, Equatable, Hashable, Sendable {
         let repos = repositoryCount > 1 ? " in \(repositoryCount) repositories" : ""
         let shown = displayLimitNotice.map { " · \($0)" } ?? ""
         if isRecovered {
-            var text = "Recovered from this turn's tool evidence · \(files)\(repos)\(shown)"
+            var text = "\(isAIReconstructed ? "AI reconstruction of this turn" : "Recovered from this turn's tool evidence") · \(files)\(repos)\(shown)"
             if let warning = recoveryWarning { text += " · \(warning)" }
             return text
         }
@@ -607,6 +617,7 @@ struct SavedSessionDiff: Codable, Equatable, Hashable, Sendable {
     }
 
     var helpText: String {
+        if isAIReconstructed { return "AI-generated reconstruction from write scripts in this turn, not a verified filesystem diff. May be incomplete; review against the actual files." }
         if isRecovered {
             return "Changes the agent's tool calls were observed making on this Mac, reconstructed from locally recorded before/after checkpoints when the normal turn capture was unavailable. May include uncommitted edits that already existed in touched files. "
                 + (recoveryWarning.map { $0.prefix(1).uppercased() + $0.dropFirst() + "." } ?? "All selected evidence was recovered.")

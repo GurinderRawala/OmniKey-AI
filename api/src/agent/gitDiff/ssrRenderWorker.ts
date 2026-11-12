@@ -199,12 +199,19 @@ export async function renderSnapshotDocument(
   const isTurn = scopes.has('turn');
   // v4 provenance: an agent-assisted recovery is labelled as such, never as a
   // normal snapshot, with an explicit partial warning and its limitations.
+  // An AI reconstruction is additionally labelled unverified (never complete).
   const recovery =
-    payload.recovery && payload.recovery.kind === 'agent_assisted' ? payload.recovery : undefined;
+    payload.recovery &&
+    (payload.recovery.kind === 'agent_assisted' || payload.recovery.kind === 'ai_reconstructed')
+      ? payload.recovery
+      : undefined;
+  const aiReconstructed = recovery?.kind === 'ai_reconstructed';
   const recoveryNotes = recovery
-    ? (recovery.complete
-        ? ''
-        : '<p class="limit"><strong>Partial recovery:</strong> some changes from this turn may be missing.</p>') +
+    ? (aiReconstructed
+        ? '<p class="limit"><strong>Unverified:</strong> these changes were reconstructed by the AI model from this turn\'s shell commands and were not read from disk. They may be partial or inaccurate.</p>'
+        : recovery.complete
+          ? ''
+          : '<p class="limit"><strong>Partial recovery:</strong> some changes from this turn may be missing.</p>') +
       (Array.isArray(recovery.limitations)
         ? recovery.limitations
             .slice(0, 8)
@@ -212,20 +219,24 @@ export async function renderSnapshotDocument(
             .join('')
         : '')
     : '';
-  const scopeLabel = recovery
-    ? 'Recovered turn changes'
-    : isTurn
-      ? 'Turn changes'
-      : scopes.size > 1
-        ? 'Working tree and commit changes'
-        : scopes.has('commit')
-          ? 'Commit changes'
-          : 'Working tree changes';
-  const disclaimer = recovery
-    ? 'Recovered with agent assistance from native per-command checkpoints of this turn (not a full repository snapshot); it may include changes not made by the agent.'
-    : isTurn
-      ? 'Net committed and uncommitted changes from the turn baseline to the working tree when the answer was produced; it may include changes not made by the agent.'
-      : 'Snapshot taken when the answer was produced; it may include changes not made by the agent.';
+  const scopeLabel = aiReconstructed
+    ? 'AI-reconstructed turn changes'
+    : recovery
+      ? 'Recovered turn changes'
+      : isTurn
+        ? 'Turn changes'
+        : scopes.size > 1
+          ? 'Working tree and commit changes'
+          : scopes.has('commit')
+            ? 'Commit changes'
+            : 'Working tree changes';
+  const disclaimer = aiReconstructed
+    ? 'Reconstructed by the AI model from write-like shell commands of this turn only (not a repository snapshot); unverified.'
+    : recovery
+      ? 'Recovered with agent assistance from native per-command checkpoints of this turn (not a full repository snapshot); it may include changes not made by the agent.'
+      : isTurn
+        ? 'Net committed and uncommitted changes from the turn baseline to the working tree when the answer was produced; it may include changes not made by the agent.'
+        : 'Snapshot taken when the answer was produced; it may include changes not made by the agent.';
   const repoCount = payload.repositories.length;
   const head = [
     '<!doctype html>',
@@ -276,11 +287,13 @@ export async function renderSnapshotDocument(
         ? `${escapeHtml(repo.root)} · ${oid(repo.baselineHead)} → ${oid(repo.head)} + working tree · baseline ${repo.baselineSource === 'before_tool' ? 'before first tool use' : 'at turn start'}${repo.baselineCapturedAt ? ` (${escapeHtml(repo.baselineCapturedAt)})` : ''}`
         : repo.scope === 'commit' && repo.commit
           ? `${escapeHtml(repo.root)} · commit <code class="oid">${escapeHtml(repo.commit.slice(0, 12))}</code>`
-          : recovery
-            ? `${escapeHtml(repo.root)} · recovered from turn checkpoints`
-            : isTurn
-              ? `${escapeHtml(repo.root)} · working tree vs HEAD (turn baseline unavailable)`
-              : `${escapeHtml(repo.root)} · working tree vs HEAD`;
+          : aiReconstructed
+            ? `${escapeHtml(repo.root)} · AI-reconstructed (unverified)`
+            : recovery
+              ? `${escapeHtml(repo.root)} · recovered from turn checkpoints`
+              : isTurn
+                ? `${escapeHtml(repo.root)} · working tree vs HEAD (turn baseline unavailable)`
+                : `${escapeHtml(repo.root)} · working tree vs HEAD`;
     // Always keep room to close the section we open.
     const sectionOpen = `<section class="repo"><h2>${title}</h2>`;
     if (bytes(sectionOpen) + bytes(sectionClose) > remaining || !tryPush(sectionOpen)) {

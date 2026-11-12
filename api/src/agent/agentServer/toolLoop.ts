@@ -34,6 +34,7 @@ import {
 } from '../gitDiff/shellContext';
 import { captureTurnBaselines } from '../gitDiff/coordinator';
 import { recordDiffRecoveryEvidence, shellRecoveryContext } from '../gitDiff/recovery';
+import { recordShellWriteEvidence } from '../gitDiff/writeEvidence';
 
 export { extractProgressSummary } from './progressSummary';
 
@@ -200,6 +201,15 @@ export async function runToolLoop(
     const executeOneToolCall = async (
       tc: NonNullable<AICompletionResult['tool_calls']>[number],
     ): Promise<{ id: string; name: string; result: string }> => {
+      if (
+        session.gitRun?.recovery &&
+        tc.name !== 'shell_script' &&
+        tc.name !== 'web_fetch' &&
+        tc.name !== 'web_search'
+      ) {
+        session.gitRun.recovery.priorNonShellTool = true;
+      }
+
       if (session.signal?.aborted) {
         return {
           id: tc.id,
@@ -433,9 +443,10 @@ export async function runToolLoop(
           : gitPlan.context;
         const terminalOutput = await new Promise<string>((resolve) => {
           let settled = false;
+          let cancelled = false;
           const finish = (
             output: string,
-            _isError?: boolean,
+            isError?: boolean,
             gitCommitObservations?: unknown,
             diffRecoveryEvidence?: unknown,
           ) => {
@@ -449,12 +460,23 @@ export async function runToolLoop(
             if (recoveryContext && diffRecoveryEvidence !== undefined && !session.signal?.aborted) {
               recordDiffRecoveryEvidence(session.gitRun, tc.id, diffRecoveryEvidence, log);
             }
+            // Write-like evidence only after the client's actual reply.
+            if (recoveryContext && !cancelled && !session.signal?.aborted) {
+              recordShellWriteEvidence(session.gitRun, tc.id, {
+                script,
+                cwd: gitPlan.workingDirectory,
+                output,
+                isError,
+              });
+            }
             resolve(output);
           };
-          const cancel = () =>
+          const cancel = () => {
+            cancelled = true;
             finish(
               'COMMAND ERROR: Connection closed before script output was received; execution outcome is unknown. Inspect the current state before retrying.',
             );
+          };
           // Register before sending: a fast client can return output immediately.
           pendingShellScripts.set(sessionId, { resolve: finish, filterKeywords });
           session.signal?.addEventListener('abort', cancel, { once: true });

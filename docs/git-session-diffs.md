@@ -518,3 +518,108 @@ command. Supported non-Git files require a reliable before-image or verified abs
 The20second fallback budget covers model selection, native replay and waiting for
 persistence. An uninterruptible database insert may finish after timeout and leave
 an unattached snapshot row; its result is never attached to the final answer late.
+
+### AI-reconstructed fallback (write evidence, no native records)
+
+Some turns produce no normal snapshot and no native records, even though the agent ran
+scripts that wrote files. Examples: a write outside any repository, or a client that has no
+checkpoint for that path. For these turns the backend makes one bounded AI reconstruction
+attempt. Verified native records always take precedence: if the run holds any records, the
+checkpoint path above runs unchanged and the model is never asked to reconstruct files.
+
+**Write evidence.** It is recorded only for a capable run, only for a shell tool call that
+was actually issued, and only after the client's real terminal reply. A cancel or disconnect
+records nothing. A script is classified by a conservative heuristic
+(`writeEvidence.ts`). This is not a shell parser: nothing is executed, expanded or looked
+up on any filesystem. Write-like means one of the following:
+
+- `>` or `>>` redirection, except to `/dev/*` or to an fd;
+- `tee`, `touch`, `truncate`, `mkdir`, `cp`, `mv`, `install`, `ln`, `rsync`, `rm`,
+  `unlink`, `rmdir`, `dd of=`, `curl -o` or `wget -O`;
+- `sed -i` or `perl -i`;
+- Python `write_text`, `write_bytes` or `open(…, 'w'|'a'|'x'|'+')`, or Node `writeFile*`;
+- `patch`, or a writing `git` subcommand (`apply`, `checkout`, `restore`, `reset`, and so
+  on).
+
+Read-only scripts never trigger the fallback. Heredoc bodies are skipped. Failed scripts
+still count, because they may have written part of their output. A run keeps at most 16
+evidence entries. Each holds:
+
+- the tool call id;
+- the status (`succeeded`, `failed` or `unknown`);
+- the cwd hint;
+- the write kinds;
+- a redacted excerpt of the script (≤4,000 chars) and of the output (≤1,000 chars);
+- literal targets.
+
+Obvious secrets are redacted: private keys, provider tokens, `Authorization`/bearer values,
+`*TOKEN|SECRET|PASSWORD|API_KEY*=` assignments, and URL credentials. If a script targets a
+sensitive path, its excerpt is withheld entirely. This uses the same policy as the native
+`GitSensitivePathPolicy`, plus `.git/` internals.
+
+**Allowlist.** Targets must be literal absolute paths. The heuristic resolves `~`, `$HOME`,
+`$PWD`, single literal assignments and relative paths, but only against a known cwd: the
+structured `working_directory` or a literal `cd`. `$HOME` is inferred from a
+`/Users/<name>` or `/home/<name>` cwd. Paths with dynamic, glob or unusual characters are
+dropped. At most 50 paths are kept. Paths inside roots that the normal capture
+authoritatively reported net-empty are removed, so a reverted change can never be brought
+back. If nothing is left, no model call is made.
+
+**Creation and deletion.**
+
+- `creationVerified` requires explicit evidence on a script that succeeded and either uses
+  `set -e` or is a single command. The accepted evidence is exclusive creation
+  (`open(…,'x')`), `mkdir` without `-p` around the path, a noclobber `>`, or a temp-dir path
+  printed by `mktemp`.
+- `deletionAllowed` requires an `rm`/`unlink` target or an `mv` source.
+
+**Model call.** One `aiClient.complete` call under the same 20 s budget, abort signal and
+usage accounting as above, with no tools, the fixed `DIFF_RECONSTRUCTION_SYSTEM_PROMPT` and
+`maxTokens: 4096`. Its input is limited to this run's input, the allowlist and this run's
+write evidence. It gets no history and no earlier turn. The reply must be exactly
+`{"files":[{path,before,after}],"limitations":[…]}` or `{"unavailable":true}`; any other
+shape yields no snapshot. The backend rejects the whole reply in any of these cases:
+
+- a key is not allowed, or a path is outside the allowlist or repeated;
+- `before: null` is given without verified creation (an unknown earlier state is never
+  turned into a fake new file);
+- `after: null` is given without allowed deletion;
+- a NUL byte appears;
+- a file exceeds 256 KiB, or all files together exceed 2 MiB or 50 files.
+
+**Diff.** The backend builds the unified diff itself (`buildFilePatch`). It emits one hunk
+around the changed region with 3 context lines, correct `\ No newline at end of file`
+markers, and new/deleted file headers. A model patch is never accepted or executed. Roots
+are deterministic: the longest known shell cwd that contains the path, otherwise the parent
+directory, with at most 8 roots. A file whose new content contains a redaction marker is
+dropped.
+
+**Storage and viewer.**
+
+- Payload: `recovery.kind: "ai_reconstructed"`, with `evidenceIds: []`, `toolCallIds`,
+  `complete: false` (always), and fixed limitation lines. The first line is always "not
+  verified against the filesystem". Model notes (≤3) are prefixed `Model note:`.
+- Summary: `recovered: true`, `recoveryIncomplete: true`,
+  `recoveryMethod: "ai_reconstructed"`. Native checkpoint recoveries now report
+  `recoveryMethod: "checkpoint"`. `cleanSessionDiffSummary` keeps only these two values.
+- Viewer: the header reads **AI-reconstructed turn changes** and shows an **Unverified**
+  notice. Each repository is labelled "AI-reconstructed (unverified)". The verified native
+  rendering is unchanged.
+
+An unavailable, invalid, timed-out or cancelled attempt leaves no snapshot and the final
+answer is unchanged. Each attempt is logged with counts only (never paths or content).
+This fallback does not observe every write: dynamic paths, writes from other processes and
+unrecognised commands are not included.
+
+Write-like turns always make the bounded AI attempt when normal capture has no
+snapshot, even when no native record or safely resolvable path exists. An empty
+path allowlist requires the model to return unavailable; no invented paths or
+original content are accepted. The /tmp native checkpoint uses POSIX realpath
+for physical parent resolution before component-wise O_NOFOLLOW reads.
+
+AI creation claims are deliberately narrower than write detection: Python exclusive
+open is not proof, conditional/pipeline/substitution/function scripts cannot prove
+absence, and a later shell cannot claim a file was absent at turn start. These
+limits do not suppress the AI attempt; uncertain originals must be reported
+unavailable instead of fabricated. The model response is capped at4096tokens, so
+large before/after reconstructions may be omitted within the20second deadline.

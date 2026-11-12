@@ -14,6 +14,10 @@
  * replay its own stored patches for those ids. Everything is bounded by one
  * 20 s budget, the run's abort signal and its connection; any failure means
  * "no snapshot", never a lost or rewritten final answer.
+ *
+ * Without native records, a run whose shells were write-like (see
+ * writeEvidence.ts) gets one AI reconstruction attempt instead, under the same
+ * budget (see aiReconstruction.ts). Verified records always take precedence.
  */
 import cuid from 'cuid';
 import type { Logger } from 'winston';
@@ -43,6 +47,15 @@ import {
   type SessionDiffCaptureOutcome,
   type SessionDiffSummary,
 } from './contracts';
+import {
+  DIFF_RECONSTRUCTION_MAX_OUTPUT_TOKENS,
+  buildReconstructionMessages,
+  parseReconstructionFiles,
+  parseReplyObject,
+  reconstructionAllowlist,
+  reconstructionLimitations,
+  reconstructionRepositories,
+} from './aiReconstruction';
 import {
   captureSessionDiffOutcome,
   requestGitControl,
@@ -151,14 +164,20 @@ export function recordDiffRecoveryEvidence(
   return accepted;
 }
 
-/** Fallback only once per run, only with verified records, only without a summary. */
+/**
+ * Fallback only once per run, only without a summary, and only with verified
+ * records or (for AI reconstruction) current-turn write-like shell evidence.
+ */
 export function shouldAttemptDiffRecovery(
   run: GitRunState | undefined,
   outcome: SessionDiffCaptureOutcome,
 ): boolean {
   const state = run?.recovery;
   return Boolean(
-    state && !state.attempted && outcome.status !== 'captured' && state.records.size > 0,
+    state &&
+    !state.attempted &&
+    outcome.status !== 'captured' &&
+    (state.records.size > 0 || state.writes.length > 0),
   );
 }
 
@@ -269,7 +288,7 @@ export async function recoverSessionDiff(
   options: DiffRecoveryOptions,
 ): Promise<SessionDiffSummary | undefined> {
   const state = run.recovery;
-  if (!state || state.attempted || !state.records.size) return undefined;
+  if (!state || state.attempted || (!state.records.size && !state.writes.length)) return undefined;
   state.attempted = true;
   const { log } = options;
   const startedAt = Date.now();
@@ -282,27 +301,14 @@ export async function recoverSessionDiff(
   }
   const timer = setTimeout(abort, deps.totalTimeoutMs);
   const remaining = () => Math.max(0, deps.totalTimeoutMs - (Date.now() - startedAt));
-  try {
-    if (budget.signal.aborted) return undefined;
-    const all = [...state.records.values()];
-    const offered = all.slice(0, DIFF_RECOVERY_MAX_RECORDS);
-    options.send?.({
-      session_id: run.sessionId,
-      sender: 'agent',
-      content: 'Recovering changes…',
-      is_terminal_output: false,
-      is_error: false,
-    });
-
+  // One tool-free provider call; usage accounting is bounded and can never
+  // fail the final answer.
+  const callModel = async (messages: AIMessage[], maxTokens: number) => {
     const result = await untilAborted(
-      deps.complete(options.model, buildManifestMessages(run, offered), {
-        signal: budget.signal,
-        maxTokens: DIFF_RECOVERY_MAX_OUTPUT_TOKENS,
-      }),
+      deps.complete(options.model, messages, { signal: budget.signal, maxTokens }),
       budget.signal,
     );
     if (options.onUsage) {
-      // Usage accounting is bounded and can never fail the final answer.
       const usageDeadline = new AbortController();
       const usageTimer = setTimeout(
         () => usageDeadline.abort(),
@@ -317,6 +323,27 @@ export async function recoverSessionDiff(
         )
         .finally(() => clearTimeout(usageTimer));
     }
+    return result;
+  };
+  try {
+    if (budget.signal.aborted) return undefined;
+    options.send?.({
+      session_id: run.sessionId,
+      sender: 'agent',
+      content: 'Recovering changes…',
+      is_terminal_output: false,
+      is_error: false,
+    });
+    if (!state.records.size) {
+      return await reconstructWithAi(run, callModel, budget.signal, log);
+    }
+    const all = [...state.records.values()];
+    const offered = all.slice(0, DIFF_RECOVERY_MAX_RECORDS);
+
+    const result = await callModel(
+      buildManifestMessages(run, offered),
+      DIFF_RECOVERY_MAX_OUTPUT_TOKENS,
+    );
     if (budget.signal.aborted) return undefined;
 
     const manifest = parseRecoveryManifest(result.content, new Set(offered.map((r) => r.id)));
@@ -427,6 +454,73 @@ export async function recoverSessionDiff(
 }
 
 /**
+ * AI reconstruction branch (no native records): one tool-free call over this
+ * run's write evidence, strict validation, a backend-built diff, and a
+ * snapshot labelled unverified + partial. Unavailable/invalid => no snapshot.
+ */
+async function reconstructWithAi(
+  run: GitRunState,
+  callModel: (messages: AIMessage[], maxTokens: number) => Promise<AICompletionResult>,
+  signal: AbortSignal,
+  log: Logger,
+): Promise<SessionDiffSummary | undefined> {
+  const state = run.recovery!;
+  const allow = reconstructionAllowlist(state);
+  const outcome = (result: string, extra: Record<string, unknown> = {}) =>
+    log.info('AI diff reconstruction finished', {
+      sessionId: run.sessionId,
+      result,
+      writeCommands: state.writes.length,
+      allowedPaths: allow.size,
+      ...extra,
+    });
+  const result = await callModel(
+    buildReconstructionMessages(state, allow),
+    DIFF_RECONSTRUCTION_MAX_OUTPUT_TOKENS,
+  );
+  if (signal.aborted) return undefined;
+  const reply = parseReplyObject(result.content);
+  const parsed = reply && 'files' in reply ? parseReconstructionFiles(reply, allow) : null;
+  if (!parsed) {
+    const unavailable = reply?.unavailable === true && Object.keys(reply).length === 1;
+    outcome(unavailable ? 'unavailable' : 'invalid');
+    return undefined;
+  }
+  const cwds = [...new Set(state.writes.map((w) => w.cwd).filter((c): c is string => !!c))];
+  const built = reconstructionRepositories(parsed.files, cwds);
+  if (!built.repositories.length) {
+    outcome('nothing_renderable');
+    return undefined;
+  }
+  const limitations = reconstructionLimitations(state, parsed.files, {
+    dropped: built.dropped,
+    redactedDropped: built.redactedDropped,
+    modelNotes: parsed.limitations,
+  });
+  if (signal.aborted) return undefined;
+  const summary = await untilAborted(
+    saveSessionDiff(
+      run,
+      built.repositories,
+      'AI-reconstructed turn changes; unverified and possibly partial.',
+      undefined,
+      {
+        kind: 'ai_reconstructed',
+        turnId: run.runId,
+        evidenceIds: [],
+        toolCallIds: state.writes.map((w) => w.toolCallId),
+        complete: false,
+        limitations,
+      },
+    ),
+    signal,
+  );
+  if (signal.aborted) return undefined;
+  outcome('saved', { diffId: summary.id, fileCount: summary.fileCount });
+  return summary;
+}
+
+/**
  * The single final-capture helper used by both the success and the failure
  * final paths: the normal automatic capture first; the agent-assisted
  * fallback only for a capable run with verified records and no snapshot.
@@ -448,6 +542,8 @@ export async function captureFinalSessionDiff(
         if (record.kind === 'git' && emptyRoots.has(comparablePath(record.root)))
           run.recovery.records.delete(id);
       }
+      // Never let AI reconstruction revive writes inside those roots either.
+      run.recovery.revertedRoots.push(...outcome.unchangedRoots);
     }
     if (!shouldAttemptDiffRecovery(run, outcome)) return undefined;
     if (options.signal?.aborted || run.connection?.aborted) return undefined;

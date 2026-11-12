@@ -900,7 +900,11 @@ final class DiffRecoveryStore: @unchecked Sendable {
         let standardized = URL(fileURLWithPath: raw).standardizedFileURL.path
         let name = (standardized as NSString).lastPathComponent
         let literalParent = (standardized as NSString).deletingLastPathComponent
-        let parent = URL(fileURLWithPath: literalParent).resolvingSymlinksInPath().path
+        // Foundation may preserve the /tmp spelling on macOS. Resolve to
+        // the physical parent before our component-wise O_NOFOLLOW read.
+        guard let resolvedParent = realpath(literalParent, nil) else { return nil }
+        let parent = String(cString: resolvedParent)
+        free(resolvedParent)
         var isDirectory: ObjCBool = false
         guard !name.isEmpty, name != ".", name != "..",
               FileManager.default.fileExists(atPath: parent, isDirectory: &isDirectory), isDirectory.boolValue,
