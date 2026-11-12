@@ -13,6 +13,13 @@
       <description>Five example workflows using OmniAgent with terminal access, authenticated browser sessions, and MCP integrations, plus permission and safety guidance.</description>
     </item>
     <item>
+      <title>OmniKey v1.8.19</title>
+      <link>https://omnikeyai.ca/changelog#v1.8.19</link>
+      <guid isPermaLink="false">omnikey-v1.8.19</guid>
+      <pubDate>Thu, 12 Nov 2026 00:00:00 +0000</pubDate>
+      <description><![CDATA[<ul><li>Package macOS 1.9.17 with complete turn diffs</li><li>Save baseline-to-working-tree diffs for every agent turn</li><li>Keep task project and model selectors on one row</li><li>Notarized macOS 1.9.17 build 77</li><li>Restore new-session selections and capture commits around heredocs</li><li>Clarify management controls with hover hints</li></ul>]]></description>
+    </item>
+    <item>
       <title>OmniKey v1.8.18</title>
       <link>https://omnikeyai.ca/changelog#v1.8.18</link>
       <guid isPermaLink="false">omnikey-v1.8.18</guid>
@@ -144,13 +151,6 @@
       <guid isPermaLink="false">omnikey-v1.7.0</guid>
       <pubDate>Wed, 16 Sep 2026 00:00:00 +0000</pubDate>
       <description><![CDATA[<ul><li>Add thread rename pinning and pagination</li><li>Release universal Markdown chat v1.7.0</li></ul>]]></description>
-    </item>
-    <item>
-      <title>OmniKey v1.6.28</title>
-      <link>https://omnikeyai.ca/changelog#v1.6.28</link>
-      <guid isPermaLink="false">omnikey-v1.6.28</guid>
-      <pubDate>Fri, 11 Sep 2026 00:00:00 +0000</pubDate>
-      <description><![CDATA[<ul><li>Derive CLI version from package metadata</li></ul>]]></description>
     </item>
   </channel>
 </rss>
