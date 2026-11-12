@@ -28,6 +28,7 @@ import type { FileDiffMetadata } from '@pierre/diffs';
 import type { SessionDiffPayload } from './contracts';
 
 export type DiffTheme = 'dark' | 'light';
+export type DiffLayout = 'unified' | 'split';
 export type FileKind = 'added' | 'deleted' | 'modified' | 'renamed' | 'binary';
 
 export const SSR_MAX_RENDERED_FILES = 120;
@@ -142,6 +143,7 @@ export async function renderSnapshotDocument(
   payload: SessionDiffPayload,
   theme: DiffTheme,
   limits: RenderLimits,
+  layout: DiffLayout = 'unified',
 ): Promise<string> {
   const kindLabel: Record<FileKind, string> = {
     added: 'Added',
@@ -154,8 +156,33 @@ export async function renderSnapshotDocument(
   const options = {
     theme: { dark: 'pierre-dark', light: 'pierre-light' },
     themeType: theme,
-    diffStyle: 'unified',
+    diffStyle: layout === 'split' ? 'split' : 'unified',
     overflow: 'scroll',
+    // SSR stays unhydrated (JavaScript is intentionally disabled). Pierre's
+    // dehydrated split CSS flattens code wrappers and clips content. Restore
+    // two bounded code scrollports inside the shadow root, not on the page.
+    // Keep the row-span/subgrid metadata so buffers/hunks remain aligned.
+    unsafeCSS: `
+:host{display:block;min-width:0;max-width:100%;box-sizing:border-box}
+[data-diff]{min-width:0;max-width:100%;box-sizing:border-box;margin-inline:0}
+[data-dehydrated][data-diff-type="split"][data-overflow="scroll"]{
+  grid-template-columns:repeat(2,minmax(0,1fr));width:100%;padding-block:0;overflow:clip
+}
+[data-dehydrated][data-diff-type="split"][data-overflow="scroll"]>[data-code]{
+  display:grid;grid-template-columns:max-content minmax(max-content,1fr);min-width:0;max-width:100%;width:100%;
+  box-sizing:border-box;overflow-x:auto;overflow-y:hidden;overscroll-behavior-x:contain
+}
+[data-dehydrated][data-diff-type="split"][data-overflow="scroll"]>[data-code]>[data-gutter]{grid-column:1}
+[data-dehydrated][data-diff-type="split"][data-overflow="scroll"]>[data-code]>[data-content]{
+  grid-column:2;min-width:max-content;overflow:visible
+}
+[data-dehydrated][data-diff-type="split"][data-overflow="scroll"]>[data-additions]{
+  border-inline-start:1px solid var(--diffs-bg-context)
+}
+[data-dehydrated][data-diff-type="split"][data-overflow="scroll"]>[data-code]::-webkit-scrollbar-thumb{
+  background-color:var(--diffs-bg-context)
+}
+`,
   };
   let totalFiles = 0;
   for (const repo of payload.repositories) totalFiles += splitPatchSections(repo.patch).length;
@@ -170,7 +197,7 @@ export async function renderSnapshotDocument(
   const repoCount = payload.repositories.length;
   const head = [
     '<!doctype html>',
-    `<html data-theme="${theme}"><head><meta charset="utf-8">`,
+    `<html data-theme="${theme}" data-layout="${layout === 'split' ? 'split' : 'unified'}"><head><meta charset="utf-8">`,
     `<meta http-equiv="Content-Security-Policy" content="${limits.csp}">`,
     `<meta name="color-scheme" content="${theme}">`,
     `<style>${limits.pageCss}</style></head><body>`,
@@ -274,27 +301,36 @@ export function ssrWorkerMain(
   const data = wt.workerData as { ssrUrl: string; coreUrl: string; limits: RenderLimits };
   if (!port) return;
   let modules: Promise<unknown[]> | null = null;
-  port.on('message', async (msg: { id: number; payload: SessionDiffPayload; theme: DiffTheme }) => {
-    try {
-      if (!modules)
-        modules = Promise.all([dynamicImport(data.ssrUrl), dynamicImport(data.coreUrl)]);
-      const loaded = await modules;
-      const html = await renderSnapshotDocument(
-        loaded[0] as PierreSsr,
-        loaded[1] as PierreCore,
-        msg.payload,
-        msg.theme,
-        data.limits,
-      );
-      port.postMessage({ id: msg.id, ok: true, html });
-    } catch (err) {
-      port.postMessage({
-        id: msg.id,
-        ok: false,
-        error: err instanceof Error ? err.name : 'Error',
-      });
-    }
-  });
+  port.on(
+    'message',
+    async (msg: {
+      id: number;
+      payload: SessionDiffPayload;
+      theme: DiffTheme;
+      layout?: DiffLayout;
+    }) => {
+      try {
+        if (!modules)
+          modules = Promise.all([dynamicImport(data.ssrUrl), dynamicImport(data.coreUrl)]);
+        const loaded = await modules;
+        const html = await renderSnapshotDocument(
+          loaded[0] as PierreSsr,
+          loaded[1] as PierreCore,
+          msg.payload,
+          msg.theme,
+          data.limits,
+          msg.layout,
+        );
+        port.postMessage({ id: msg.id, ok: true, html });
+      } catch (err) {
+        port.postMessage({
+          id: msg.id,
+          ok: false,
+          error: err instanceof Error ? err.name : 'Error',
+        });
+      }
+    },
+  );
 }
 
 /** The eval'd worker program: serialized helpers plus a bootstrap call. */
@@ -392,6 +428,7 @@ interface Job {
   key: string;
   payload: SessionDiffPayload;
   theme: DiffTheme;
+  layout: DiffLayout;
   state: 'queued' | 'active' | 'done';
   timer: ReturnType<typeof setTimeout>;
   resolve: (html: string) => void;
@@ -453,6 +490,7 @@ export class DiffRenderPool {
     payload: SessionDiffPayload,
     theme: DiffTheme,
     timeoutMs: number,
+    layout: DiffLayout = 'unified',
   ): Promise<string> {
     const existing = this.inFlight.get(key);
     if (existing) return existing;
@@ -466,6 +504,7 @@ export class DiffRenderPool {
         key,
         payload,
         theme,
+        layout,
         state: 'queued',
         timer: setTimeout(() => this.onDeadline(job), Math.max(0, timeoutMs)),
         resolve,
@@ -604,7 +643,12 @@ export class DiffRenderPool {
       this.worker ??= this.spawn();
       this.worker.ref();
       this.counters.jobsStarted += 1;
-      this.worker.postMessage({ id: job.id, payload: job.payload, theme: job.theme });
+      this.worker.postMessage({
+        id: job.id,
+        payload: job.payload,
+        theme: job.theme,
+        layout: job.layout,
+      });
     } catch (err) {
       this.active = null;
       this.settle(
@@ -631,7 +675,10 @@ const PAGE_CSS = `
 :root{color-scheme:var(--scheme);font:13px -apple-system,system-ui,sans-serif}
 html[data-theme=dark]{--scheme:dark;--bg:#0d0d0d;--fg:#e6e6e6;--muted:#9a9a9a;--line:#2a2a2a;--card:#151515}
 html[data-theme=light]{--scheme:light;--bg:#ffffff;--fg:#1d1d1f;--muted:#6e6e73;--line:#e3e3e6;--card:#f7f7f8}
+html,body{width:100%;max-width:100%;min-width:0;overflow-x:clip}
 body{margin:0;background:var(--bg);color:var(--fg)}
+main,section.repo,details.file,.diffs-host{display:block;min-width:0;max-width:100%;box-sizing:border-box}
+.diffs-host{width:100%;overflow-x:clip}
 header.snapshot{padding:12px 14px;border-bottom:1px solid var(--line)}
 header.snapshot h1{font-size:13px;margin:0 0 4px}
 header.snapshot p{margin:2px 0;color:var(--muted)}

@@ -15,7 +15,7 @@ The CLI ships **all three TypeScript services in one package**: at build time `c
 
 ## Prerequisites
 
-- Node.js **22.12.0+ within the 22.x line, or 24.0.0+** (`^22.12.0 || >=24.0.0`) is the project baseline for installing the full development dependencies and monorepo work, including lint. The published API/CLI package metadata still declares Node ≥14 for runtime compatibility; that does not describe the development toolchain.
+- Node.js **22.12.0+ within the 22.x line, or 24.0.0+** (`^22.12.0 || >=24.0.0`) is the project baseline for installing the full development dependencies and monorepo work, including lint. The API and CLI package manifests declare Node ≥22 for runtime compatibility; installing the full development toolchain requires the more specific versions above.
 - **Yarn 1.22+** (`npm install -g yarn` if you don't have it). Yarn is the supported package manager for the monorepo; the only `package-lock.json` in the repo is `cli/package-lock.json`, which exists so the published npm package carries a lockfile.
 - For the native clients: Xcode 15+ (macOS) or .NET 10 SDK + Visual Studio 2022 (Windows). Neither is required to work on the TypeScript services.
 

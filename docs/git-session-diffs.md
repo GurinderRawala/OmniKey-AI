@@ -288,3 +288,22 @@ fallback. Safe execution directories are validated separately from conservative
 repository candidate selection. Invalid execution paths return a tool error and
 never silently run in another directory. Git environment overrides and opaque
 commit scripts fail closed for attribution.
+
+## Diff appearance and layout
+
+The macOS inspector follows the app/system light or dark appearance automatically;
+there is no separate theme picker or persisted theme override. The **Diff layout**
+menu offers **Unified** (default) and **Side-by-side** (old and new in parallel
+columns separated vertically). This is a rendering preference, not a new capture:
+the same saved snapshot ID is fetched with `layout=unified|split`. Server validation,
+worker rendering, request deduplication and HTML caches include the layout; omitted
+layout remains unified for older clients. The native request identity also includes
+theme and layout so late responses cannot replace a newer selection. Diff banners
+fill the same available transcript column as the final answer.
+
+Side-by-side horizontal scrolling is owned by the two code panes, not the outer
+WebView document. Because the viewer intentionally does not hydrate Pierre with
+JavaScript, a scoped shadow-root CSS override restores bounded scroll containers
+in its dehydrated split markup. Long lines scroll within their old/new pane;
+line-number gutters remain sticky, and the page wrapper cannot pan into blank
+space. Hunk/buffer row metadata is preserved. No client-side scripts are enabled.

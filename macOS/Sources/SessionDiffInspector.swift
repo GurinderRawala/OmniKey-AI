@@ -11,6 +11,13 @@ enum SessionDiffTheme: String, CaseIterable, Sendable {
     init(_ scheme: ColorScheme) { self = scheme == .dark ? .dark : .light }
 }
 
+enum SessionDiffLayout: String, CaseIterable, Sendable {
+    case unified
+    case split
+
+    var label: String { self == .unified ? "Unified" : "Side-by-side" }
+}
+
 struct SessionDiffHTMLResponse: Decodable, Equatable, Sendable {
     let id: String
     let html: String
@@ -36,7 +43,7 @@ enum SessionDiffFetchError: LocalizedError, Equatable {
 }
 
 protocol SessionDiffFetching: Sendable {
-    func fetch(sessionId: String, diffId: String, theme: SessionDiffTheme) async throws -> SessionDiffHTMLResponse
+    func fetch(sessionId: String, diffId: String, theme: SessionDiffTheme, layout: SessionDiffLayout) async throws -> SessionDiffHTMLResponse
 }
 
 private final class SessionDiffNoRedirect: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
@@ -54,7 +61,7 @@ struct SessionDiffHTTPFetcher: SessionDiffFetching {
     var token: @Sendable () -> String? = { SubscriptionManager.shared.jwtToken }
     var session: URLSession = .shared
 
-    static func requestURL(baseURL: URL, sessionId: String, diffId: String, theme: SessionDiffTheme) -> URL? {
+    static func requestURL(baseURL: URL, sessionId: String, diffId: String, theme: SessionDiffTheme, layout: SessionDiffLayout = .unified) -> URL? {
         var components = URLComponents(
             url: baseURL
                 .appendingPathComponent("api/agent/sessions")
@@ -63,15 +70,16 @@ struct SessionDiffHTTPFetcher: SessionDiffFetching {
                 .appendingPathComponent(diffId),
             resolvingAgainstBaseURL: false
         )
-        components?.queryItems = [URLQueryItem(name: "theme", value: theme.rawValue)]
+        components?.queryItems = [URLQueryItem(name: "theme", value: theme.rawValue),
+                                  URLQueryItem(name: "layout", value: layout.rawValue)]
         return components?.url
     }
 
-    func fetch(sessionId: String, diffId: String, theme: SessionDiffTheme) async throws -> SessionDiffHTMLResponse {
+    func fetch(sessionId: String, diffId: String, theme: SessionDiffTheme, layout: SessionDiffLayout) async throws -> SessionDiffHTMLResponse {
         guard let token = token(), !token.isEmpty else { throw SessionDiffFetchError.notSignedIn }
         guard SavedSessionDiff(id: diffId, fileCount: 0, repositoryCount: 1, createdAt: "").hasSafeID,
               !sessionId.isEmpty, !sessionId.contains("/"),
-              let url = Self.requestURL(baseURL: baseURL(), sessionId: sessionId, diffId: diffId, theme: theme)
+              let url = Self.requestURL(baseURL: baseURL(), sessionId: sessionId, diffId: diffId, theme: theme, layout: layout)
         else { throw SessionDiffFetchError.invalidIdentifier }
         var request = URLRequest(url: url)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -160,14 +168,14 @@ final class SessionDiffInspectorModel: ObservableObject {
         self.fetcher = fetcher
     }
 
-    static func key(_ selection: SessionDiffSelection, theme: SessionDiffTheme) -> String {
-        "\(selection.sessionId)\u{0}\(selection.diff.id)\u{0}\(theme.rawValue)"
+    static func key(_ selection: SessionDiffSelection, theme: SessionDiffTheme, layout: SessionDiffLayout = .unified) -> String {
+        "\(selection.sessionId)\u{0}\(selection.diff.id)\u{0}\(theme.rawValue)\u{0}\(layout.rawValue)"
     }
 
     /// Loads exactly `selection.diff.id`. Any earlier in-flight fetch is
     /// cancelled and its late result discarded (stale identity guard).
-    func load(_ selection: SessionDiffSelection, theme: SessionDiffTheme, force: Bool = false) {
-        let key = Self.key(selection, theme: theme)
+    func load(_ selection: SessionDiffSelection, theme: SessionDiffTheme, layout: SessionDiffLayout = .unified, force: Bool = false) {
+        let key = Self.key(selection, theme: theme, layout: layout)
         if !force, key == loadedKey, phase != .idle { return }
         task?.cancel()
         generation += 1
@@ -179,7 +187,7 @@ final class SessionDiffInspectorModel: ObservableObject {
             let outcome: Phase
             do {
                 let body = try await fetcher.fetch(
-                    sessionId: selection.sessionId, diffId: selection.diff.id, theme: theme
+                    sessionId: selection.sessionId, diffId: selection.diff.id, theme: theme, layout: layout
                 )
                 outcome = body.id == selection.diff.id
                     ? .loaded(SessionDiffHTMLDocument.prepare(body.html))
@@ -302,12 +310,10 @@ struct SessionDiffInspectorView: View {
     let selection: SessionDiffSelection
     @StateObject private var inspector = SessionDiffInspectorModel()
     @Environment(\.colorScheme) private var colorScheme
-    /// Local, trusted theme choice ("" follows the app appearance).
-    @AppStorage("sessionDiffInspectorTheme") private var themeOverride: String = ""
+    @AppStorage("sessionDiffInspectorLayout") private var layout: SessionDiffLayout = .unified
 
-    private var theme: SessionDiffTheme {
-        SessionDiffTheme(rawValue: themeOverride) ?? SessionDiffTheme(colorScheme)
-    }
+    // Always use the same effective system appearance as the rest of the app.
+    private var theme: SessionDiffTheme { SessionDiffTheme(colorScheme) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -317,9 +323,10 @@ struct SessionDiffInspectorView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(NordTheme.editorBackground(colorScheme))
-        .onAppear { inspector.load(selection, theme: theme) }
-        .onChange(of: selection) { _, next in inspector.load(next, theme: theme) }
-        .onChange(of: theme) { _, next in inspector.load(selection, theme: next) }
+        .onAppear { inspector.load(selection, theme: theme, layout: layout) }
+        .onChange(of: selection) { _, next in inspector.load(next, theme: theme, layout: layout) }
+        .onChange(of: theme) { _, next in inspector.load(selection, theme: next, layout: layout) }
+        .onChange(of: layout) { _, next in inspector.load(selection, theme: theme, layout: next) }
         .onDisappear { inspector.reset() }
     }
 
@@ -338,15 +345,16 @@ struct SessionDiffInspectorView: View {
                     .truncationMode(.tail)
             }
             Spacer(minLength: 4)
-            Picker("Theme", selection: $themeOverride) {
-                Text("Auto").tag("")
-                Text("Dark").tag(SessionDiffTheme.dark.rawValue)
-                Text("Light").tag(SessionDiffTheme.light.rawValue)
+            Picker("Diff layout", selection: $layout) {
+                ForEach(SessionDiffLayout.allCases, id: \.self) { option in
+                    Text(option.label).tag(option)
+                }
             }
             .pickerStyle(.menu)
             .labelsHidden()
             .fixedSize()
-            .help("Diff theme")
+            .help("Choose unified or side-by-side changes")
+            .accessibilityLabel("Diff layout")
             Button {
                 model.closeSessionDiff()
             } label: {
@@ -384,7 +392,7 @@ struct SessionDiffInspectorView: View {
                     .font(.system(size: 12))
                     .foregroundColor(NordTheme.secondaryText(colorScheme))
                     .multilineTextAlignment(.center)
-                Button("Retry") { inspector.load(selection, theme: theme, force: true) }
+                Button("Retry") { inspector.load(selection, theme: theme, layout: layout, force: true) }
                     .controlSize(.small)
             }
             .padding(24)
@@ -425,7 +433,7 @@ struct SessionDiffCardView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .frame(maxWidth: 420, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(NordTheme.border(colorScheme).opacity(isSelected ? 0.55 : 0.25))

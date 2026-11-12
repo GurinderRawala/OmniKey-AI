@@ -217,7 +217,22 @@ final class SessionDiffWireTests: XCTestCase {
         let url = try XCTUnwrap(SessionDiffHTTPFetcher.requestURL(
             baseURL: URL(string: "http://127.0.0.1:7071")!, sessionId: "s 1", diffId: "d-1", theme: .dark
         ))
-        XCTAssertEqual(url.absoluteString, "http://127.0.0.1:7071/api/agent/sessions/s%201/diffs/d-1?theme=dark")
+        XCTAssertEqual(url.absoluteString, "http://127.0.0.1:7071/api/agent/sessions/s%201/diffs/d-1?theme=dark&layout=unified")
+    }
+
+    @MainActor
+    func testSystemAppearanceAndLayoutRequestIdentity() throws {
+        XCTAssertEqual(SessionDiffTheme(.dark), .dark)
+        XCTAssertEqual(SessionDiffTheme(.light), .light)
+        let url = try XCTUnwrap(SessionDiffHTTPFetcher.requestURL(baseURL: URL(string: "http://localhost:7071")!,
+            sessionId: "s", diffId: "d", theme: .light, layout: .split))
+        XCTAssertEqual(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
+            [URLQueryItem(name: "theme", value: "light"), URLQueryItem(name: "layout", value: "split")])
+        let selected = SessionDiffSelection(sessionId: "s", diff: SavedSessionDiff(id: "d", fileCount: 1, repositoryCount: 1, createdAt: "t"))
+        XCTAssertNotEqual(SessionDiffInspectorModel.key(selected, theme: .dark, layout: .unified),
+                          SessionDiffInspectorModel.key(selected, theme: .dark, layout: .split))
+        XCTAssertNotEqual(SessionDiffInspectorModel.key(selected, theme: .dark, layout: .split),
+                          SessionDiffInspectorModel.key(selected, theme: .light, layout: .split))
     }
 
     @MainActor
@@ -251,7 +266,7 @@ private final class ScriptedDiffFetcher: SessionDiffFetching, @unchecked Sendabl
         return e
     }
 
-    func fetch(sessionId: String, diffId: String, theme: SessionDiffTheme) async throws -> SessionDiffHTMLResponse {
+    func fetch(sessionId: String, diffId: String, theme: SessionDiffTheme, layout: SessionDiffLayout) async throws -> SessionDiffHTMLResponse {
         try await withCheckedThrowingContinuation { continuation in
             let e = lock.withLock { () -> XCTestExpectation? in
                 continuations[diffId] = continuation

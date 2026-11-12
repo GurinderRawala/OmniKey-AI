@@ -424,3 +424,67 @@ describe('Git snapshot integration regressions', () => {
     expect(candidates.list()[0]).toBe('/Users/dev/current');
   });
 });
+
+describe('saved diff layout rendering', () => {
+  it('renders real unified and split markup without cache collisions', async () => {
+    clearDiffRenderCacheForTesting();
+    const payload = {
+      version: 1 as const,
+      repositories: [{ root: ROOT, patch: MALICIOUS_PATCH, scope: 'working_tree' as const }],
+    };
+    const unified = await renderSessionDiffHtml('layout-check', payload, 'light');
+    const split = await renderSessionDiffHtml('layout-check', payload, 'light', undefined, 'split');
+    expect(unified).toContain('data-layout="unified"');
+    expect(unified).toContain('data-diff-type="single"');
+    expect(split).toContain('data-layout="split"');
+    expect(split).toContain('data-diff-type="split"');
+    expect(split).not.toEqual(unified);
+    expect(await renderSessionDiffHtml('layout-check', payload, 'light')).toEqual(unified);
+    expect(
+      await renderSessionDiffHtml('layout-check', payload, 'light', undefined, 'split'),
+    ).toEqual(split);
+  });
+});
+
+describe('unhydrated split scroll containment', () => {
+  it('keeps long lines inside separate code scrollports, not the document wrapper', async () => {
+    const oldLine = 'left_' + 'x'.repeat(4000);
+    const newLine = 'right_' + 'y'.repeat(5000);
+    const patch = [
+      'diff --git a/long.txt b/long.txt',
+      '--- a/long.txt',
+      '+++ b/long.txt',
+      '@@ -1,2 +1,3 @@',
+      '-' + oldLine,
+      '+' + newLine,
+      '+extra',
+      ' context',
+      '',
+    ].join('\n');
+    for (const theme of ['light', 'dark'] as const) {
+      const html = await renderSessionDiffHtml(
+        'long-scroll-' + theme,
+        {
+          version: 1,
+          repositories: [{ root: ROOT, patch, scope: 'working_tree' }],
+        },
+        theme,
+        undefined,
+        'split',
+      );
+      expect(html).toContain(oldLine);
+      expect(html).toContain(newLine);
+      // Inspect the app's CSS override in the real Pierre shadow-root HTML,
+      // not the library's original dehydrated rules which deliberately clip.
+      const shadow = html.slice(html.indexOf('<template shadowrootmode="open">'));
+      expect(shadow).toContain('grid-template-columns:repeat(2,minmax(0,1fr))');
+      expect(shadow).toContain('display:grid;grid-template-columns:max-content minmax(max-content,1fr)');
+      expect(shadow).toContain('overflow-x:auto;overflow-y:hidden');
+      expect(shadow).toContain('grid-column:2;min-width:max-content;overflow:visible');
+      expect(shadow).toContain('>[data-code]>[data-gutter]{grid-column:1}');
+      expect(html).toContain('html,body{width:100%;max-width:100%;min-width:0;overflow-x:clip}');
+      expect(html).toContain('data-content-buffer');
+      expect(html).not.toMatch(/<script[\s>]/i);
+    }
+  });
+});

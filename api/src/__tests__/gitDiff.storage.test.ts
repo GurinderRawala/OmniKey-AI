@@ -438,6 +438,18 @@ describe('GET /api/agent/sessions/:sessionId/diffs/:diffId', () => {
     expect(ok.body.html).toContain('<template shadowrootmode="open">');
     expect(ok.body.html).not.toMatch(/<script/i);
     expect(ok.body.html).toContain('&#x3C;script>');
+    const split = await request(app)
+      .get(`${url}?theme=light&layout=split`)
+      .set('x-test-subscription', 'sub-a');
+    expect(split.status).toBe(200);
+    expect(split.body.html).toContain('data-layout="split"');
+    expect(split.body.html).toContain('data-diff-type="split"');
+    for (const invalid of ['vertical', 'split&layout=unified']) {
+      expect(
+        (await request(app).get(`${url}?layout=${invalid}`).set('x-test-subscription', 'sub-a'))
+          .status,
+      ).toBe(400);
+    }
   });
 });
 

@@ -20,6 +20,7 @@ import {
   SSR_MAX_HTML_BYTES,
   SSR_RENDER_TIMEOUT_MS,
   type DiffTheme,
+  type DiffLayout,
 } from './ssrRenderWorker';
 
 export {
@@ -36,7 +37,7 @@ export {
   SSR_MAX_RENDERED_FILES,
   SSR_RENDER_TIMEOUT_MS,
 } from './ssrRenderWorker';
-export type { DiffTheme, FileKind } from './ssrRenderWorker';
+export type { DiffTheme, DiffLayout, FileKind } from './ssrRenderWorker';
 
 export const CACHE_MAX_ENTRIES = 8;
 export const CACHE_MAX_BYTES = 48 * 1024 * 1024;
@@ -100,9 +101,11 @@ export function renderSessionDiffHtml(
   payload: SessionDiffPayload,
   theme: DiffTheme,
   timeoutMs = SSR_RENDER_TIMEOUT_MS,
+  layout: DiffLayout = 'unified',
 ): Promise<string> {
   const safeTheme: DiffTheme = theme === 'light' ? 'light' : 'dark';
-  const key = `${cacheKey}:${safeTheme}`;
+  const safeLayout: DiffLayout = layout === 'split' ? 'split' : 'unified';
+  const key = `${cacheKey}:${safeTheme}:${safeLayout}`;
   const hit = cache.get(key);
   if (hit !== undefined) {
     cache.delete(key);
@@ -112,7 +115,7 @@ export function renderSessionDiffHtml(
   const pending = inFlight.get(key);
   if (pending) return pending;
   const work = getPool()
-    .render(key, payload, safeTheme, timeoutMs)
+    .render(key, payload, safeTheme, timeoutMs, safeLayout)
     .then((html) => {
       cachePut(key, html);
       return html;

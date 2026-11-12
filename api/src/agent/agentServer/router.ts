@@ -559,6 +559,11 @@ export function createAgentRouter(): express.Router {
       return;
     }
     const theme: DiffTheme = themeQuery === 'light' ? 'light' : 'dark';
+    const layout = req.query.layout;
+    if (layout !== undefined && layout !== 'unified' && layout !== 'split') {
+      res.status(400).json({ error: 'Invalid layout' });
+      return;
+    }
     try {
       const session = await AgentSession.findOne({
         where: { id: sessionId, subscriptionId: subscription.id },
@@ -573,7 +578,13 @@ export function createAgentRouter(): express.Router {
         res.status(404).json({ error: 'Diff not found' });
         return;
       }
-      const html = await renderSessionDiffHtml(stored.row.id, stored.payload, theme);
+      const html = await renderSessionDiffHtml(
+        stored.row.id,
+        stored.payload,
+        theme,
+        undefined,
+        layout === 'split' ? 'split' : 'unified',
+      );
       res.setHeader('Cache-Control', 'private, no-store');
       res.json({ id: stored.row.id, html });
     } catch (err) {
