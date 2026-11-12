@@ -13,6 +13,13 @@
       <description>Five example workflows using OmniAgent with terminal access, authenticated browser sessions, and MCP integrations, plus permission and safety guidance.</description>
     </item>
     <item>
+      <title>OmniKey v1.8.18</title>
+      <link>https://omnikeyai.ca/changelog#v1.8.18</link>
+      <guid isPermaLink="false">omnikey-v1.8.18</guid>
+      <pubDate>Thu, 12 Nov 2026 00:00:00 +0000</pubDate>
+      <description><![CDATA[<ul><li>Rebuild notarized macOS after review fixes</li><li>Address diff review security, capture and compact layout findings</li><li>Package notarized macOS 1.9.16 build 76</li><li>Prepare macOS 1.9.16 and CLI/API 1.8.18 patch release</li><li>Contain split diff scrolling and follow system appearance</li><li>Save per-answer Git diffs and render Pierre SSR in macOS</li></ul>]]></description>
+    </item>
+    <item>
       <title>OmniKey v1.8.17</title>
       <link>https://omnikeyai.ca/changelog#v1.8.17</link>
       <guid isPermaLink="false">omnikey-v1.8.17</guid>
@@ -144,13 +151,6 @@
       <guid isPermaLink="false">omnikey-v1.6.28</guid>
       <pubDate>Fri, 11 Sep 2026 00:00:00 +0000</pubDate>
       <description><![CDATA[<ul><li>Derive CLI version from package metadata</li></ul>]]></description>
-    </item>
-    <item>
-      <title>OmniKey v1.6.27</title>
-      <link>https://omnikeyai.ca/changelog#v1.6.27</link>
-      <guid isPermaLink="false">omnikey-v1.6.27</guid>
-      <pubDate>Fri, 11 Sep 2026 00:00:00 +0000</pubDate>
-      <description><![CDATA[<ul><li>Support Astra and future Responses models</li></ul>]]></description>
     </item>
   </channel>
 </rss>
