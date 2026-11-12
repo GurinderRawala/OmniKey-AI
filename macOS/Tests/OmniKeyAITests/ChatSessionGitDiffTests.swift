@@ -21,7 +21,7 @@ final class ChatSessionGitDiffTests: XCTestCase {
             originalText: "Start", groupName: nil, allowReauth: false, handle: ChatSessionRunHandle(),
             onBlock: onBlock, onSteeringEvent: { _ in }, onFinal: onFinal,
             onError: { XCTFail("Unexpected error: \($0)") },
-            socket: socket, executeShell: executeShell, collectGitDiff: collect
+            socket: socket, executeShell: executeShell, collectGitDiff: { request, _ in collect(request) }
         )
     }
 
@@ -31,6 +31,7 @@ final class ChatSessionGitDiffTests: XCTestCase {
         let socket = GitDiffTestSocket { message in
             if message.content == "Start" {
                 XCTAssertEqual(message.supportsGitDiff, true)
+                XCTAssertEqual(message.supportsGitTurnDiff, true)
                 sent.fulfill()
             }
         }

@@ -53,7 +53,9 @@ final class GitDiffRequestLedger: @unchecked Sendable {
 
     func begin(_ requestID: String) -> Bool {
         lock.withLock {
-            guard !requestID.isEmpty, requestID.count <= 128, seen.count < 32 else { return false }
+            // Turn mode adds one baseline request per newly discovered
+            // repository directory, so the per-run bound leaves headroom.
+            guard !requestID.isEmpty, requestID.count <= 128, seen.count < 64 else { return false }
             return seen.insert(requestID).inserted
         }
     }
@@ -440,6 +442,9 @@ final class ChatSessionRunner {
         let supportsSkillStatus: Bool?
         /// Client -> server opt-in for per-final Git snapshots (initial message only).
         let supportsGitDiff: Bool?
+        /// Client -> server opt-in for v3 per-turn baseline diffs (initial
+        /// message only). The server uses turn mode only when literally true.
+        let supportsGitTurnDiff: Bool?
         let workingDirectory: String?
         /// Server -> client control frame; never a model/tool/transcript message.
         let gitDiffRequest: GitDiffRequestPayload?
@@ -472,6 +477,7 @@ final class ChatSessionRunner {
             model: String? = nil,
             supportsSkillStatus: Bool? = nil,
             supportsGitDiff: Bool? = nil,
+            supportsGitTurnDiff: Bool? = nil,
             workingDirectory: String? = nil,
             gitDiffRequest: GitDiffRequestPayload? = nil,
             gitDiffResponse: GitDiffResponsePayload? = nil,
@@ -498,6 +504,7 @@ final class ChatSessionRunner {
             self.model = model
             self.supportsSkillStatus = supportsSkillStatus
             self.supportsGitDiff = supportsGitDiff
+            self.supportsGitTurnDiff = supportsGitTurnDiff
             self.workingDirectory = workingDirectory
             self.gitDiffRequest = gitDiffRequest
             self.gitDiffResponse = gitDiffResponse
@@ -526,6 +533,7 @@ final class ChatSessionRunner {
             case groupName = "group_name"
             case supportsSkillStatus = "supports_skill_status"
             case supportsGitDiff = "supports_git_diff"
+            case supportsGitTurnDiff = "supports_git_turn_diff"
             case workingDirectory = "working_directory"
             case gitDiffRequest = "git_diff_request"
             case gitDiffResponse = "git_diff_response"
@@ -557,6 +565,7 @@ final class ChatSessionRunner {
             model = try c.decodeIfPresent(String.self, forKey: .model)
             supportsSkillStatus = try c.decodeIfPresent(Bool.self, forKey: .supportsSkillStatus)
             supportsGitDiff = try? c.decodeIfPresent(Bool.self, forKey: .supportsGitDiff)
+            supportsGitTurnDiff = try? c.decodeIfPresent(Bool.self, forKey: .supportsGitTurnDiff)
             workingDirectory = try? c.decodeIfPresent(String.self, forKey: .workingDirectory)
             gitDiffRequest = try? c.decodeIfPresent(GitDiffRequestPayload.self, forKey: .gitDiffRequest)
             gitDiffResponse = try? c.decodeIfPresent(GitDiffResponsePayload.self, forKey: .gitDiffResponse)
@@ -628,8 +637,8 @@ final class ChatSessionRunner {
         executeShell: @escaping @Sendable (String, @escaping @Sendable (Process?) -> Void) -> (output: String, status: Int32) = {
             runShellCommandWithStatus($0, processRegistrar: $1)
         },
-        collectGitDiff: @escaping @Sendable (GitDiffRequestPayload) -> GitDiffResponsePayload = {
-            GitSnapshotCollector().collect($0)
+        collectGitDiff: @escaping @Sendable (GitDiffRequestPayload, GitTurnBaselineStore) -> GitDiffResponsePayload = {
+            GitSnapshotCollector().collect($0, turnStore: $1)
         },
         gitProvenance: GitProvenanceTracker = GitProvenanceTracker()
     ) {
@@ -654,6 +663,10 @@ final class ChatSessionRunner {
         // Git snapshot work runs serially off the receive/main paths.
         let gitQueue = DispatchQueue(label: "ChatSessionRunner.git-snapshot", qos: .userInitiated)
         let gitRequests = GitDiffRequestLedger()
+        // First HEAD captured per repository for this run (one outer user
+        // input, reused across recursion and steering; never reset or
+        // rebased within the run). The next turn gets a fresh store.
+        let turnBaselines = GitTurnBaselineStore()
 
         @Sendable func finishWithError(_ error: Error) {
             guard completion.finish() else { return }
@@ -734,7 +747,7 @@ final class ChatSessionRunner {
                         {
                             gitQueue.async {
                                 guard !completion.isFinished, !handle.isCancelledByUser else { return }
-                                let payload = collectGitDiff(gitRequest)
+                                let payload = collectGitDiff(gitRequest, turnBaselines)
                                 let reply = AgentMessage(
                                     sessionID: sessionID, sender: "client", content: "",
                                     platform: "macos", gitDiffResponse: payload
@@ -967,7 +980,8 @@ final class ChatSessionRunner {
             groupName: groupName,
             model: model,
             supportsSkillStatus: true,
-            supportsGitDiff: true
+            supportsGitDiff: true,
+            supportsGitTurnDiff: true
         )
 
         guard let data = try? encoder.encode(initial),

@@ -19,8 +19,30 @@ export const GIT_MAX_PATH_LENGTH = 1024;
 export const GIT_MAX_REASON_LENGTH = 500;
 export const GIT_MAX_REQUEST_ID_LENGTH = 64;
 
-export type SessionDiffScope = 'working_tree' | 'commit';
+/** Viewer cap: rendered file panels across all repositories of one snapshot. */
+export const GIT_DIFF_DISPLAY_LIMIT = 50;
+/** Backend wait for a baseline (HEAD-only) reply; it delays the model/shell. */
+export const GIT_TURN_BASELINE_TIMEOUT_MS = 6_000;
+/** Accepted clock skew for client baseline timestamps. */
+export const GIT_TURN_BASELINE_CLOCK_SKEW_MS = 5 * 60_000;
+const GIT_MAX_TIMESTAMP_LENGTH = 40;
+
+export type SessionDiffScope = 'working_tree' | 'commit' | 'turn';
 export type SessionDiffSummaryScope = SessionDiffScope | 'mixed';
+export type GitTurnBaselineSource = 'turn_start' | 'before_tool';
+export type GitDiffPhase = 'baseline' | 'final';
+
+/**
+ * HEAD of one canonical repository root, recorded once per outer run (contract
+ * v3). `head: null` means the root was unborn when the baseline was taken.
+ * The timestamp is the collector's capture time, not the user's click time.
+ */
+export interface GitTurnBaseline {
+  root: string;
+  head: string | null;
+  capturedAt: string;
+  source: GitTurnBaselineSource;
+}
 
 /** Snapshot summary stored on history metadata and sent with the live final. */
 export interface SessionDiffSummary {
@@ -31,6 +53,10 @@ export interface SessionDiffSummary {
   scope: SessionDiffSummaryScope;
   /** Present only for a single-repository commit snapshot. */
   commit?: string;
+  /** Turn snapshots (v3): viewer file-panel cap. */
+  displayLimit?: number;
+  baselineSource?: GitTurnBaselineSource;
+  baselineUnavailable?: boolean;
 }
 
 export interface EligibleCommit {
@@ -43,6 +69,14 @@ export interface GitDiffRequest {
   request_id: string;
   candidate_paths: string[];
   eligible_commits: EligibleCommit[];
+  /** v3 only. Absent = legacy capture. */
+  phase?: GitDiffPhase;
+  /** v3 baseline phase: the source the collector must echo on every baseline. */
+  baseline_source?: GitTurnBaselineSource;
+  /** v3 final phase: baselines recorded for this run. */
+  baselines?: GitTurnBaseline[];
+  /** v3 final phase: viewer file-panel cap (the patch itself stays complete). */
+  display_limit?: number;
 }
 
 export interface GitDiffRepository {
@@ -50,6 +84,11 @@ export interface GitDiffRepository {
   patch: string;
   scope: SessionDiffScope;
   commit?: string;
+  /** scope "turn" only: the recorded baseline and the endpoint HEAD. */
+  baselineHead?: string | null;
+  head?: string | null;
+  baselineCapturedAt?: string;
+  baselineSource?: GitTurnBaselineSource;
 }
 
 export type GitDiffResponseStatus = 'ok' | 'not_repository' | 'unavailable';
@@ -60,6 +99,8 @@ export interface GitDiffResponse {
   status: GitDiffResponseStatus;
   repositories: GitDiffRepository[];
   reason?: string;
+  /** v3 baseline phase only. */
+  baselines?: GitTurnBaseline[];
 }
 
 /** Optional on a shell_script request (server -> client). */
@@ -79,6 +120,9 @@ export interface SessionDiffPayload {
   version: 1;
   repositories: GitDiffRepository[];
   notice?: string;
+  /** v3 turn snapshots: every baseline recorded for the run, and the cap. */
+  baselines?: GitTurnBaseline[];
+  displayLimit?: number;
 }
 
 const OID_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
@@ -209,6 +253,174 @@ export function validateGitDiffResponse(
   return { request_id: request.request_id, status, repositories, reason };
 }
 
+function isBaselineSource(value: unknown): value is GitTurnBaselineSource {
+  return value === 'turn_start' || value === 'before_tool';
+}
+
+function relatedToAny(root: string, candidates: readonly string[]): boolean {
+  return candidates.some(
+    (candidate) => pathIsWithin(candidate, root) || pathIsWithin(root, candidate),
+  );
+}
+
+/**
+ * Normalize a bounded collector timestamp. It must parse, and lie between the
+ * run start and now (with clock-skew slack). Returns the ISO form or null.
+ */
+export function normalizeBaselineTimestamp(
+  value: unknown,
+  bounds: { notBefore: number; now: number },
+): string | null {
+  if (typeof value !== 'string' || value.length > GIT_MAX_TIMESTAMP_LENGTH) return null;
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/.test(value)) {
+    return null;
+  }
+  const ms = Date.parse(value);
+  if (!Number.isFinite(ms)) return null;
+  if (ms < bounds.notBefore - GIT_TURN_BASELINE_CLOCK_SKEW_MS) return null;
+  if (ms > bounds.now + GIT_TURN_BASELINE_CLOCK_SKEW_MS) return null;
+  return new Date(ms).toISOString();
+}
+
+/**
+ * Validate a v3 `phase: "baseline"` reply. `ok` carries no patch and at most
+ * 8 baselines, each for a safe root related to the requested candidates,
+ * with a valid OID or null (unborn), a bounded timestamp and exactly the
+ * requested source. Anything else throws (the whole reply is rejected, so a
+ * partial/forged set never becomes a baseline).
+ */
+export function validateGitBaselineResponse(
+  raw: unknown,
+  request: Pick<GitDiffRequest, 'request_id' | 'candidate_paths' | 'baseline_source'>,
+  bounds: { notBefore: number; now: number },
+  recorded: readonly GitTurnBaseline[] = [],
+): GitDiffResponse {
+  if (!isPlainObject(raw)) throw new GitDiffValidationError('not an object');
+  if (raw.request_id !== request.request_id) throw new GitDiffValidationError('request id');
+  const status = raw.status;
+  if (status !== 'ok' && status !== 'not_repository' && status !== 'unavailable') {
+    throw new GitDiffValidationError('status');
+  }
+  const rawRepositories = raw.repositories ?? [];
+  if (!Array.isArray(rawRepositories) || rawRepositories.length > 0) {
+    throw new GitDiffValidationError('baseline carries repositories');
+  }
+  const rawBaselines = raw.baselines ?? [];
+  if (!Array.isArray(rawBaselines)) throw new GitDiffValidationError('baselines');
+  if (status !== 'ok') {
+    if (rawBaselines.length > 0) throw new GitDiffValidationError('baselines on failure');
+    return { request_id: request.request_id, status, repositories: [], baselines: [] };
+  }
+  if (rawBaselines.length > GIT_DIFF_MAX_REPOSITORIES) {
+    throw new GitDiffValidationError('too many baselines');
+  }
+  const seen = new Set<string>();
+  const baselines: GitTurnBaseline[] = [];
+  for (const entry of rawBaselines) {
+    if (!isPlainObject(entry)) throw new GitDiffValidationError('baseline');
+    const { root, head, capturedAt, source } = entry;
+    if (!isSafeAbsolutePath(root)) throw new GitDiffValidationError('baseline root');
+    const existing = recorded.find(
+      (b) =>
+        comparablePath(b.root) === comparablePath(root) &&
+        b.head === head &&
+        b.source === source &&
+        Date.parse(b.capturedAt) === Date.parse(String(capturedAt)),
+    );
+    if (!existing && !relatedToAny(root, request.candidate_paths)) {
+      throw new GitDiffValidationError('baseline root not related to requested candidates');
+    }
+    if (head !== null && !isGitOid(head)) throw new GitDiffValidationError('baseline head');
+    if (!isBaselineSource(source) || (!existing && source !== request.baseline_source)) {
+      throw new GitDiffValidationError('baseline source');
+    }
+    const timestamp = normalizeBaselineTimestamp(capturedAt, bounds);
+    if (!timestamp) throw new GitDiffValidationError('baseline timestamp');
+    const key = comparablePath(root);
+    if (seen.has(key)) throw new GitDiffValidationError('duplicate baseline root');
+    seen.add(key);
+    baselines.push({ root: normalizeAbsolutePath(root), head, capturedAt: timestamp, source });
+  }
+  return { request_id: request.request_id, status, repositories: [], baselines };
+}
+
+/**
+ * Validate a v3 `phase: "final"` reply. A root with a recorded baseline may
+ * only be reported as scope "turn" echoing exactly that baseline; a root
+ * without one may only be "working_tree" (current uncommitted changes).
+ * Commit scope is never accepted (no latest-commit fallback in this mode).
+ */
+export function validateGitTurnFinalResponse(
+  raw: unknown,
+  request: Pick<GitDiffRequest, 'request_id' | 'candidate_paths' | 'baselines'>,
+): GitDiffResponse {
+  const recorded = new Map<string, GitTurnBaseline>();
+  for (const baseline of request.baselines ?? []) {
+    recorded.set(comparablePath(baseline.root), baseline);
+  }
+  const candidatePaths = [
+    ...request.candidate_paths,
+    ...(request.baselines ?? []).map((b) => b.root),
+  ];
+  if (!isPlainObject(raw)) throw new GitDiffValidationError('not an object');
+  const rawRepositories = raw.repositories;
+  const stripped: unknown[] = [];
+  const turnEntries = new Map<number, Record<string, unknown>>();
+  if (Array.isArray(rawRepositories)) {
+    rawRepositories.forEach((entry, index) => {
+      if (isPlainObject(entry) && entry.scope === 'turn') {
+        turnEntries.set(index, entry);
+        // Validated as a bounded working-tree entry first (root, size,
+        // duplicates, no commit), then re-typed against its baseline.
+        stripped.push({
+          root: entry.root,
+          patch: entry.patch,
+          scope: 'working_tree',
+          ...(entry.commit !== undefined ? { commit: entry.commit } : {}),
+        });
+      } else {
+        stripped.push(entry);
+      }
+    });
+  }
+  const base = validateGitDiffResponse(
+    { ...raw, repositories: Array.isArray(rawRepositories) ? stripped : rawRepositories },
+    { request_id: request.request_id, eligible_commits: [], candidate_paths: candidatePaths },
+  );
+  if (base.status !== 'ok') return base;
+  const repositories = base.repositories.map((repository, index) => {
+    const baseline = recorded.get(comparablePath(repository.root));
+    const entry = turnEntries.get(index);
+    if (!entry) {
+      if (baseline) throw new GitDiffValidationError('baselined root without turn scope');
+      return repository;
+    }
+    if (!baseline) throw new GitDiffValidationError('turn scope without recorded baseline');
+    const { baselineHead, head, baselineCapturedAt, baselineSource } = entry;
+    if (
+      baselineHead !== baseline.head ||
+      baselineSource !== baseline.source ||
+      typeof baselineCapturedAt !== 'string' ||
+      Date.parse(baselineCapturedAt) !== Date.parse(baseline.capturedAt)
+    ) {
+      throw new GitDiffValidationError('turn baseline mismatch');
+    }
+    if (head !== null && !isGitOid(head)) throw new GitDiffValidationError('turn head');
+    // An unborn endpoint is only possible from an unborn baseline.
+    if (head === null && baseline.head !== null) throw new GitDiffValidationError('turn head');
+    return {
+      root: repository.root,
+      patch: repository.patch,
+      scope: 'turn' as const,
+      baselineHead: baseline.head,
+      head,
+      baselineCapturedAt: baseline.capturedAt,
+      baselineSource: baseline.source,
+    };
+  });
+  return { ...base, repositories };
+}
+
 /** Literal, conservative detection of a direct `git commit` invocation. */
 export function scriptInvokesGitCommit(script: string): boolean {
   // `git [-C <path>]... [-c k=v]... commit` at a command position. Scripted
@@ -263,8 +475,15 @@ export function isSessionDiffSummary(value: unknown): value is SessionDiffSummar
     Number.isInteger(value.repositoryCount) &&
     (value.repositoryCount as number) >= 0 &&
     typeof value.createdAt === 'string' &&
-    (value.scope === 'working_tree' || value.scope === 'commit' || value.scope === 'mixed') &&
-    (value.commit === undefined || isGitOid(value.commit))
+    (value.scope === 'working_tree' ||
+      value.scope === 'commit' ||
+      value.scope === 'turn' ||
+      value.scope === 'mixed') &&
+    (value.commit === undefined || isGitOid(value.commit)) &&
+    (value.displayLimit === undefined ||
+      (Number.isInteger(value.displayLimit) &&
+        (value.displayLimit as number) > 0 &&
+        (value.displayLimit as number) <= 1000))
   );
 }
 
@@ -278,6 +497,11 @@ export function cleanSessionDiffSummary(value: unknown): SessionDiffSummary | un
     createdAt: value.createdAt,
     scope: value.scope,
     ...(value.commit ? { commit: value.commit } : {}),
+    ...(value.displayLimit !== undefined ? { displayLimit: value.displayLimit } : {}),
+    ...(isBaselineSource(value.baselineSource) ? { baselineSource: value.baselineSource } : {}),
+    ...(typeof value.baselineUnavailable === 'boolean'
+      ? { baselineUnavailable: value.baselineUnavailable }
+      : {}),
   };
 }
 

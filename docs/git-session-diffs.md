@@ -226,11 +226,12 @@ external service.
 'unsafe-inline'; img-src data:; …`. It has no scripts, network access, forms, frames or
   CDN assets. Pierre escapes code and file names, and every root, path, notice and OID that
   the backend adds is escaped too.
-- Limits: 120 rendered files, 512 KiB per file section, about 16 MiB of HTML, and 15 s
+- Limits: 50 file panels across all repositories (files past the cap get no DOM; one
+  `Showing 50 of N files.` line reports them, and `fileCount` stays exact), 512 KiB per file section, about 16 MiB of HTML, and 15 s
   wall time (the route returns 503 when it is exceeded). Renders run in an isolated worker thread (one active, at most two waiting).
   Queue time counts against the deadline, and timed-out workers are terminated.
   Identical in-flight requests are deduplicated. An LRU cache keyed by `id:theme` (8 entries, 48 MiB) serves repeats. Files beyond a limit
-  are listed but not rendered.
+  within the 50 panels get an honest per-file notice instead of content.
 - The API compiles to CommonJS, so the ESM-only package is loaded with a real dynamic
   `import()` that TypeScript does not rewrite. This needs Node ≥ 22.
 
@@ -326,3 +327,68 @@ Heredoc bodies that feed shell/interpreter Git commands fail closed. The staged-
 Python verifier is recognized narrowly (`git diff --cached --name-only` literal
 arguments). Commit observations require a direct parent match to the captured HEAD,
 so a hidden pull/merge followed by a commit cannot borrow the earlier baseline.
+
+## Per-turn diffs (contract v3, `supports_git_turn_diff`)
+
+A client that sends `supports_git_turn_diff: true` (as a literal boolean, in addition to
+`supports_git_diff: true`) gets **turn** snapshots: every net change from the HEAD
+recorded at the start of the outer run to the working tree when the answer is produced.
+Committed (any number of commits), staged, unstaged and eligible untracked changes appear
+as one patch. Clients without the flag keep the v2 flow byte-for-byte (no `phase`, legacy
+eligible-commit fallback).
+
+**Run boundary.** One `GitRunState` per outer user input. Recursion, tool continuations and
+steering reuse it; baselines are never reset, rebased or overwritten within the run. The
+next input on the same session starts a new run and requests a fresh HEAD; a previous
+baseline is never reused. The boundary is "the user input was accepted, before any agent
+action". It is not the click time, and external writers between acceptance and the
+baseline read cannot be excluded atomically.
+
+**Baseline phase** (server → client, same control path, owner/session/connection/request
+correlation as v2):
+
+```json
+{ "git_diff_request": { "request_id": "…", "phase": "baseline", "baseline_source": "turn_start|before_tool",
+  "candidate_paths": ["/abs"], "eligible_commits": [], "baselines": [] } }
+```
+
+Reply: `{ request_id, status, repositories: [], baselines: [{ root, head: "<oid>"|null,
+capturedAt: "ISO-8601", source }] }`. The backend rejects the whole reply unless: no
+repositories/patch; at most 8 baselines; safe roots related to the requested candidates;
+`head` a valid OID or `null` (unborn); `source` equal to the requested `baseline_source`;
+`capturedAt` parseable ISO-8601 within the run start/now (±5 min skew); no duplicate roots.
+The first verified baseline per canonical root wins (`/private/tmp` aliases merged); at most
+8 per run.
+
+- `turn_start`: sent once, after the session ownership check and before the first model
+  request or tool, for the project-context directory, absolute paths the user typed, and
+  the immediately previous run's candidates.
+- `before_tool`: before a shell is forwarded, for a newly seen structured
+  `working_directory`, literal leading `cd` or literal `git -C` directory. The shell waits
+  for it (bounded, 6 s). A path is attempted at most once per run, so repeated shells never
+  rebase. `pwd` output is only known afterwards and is never baselined retroactively.
+- A timeout, invalid/foreign/stale reply or `unavailable` marks the attempt failed; it is
+  never retried or captured late.
+
+**Final phase**: `{ phase: "final", baselines: [recorded…], display_limit: 50,
+eligible_commits: [] }`; baseline roots lead `candidate_paths`. A root with a recorded
+baseline may only be reported as `scope: "turn"` echoing exactly `baselineHead`,
+`baselineCapturedAt` and `baselineSource`, plus the endpoint `head` (an OID, or `null` only
+if the baseline was unborn). A root without a baseline may only be `working_tree`
+(current uncommitted changes), and the snapshot carries a "Turn baseline unavailable"
+notice. History is never guessed, and `commit` scope is never accepted in this mode. Any
+violation rejects the reply (no card; the final is still delivered).
+
+**Summary/storage.** `scope` is `turn` (all repositories baselined), `working_tree` (none),
+or `mixed`, and includes `displayLimit: 50`. The compressed immutable payload stores the
+repositories with their baseline/endpoint fields plus every recorded baseline. No new tables
+or columns are added. The viewer is titled **Turn changes** and shows
+`<baseline> → <head> + working tree` per repository. It makes no latest-commit claim.
+
+**Collector obligations (macOS).** Baseline: resolve at most 8 roots, read HEAD/unborn,
+never mutate the index, echo `baseline_source`. Final: `git diff <BASE>` against the working
+tree (empty tree when unborn) with `--no-ext-diff --no-textconv --no-color` (never
+`--binary`) plus eligible untracked files, even when the tree is clean. Verify that BASE
+exists and is an ancestor of (or equal to) the current HEAD; detached HEAD is fine. On
+reset/divergence or a HEAD that moves during capture, report `unavailable` and do not fall
+back. The patch stays within the existing 2 MiB budget.

@@ -3,6 +3,8 @@
 ## macOS 1.9.17 (build 77) · CLI/API 1.8.19 — 2026-11-12
 
 ### Fixed
+- Saved turn-wide Git diffs retain a fresh baseline HEAD per user input, combine all commits in that turn with current uncommitted/untracked changes, and reset the baseline on the next turn. Existing final-answer snapshots remain immutable.
+- Diff display is capped at50file panels with a clear omitted-file count. Late-discovered repositories disclose their later baseline; missing baselines never guess commit history.
 - New chats retain the cached task instruction while refreshing; stale task/model responses no longer overwrite newer selections. Unsent drafts restore their project/model choices, and existing sessions no longer inherit another chat's project.
 - Task, project and model names stay visible in a compact single-row composer. Full names and task-instruction excerpts are available in help text, and custom model labels retain their version identifiers.
 - First sends wait for pending task-default changes to finish, preserving the draft rather than starting with mismatched instructions.

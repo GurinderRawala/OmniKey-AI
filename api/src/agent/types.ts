@@ -69,6 +69,9 @@ export interface AgentMessage {
   // Client -> server (initial input): the client can collect Git snapshots on
   // its own execution host. Literal true only; never inferred.
   supports_git_diff?: boolean;
+  // Client -> server (initial input, contract v3): the client can capture
+  // per-turn HEAD baselines (`git_diff_request.phase`). Literal true only.
+  supports_git_turn_diff?: boolean;
   // Server -> client control frame sent before a final answer.
   git_diff_request?: GitDiffRequest;
   // Client -> server reply to git_diff_request (validated; never a turn input).

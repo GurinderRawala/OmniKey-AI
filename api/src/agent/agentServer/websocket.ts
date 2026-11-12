@@ -79,6 +79,7 @@ async function processNextInQueue(sessionId: string): Promise<void> {
       // Capability of the connection that sent (and receives frames for) this input.
       supportsSkillStatus: next.message.supports_skill_status === true,
       supportsGitDiff: next.message.supports_git_diff === true,
+      supportsGitTurnDiff: next.message.supports_git_turn_diff === true,
     });
   } catch (err) {
     next.log.error('Queued agent turn failed', { sessionId, error: err });

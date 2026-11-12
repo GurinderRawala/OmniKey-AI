@@ -332,10 +332,10 @@ struct SessionDiffInspectorView: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            Image(systemName: selection.diff.scope == .commit ? "point.3.connected.trianglepath.dotted" : "doc.text.magnifyingglass")
+            Image(systemName: selection.diff.scope == .commit || selection.diff.scope == .turn ? "point.3.connected.trianglepath.dotted" : "doc.text.magnifyingglass")
                 .foregroundColor(NordTheme.accent(colorScheme))
             VStack(alignment: .leading, spacing: 1) {
-                Text(selection.diff.scope == .commit ? "Commit changes" : selection.diff.scope == .mixed ? "Working tree and commit changes" : "Working-tree snapshot")
+                Text(selection.diff.headerTitle)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundColor(NordTheme.primaryText(colorScheme))
                 Text(selection.diff.detailText)
@@ -343,6 +343,7 @@ struct SessionDiffInspectorView: View {
                     .foregroundColor(NordTheme.secondaryText(colorScheme))
                     .lineLimit(1)
                     .truncationMode(.tail)
+                    .help(selection.diff.detailText)
             }
             Spacer(minLength: 4)
             Picker("Diff layout", selection: $layout) {
@@ -414,7 +415,7 @@ struct SessionDiffCardView: View {
             model.toggleSessionDiff(diff)
         } label: {
             HStack(spacing: 10) {
-                Image(systemName: diff.scope == .commit ? "point.3.connected.trianglepath.dotted" : "plusminus.circle")
+                Image(systemName: diff.scope == .commit || diff.scope == .turn ? "point.3.connected.trianglepath.dotted" : "plusminus.circle")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundColor(NordTheme.accent(colorScheme))
                 VStack(alignment: .leading, spacing: 2) {
@@ -445,9 +446,7 @@ struct SessionDiffCardView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(diff.scope == .commit
-            ? "Show the changes of the commit observed during this run"
-            : "Show the repository's uncommitted changes when this answer was produced (may include edits made outside this run)")
+        .help(diff.helpText)
         .accessibilityLabel("\(diff.buttonTitle). \(diff.detailText)")
     }
 }

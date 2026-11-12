@@ -27,7 +27,12 @@ import { completeWithContextRecovery } from './completionRecovery';
 import { extractProgressSummary } from './progressSummary';
 import { ToolProgressGuard } from './toolProgressGuard';
 import { throwIfTurnCancelled } from './turnCancellation';
-import { planShellGitContext, recordShellGitResult } from '../gitDiff/shellContext';
+import {
+  baselinePathsForShell,
+  planShellGitContext,
+  recordShellGitResult,
+} from '../gitDiff/shellContext';
+import { captureTurnBaselines } from '../gitDiff/coordinator';
 
 export { extractProgressSummary } from './progressSummary';
 
@@ -406,6 +411,18 @@ export async function runToolLoop(
             name: tc.name,
             result: `COMMAND ERROR: ${gitPlan.error} Script was not executed.`,
           };
+        }
+        // Contract v3: a newly discovered structured/literal directory gets
+        // its baseline BEFORE the script is forwarded (awaited, bounded).
+        // Already-attempted paths/roots are skipped, so it never rebases.
+        if (session.gitRun?.turnDiff) {
+          await captureTurnBaselines(
+            session.gitRun,
+            baselinePathsForShell(gitPlan, script),
+            'before_tool',
+            session.signal,
+            log,
+          );
         }
         const terminalOutput = await new Promise<string>((resolve) => {
           const finish = (output: string, _isError?: boolean, gitCommitObservations?: unknown) => {
