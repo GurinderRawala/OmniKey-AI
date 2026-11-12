@@ -478,7 +478,9 @@ describe('unhydrated split scroll containment', () => {
       // not the library's original dehydrated rules which deliberately clip.
       const shadow = html.slice(html.indexOf('<template shadowrootmode="open">'));
       expect(shadow).toContain('grid-template-columns:repeat(2,minmax(0,1fr))');
-      expect(shadow).toContain('display:grid;grid-template-columns:max-content minmax(max-content,1fr)');
+      expect(shadow).toContain(
+        'display:grid;grid-template-columns:max-content minmax(max-content,1fr)',
+      );
       expect(shadow).toContain('overflow-x:auto;overflow-y:hidden');
       expect(shadow).toContain('grid-column:2;min-width:max-content;overflow:visible');
       expect(shadow).toContain('>[data-code]>[data-gutter]{grid-column:1}');

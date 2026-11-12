@@ -1,5 +1,22 @@
 # Changelog
 
+## macOS 1.9.16 (build 76) · CLI/API 1.8.18 — 2026-11-12
+
+### Added
+- Automatic Git repository snapshots saved with each agent answer, compressed and restored with session history. No folder selection is required; non-Git work has no diff button.
+- Right-hand diff inspector powered by Pierre server-side rendering, with Unified and Side-by-side layouts and automatic system appearance.
+- Clean repositories can show the latest commit when it matches observed agent execution in the current or immediately previous session run; unrelated user commits are not inferred from author or time.
+
+### Fixed
+- Side-by-side horizontal scrolling stays inside the old/new code panes instead of moving the page into blank space. Diff banners match the message column width.
+- Git capture honors validated execution directories, includes staged/unstaged and eligible untracked changes, and preserves each final answer's immutable snapshot identity.
+- Rendering runs in bounded, terminable workers so syntax highlighting cannot stall the API event loop. Authenticated snapshots are owner/session scoped, script-free, and isolated in the macOS WebView.
+
+### Release scope and compatibility
+- macOS 15+, universal Apple Silicon/Intel distribution. CLI and API are 1.8.18 and require Node 22+; Pierre is installed in both runtime packages.
+- Windows version and artifact remain unchanged. Working-tree snapshots may include pre-existing edits; binary content and sensitive filename patterns are excluded or summarized. Commit attribution is conservative under concurrent writers.
+- No app/E2E launch was performed by the release agent; the user handles UI acceptance. See docs/git-session-diffs.md for capture and rendering limits.
+
 ## macOS 1.9.15 (build 75) · CLI/API 1.8.17 — 2026-11-11
 
 ### Added
