@@ -1046,7 +1046,7 @@ final class ChatSessionRunner {
     /// session is shown; error finals never get a snapshot card.
     nonisolated static func acceptedSessionDiff(from response: AgentMessage, sessionID: String) -> SavedSessionDiff? {
         guard  response.sessionID == sessionID,
-              let diff = response.sessionDiff, diff.hasSafeID, diff.fileCount >= 0, diff.repositoryCount > 0
+              let diff = response.sessionDiff, diff.isEligibleForViewer, diff.fileCount >= 0, diff.repositoryCount > 0
         else { return nil }
         return diff
     }

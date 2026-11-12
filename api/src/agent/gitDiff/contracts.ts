@@ -86,8 +86,15 @@ export interface GitDiffRecoveryReply {
 
 /**
  * Provenance stored on a recovered snapshot payload. `agent_assisted` replays
- * verified native checkpoints; `ai_reconstructed` is an unverified model
- * reconstruction from this turn's write-like shell scripts (never complete).
+ * verified native checkpoints; `ai_reconstructed` contains at least one file
+ * reconstructed by the model from this turn's write-like shell scripts
+ * (always unverified), optionally merged with a verified base.
+ *
+ * `complete` is KNOWN COVERAGE only: every change the backend knew about for
+ * this turn is represented. It never means the content was verified, and it
+ * never claims that changes made by unrecognised scripts are included. New
+ * snapshots are only ever saved with `complete: true`; `false` exists solely
+ * on older stored payloads (which the viewer route now refuses to serve).
  */
 export interface SessionDiffRecoveryProvenance {
   kind: 'agent_assisted' | 'ai_reconstructed';
@@ -97,6 +104,8 @@ export interface SessionDiffRecoveryProvenance {
   limitations: string[];
   /** ai_reconstructed only: the write-like tool calls offered as evidence. */
   toolCallIds?: string[];
+  /** ai_reconstructed only: the verified evidence the AI files were merged into. */
+  base?: 'automatic' | 'checkpoint';
 }
 
 export type SessionDiffRecoveryMethod = 'checkpoint' | 'ai_reconstructed';
@@ -110,9 +119,21 @@ export type SessionDiffCaptureStatus =
   | 'workspace_unavailable'
   | 'capture_failed';
 
+/** A validated automatic capture that has NOT been persisted yet. */
+export interface SessionDiffCandidate {
+  repositories: GitDiffRepository[];
+  notice?: string;
+  /** Native disclosure text (e.g. sensitive exclusion counts). */
+  reason?: string;
+  /** Present for v3 turn captures. */
+  turn?: { baselines: GitTurnBaseline[]; displayLimit: number };
+}
+
 export interface SessionDiffCaptureOutcome {
   status: SessionDiffCaptureStatus;
   summary?: SessionDiffSummary;
+  /** Deferred capture only: the unsaved snapshot behind status "captured". */
+  candidate?: SessionDiffCandidate;
   /** Roots authoritatively checked and reported net-empty by normal capture. */
   unchangedRoots?: string[];
   reason?: string;
@@ -183,6 +204,8 @@ export interface GitDiffRepository {
   head?: string | null;
   baselineCapturedAt?: string;
   baselineSource?: GitTurnBaselineSource;
+  /** Stored payloads only: files of this entry were reconstructed by the AI (unverified). */
+  reconstructed?: true;
 }
 
 export type GitDiffResponseStatus = 'ok' | 'not_repository' | 'unavailable';
@@ -613,6 +636,27 @@ export function cleanSessionDiffSummary(value: unknown): SessionDiffSummary | un
       ? { recoveryMethod: value.recoveryMethod }
       : {}),
   };
+}
+
+/**
+ * A summary the backend knows is partial: an incomplete recovery, or a turn
+ * snapshot in which some root had no baseline (uncommitted changes only).
+ * Such summaries are never attached or re-served.
+ */
+export function isKnownPartialSummary(summary: SessionDiffSummary | undefined): boolean {
+  return summary?.recoveryIncomplete === true || summary?.baselineUnavailable === true;
+}
+
+/**
+ * Stored payload counterpart of `isKnownPartialSummary`. Legacy working-tree
+ * payloads (no baselines, no recovery provenance) carry no such claim.
+ */
+export function isKnownPartialPayload(payload: SessionDiffPayload): boolean {
+  // Recovered payloads are judged by their own coverage verdict (their
+  // checkpoint/AI entries are working-tree scoped by design).
+  if (payload.recovery) return payload.recovery.complete !== true;
+  if (Array.isArray(payload.baselines)) return payload.repositories.some((r) => r.scope !== 'turn');
+  return false;
 }
 
 // ---------------------------------------------------------------------------

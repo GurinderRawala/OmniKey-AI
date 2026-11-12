@@ -27,6 +27,7 @@ enum SessionDiffFetchError: LocalizedError, Equatable {
     case notSignedIn
     case invalidIdentifier
     case notFound
+    case incomplete
     case server(Int)
     case malformed
     case mismatchedSnapshot
@@ -36,6 +37,7 @@ enum SessionDiffFetchError: LocalizedError, Equatable {
         case .notSignedIn: return "Sign in to view saved changes."
         case .invalidIdentifier: return "This snapshot can't be opened."
         case .notFound: return "This snapshot is no longer available."
+        case .incomplete: return "This snapshot is incomplete and cannot be displayed."
         case let .server(code): return "Couldn't load the snapshot (HTTP \(code))."
         case .malformed, .mismatchedSnapshot: return "The server returned an invalid snapshot."
         }
@@ -96,6 +98,7 @@ struct SessionDiffHTTPFetcher: SessionDiffFetching {
         }
         guard let http = response as? HTTPURLResponse else { throw SessionDiffFetchError.malformed }
         if http.statusCode == 404 { throw SessionDiffFetchError.notFound }
+        if http.statusCode == 409 { throw SessionDiffFetchError.incomplete }
         guard 200..<300 ~= http.statusCode else { throw SessionDiffFetchError.server(http.statusCode) }
         guard let body = try? JSONDecoder().decode(SessionDiffHTMLResponse.self, from: data) else {
             throw SessionDiffFetchError.malformed
@@ -175,6 +178,13 @@ final class SessionDiffInspectorModel: ObservableObject {
     /// Loads exactly `selection.diff.id`. Any earlier in-flight fetch is
     /// cancelled and its late result discarded (stale identity guard).
     func load(_ selection: SessionDiffSelection, theme: SessionDiffTheme, layout: SessionDiffLayout = .unified, force: Bool = false) {
+        guard selection.diff.isEligibleForViewer else {
+            task?.cancel()
+            generation += 1
+            loadedKey = nil
+            phase = .failed("The changes snapshot is incomplete and cannot be displayed.")
+            return
+        }
         let key = Self.key(selection, theme: theme, layout: layout)
         if !force, key == loadedKey, phase != .idle { return }
         task?.cancel()
@@ -460,7 +470,7 @@ enum ChatSessionDiffPlacement {
         guard let finalIndex = blocks.firstIndex(where: { $0.kind == .finalAnswer }) else { return [] }
         var seen = Set<String>()
         return blocks[..<finalIndex].filter { block in
-            guard block.kind == .sessionDiff, let diff = block.sessionDiff, diff.hasSafeID else { return false }
+            guard block.kind == .sessionDiff, let diff = block.sessionDiff, diff.isEligibleForViewer else { return false }
             return seen.insert(diff.id).inserted
         }
     }

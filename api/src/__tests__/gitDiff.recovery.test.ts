@@ -129,6 +129,12 @@ import {
   parseReconstructionFiles,
 } from '../agent/gitDiff/aiReconstruction';
 import { classifyShellWrites, redactSecrets } from '../agent/gitDiff/writeEvidence';
+import {
+  coverageAssessment,
+  patchCoveredPaths,
+  reasonDisclosesExclusion,
+  withoutCoveredSections,
+} from '../agent/gitDiff/coverage';
 import { setSkillResolverForTesting } from '../agent/skillContext';
 import { buildTranscript } from '../agent/agentServer/transcript';
 
@@ -358,8 +364,11 @@ function manifest(body: unknown, usage = true) {
   };
 }
 
-/** One shell in ROOT that reports `records(ctx)` as evidence. */
-function shellTurn(script = `cd ${ROOT} && ${SECRET_SCRIPT_MARKER} > a.ts`) {
+/**
+ * One shell in ROOT that reports `records(ctx)` as evidence. The default
+ * script is not write-like (its changes are known only through the records).
+ */
+function shellTurn(script = `cd ${ROOT} && ${SECRET_SCRIPT_MARKER} && make`) {
   queueResults(
     toolCalls([{ id: 'c1', name: 'shell_script', arguments: { script } }]),
     finalAnswer('done'),
@@ -1050,7 +1059,7 @@ describe('agent-assisted recovery in a real agent turn', () => {
     expect(await diffCount('r-forged')).toBe(0);
   });
 
-  it('a partial selection is saved with an honest incomplete warning', async () => {
+  it('a partial selection with native omissions attempts AI but never attaches a partial card', async () => {
     queueResults(
       toolCalls([{ id: 'c1', name: 'shell_script', arguments: { script: `cd ${ROOT} && make` } }]),
       toolCalls([
@@ -1059,6 +1068,7 @@ describe('agent-assisted recovery in a real agent turn', () => {
       finalAnswer('done'),
     );
     mocks.recoveryResult.mockResolvedValue(manifest({ evidenceIds: ['r-b'] }));
+    mocks.reconstructionResult.mockResolvedValue(manifest({ unavailable: true }));
     const t = await turn('r-partial', `Fix ${ROOT}`, {
       heads: { [ROOT]: OID_1 },
       evidence: (ctx) =>
@@ -1073,14 +1083,84 @@ describe('agent-assisted recovery in a real agent turn', () => {
     expect(
       JSON.parse((recoveryCalls()[0][1] as any)[1].content).records.map((r: any) => r.id),
     ).toEqual(['r-a', 'r-b']);
-    expect(t.final!.session_diff).toMatchObject({ recovered: true, recoveryIncomplete: true });
-    const stored = await loadSessionDiffPayload('r-partial', 'sub-a', t.final!.session_diff!.id);
-    expect(stored!.payload.recovery!.complete).toBe(false);
-    expect(stored!.payload.recovery!.limitations).toEqual([
-      '1 verified change record was not selected for recovery.',
-      'The native checkpoint store omitted 3 records.',
-      'Some selected records were truncated by native limits.',
+    // Manifest + one reconstruction attempt for the unselected verified path.
+    expect(t.events.slice(-4)).toEqual([
+      'final',
+      'recovery-model',
+      'recover',
+      'reconstruction-model',
     ]);
+    const recon = JSON.parse((mocks.reconstructionResult.mock.calls[0][1] as any)[1].content);
+    expect(recon.allowedPaths).toEqual([
+      { path: `${ROOT}/a.ts`, creationVerified: false, deletionAllowed: false },
+    ]);
+    // Truncated record + native omissions remain unresolvable: withheld.
+    expect(t.final!.content).toBe('<final_answer>\ndone\n</final_answer>');
+    expect(t.final!.session_diff).toBeUndefined();
+    expect(await diffCount('r-partial')).toBe(0);
+  });
+
+  it('an unselected verified file is AI-reconstructed and merged without touching the replayed file', async () => {
+    queueResults(
+      toolCalls([{ id: 'c1', name: 'shell_script', arguments: { script: `cd ${NOTES} && make` } }]),
+      finalAnswer('done'),
+    );
+    mocks.recoveryResult.mockResolvedValue(manifest({ evidenceIds: ['f-a'] }));
+    mocks.reconstructionResult.mockResolvedValue(
+      manifest({ files: [{ path: `${NOTES}/b.md`, before: null, after: 'b\n' }] }),
+    );
+    const t = await turn('r-merge-native', 'update notes', {
+      evidence: evidenceFor((tc) => [
+        rec('f-a', tc, NOTES, ['a.md'], 'file'),
+        rec('f-b', tc, NOTES, ['b.md'], 'file'),
+      ]),
+    });
+    expect(t.final!.session_diff).toMatchObject({
+      recovered: true,
+      recoveryIncomplete: false,
+      recoveryMethod: 'ai_reconstructed',
+      fileCount: 2,
+    });
+    const stored = await loadSessionDiffPayload(
+      'r-merge-native',
+      'sub-a',
+      t.final!.session_diff!.id,
+    );
+    expect(stored!.payload.recovery).toMatchObject({
+      kind: 'ai_reconstructed',
+      base: 'checkpoint',
+      evidenceIds: ['f-a'],
+      complete: true,
+    });
+    expect(stored!.payload.repositories).toEqual([
+      { root: NOTES, patch: filePatch('a.md'), scope: 'working_tree' },
+      {
+        root: NOTES,
+        patch: buildFilePatch('b.md', null, 'b\n'),
+        scope: 'working_tree',
+        reconstructed: true,
+      },
+    ]);
+  });
+
+  it('an older selected checkpoint cannot cover a later record on the same path', async () => {
+    queueResults(
+      toolCalls([{ id: 'c1', name: 'shell_script', arguments: { script: `cd ${NOTES} && make` } }]),
+      finalAnswer('done'),
+    );
+    mocks.recoveryResult.mockResolvedValue(manifest({ evidenceIds: ['old'] }));
+    mocks.reconstructionResult.mockResolvedValue(
+      manifest({ files: [{ path: `${NOTES}/a.md`, before: 'old\n', after: 'new\n' }] }),
+    );
+    const t = await turn('r-same-path-stale', 'update notes', {
+      evidence: evidenceFor((tc) => [
+        rec('old', tc, NOTES, ['a.md'], 'file'),
+        rec('new', tc, NOTES, ['a.md'], 'file'),
+      ]),
+    });
+    expect(mocks.reconstructionResult).toHaveBeenCalledOnce();
+    expect(t.final?.session_diff).toBeUndefined();
+    expect(await diffCount('r-same-path-stale')).toBe(0);
   });
 
   it('the next turn never sees or recovers an older turn record', async () => {
@@ -1236,8 +1316,10 @@ describe('agent-assisted recovery in a real agent turn', () => {
     const complete = vi.fn(async () => manifest({ unavailable: true }));
     restoreDeps = setDiffRecoveryDepsForTesting({ complete: complete as any });
     await recoverSessionDiff(r, { model: 'm', signal: undefined, log });
+    // Manifest + one reconstruction attempt (the record path stayed missing).
+    expect(complete).toHaveBeenCalledTimes(2);
     await recoverSessionDiff(r, { model: 'm', signal: undefined, log });
-    expect(complete).toHaveBeenCalledTimes(1);
+    expect(complete).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -1245,9 +1327,9 @@ describe('recovered snapshot viewer', () => {
   const app = express();
   app.use('/api/agent', createAgentRouter());
 
-  it('replays a compressed recovered payload with provenance, partial warning and the 50-panel cap', async () => {
+  it('replays a complete 100-file recovered payload with provenance and the 50-panel cap', async () => {
     await AgentSession.create({ id: 'v-rec', subscriptionId: 'sub-a' } as any);
-    const patch = Array.from({ length: 60 }, (_, i) =>
+    const patch = Array.from({ length: 100 }, (_, i) =>
       filePatch(`src/f${String(i).padStart(3, '0')}.ts`),
     ).join('');
     const connection = new AbortController();
@@ -1273,7 +1355,7 @@ describe('recovered snapshot viewer', () => {
                   repositories: [
                     { root: WORKTREE, patch: `${patch}<script>x</script>`, scope: 'working_tree' },
                   ],
-                  recovery: { turn_id: r.runId, evidence_ids: ['r1', 'r2'], omitted: 1 },
+                  recovery: { turn_id: r.runId, evidence_ids: ['r1', 'r2'], omitted: 0 },
                 },
               },
               'sub-a',
@@ -1298,7 +1380,7 @@ describe('recovered snapshot viewer', () => {
           'r2',
           'c1',
           WORKTREE,
-          Array.from({ length: 10 }, (_, i) => `src/f${String(i + 50).padStart(3, '0')}.ts`),
+          Array.from({ length: 50 }, (_, i) => `src/f${String(i + 50).padStart(3, '0')}.ts`),
         ),
       ],
     });
@@ -1306,18 +1388,18 @@ describe('recovered snapshot viewer', () => {
       complete: (async () => manifest({ evidenceIds: ['r1', 'r2'] })) as any,
     });
     const summary = (await recoverSessionDiff(r, { model: 'm', signal: undefined, log }))!;
-    expect(summary).toMatchObject({ recovered: true, recoveryIncomplete: true, fileCount: 60 });
+    // The 50-panel viewer cap is a display limit, never a coverage gap.
+    expect(summary).toMatchObject({ recovered: true, recoveryIncomplete: false, fileCount: 100 });
     const res = await request(app)
       .get(`/api/agent/sessions/v-rec/diffs/${summary.id}`)
       .set('x-test-subscription', 'sub-a');
     expect(res.status).toBe(200);
     const html: string = res.body.html;
     expect(html).toContain('Recovered turn changes');
-    expect(html).toContain('Partial recovery');
-    expect(html).toContain('The native checkpoint store omitted 1 record.');
+    expect(html).not.toContain('Partial recovery');
     expect(html).toContain('recovered from turn checkpoints');
     expect((html.match(/<details class="file"/g) ?? []).length).toBe(50);
-    expect(html).toContain('Showing 50 of 60 files');
+    expect(html).toContain('Showing 50 of 100 files');
     expect(html).not.toContain('<script>x</script>');
     expect(
       (
@@ -1326,6 +1408,82 @@ describe('recovered snapshot viewer', () => {
           .set('x-test-subscription', 'sub-b')
       ).status,
     ).toBe(404);
+  }, 60_000);
+
+  it('refuses known-partial stored snapshots (409) and keeps legacy working-tree ones', async () => {
+    const { compressString } = await import('../compression');
+    await AgentSession.create({ id: 'v-old', subscriptionId: 'sub-a' } as any);
+    const store = async (id: string, payload: Record<string, unknown>) =>
+      AgentSessionDiff.create({
+        id,
+        sessionId: 'v-old',
+        subscriptionId: 'sub-a',
+        runId: 'grun_old',
+        scope: 'working_tree',
+        commitOid: null,
+        fileCount: 1,
+        repositoryCount: 1,
+        payload: compressString(JSON.stringify({ version: 1, ...payload })),
+      } as any);
+    const repo = { root: ROOT, patch: filePatch('a.ts'), scope: 'working_tree' };
+    await store('sdiff_oldpartial1', {
+      repositories: [repo],
+      displayLimit: 50,
+      recovery: {
+        kind: 'agent_assisted',
+        turnId: 'grun_old',
+        evidenceIds: ['r1'],
+        complete: false,
+        limitations: [],
+      },
+    });
+    await store('sdiff_oldnobase01', { repositories: [repo], baselines: [], displayLimit: 50 });
+    await store('sdiff_legacywt001', { repositories: [repo] });
+    const get = (id: string) =>
+      request(app).get(`/api/agent/sessions/v-old/diffs/${id}`).set('x-test-subscription', 'sub-a');
+    for (const id of ['sdiff_oldpartial1', 'sdiff_oldnobase01']) {
+      const res = await get(id);
+      expect(res.status).toBe(409);
+      expect(res.body).toEqual({ error: 'Diff incomplete', code: 'diff_incomplete' });
+      expect(JSON.stringify(res.body)).not.toContain('a.ts');
+    }
+    const legacy = await get('sdiff_legacywt001');
+    expect(legacy.status).toBe(200);
+    expect(legacy.body.html).toContain('Working tree changes');
+    // Transcript replay no longer offers known-partial cards.
+    const summary = (id: string, extra: Record<string, unknown>) => ({
+      id,
+      fileCount: 1,
+      repositoryCount: 1,
+      createdAt: new Date().toISOString(),
+      scope: 'working_tree',
+      ...extra,
+    });
+    const transcript = JSON.stringify(
+      buildTranscript([
+        { role: 'user', content: 'a' },
+        {
+          role: 'assistant',
+          content: '<final_answer>\none\n</final_answer>',
+          session_diff: summary('sdiff_oldpartial1', { recovered: true, recoveryIncomplete: true }),
+        },
+        { role: 'user', content: 'b' },
+        {
+          role: 'assistant',
+          content: '<final_answer>\ntwo\n</final_answer>',
+          session_diff: summary('sdiff_oldnobase01', { baselineUnavailable: true }),
+        },
+        { role: 'user', content: 'c' },
+        {
+          role: 'assistant',
+          content: '<final_answer>\nthree\n</final_answer>',
+          session_diff: summary('sdiff_legacywt001', {}),
+        },
+      ] as any),
+    );
+    expect(transcript).not.toContain('sdiff_oldpartial1');
+    expect(transcript).not.toContain('sdiff_oldnobase01');
+    expect(transcript).toContain('sdiff_legacywt001');
   }, 60_000);
 });
 
@@ -1572,13 +1730,10 @@ printf 'hi\\n' > todo.md`;
       { id, name: 'shell_script', arguments: { script, working_directory: workingDirectory } },
     ]);
 
-  it('no Git + write + zero records: one tool-free AI call and a labelled unverified snapshot', async () => {
+  it('no Git + write + zero records: one tool-free AI call; full known coverage is unverified, not partial', async () => {
     queueResults(writeShell(), finalAnswer('done'));
     mocks.reconstructionResult.mockResolvedValue(
-      manifest({
-        files: [{ path: `${NOTES}/todo.md`, before: null, after: 'hi\n' }],
-        limitations: ['guessed'],
-      }),
+      manifest({ files: [{ path: `${NOTES}/todo.md`, before: null, after: 'hi\n' }] }),
     );
     const t = await turn('ai-ok', 'create my todo', {});
     expect(t.events.slice(-2)).toEqual(['final', 'reconstruction-model']);
@@ -1603,23 +1758,32 @@ printf 'hi\\n' > todo.md`;
     expect(t.final!.content).toBe('<final_answer>\ndone\n</final_answer>');
     expect(t.final!.session_diff).toMatchObject({
       recovered: true,
-      recoveryIncomplete: true,
+      recoveryIncomplete: false,
       recoveryMethod: 'ai_reconstructed',
       fileCount: 1,
     });
     expect(mocks.recordTokenUsage).toHaveBeenCalledTimes(1);
     const stored = await loadSessionDiffPayload('ai-ok', 'sub-a', t.final!.session_diff!.id);
     expect(stored!.payload.repositories).toEqual([
-      { root: NOTES, patch: buildFilePatch('todo.md', null, 'hi\n'), scope: 'working_tree' },
+      {
+        root: NOTES,
+        patch: buildFilePatch('todo.md', null, 'hi\n'),
+        scope: 'working_tree',
+        reconstructed: true,
+      },
     ]);
+    // complete = known coverage only; the content stays explicitly unverified.
     expect(stored!.payload.recovery).toMatchObject({
       kind: 'ai_reconstructed',
       evidenceIds: [],
       toolCallIds: ['c1'],
-      complete: false,
+      complete: true,
     });
+    expect(stored!.payload.recovery!.base).toBeUndefined();
     expect(stored!.payload.recovery!.limitations[0]).toMatch(/not verified/);
-    expect(stored!.payload.recovery!.limitations).toContain('Model note: guessed');
+    expect(stored!.payload.recovery!.limitations).toContain(
+      'Writes the backend did not recognise (for example dynamic paths) cannot be detected.',
+    );
 
     const res = await request(app)
       .get(`/api/agent/sessions/ai-ok/diffs/${t.final!.session_diff!.id}`)
@@ -1628,8 +1792,208 @@ printf 'hi\\n' > todo.md`;
     expect(res.body.html).toContain('AI-reconstructed turn changes');
     expect(res.body.html).toContain('Unverified');
     expect(res.body.html).toContain('AI-reconstructed (unverified)');
+    expect(res.body.html).toContain('They may be inaccurate.');
+    expect(res.body.html).not.toContain('partial or inaccurate');
     expect(res.body.html).not.toContain('Recovered turn changes');
   }, 60_000);
+
+  it.each([
+    [
+      'model notes a gap',
+      {
+        files: [
+          { path: `${NOTES}/a.md`, before: null, after: 'a\n' },
+          { path: `${NOTES}/b.md`, before: null, after: 'b\n' },
+        ],
+        limitations: ['b.md is a guess'],
+      },
+    ],
+    [
+      'subset of the required paths',
+      { files: [{ path: `${NOTES}/a.md`, before: null, after: 'a\n' }] },
+    ],
+  ])(
+    'a reconstruction with %s is rejected (missing new file one of two => no button)',
+    async (label, body) => {
+      queueResults(writeShell(`set -eC\nprintf a > a.md\nprintf b > b.md`), finalAnswer('done'));
+      mocks.reconstructionResult.mockResolvedValue(manifest(body));
+      const id = `ai-subset-${label.replace(/\W/g, '')}`;
+      const t = await turn(id, 'create two files', {});
+      const payload = JSON.parse((reconstructionCalls()[0][1] as any)[1].content);
+      expect(payload.allowedPaths.map((p: any) => p.path)).toEqual([
+        `${NOTES}/a.md`,
+        `${NOTES}/b.md`,
+      ]);
+      expect(t.final!.content).toBe('<final_answer>\ndone\n</final_answer>');
+      expect(t.final!.session_diff).toBeUndefined();
+      expect(await diffCount(id)).toBe(0);
+    },
+  );
+
+  it('automatic capture of one file + an uncovered non-Git write: AI fills it and merges, verified file untouched', async () => {
+    queueResults(
+      writeShell(`echo x > a.ts`, 'c1', ROOT),
+      writeShell(`echo more >> n.md`, 'c2', NOTES),
+      finalAnswer('done'),
+    );
+    mocks.reconstructionResult.mockResolvedValue(
+      manifest({ files: [{ path: `${NOTES}/n.md`, before: 'n\n', after: 'n\nmore\n' }] }),
+    );
+    const t = await turn('ai-merge-auto', `Fix ${ROOT}`, {
+      heads: { [ROOT]: OID_1 },
+      final: (req) => ({
+        status: 'ok',
+        repositories: (req.baselines ?? []).map((b) => ({
+          root: b.root,
+          patch: filePatch('a.ts'),
+          scope: 'turn',
+          baselineHead: b.head,
+          head: OID_1,
+          baselineCapturedAt: b.capturedAt,
+          baselineSource: b.source,
+        })),
+      }),
+    });
+    // The verified ROOT file is never offered to the model.
+    const payload = JSON.parse((reconstructionCalls()[0][1] as any)[1].content);
+    expect(payload.allowedPaths.map((p: any) => p.path)).toEqual([`${NOTES}/n.md`]);
+    expect(t.final!.session_diff).toMatchObject({
+      scope: 'mixed',
+      fileCount: 2,
+      recovered: true,
+      recoveryIncomplete: false,
+      recoveryMethod: 'ai_reconstructed',
+      baselineUnavailable: false,
+    });
+    const stored = await loadSessionDiffPayload(
+      'ai-merge-auto',
+      'sub-a',
+      t.final!.session_diff!.id,
+    );
+    expect(stored!.payload.recovery).toMatchObject({ base: 'automatic', complete: true });
+    expect(stored!.payload.repositories.map((r) => [r.root, r.scope, r.reconstructed])).toEqual([
+      [ROOT, 'turn', undefined],
+      [NOTES, 'working_tree', true],
+    ]);
+    expect(stored!.payload.repositories[0].patch).toBe(filePatch('a.ts'));
+    const res = await request(app)
+      .get(`/api/agent/sessions/ai-merge-auto/diffs/${t.final!.session_diff!.id}`)
+      .set('x-test-subscription', 'sub-a');
+    expect(res.status).toBe(200);
+    expect(res.body.html).toContain('Turn changes with AI-reconstructed files');
+    expect(res.body.html).toContain(`${NOTES} · AI-reconstructed (unverified)`);
+    expect(res.body.html).toContain('Unverified:');
+
+    // Same turn shape, AI unavailable: no card at all (never the partial automatic one).
+    mocks.complete.mockClear();
+    queueResults(
+      writeShell(`echo x > a.ts`, 'c1', ROOT),
+      writeShell(`echo more >> n.md`, 'c2', NOTES),
+      finalAnswer('done'),
+    );
+    mocks.reconstructionResult.mockResolvedValue(manifest({ unavailable: true }));
+    const none = await turn('ai-merge-none', `Fix ${ROOT}`, {
+      heads: { [ROOT]: OID_1 },
+      final: (req) => ({
+        status: 'ok',
+        repositories: (req.baselines ?? []).map((b) => ({
+          root: b.root,
+          patch: filePatch('a.ts'),
+          scope: 'turn',
+          baselineHead: b.head,
+          head: OID_1,
+          baselineCapturedAt: b.capturedAt,
+          baselineSource: b.source,
+        })),
+      }),
+    });
+    expect(reconstructionCalls()).toHaveLength(1);
+    expect(none.final!.session_diff).toBeUndefined();
+    expect(await diffCount('ai-merge-none')).toBe(0);
+  }, 60_000);
+
+  it('a complete automatic capture of 100 files attaches with no extra model call', async () => {
+    queueResults(writeShell(`echo x > f000.ts`, 'c1', ROOT), finalAnswer('done'));
+    const patch = Array.from({ length: 100 }, (_, i) =>
+      filePatch(`f${String(i).padStart(3, '0')}.ts`),
+    ).join('');
+    const t = await turn('ai-complete-100', `Fix ${ROOT}`, {
+      heads: { [ROOT]: OID_1 },
+      final: (req) => ({
+        status: 'ok',
+        repositories: (req.baselines ?? []).map((b) => ({
+          root: b.root,
+          patch,
+          scope: 'turn',
+          baselineHead: b.head,
+          head: OID_1,
+          baselineCapturedAt: b.capturedAt,
+          baselineSource: b.source,
+        })),
+      }),
+    });
+    expect(t.events).not.toContain('reconstruction-model');
+    expect(t.events).not.toContain('recovery-model');
+    expect(t.final!.session_diff).toMatchObject({
+      scope: 'turn',
+      fileCount: 100,
+      displayLimit: 50,
+    });
+    expect(t.final!.session_diff!.recovered).toBeUndefined();
+  });
+
+  it('a disclosed sensitive exclusion is a policy limit: AI attempted, card withheld', async () => {
+    queueResults(writeShell(`echo x > a.ts`, 'c1', ROOT), finalAnswer('done'));
+    mocks.reconstructionResult.mockResolvedValue(manifest({ unavailable: true }));
+    const t = await turn('ai-sensitive', `Fix ${ROOT}`, {
+      heads: { [ROOT]: OID_1 },
+      final: (req) => ({
+        status: 'ok',
+        reason: 'Excluded 1 sensitive file from the snapshot.',
+        repositories: (req.baselines ?? []).map((b) => ({
+          root: b.root,
+          patch: filePatch('a.ts'),
+          scope: 'turn',
+          baselineHead: b.head,
+          head: OID_1,
+          baselineCapturedAt: b.capturedAt,
+          baselineSource: b.source,
+        })),
+      }),
+    });
+    expect(reconstructionCalls()).toHaveLength(1);
+    expect(t.final!.session_diff).toBeUndefined();
+    expect(await diffCount('ai-sensitive')).toBe(0);
+  });
+
+  it('manifest and reconstruction share one budget: a stalled second call is aborted', async () => {
+    restoreDeps = setDiffRecoveryDepsForTesting({ totalTimeoutMs: 200 });
+    shellTurn();
+    mocks.recoveryResult.mockImplementation(
+      () => new Promise((r) => setTimeout(() => r(manifest({ unavailable: true })), 120)),
+    );
+    let providerSignal: AbortSignal | undefined;
+    mocks.reconstructionResult.mockImplementation(
+      (_m: unknown, _msgs: unknown, o: { signal: AbortSignal }) => {
+        providerSignal = o.signal;
+        return new Promise(() => undefined);
+      },
+    );
+    const started = Date.now();
+    const t = await turn('ai-two-call-budget', `Fix ${ROOT}`, {
+      heads: { [ROOT]: OID_1 },
+      evidence: evidenceFor((tc) => [rec('r1', tc, ROOT, ['a.ts'])]),
+    });
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(t.events.filter((e) => e.endsWith('-model'))).toEqual([
+      'recovery-model',
+      'reconstruction-model',
+    ]);
+    expect(providerSignal?.aborted).toBe(true);
+    expect(t.final!.content).toBe('<final_answer>\ndone\n</final_answer>');
+    expect(t.final!.session_diff).toBeUndefined();
+    expect(await diffCount('ai-two-call-budget')).toBe(0);
+  });
 
   it.each([
     [
@@ -1721,12 +2085,16 @@ printf 'hi\\n' > todo.md`;
     expect(payload.allowedPaths.map((p: any) => p.path)).toEqual([`${NOTES}/new/n.md`]);
     expect(payload.allowedPaths[0].creationVerified).toBe(false);
 
-    // Write-like turns still attempt AI, but the reverted path is not allowlisted.
+    // Writes only inside a net-empty root are exempt: nothing is missing, so
+    // there is nothing to show and no model call.
     mocks.complete.mockClear();
     queueResults(writeShell(`echo x > a.ts`, 'c1', ROOT), finalAnswer('done'));
-    await turn('ai-reverted-2', `Fix ${ROOT}`, { heads: { [ROOT]: OID_1 }, final: emptyTurnFinal });
-    expect(reconstructionCalls()).toHaveLength(1);
-    expect(JSON.parse((reconstructionCalls()[0][1] as any)[1].content).allowedPaths).toEqual([]);
+    const t2 = await turn('ai-reverted-2', `Fix ${ROOT}`, {
+      heads: { [ROOT]: OID_1 },
+      final: emptyTurnFinal,
+    });
+    expect(reconstructionCalls()).toHaveLength(0);
+    expect(t2.final!.session_diff).toBeUndefined();
   });
 
   it('unknown write targets still cause one AI attempt instead of silently skipping recovery', async () => {
@@ -1765,7 +2133,7 @@ printf 'hi\\n' > todo.md`;
     expect(payload.allowedPaths[0].creationVerified).toBe(false);
     const stored = await loadSessionDiffPayload('ai-failed', 'sub-a', t.final!.session_diff!.id);
     expect(stored!.payload.recovery!.limitations).toContain(
-      'Some write commands failed or reported no status; their changes may be partial.',
+      'Some write commands failed or reported no status; reconstructed content may be inaccurate.',
     );
   });
 
@@ -1800,5 +2168,163 @@ printf 'hi\\n' > todo.md`;
     expect(t.final!.content).toBe('<final_answer>\ndone\n</final_answer>');
     expect(t.final!.session_diff).toBeUndefined();
     expect(await diffCount('ai-timeout')).toBe(0);
+  });
+});
+
+describe('coverage assessment', () => {
+  const state = (writes: any[], extra: Record<string, unknown> = {}) =>
+    ({
+      records: new Map(),
+      issuedToolCalls: new Set(),
+      omitted: 0,
+      attempted: false,
+      writes,
+      revertedRoots: [],
+      ...extra,
+    }) as any;
+  const write = (targets: string[], extra: Record<string, unknown> = {}) => ({
+    toolCallId: 'c1',
+    status: 'succeeded',
+    cwd: '/private/tmp/w',
+    script: '',
+    output: '',
+    truncated: false,
+    redacted: false,
+    kinds: ['redirect'],
+    targets: targets.map((path) => ({ path, created: false, removed: false })),
+    ...extra,
+  });
+  const auto = (root: string, patch: string) => ({
+    repository: { root, patch, scope: 'turn' as const },
+    source: 'automatic' as const,
+    turnVerified: true,
+  });
+
+  it('parses header paths safely: renames, /dev/null, quoted and basename-only never cover', () => {
+    const patch = [
+      'diff --git a/src/old.ts b/src/new.ts',
+      'similarity index 90%',
+      'rename from src/old.ts',
+      'rename to src/new.ts',
+      'diff --git a/gone.ts b/gone.ts',
+      'deleted file mode 100644',
+      '--- a/gone.ts',
+      '+++ /dev/null',
+      '@@ -1 +0,0 @@',
+      '-+++ b/injected.ts',
+      'diff --git "a/sp ace.ts" "b/sp ace.ts"',
+      'diff --git a/empty.ts b/empty.ts',
+      'new file mode 100644',
+      '',
+    ].join('\n');
+    expect([...patchCoveredPaths('/private/tmp/w', patch)].sort()).toEqual([
+      '/tmp/w/empty.ts',
+      '/tmp/w/gone.ts',
+      '/tmp/w/src/new.ts',
+      '/tmp/w/src/old.ts',
+    ]);
+    // A same-basename file in another directory is not covered.
+    const c = coverageAssessment({
+      state: state([write(['/tmp/w/other/new.ts', '/private/tmp/w/src/new.ts'])]),
+      verified: [auto('/tmp/w', patch)],
+      unchangedRoots: [],
+      records: [],
+    });
+    expect([...c.missing.keys()]).toEqual(['/tmp/w/other/new.ts']);
+    expect(c.complete).toBe(false);
+  });
+
+  it('exempts net-empty roots; unknown targets, truncation and budgets block', () => {
+    const ok = coverageAssessment({
+      state: state([write(['/tmp/w/a.ts'])]),
+      verified: [],
+      unchangedRoots: ['/private/tmp/w'],
+      records: [],
+    });
+    expect(ok).toMatchObject({ complete: true, blocking: [] });
+    for (const [w, extra, flag] of [
+      [write([], { unresolved: true }), {}, 'write_target_unknown'],
+      [write([], { truncated: true }), {}, 'write_evidence_truncated'],
+      [write([], { kinds: ['git checkout'], cwd: '/elsewhere' }), {}, 'write_target_unknown'],
+      [write([]), { writesOmitted: 1 }, 'writes_over_budget'],
+      [write([]), { nativeOmitted: 2 }, 'native_omitted'],
+    ] as Array<[any, Record<string, unknown>, string]>) {
+      const c = coverageAssessment({
+        state: state([w], extra),
+        verified: [],
+        unchangedRoots: [],
+        records: [],
+      });
+      expect(c.blocking).toContain(flag);
+      expect(c.complete).toBe(false);
+    }
+    // Git operations inside an authoritative turn root are covered by it.
+    const git = coverageAssessment({
+      state: state([write([], { kinds: ['git checkout'], cwd: '/tmp/w/src' })]),
+      verified: [auto('/tmp/w', filePatch('a.ts'))],
+      unchangedRoots: [],
+      records: [],
+    });
+    expect(git.complete).toBe(true);
+  });
+
+  it('a later write without a checkpoint invalidates checkpoint path coverage', () => {
+    const c = coverageAssessment({
+      state: state([write([`${NOTES}/a.md`], { toolCallId: 'c2' })], {
+        issuedToolCalls: new Set(['c1', 'c2']),
+      }),
+      verified: [
+        {
+          repository: { root: NOTES, patch: filePatch('a.md'), scope: 'working_tree' },
+          source: 'checkpoint',
+          turnVerified: false,
+          evidenceIds: ['r1'],
+        },
+      ],
+      unchangedRoots: [],
+      records: [rec('r1', 'c1', NOTES, ['a.md'], 'file')],
+    });
+    expect(c.complete).toBe(false);
+    expect(c.blocking).toContain('checkpoint_not_final');
+  });
+
+  it('records need their paths covered; truncated records block', () => {
+    const c = coverageAssessment({
+      state: undefined,
+      verified: [auto(ROOT, filePatch('a.ts'))],
+      unchangedRoots: [],
+      records: [
+        rec('r1', 'c1', ROOT, ['a.ts', 'b.ts']),
+        rec('r2', 'c1', NOTES, ['n.md'], 'file', false),
+      ],
+    });
+    expect([...c.missing.values()]).toEqual([
+      { path: `${ROOT}/b.ts`, created: false, removed: false },
+      { path: `${NOTES}/n.md`, created: true, removed: false },
+    ]);
+    expect(c.blocking).toEqual(['native_record_truncated']);
+  });
+
+  it('dedupes replayed sections already covered and reads native reasons', () => {
+    const covered = patchCoveredPaths(ROOT, filePatch('a.ts'));
+    expect(withoutCoveredSections(ROOT, filePatch('a.ts') + filePatch('b.ts'), covered)).toBe(
+      filePatch('b.ts'),
+    );
+    expect(reasonDisclosesExclusion('Excluded 2 sensitive files from the snapshot.')).toBe(true);
+    expect(
+      reasonDisclosesExclusion(
+        'Turn baseline unavailable for 1 repository; showing uncommitted changes only.',
+      ),
+    ).toBe(false);
+    expect(reasonDisclosesExclusion(undefined)).toBe(false);
+  });
+
+  it('write classification flags unresolved targets', () => {
+    const ok = { cwd: ROOT, status: 'succeeded' as const };
+    expect(classifyShellWrites('echo x > "$OUT"', ok)?.unresolved).toBe(true);
+    expect(classifyShellWrites('cp -r src', ok)?.unresolved).toBe(true);
+    expect(classifyShellWrites('python3 -c "Path(p).write_text(v)"', ok)?.unresolved).toBe(true);
+    expect(classifyShellWrites('echo x > a.ts 2>/dev/null', ok)?.unresolved).toBe(false);
+    expect(classifyShellWrites('echo x > rel.ts', { status: 'succeeded' })?.unresolved).toBe(true);
   });
 });

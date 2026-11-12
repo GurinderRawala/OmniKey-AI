@@ -15,9 +15,16 @@
  * 20 s budget, the run's abort signal and its connection; any failure means
  * "no snapshot", never a lost or rewritten final answer.
  *
- * Without native records, a run whose shells were write-like (see
- * writeEvidence.ts) gets one AI reconstruction attempt instead, under the same
- * budget (see aiReconstruction.ts). Verified records always take precedence.
+ * Coverage orchestration (see coverage.ts): no snapshot is saved or attached
+ * before its KNOWN coverage is checked. A normal capture that is known partial
+ * (baseline unavailable, disclosed exclusions, current-turn writes or verified
+ * record paths outside its patch, unknown write targets) is not saved; it
+ * becomes the verified base of a bounded recovery: at most one manifest call
+ * (verified records) and one AI reconstruction call for the still-missing
+ * known paths, both under the same 20 s budget. AI files are merged into the
+ * verified base (never replacing or duplicating a verified file). If any
+ * known path stays uncovered or any blocking uncertainty remains, nothing is
+ * attached. Verified native records always take precedence over AI.
  */
 import cuid from 'cuid';
 import type { Logger } from 'winston';
@@ -41,27 +48,41 @@ import {
   comparablePath,
   validateDiffRecoveryEvidence,
   validateGitRecoveryResponse,
+  GIT_DIFF_MAX_PATCH_BYTES,
+  GIT_DIFF_MAX_REPOSITORIES,
   type DiffRecoveryRecord,
+  type GitDiffRepository,
   type GitDiffRequest,
   type GitDiffShellContext,
+  type SessionDiffCandidate,
+  type SessionDiffRecoveryProvenance,
   type SessionDiffCaptureOutcome,
   type SessionDiffSummary,
 } from './contracts';
 import {
+  DIFF_RECONSTRUCTION_MAX_FILES,
   DIFF_RECONSTRUCTION_MAX_OUTPUT_TOKENS,
   buildReconstructionMessages,
   parseReconstructionFiles,
   parseReplyObject,
-  reconstructionAllowlist,
   reconstructionLimitations,
   reconstructionRepositories,
 } from './aiReconstruction';
 import {
-  captureSessionDiffOutcome,
+  captureSessionDiffCandidate,
   requestGitControl,
   saveSessionDiff,
+  saveSessionDiffCandidate,
   type GitRunState,
 } from './coordinator';
+import {
+  coverageAssessment,
+  patchCoveredPaths,
+  reasonDisclosesExclusion,
+  withoutCoveredSections,
+  type VerifiedRepository,
+} from './coverage';
+import type { WriteTarget } from './writeEvidence';
 
 /** Fixed, literal system prompt of the manifest call. */
 export const DIFF_RECOVERY_SYSTEM_PROMPT = [
@@ -165,8 +186,10 @@ export function recordDiffRecoveryEvidence(
 }
 
 /**
- * Fallback only once per run, only without a summary, and only with verified
- * records or (for AI reconstruction) current-turn write-like shell evidence.
+ * Fallback only once per run, only without a saved summary, and only with
+ * verified records or (for AI reconstruction) current-turn write evidence.
+ * A known-partial automatic candidate always qualifies (see
+ * captureFinalSessionDiff).
  */
 export function shouldAttemptDiffRecovery(
   run: GitRunState | undefined,
@@ -279,18 +302,69 @@ export interface DiffRecoveryOptions {
   send?: AgentSendFn;
 }
 
+/** Context of the final-answer capture handed to the recovery phase. */
+export interface DiffRecoveryContext {
+  /** Validated, unsaved automatic capture (known partial), if any. */
+  base?: SessionDiffCandidate;
+  /** Roots the automatic capture authoritatively reported net-empty. */
+  unchangedRoots?: string[];
+}
+
+/** Repositories of an automatic candidate the backend treats as verified. */
+function verifiedBase(base: SessionDiffCandidate | undefined): {
+  verified: VerifiedRepository[];
+  missingBaseline: GitDiffRepository[];
+} {
+  const verified: VerifiedRepository[] = [];
+  const missingBaseline: GitDiffRepository[] = [];
+  for (const repository of base?.repositories ?? []) {
+    // In turn mode a non-turn entry is "working tree vs HEAD" only: not
+    // evidence of what this turn changed, so never a verified base.
+    if (base?.turn && repository.scope !== 'turn') missingBaseline.push(repository);
+    else
+      verified.push({ repository, source: 'automatic', turnVerified: repository.scope === 'turn' });
+  }
+  return { verified, missingBaseline };
+}
+
 /**
- * Run the fallback once. Returns the saved recovered summary, or undefined.
- * Never throws; never stores or attaches anything after cancel/deadline.
+ * Coverage of a normal automatic candidate (no model call). Complete means it
+ * may be saved and attached exactly as before.
+ */
+export function assessAutomaticCandidate(
+  run: GitRunState,
+  candidate: SessionDiffCandidate,
+  unchangedRoots: readonly string[],
+) {
+  const { verified, missingBaseline } = verifiedBase(candidate);
+  const blocking: string[] = [];
+  if (missingBaseline.length) blocking.push('baseline_unavailable');
+  if (reasonDisclosesExclusion(candidate.reason)) blocking.push('native_exclusion');
+  return coverageAssessment({
+    state: run.recovery,
+    verified,
+    unchangedRoots,
+    records: run.recovery ? [...run.recovery.records.values()] : [],
+    blocking,
+  });
+}
+
+/**
+ * Run the bounded recovery once. Returns the saved summary, or undefined.
+ * Never throws; never stores or attaches anything after cancel/deadline, and
+ * never stores a snapshot whose known coverage is incomplete.
  */
 export async function recoverSessionDiff(
   run: GitRunState,
   options: DiffRecoveryOptions,
+  context: DiffRecoveryContext = {},
 ): Promise<SessionDiffSummary | undefined> {
   const state = run.recovery;
-  if (!state || state.attempted || (!state.records.size && !state.writes.length)) return undefined;
+  if (!state || state.attempted) return undefined;
+  if (!context.base && !state.records.size && !state.writes.length) return undefined;
   state.attempted = true;
   const { log } = options;
+  const unchangedRoots = context.unchangedRoots ?? [];
   const startedAt = Date.now();
   const budget = new AbortController();
   const abort = () => budget.abort();
@@ -301,8 +375,8 @@ export async function recoverSessionDiff(
   }
   const timer = setTimeout(abort, deps.totalTimeoutMs);
   const remaining = () => Math.max(0, deps.totalTimeoutMs - (Date.now() - startedAt));
-  // One tool-free provider call; usage accounting is bounded and can never
-  // fail the final answer.
+  // At most two tool-free provider calls (manifest + reconstruction) share the
+  // one budget; usage accounting is bounded and can never fail the answer.
   const callModel = async (messages: AIMessage[], maxTokens: number) => {
     const result = await untilAborted(
       deps.complete(options.model, messages, { signal: budget.signal, maxTokens }),
@@ -325,6 +399,14 @@ export async function recoverSessionDiff(
     }
     return result;
   };
+  // Bound persistence too. A DB adapter cannot cancel an in-flight insert,
+  // but late completion must never attach a snapshot or delay the answer.
+  const save = (
+    repositories: GitDiffRepository[],
+    notice: string,
+    turn: SessionDiffCandidate['turn'],
+    provenance: SessionDiffRecoveryProvenance,
+  ) => untilAborted(saveSessionDiff(run, repositories, notice, turn, provenance), budget.signal);
   try {
     if (budget.signal.aborted) return undefined;
     options.send?.({
@@ -334,106 +416,179 @@ export async function recoverSessionDiff(
       is_terminal_output: false,
       is_error: false,
     });
-    if (!state.records.size) {
-      return await reconstructWithAi(run, callModel, budget.signal, log);
-    }
-    const all = [...state.records.values()];
-    const offered = all.slice(0, DIFF_RECOVERY_MAX_RECORDS);
+    const { verified, missingBaseline } = verifiedBase(context.base);
+    const blocking: string[] = [];
+    if (reasonDisclosesExclusion(context.base?.reason)) blocking.push('native_exclusion');
+    const records = [...state.records.values()];
 
+    // Phase 1 (verified records not already covered): manifest + native replay.
+    let evidenceIds: string[] = [];
+    let checkpointLimitations: string[] = [];
+    const recordsCoverage = coverageAssessment({
+      state: undefined,
+      verified,
+      unchangedRoots,
+      records,
+    });
+    if (records.length && !recordsCoverage.complete) {
+      const replay = await replayCheckpoints(
+        run,
+        records,
+        verified,
+        callModel,
+        budget.signal,
+        remaining,
+        log,
+      );
+      if (budget.signal.aborted) return undefined;
+      evidenceIds = replay.evidenceIds;
+      checkpointLimitations = replay.limitations;
+      verified.push(...replay.repositories);
+    }
+
+    // Phase 2: what is still known-missing after the verified evidence?
+    const coverage = coverageAssessment({ state, verified, unchangedRoots, records, blocking });
+    // A root without a turn baseline is only acceptable when the turn's own
+    // known writes explain every file of its uncommitted diff (they are then
+    // reconstructed turn-relative); otherwise its content is unattributable.
+    for (const repo of missingBaseline) {
+      const paths = patchCoveredPaths(repo.root, repo.patch);
+      const sections = repo.patch
+        .split(/(?=^diff --git )/m)
+        .filter((s) => s.startsWith('diff --git '));
+      if (
+        !sections.length ||
+        sections.some((s) => !patchCoveredPaths(repo.root, s).size) ||
+        ![...paths].every((p) => coverage.missing.has(p))
+      ) {
+        coverage.blocking.push('baseline_unavailable');
+        break;
+      }
+    }
+    const checkpointUsed = verified.some((v) => v.source === 'checkpoint');
+    if (!coverage.missing.size && !coverage.blocking.length) {
+      if (!verified.length) {
+        logResult(log, run, 'nothing_to_show');
+        return undefined;
+      }
+      if (!checkpointUsed) {
+        // Only reachable with an automatic base that became complete because
+        // a baseline-less root was dropped without known changes in it.
+        return await untilAborted(
+          saveSessionDiffCandidate(
+            run,
+            {
+              ...context.base!,
+              notice: undefined,
+              reason: undefined,
+              repositories: verified.map((v) => v.repository),
+            },
+            log,
+          ),
+          budget.signal,
+        );
+      }
+      const summary = await save(
+        verified.map((v) => v.repository),
+        'Recovered from native per-command checkpoints recorded during this turn; edits made outside recognised commands are not included.',
+        context.base?.turn,
+        {
+          kind: 'agent_assisted',
+          turnId: run.runId,
+          evidenceIds,
+          complete: true,
+          limitations: checkpointLimitations,
+        },
+      );
+      if (budget.signal.aborted) return undefined;
+      logResult(log, run, 'saved_checkpoint', { diffId: summary.id, fileCount: summary.fileCount });
+      return summary;
+    }
+
+    // Phase 3: known partial => always one AI attempt for the missing paths.
+    if (coverage.missing.size > DIFF_RECONSTRUCTION_MAX_FILES) {
+      coverage.blocking.push('too_many_missing_paths');
+    }
+    const allow = new Map<string, WriteTarget>(
+      [...coverage.missing].slice(0, DIFF_RECONSTRUCTION_MAX_FILES),
+    );
     const result = await callModel(
-      buildManifestMessages(run, offered),
-      DIFF_RECOVERY_MAX_OUTPUT_TOKENS,
+      buildReconstructionMessages(state, allow),
+      DIFF_RECONSTRUCTION_MAX_OUTPUT_TOKENS,
     );
     if (budget.signal.aborted) return undefined;
-
-    const manifest = parseRecoveryManifest(result.content, new Set(offered.map((r) => r.id)));
-    if (!manifest || 'unavailable' in manifest) {
-      log.info('Diff recovery manifest produced no selection', {
-        sessionId: run.sessionId,
-        result: manifest ? 'unavailable' : 'invalid',
+    if (coverage.blocking.length) {
+      logResult(log, run, 'withheld_uncertain', {
+        blocking: coverage.blocking,
+        missing: coverage.missing.size,
       });
       return undefined;
     }
-    const selected = manifest.evidenceIds.map((id) => state.records.get(id)!);
-    const request: GitDiffRequest = {
-      request_id: cuid(),
-      candidate_paths: [],
-      eligible_commits: [],
-      phase: 'recover',
-      recovery: { turn_id: run.runId, evidence_ids: [...manifest.evidenceIds] },
-    };
-    const response = await requestGitControl(
-      run,
-      request,
-      budget.signal,
-      Math.min(remaining(), GIT_DIFF_RESPONSE_TIMEOUT_MS),
-      (raw) => validateGitRecoveryResponse(raw, request, selected),
-    );
-    // Late, cancelled or failed: nothing is stored or attached.
-    if (budget.signal.aborted || !response || response.status !== 'ok') {
-      log.info('Diff recovery returned no snapshot', {
-        sessionId: run.sessionId,
-        status: budget.signal.aborted ? 'deadline' : (response?.status ?? 'no_reply'),
+    const reply = parseReplyObject(result?.content ?? '');
+    const parsed =
+      reply && 'files' in reply
+        ? parseReconstructionFiles(reply, allow, { requireAll: true })
+        : null;
+    if (!parsed) {
+      const unavailable = reply?.unavailable === true && Object.keys(reply).length === 1;
+      logResult(log, run, unavailable ? 'unavailable' : 'invalid_or_incomplete', {
+        missing: allow.size,
       });
       return undefined;
     }
-    const repositories = response.repositories.filter((r) => r.patch.trim().length > 0);
-    if (!repositories.length) return undefined;
-
-    const limitations: string[] = [];
-    const unselected = all.length - selected.length;
-    if (unselected > 0) {
-      limitations.push(
-        `${plural(unselected, 'verified change record was', 'verified change records were')} not selected for recovery.`,
-      );
+    if (parsed.limitations.length) {
+      // The model disclosed something it could not reconstruct.
+      logResult(log, run, 'model_reported_gaps', { missing: allow.size });
+      return undefined;
     }
-    const nativeOmitted = Math.max(state.nativeOmitted ?? 0, response.recovery?.omitted ?? 0);
-    if (nativeOmitted > 0) {
-      limitations.push(
-        `The native checkpoint store omitted ${plural(nativeOmitted, 'record', 'records')}.`,
-      );
+    const cwds = [...new Set(state.writes.map((w) => w.cwd).filter((c): c is string => !!c))];
+    const built = reconstructionRepositories(
+      parsed.files,
+      cwds,
+      verified.map((v) => v.repository.root),
+    );
+    if (built.dropped || built.redactedDropped) {
+      logResult(log, run, 'dropped', { dropped: built.dropped, redacted: built.redactedDropped });
+      return undefined;
     }
-    if (state.omitted > 0) {
-      limitations.push(
-        `${plural(state.omitted, 'record exceeded', 'records exceeded')} the per-turn evidence budget.`,
-      );
+    const merged = [...verified.map((v) => v.repository), ...built.repositories];
+    const distinctRoots = new Set(merged.map((r) => comparablePath(r.root))).size;
+    const totalBytes = merged.reduce((n, r) => n + Buffer.byteLength(r.patch, 'utf8'), 0);
+    if (
+      !merged.some((r) => r.patch.trim()) ||
+      distinctRoots > GIT_DIFF_MAX_REPOSITORIES ||
+      totalBytes > GIT_DIFF_MAX_PATCH_BYTES * 2
+    ) {
+      logResult(log, run, 'nothing_renderable');
+      return undefined;
     }
-    if (selected.some((r) => !r.complete)) {
-      limitations.push('Some selected records were truncated by native limits.');
-    }
-    const selectedRoots = new Set(selected.map((r) => r.root));
-    const missingRoots = selectedRoots.size - repositories.length;
-    if (missingRoots > 0) {
-      limitations.push(
-        `${plural(missingRoots, 'selected root', 'selected roots')} returned no patch.`,
-      );
-    }
-    const bounded = limitations.slice(0, DIFF_RECOVERY_MAX_LIMITATIONS);
-    const complete = bounded.length === 0;
-    const notice = complete
-      ? 'Recovered from native per-command checkpoints recorded during this turn; edits made outside recorded commands are not included.'
-      : `Partial recovery from native per-command checkpoints recorded during this turn. ${bounded.join(' ')}`;
+    const baseKind = checkpointUsed ? 'checkpoint' : verified.length ? 'automatic' : undefined;
+    const limitations = reconstructionLimitations(state, parsed.files, {
+      base: baseKind,
+      unchanged: allow.size - parsed.files.length,
+      checkpointLimitations,
+    });
     if (budget.signal.aborted) return undefined;
-    // Bound persistence too. A DB adapter cannot cancel an in-flight insert,
-    // but late completion must never attach a snapshot or delay the answer.
-    const summary = await untilAborted(
-      saveSessionDiff(run, repositories, notice, undefined, {
-        kind: 'agent_assisted',
+    const summary = await save(
+      merged,
+      'AI-reconstructed turn changes; known coverage complete but unverified.',
+      verified.some((v) => v.repository.scope === 'turn') ? context.base?.turn : undefined,
+      {
+        kind: 'ai_reconstructed',
         turnId: run.runId,
-        evidenceIds: [...manifest.evidenceIds],
-        complete,
-        limitations: bounded,
-      }),
-      budget.signal,
+        evidenceIds,
+        toolCallIds: state.writes.map((w) => w.toolCallId),
+        complete: true,
+        limitations,
+        ...(baseKind ? { base: baseKind } : {}),
+      },
     );
     if (budget.signal.aborted) return undefined;
-    log.info('Saved recovered git snapshot for final answer', {
-      sessionId: run.sessionId,
+    logResult(log, run, 'saved_ai', {
       diffId: summary.id,
-      repositoryCount: summary.repositoryCount,
       fileCount: summary.fileCount,
-      complete,
-      displayLimit: GIT_DIFF_DISPLAY_LIMIT,
+      reconstructed: parsed.files.length,
+      base: baseKind ?? 'none',
     });
     return summary;
   } catch (err) {
@@ -453,77 +608,112 @@ export async function recoverSessionDiff(
   }
 }
 
-/**
- * AI reconstruction branch (no native records): one tool-free call over this
- * run's write evidence, strict validation, a backend-built diff, and a
- * snapshot labelled unverified + partial. Unavailable/invalid => no snapshot.
- */
-async function reconstructWithAi(
+function logResult(
+  log: Logger,
   run: GitRunState,
+  result: string,
+  extra: Record<string, unknown> = {},
+): void {
+  log.info('Diff recovery finished', {
+    sessionId: run.sessionId,
+    result,
+    writeCommands: run.recovery?.writes.length ?? 0,
+    records: run.recovery?.records.size ?? 0,
+    displayLimit: GIT_DIFF_DISPLAY_LIMIT,
+    ...extra,
+  });
+}
+
+/**
+ * Manifest call over the verified records, then one native `recover` replay.
+ * Returns the verified checkpoint repositories (file sections already covered
+ * by the automatic base removed) and honest limitation lines. Unselected or
+ * unreplayed record paths simply stay uncovered for the coverage check.
+ */
+async function replayCheckpoints(
+  run: GitRunState,
+  all: DiffRecoveryRecord[],
+  verified: readonly VerifiedRepository[],
   callModel: (messages: AIMessage[], maxTokens: number) => Promise<AICompletionResult>,
   signal: AbortSignal,
+  remaining: () => number,
   log: Logger,
-): Promise<SessionDiffSummary | undefined> {
+): Promise<{ repositories: VerifiedRepository[]; evidenceIds: string[]; limitations: string[] }> {
   const state = run.recovery!;
-  const allow = reconstructionAllowlist(state);
-  const outcome = (result: string, extra: Record<string, unknown> = {}) =>
-    log.info('AI diff reconstruction finished', {
-      sessionId: run.sessionId,
-      result,
-      writeCommands: state.writes.length,
-      allowedPaths: allow.size,
-      ...extra,
-    });
+  const none = { repositories: [], evidenceIds: [], limitations: [] };
+  const offered = all.slice(0, DIFF_RECOVERY_MAX_RECORDS);
   const result = await callModel(
-    buildReconstructionMessages(state, allow),
-    DIFF_RECONSTRUCTION_MAX_OUTPUT_TOKENS,
+    buildManifestMessages(run, offered),
+    DIFF_RECOVERY_MAX_OUTPUT_TOKENS,
   );
-  if (signal.aborted) return undefined;
-  const reply = parseReplyObject(result.content);
-  const parsed = reply && 'files' in reply ? parseReconstructionFiles(reply, allow) : null;
-  if (!parsed) {
-    const unavailable = reply?.unavailable === true && Object.keys(reply).length === 1;
-    outcome(unavailable ? 'unavailable' : 'invalid');
-    return undefined;
+  if (signal.aborted) return none;
+  const manifest = parseRecoveryManifest(result?.content ?? '', new Set(offered.map((r) => r.id)));
+  if (!manifest || 'unavailable' in manifest) {
+    log.info('Diff recovery manifest produced no selection', {
+      sessionId: run.sessionId,
+      result: manifest ? 'unavailable' : 'invalid',
+    });
+    return none;
   }
-  const cwds = [...new Set(state.writes.map((w) => w.cwd).filter((c): c is string => !!c))];
-  const built = reconstructionRepositories(parsed.files, cwds);
-  if (!built.repositories.length) {
-    outcome('nothing_renderable');
-    return undefined;
-  }
-  const limitations = reconstructionLimitations(state, parsed.files, {
-    dropped: built.dropped,
-    redactedDropped: built.redactedDropped,
-    modelNotes: parsed.limitations,
-  });
-  if (signal.aborted) return undefined;
-  const summary = await untilAborted(
-    saveSessionDiff(
-      run,
-      built.repositories,
-      'AI-reconstructed turn changes; unverified and possibly partial.',
-      undefined,
-      {
-        kind: 'ai_reconstructed',
-        turnId: run.runId,
-        evidenceIds: [],
-        toolCallIds: state.writes.map((w) => w.toolCallId),
-        complete: false,
-        limitations,
-      },
-    ),
+  const selected = manifest.evidenceIds.map((id) => state.records.get(id)!);
+  const request: GitDiffRequest = {
+    request_id: cuid(),
+    candidate_paths: [],
+    eligible_commits: [],
+    phase: 'recover',
+    recovery: { turn_id: run.runId, evidence_ids: [...manifest.evidenceIds] },
+  };
+  const response = await requestGitControl(
+    run,
+    request,
     signal,
+    Math.min(remaining(), GIT_DIFF_RESPONSE_TIMEOUT_MS),
+    (raw) => validateGitRecoveryResponse(raw, request, selected),
   );
-  if (signal.aborted) return undefined;
-  outcome('saved', { diffId: summary.id, fileCount: summary.fileCount });
-  return summary;
+  if (signal.aborted || !response || response.status !== 'ok') {
+    log.info('Diff recovery returned no snapshot', {
+      sessionId: run.sessionId,
+      status: signal.aborted ? 'deadline' : (response?.status ?? 'no_reply'),
+    });
+    return none;
+  }
+  const nativeOmitted = Math.max(state.nativeOmitted ?? 0, response.recovery?.omitted ?? 0);
+  if (nativeOmitted > 0) state.nativeOmitted = nativeOmitted;
+  const covered = new Set<string>();
+  for (const v of verified) {
+    for (const p of patchCoveredPaths(v.repository.root, v.repository.patch)) covered.add(p);
+  }
+  const repositories: VerifiedRepository[] = [];
+  for (const repo of response.repositories) {
+    const patch = withoutCoveredSections(repo.root, repo.patch, covered);
+    if (!patch.trim()) continue;
+    repositories.push({
+      repository: { ...repo, patch },
+      source: 'checkpoint',
+      turnVerified: false,
+      evidenceIds: manifest.evidenceIds,
+    });
+  }
+  const limitations: string[] = [];
+  const unselected = all.length - selected.length;
+  if (unselected > 0) {
+    // Their paths stay required: coverage proves them by other evidence or withholds.
+    limitations.push(
+      `${plural(unselected, 'verified change record was', 'verified change records were')} not replayed; ${unselected === 1 ? 'its files are' : 'their files are'} shown from other evidence.`,
+    );
+  }
+  return {
+    repositories,
+    evidenceIds: [...manifest.evidenceIds],
+    limitations: limitations.slice(0, DIFF_RECOVERY_MAX_LIMITATIONS),
+  };
 }
 
 /**
  * The single final-capture helper used by both the success and the failure
- * final paths: the normal automatic capture first; the agent-assisted
- * fallback only for a capable run with verified records and no snapshot.
+ * final paths. The normal automatic capture is persisted only when its known
+ * coverage is complete (no extra model call); otherwise the bounded recovery
+ * runs with it as the verified base. Undefined = no button, final unchanged.
  */
 export async function captureFinalSessionDiff(
   run: GitRunState | undefined,
@@ -532,22 +722,35 @@ export async function captureFinalSessionDiff(
 ): Promise<SessionDiffSummary | undefined> {
   if (!run || options.signal?.aborted || run.connection?.aborted) return undefined;
   try {
-    const outcome = await captureSessionDiffOutcome(run, history, options.signal, options.log);
-    if (outcome.summary) return outcome.summary;
+    const outcome = await captureSessionDiffCandidate(run, history, options.signal, options.log);
+    const unchangedRoots = outcome.unchangedRoots ?? [];
     // A successful net-empty automatic capture is newer evidence than the
     // last shell checkpoint. Do not resurrect Git edits reverted since it.
-    if (outcome.unchangedRoots?.length && run.recovery) {
-      const emptyRoots = new Set(outcome.unchangedRoots.map(comparablePath));
+    if (unchangedRoots.length && run.recovery) {
+      const emptyRoots = new Set(unchangedRoots.map(comparablePath));
       for (const [id, record] of run.recovery.records) {
         if (record.kind === 'git' && emptyRoots.has(comparablePath(record.root)))
           run.recovery.records.delete(id);
       }
       // Never let AI reconstruction revive writes inside those roots either.
-      run.recovery.revertedRoots.push(...outcome.unchangedRoots);
+      run.recovery.revertedRoots.push(...unchangedRoots);
     }
-    if (!shouldAttemptDiffRecovery(run, outcome)) return undefined;
+    const candidate = outcome.candidate;
+    if (candidate) {
+      const assessment = assessAutomaticCandidate(run, candidate, unchangedRoots);
+      if (assessment.complete) return await saveSessionDiffCandidate(run, candidate, options.log);
+      options.log.info('Automatic git snapshot is known partial; not attached as is', {
+        sessionId: run.sessionId,
+        missing: assessment.missing.size,
+        blocking: assessment.blocking,
+      });
+      // Without the v4 capability there is no evidence to complete it with.
+      if (!run.recovery || run.recovery.attempted) return undefined;
+    } else if (!shouldAttemptDiffRecovery(run, outcome)) {
+      return undefined;
+    }
     if (options.signal?.aborted || run.connection?.aborted) return undefined;
-    return await recoverSessionDiff(run, options);
+    return await recoverSessionDiff(run, options, { base: candidate, unchangedRoots });
   } catch {
     return undefined;
   }

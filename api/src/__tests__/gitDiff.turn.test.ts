@@ -386,7 +386,7 @@ describe('turn baselines in a real agent turn', () => {
     expect(final.candidate_paths).toContain('/Users/dev/projects/late');
   });
 
-  it('fails closed when the turn-start baseline is unavailable: working tree only, with a notice', async () => {
+  it('withholds a known-partial snapshot when the turn-start baseline is unavailable', async () => {
     queueResults(finalAnswer('done'));
     const t = await turn('t-missing', `Work in ${ROOT}`, {
       heads: {},
@@ -399,11 +399,11 @@ describe('turn baselines in a real agent turn', () => {
         };
       },
     });
-    const live = t.frames.find((f) => f.session_diff)!.session_diff!;
-    expect(live).toMatchObject({ scope: 'working_tree', fileCount: 1 });
-    const stored = await loadSessionDiffPayload('t-missing', 'sub-a', live.id);
-    expect(stored!.payload.notice).toContain('Turn baseline unavailable');
-    expect(stored!.payload.baselines).toEqual([]);
+    // "Working tree vs HEAD" cannot prove what this turn changed: no card,
+    // nothing stored, the final answer is unchanged.
+    expect(t.frames.some((f) => f.session_diff)).toBe(false);
+    expect(t.frames.some((f) => f.content.includes('<final_answer>'))).toBe(true);
+    expect(await AgentSessionDiff.count({ where: { sessionId: 't-missing' } })).toBe(0);
   });
 
   it('rejects a turn-scope or commit claim for a root without a recorded baseline', async () => {

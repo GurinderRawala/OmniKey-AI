@@ -206,9 +206,16 @@ export async function renderSnapshotDocument(
       ? payload.recovery
       : undefined;
   const aiReconstructed = recovery?.kind === 'ai_reconstructed';
+  // Merged snapshots mark their AI entries; older AI payloads are AI-only.
+  const markedEntries = payload.repositories.some((r) => r.reconstructed === true);
+  const isAiEntry = (repo: (typeof payload.repositories)[number]) =>
+    aiReconstructed && (markedEntries ? repo.reconstructed === true : true);
+  const mergedBase = aiReconstructed && payload.repositories.some((r) => !isAiEntry(r));
   const recoveryNotes = recovery
     ? (aiReconstructed
-        ? '<p class="limit"><strong>Unverified:</strong> these changes were reconstructed by the AI model from this turn\'s shell commands and were not read from disk. They may be partial or inaccurate.</p>'
+        ? recovery.complete
+          ? `<p class="limit"><strong>Unverified:</strong> ${mergedBase ? 'files marked AI-reconstructed' : 'these changes'} were reconstructed by the AI model from this turn's shell commands and were not read from disk. They may be inaccurate. Every change the backend knew about is shown, but changes made by unrecognised commands cannot be detected.</p>`
+          : '<p class="limit"><strong>Unverified:</strong> these changes were reconstructed by the AI model from this turn\'s shell commands and were not read from disk. They may be partial or inaccurate.</p>'
         : recovery.complete
           ? ''
           : '<p class="limit"><strong>Partial recovery:</strong> some changes from this turn may be missing.</p>') +
@@ -220,7 +227,9 @@ export async function renderSnapshotDocument(
         : '')
     : '';
   const scopeLabel = aiReconstructed
-    ? 'AI-reconstructed turn changes'
+    ? mergedBase
+      ? 'Turn changes with AI-reconstructed files'
+      : 'AI-reconstructed turn changes'
     : recovery
       ? 'Recovered turn changes'
       : isTurn
@@ -231,7 +240,9 @@ export async function renderSnapshotDocument(
             ? 'Commit changes'
             : 'Working tree changes';
   const disclaimer = aiReconstructed
-    ? 'Reconstructed by the AI model from write-like shell commands of this turn only (not a repository snapshot); unverified.'
+    ? mergedBase
+      ? 'Verified captures of this turn merged with files reconstructed by the AI model from write-like shell commands (unverified).'
+      : 'Reconstructed by the AI model from write-like shell commands of this turn only (not a repository snapshot); unverified.'
     : recovery
       ? 'Recovered with agent assistance from native per-command checkpoints of this turn (not a full repository snapshot); it may include changes not made by the agent.'
       : isTurn
@@ -287,7 +298,7 @@ export async function renderSnapshotDocument(
         ? `${escapeHtml(repo.root)} · ${oid(repo.baselineHead)} → ${oid(repo.head)} + working tree · baseline ${repo.baselineSource === 'before_tool' ? 'before first tool use' : 'at turn start'}${repo.baselineCapturedAt ? ` (${escapeHtml(repo.baselineCapturedAt)})` : ''}`
         : repo.scope === 'commit' && repo.commit
           ? `${escapeHtml(repo.root)} · commit <code class="oid">${escapeHtml(repo.commit.slice(0, 12))}</code>`
-          : aiReconstructed
+          : isAiEntry(repo)
             ? `${escapeHtml(repo.root)} · AI-reconstructed (unverified)`
             : recovery
               ? `${escapeHtml(repo.root)} · recovered from turn checkpoints`

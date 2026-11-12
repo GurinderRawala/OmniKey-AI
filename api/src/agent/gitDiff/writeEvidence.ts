@@ -33,6 +33,12 @@ export interface ShellWriteEvidence {
   redacted: boolean;
   kinds: string[];
   targets: WriteTarget[];
+  /**
+   * A write target existed but could not be resolved to a literal safe path
+   * (variables, globs, relative path without cwd, caps). Coverage is then
+   * uncertain and a snapshot is never claimed complete.
+   */
+  unresolved?: boolean;
 }
 
 // eslint-disable-next-line no-control-regex
@@ -214,16 +220,27 @@ interface Scan {
   createdDirs: string[];
   mktemp: Set<string>;
   sensitive: boolean;
+  unresolved: boolean;
   commands: number;
 }
 
 function addTarget(s: Scan, path: string | undefined, flags: Partial<WriteTarget> = {}): void {
-  if (!path || path.startsWith('/dev/')) return;
+  if (!path) {
+    s.unresolved = true;
+    return;
+  }
+  if (path.startsWith('/dev/')) return;
   if (isSensitiveWritePath(path)) {
     s.sensitive = true;
     return;
   }
-  if (!SAFE_PATH_CHARS.test(path) || s.targets.size >= WRITE_EVIDENCE_MAX_TARGETS) return;
+  if (
+    !SAFE_PATH_CHARS.test(path) ||
+    (!s.targets.has(path) && s.targets.size >= WRITE_EVIDENCE_MAX_TARGETS)
+  ) {
+    s.unresolved = true;
+    return;
+  }
   const prev = s.targets.get(path) ?? { path, created: false, removed: false };
   s.targets.set(path, {
     path,
@@ -286,6 +303,7 @@ function scanCommand(
     s.kinds.add(cmd);
     const ops = operands(/^-[mogt]$/);
     if (ops.length >= 2) addTarget(s, resolve(ops[ops.length - 1], r));
+    else s.unresolved = true;
     if (cmd === 'mv') paths(ops.slice(0, -1)).forEach((p) => addTarget(s, p, { removed: true }));
   } else if (cmd === 'rm' || cmd === 'unlink' || cmd === 'rmdir') {
     s.kinds.add(cmd);
@@ -302,6 +320,7 @@ function scanCommand(
     s.kinds.add('dd');
     const of = args.find((a) => a.value.startsWith('of='));
     if (of) addTarget(s, resolve({ value: of.value.slice(3), tilde: false }, r));
+    else s.kinds.delete('dd'); // stdout only
   } else if (cmd === 'curl' || cmd === 'wget') {
     const k = args.findIndex(
       (a) => a.value === (cmd === 'curl' ? '-o' : '-O') || a.value === '--output',
@@ -342,6 +361,7 @@ export function classifyShellWrites(
     createdDirs: [],
     mktemp: new Set(),
     sensitive: false,
+    unresolved: false,
     commands: 0,
   };
   const r: Resolver = { cwd: input.cwd, vars: new Map() };
@@ -427,8 +447,18 @@ export function classifyShellWrites(
       addTarget(s, p); // Interpreter execution alone cannot prove absence at turn start.
     }
   }
-  if (/\.write_(?:text|bytes)\(|\bopen\([^)\n]*,\s*['"][wax]/.test(text))
-    s.kinds.add('python write');
+  const literalInterpreterWrites = [PY_PATH_WRITE, PY_OPEN, NODE_WRITE].reduce(
+    (n, re) => n + [...text.matchAll(re)].length,
+    0,
+  );
+  const genericInterpreterWrites = (
+    text.match(
+      /\.write_(?:text|bytes)\(|\bopen\([^)\n]*,\s*['"][wax]|\b(?:writeFileSync|appendFileSync|writeFile|appendFile)\(/g,
+    ) ?? []
+  ).length;
+  if (genericInterpreterWrites) s.kinds.add('python write');
+  // A dynamic interpreter write (computed path) cannot be attributed.
+  if (genericInterpreterWrites > literalInterpreterWrites) s.unresolved = true;
   // Only a bare successful mktemp invocation proves what produced stdout.
   const bare = text
     .split('\n')
@@ -464,7 +494,12 @@ export function classifyShellWrites(
       (input.status !== 'failed' && s.mktemp.has(t.path)) ||
       (strict && (t.created || s.createdDirs.some((d) => t.path.startsWith(`${d}/`)))),
   }));
-  return { kinds: [...s.kinds].slice(0, 12), targets, sensitive: s.sensitive };
+  return {
+    kinds: [...s.kinds].slice(0, 12),
+    targets,
+    sensitive: s.sensitive,
+    unresolved: s.unresolved,
+  };
 }
 
 function excerpt(
@@ -513,6 +548,7 @@ export function recordShellWriteEvidence(
     truncated: script.truncated || output.truncated,
     redacted: script.redacted || output.redacted,
     kinds: found.kinds,
+    ...(found.unresolved ? { unresolved: true } : {}),
     targets: found.targets.map((t) => ({
       ...t,
       // Absence proven only in the first issued shell can describe turn start.

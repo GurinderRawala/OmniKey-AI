@@ -3,7 +3,11 @@ import { MCP_TOOL_PREFIX } from '../mcpRuntime';
 import { isInjectedUserPrompt } from '../injectedUserPrompts';
 import type { SessionState } from '../types';
 import { extractProgressSummary, isProgressOnlyResponse } from './progressSummary';
-import { cleanSessionDiffSummary, type SessionDiffSummary } from '../gitDiff/contracts';
+import {
+  cleanSessionDiffSummary,
+  isKnownPartialSummary,
+  type SessionDiffSummary,
+} from '../gitDiff/contracts';
 
 export type HistoryBlockKind =
   | 'agentReasoning'
@@ -578,7 +582,9 @@ export function buildTranscript(raw: RawHistoryMessage[]): TranscriptMessage[] {
       return;
     }
 
-    const sessionDiff = cleanSessionDiffSummary(entry.session_diff);
+    // Known-partial historical snapshots are not offered (the route refuses them too).
+    const cleanedDiff = cleanSessionDiffSummary(entry.session_diff);
+    const sessionDiff = isKnownPartialSummary(cleanedDiff) ? undefined : cleanedDiff;
     const finalAnswer = extractTaggedBlock(content, 'final_answer');
     if (finalAnswer) {
       appendAssistantBlock('finalAnswer', finalAnswer, undefined, undefined, sessionDiff);

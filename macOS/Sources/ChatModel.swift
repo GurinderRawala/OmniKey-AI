@@ -380,7 +380,7 @@ final class ChatModel: ObservableObject {
     @Published private(set) var inspectedSessionDiff: SessionDiffSelection? = nil
 
     func toggleSessionDiff(_ diff: SavedSessionDiff) {
-        guard let sessionId = activeSessionId, diff.hasSafeID else { return }
+        guard let sessionId = activeSessionId, diff.isEligibleForViewer else { return }
         if inspectedSessionDiff?.sessionId == sessionId, inspectedSessionDiff?.diff.id == diff.id {
             inspectedSessionDiff = nil
         } else {
@@ -1307,7 +1307,7 @@ final class ChatModel: ObservableObject {
                 message.blocks = (entry.blocks ?? []).flatMap { block -> [ChatBlock] in
                     // Each historical final keeps its own snapshot card,
                     // placed immediately before it.
-                    if let diff = block.sessionDiff, diff.hasSafeID,
+                    if let diff = block.sessionDiff, diff.isEligibleForViewer,
                        block.kind == "finalAnswer" || block.kind == "sessionDiff"
                     {
                         let card = ChatBlock(
@@ -1357,7 +1357,7 @@ final class ChatModel: ObservableObject {
             }
 
             var message = ChatMessage.assistant(id: "server:\(displayEntry.id)")
-            if let diff = displayEntry.sessionDiff, diff.hasSafeID {
+            if let diff = displayEntry.sessionDiff, diff.isEligibleForViewer {
                 message.blocks.append(ChatBlock(
                     id: "server:\(displayEntry.id):session-diff:\(diff.id)",
                     kind: .sessionDiff, text: "", createdAt: hydratedAt, sessionDiff: diff

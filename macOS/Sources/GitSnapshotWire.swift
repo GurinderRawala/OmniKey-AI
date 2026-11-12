@@ -532,6 +532,10 @@ struct SavedSessionDiff: Codable, Equatable, Hashable, Sendable {
             && id.allSatisfy(\.isASCII)
     }
 
+    /// Coverage is distinct from accuracy: an AI reconstruction remains
+    /// unverified, but a known partial snapshot is never a viewer candidate.
+    var isEligibleForViewer: Bool { hasSafeID && recoveryIncomplete != true && baselineUnavailable != true }
+
     var shortCommit: String? {
         guard let commit, GitOID.isValid(commit) else { return nil }
         return String(commit.prefix(7))
@@ -543,7 +547,7 @@ struct SavedSessionDiff: Codable, Equatable, Hashable, Sendable {
     var isAIReconstructed: Bool { isRecovered && recoveryMethod == "ai_reconstructed" }
 
     var recoveryWarning: String? {
-        if isAIReconstructed { return "AI reconstruction · unverified and potentially incomplete" }
+        if isAIReconstructed { return "AI reconstruction · unverified" }
         guard isRecovered, recoveryIncomplete == true else { return nil }
         return "partial: some changes could not be recovered"
     }

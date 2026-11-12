@@ -623,3 +623,104 @@ absence, and a later shell cannot claim a file was absent at turn start. These
 limits do not suppress the AI attempt; uncertain originals must be reported
 unavailable instead of fabricated. The model response is capped at4096tokens, so
 large before/after reconstructions may be omitted within the20second deadline.
+
+### Coverage orchestration: no known-partial snapshot is ever attached
+
+This section supersedes earlier statements above that a partial recovery is saved with a
+warning, that AI reconstructions are always `complete: false`, and that a turn root without a
+baseline is shown as "working tree only".
+
+**No snapshot is saved before its known coverage is checked.** The final-answer capture
+(`captureFinalSessionDiff`) now runs the normal capture through
+`captureSessionDiffCandidate`. That call validates the reply but does not persist it. The
+candidate is then assessed by `coverage.ts` (`coverageAssessment`). Only a candidate with
+complete known coverage is saved and attached as before, with no extra model call.
+`captureSessionDiffOutcome` keeps its old save-immediately behaviour for other callers.
+
+**Known evidence of a turn:**
+
+- literal write targets of this run's write-like shells (see the allowlist above);
+- the root plus relative paths of every verified native record.
+
+A path is **covered** when an actual patch section of a verified repository names it. A path
+is **exempt** when it lies inside a root the automatic capture reported as net-empty, or a
+root that was reverted.
+
+Paths are compared in normalised absolute form, with the macOS `/private` aliases folded.
+Header paths come from `--- a/`, `+++ b/`, `rename from/to` and `copy to`, or from the
+unambiguous `diff --git a/P b/P` form. Quoted (C-escaped) headers never count as coverage.
+Coverage is never basename-only. Hunk bodies are never parsed as headers.
+
+Verified repositories are:
+
+- `turn`-scoped repositories of the automatic capture;
+- legacy working-tree repositories (non-turn mode);
+- native checkpoint replays.
+
+In turn mode, a non-`turn` entry (baseline unavailable, "working tree vs HEAD") is **not**
+verified evidence.
+
+**Blocking uncertainties.** Each of these means a snapshot is never claimed complete:
+
+- a write target that could not be resolved to a literal path (variables, globs, a relative
+  path without a cwd, over-cap targets, or dynamic interpreter writes; see
+  `ShellWriteEvidence.unresolved`);
+- `git`/`patch` writes whose cwd is not inside an authoritative turn root or a net-empty
+  root;
+- truncated or withheld command evidence. This includes scripts that target sensitive
+  paths: sensitive exclusions are policy limits, so the card is withheld rather than asking
+  the model about secrets;
+- per-run write or record budget overflow, `omitted` counts from the native store, and
+  native records with `complete: false`;
+- any native `reason` other than the "Turn baseline unavailable" sentence, for example
+  "Excluded N sensitive files";
+- a baseline-less root whose uncommitted diff contains files that this turn's known writes do
+  not explain.
+
+The 50-file viewer cap (`displayLimit`) is a display limit, not a coverage gap. A complete
+raw patch of 100 files is attached normally.
+
+**Bounded recovery when coverage is incomplete.** This applies only to v4-capable runs, at
+most once per outer run, and under the same single 20 s budget, abort signal and connection.
+
+1. If verified native records are not already covered, the manifest call and one native
+   `recover` replay run as before. Replayed file sections already covered by the automatic
+   base are removed, so a verified file is never duplicated. Unselected or unreplayed record
+   paths simply stay missing.
+2. If anything is still missing or blocking, **one** AI reconstruction call is always made
+   for the known missing paths only, so there are at most two model calls in total. A
+   record path counts as creation or deletion only when it is a `file` record with a `null`
+   before or after hash.
+3. The reply must address **every** required path exactly once. An entry with identical
+   before and after content counts as unchanged. The reply is discarded in any of these
+   cases:
+   - a subset of the required paths is returned;
+   - the model adds any limitation note;
+   - any file is dropped or redacted;
+   - the repository count or byte bound is exceeded;
+   - a blocking uncertainty remains (the attempt is still made, then withheld).
+4. AI files are merged into the verified base. A file inside a verified root is grouped under
+   that root, and each AI entry is marked `reconstructed: true`. Verified files are never
+   replaced.
+
+Unavailable, invalid, timed-out, cancelled or late results leave no card. The final answer
+is unchanged.
+
+**Truthfulness: unverified is not the same as incomplete.** A saved AI reconstruction has
+`recovery.complete: true`, `recoveryIncomplete: false` and
+`recoveryMethod: "ai_reconstructed"`. `complete` means the known coverage check passed. It
+does not mean the content was verified, and it does not mean every change on disk is shown:
+writes by unrecognised scripts cannot be detected, and the limitation lines say so. The
+viewer always shows the **Unverified** notice. A merged snapshot is headed **Turn changes
+with AI-reconstructed files**, labels only the marked entries "AI-reconstructed
+(unverified)", and stores `recovery.base: "automatic" | "checkpoint"`.
+
+**Older partial snapshots.**
+
+- `GET /api/agent/sessions/:id/diffs/:diffId` answers
+  `409 {"error":"Diff incomplete","code":"diff_incomplete"}`, without rendering, for any
+  stored payload with `recovery.complete !== true`, and for a turn payload (`baselines`
+  present) with a non-`turn` repository.
+- Transcript replay drops `session_diff` summaries with `recoveryIncomplete === true` or
+  `baselineUnavailable === true`.
+- Legacy working-tree payloads without these flags are served as before.

@@ -1,10 +1,12 @@
 /**
- * Contract v4 AI reconstruction: when the normal capture produced nothing,
- * the run holds NO native records, and this turn ran write-like shell
- * scripts, one tool-free model call may reconstruct full before/after file
- * contents for allowlisted paths only. The backend validates the strict reply
- * and builds the unified diff itself; no model patch is ever executed or
- * stored. Every result is labelled unverified and partial.
+ * Contract v4 AI reconstruction: when the known coverage of this turn is
+ * incomplete (see coverage.ts), one tool-free model call may reconstruct full
+ * before/after file contents for the KNOWN MISSING allowlisted paths only
+ * (literal current-turn write targets and verified native record paths not
+ * covered by any verified patch). The backend validates the strict reply
+ * (every required path must be addressed) and builds the unified diff itself;
+ * no model patch is ever executed or stored. Every result is labelled
+ * unverified; "complete" only ever means known coverage, never accuracy.
  */
 import type { AIMessage } from '../../ai-client';
 import {
@@ -33,10 +35,12 @@ export const DIFF_RECONSTRUCTION_SYSTEM_PROMPT = [
   'You reconstruct file changes for a read-only diff viewer from the shell commands of the CURRENT turn only.',
   'You have no tools and no prior conversation history. Use only the commands and outputs provided.',
   'Reply with exactly one JSON object and nothing else, either:',
-  '{"files":[{"path":"<path copied exactly from allowedPaths>","before":"<full content before this turn>"|null,"after":"<full content after the commands>"|null}],"limitations":["<short note>"]}',
+  '{"files":[{"path":"<path copied exactly from allowedPaths>","before":"<full content before this turn>"|null,"after":"<full content after the commands>"|null}]}',
   'or {"unavailable":true} if you cannot reconstruct the changes from the provided commands.',
+  'Every entry of allowedPaths is REQUIRED: list each exactly once (use identical before and after if it ended unchanged).',
+  'If any required path cannot be fully reconstructed, reply {"unavailable":true}; a partial answer is discarded.',
   'Rules: never invent paths; use before:null ONLY when creationVerified is true; use after:null ONLY when deletionAllowed is true;',
-  'if the earlier content of a file is unknown, omit that file (never pretend it was empty or new);',
+  'never pretend an unknown earlier content was empty or new;',
   'never fabricate content that the commands do not determine; prefer {"unavailable":true} over guessing.',
 ].join('\n');
 
@@ -107,6 +111,7 @@ const utf8 = (s: string) => Buffer.byteLength(s, 'utf8');
 export function parseReconstructionFiles(
   value: Record<string, unknown>,
   allow: Map<string, WriteTarget>,
+  options: { requireAll?: boolean } = {},
 ): { files: ReconstructedFile[]; limitations: string[] } | null {
   const keys = Object.keys(value).sort().join(',');
   if (keys !== 'files,limitations' && keys !== 'files') return null;
@@ -138,7 +143,9 @@ export function parseReconstructionFiles(
     if (before === after) continue; // no change: nothing to show
     out.push({ path, before: before as string | null, after: after as string | null });
   }
-  if (!out.length) return null;
+  // Coverage mode: a subset of the required paths is a known omission.
+  if (options.requireAll && seen.size !== allow.size) return null;
+  if (!out.length && !options.requireAll) return null;
   return {
     files: out,
     limitations: (limitations as string[])
@@ -220,6 +227,8 @@ export function buildFilePatch(rel: string, before: string | null, after: string
 export function reconstructionRepositories(
   files: ReconstructedFile[],
   cwds: readonly string[],
+  /** Verified base roots: a file inside one is grouped under it (same relative paths). */
+  preferredRoots: readonly string[] = [],
 ): { repositories: GitDiffRepository[]; dropped: number; redactedDropped: number } {
   const groups = new Map<string, string[]>();
   let dropped = 0;
@@ -229,9 +238,11 @@ export function reconstructionRepositories(
       redactedDropped += 1; // content derived from redacted evidence would be fiction
       continue;
     }
-    const cwd = cwds
-      .filter((c) => pathIsWithin(f.path, c) && comparablePath(c) !== comparablePath(f.path))
-      .sort((x, y) => y.length - x.length)[0];
+    const within = (roots: readonly string[]) =>
+      roots
+        .filter((c) => pathIsWithin(f.path, c) && comparablePath(c) !== comparablePath(f.path))
+        .sort((x, y) => y.length - x.length)[0];
+    const cwd = within(preferredRoots) ?? within(cwds);
     const root = cwd ?? f.path.slice(0, f.path.lastIndexOf('/'));
     const rel = f.path.slice(root.length + 1);
     if (!root || !isSafeRelativePath(rel)) {
@@ -251,32 +262,49 @@ export function reconstructionRepositories(
       root,
       patch: patches.join(''),
       scope: 'working_tree' as const,
+      reconstructed: true as const,
     })),
     dropped,
     redactedDropped,
   };
 }
 
-/** Fixed, honest limitation lines for an AI-reconstructed snapshot. */
+/**
+ * Fixed, honest limitation lines for an AI-reconstructed snapshot whose known
+ * coverage passed. They state what is unverified and the detection boundary;
+ * they never describe a known omission (those are withheld instead).
+ */
 export function reconstructionLimitations(
   state: DiffRecoveryRunState,
   files: ReconstructedFile[],
-  extra: { dropped: number; redactedDropped: number; modelNotes: string[] },
+  extra: {
+    base?: 'automatic' | 'checkpoint';
+    unchanged: number;
+    checkpointLimitations?: string[];
+  },
 ): string[] {
   const lines = [
     "AI-reconstructed from this turn's write-like shell commands; not verified against the filesystem.",
   ];
+  if (extra.base === 'automatic')
+    lines.push('Other files are from the automatic Git capture of this turn.');
+  if (extra.base === 'checkpoint')
+    lines.push('Other files are from native per-command checkpoints of this turn.');
   if (files.some((f) => f.before !== null))
     lines.push('Earlier file contents were inferred by the model and may be inaccurate.');
+  if (extra.unchanged > 0)
+    lines.push(
+      `The model reported ${extra.unchanged} written ${extra.unchanged === 1 ? 'file' : 'files'} as unchanged at the end of the turn (unverified).`,
+    );
   if (state.writes.some((w) => w.status !== 'succeeded'))
-    lines.push('Some write commands failed or reported no status; their changes may be partial.');
-  if (state.writes.some((w) => w.truncated || w.redacted) || extra.redactedDropped)
-    lines.push('Some command evidence was truncated or redacted.');
-  if (state.writesOmitted)
-    lines.push('Write commands beyond the per-turn evidence budget were not offered.');
-  if (extra.dropped)
-    lines.push('Some reconstructed files were outside the viewer limits and were dropped.');
-  lines.push('Writes the backend did not recognise (for example dynamic paths) are not included.');
-  for (const note of extra.modelNotes) lines.push(`Model note: ${note}`);
+    lines.push(
+      'Some write commands failed or reported no status; reconstructed content may be inaccurate.',
+    );
+  if (state.writes.some((w) => w.redacted))
+    lines.push('Secrets in command evidence were redacted before reconstruction.');
+  for (const note of extra.checkpointLimitations ?? []) lines.push(note);
+  lines.push(
+    'Writes the backend did not recognise (for example dynamic paths) cannot be detected.',
+  );
   return lines.slice(0, DIFF_RECOVERY_MAX_LIMITATIONS);
 }

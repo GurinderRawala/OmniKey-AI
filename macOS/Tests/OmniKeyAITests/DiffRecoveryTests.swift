@@ -79,6 +79,20 @@ final class DiffRecoveryTests: XCTestCase {
         XCTAssertEqual(roundtrip.recoveryMethod, "ai_reconstructed")
     }
 
+    func testKnownPartialSnapshotsAreNotViewerEligible() {
+        let partial = SavedSessionDiff(id: "partial", fileCount: 2, repositoryCount: 1, createdAt: "t",
+            recovered: true, recoveryIncomplete: true)
+        let missingBase = SavedSessionDiff(id: "base", fileCount: 2, repositoryCount: 1, createdAt: "t",
+            baselineUnavailable: true)
+        let completeAI = SavedSessionDiff(id: "ai", fileCount: 100, repositoryCount: 1, createdAt: "t",
+            displayLimit: 50, recovered: true, recoveryIncomplete: false, recoveryMethod: "ai_reconstructed")
+        XCTAssertFalse(partial.isEligibleForViewer)
+        XCTAssertFalse(missingBase.isEligibleForViewer)
+        XCTAssertTrue(completeAI.isEligibleForViewer, "display cap is not missing capture data")
+        let response = ChatSessionRunner.AgentMessage(sessionID: "s", sender: "agent", content: "done", sessionDiff: partial)
+        XCTAssertNil(ChatSessionRunner.acceptedSessionDiff(from: response, sessionID: "s"))
+    }
+
     func testRenameEvidenceIncludesBothPaths() throws {
         let repo = try GitTestRepo()
         try repo.write("old.txt", "original\n")
