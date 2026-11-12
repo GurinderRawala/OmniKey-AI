@@ -29,6 +29,8 @@ export interface AgentTurnOptions {
   supportsSkillStatus?: boolean;
   // Literal-true Git snapshot capability of the connection that sent this input.
   supportsGitDiff?: boolean;
+  // Literal-true per-turn baseline capability (contract v3) of that connection.
+  supportsGitTurnDiff?: boolean;
 }
 
 export interface QueuedMessage {

@@ -2111,15 +2111,188 @@ struct ContextWindowIndicator: View {
 /// context-window indicator, a keyboard-hint, and a circular send /
 /// stop button. The whole surface uses a real fill + soft drop shadow
 /// so it reads as a self-contained card lifted above the transcript.
-private struct CompactComposerKey: EnvironmentKey { static let defaultValue = false }
-private extension EnvironmentValues {
-    var compactComposer: Bool {
-        get { self[CompactComposerKey.self] }
-        set { self[CompactComposerKey.self] = newValue }
+enum ComposerToolbarLayout {
+    /// Compact widths omit optional hints, never move a selection to another row.
+    static func isCompact(width: CGFloat) -> Bool { width < 660 }
+    static let pillChrome: CGFloat = 52
+    static let sendButtonWidth: CGFloat = 32
+    static let contextIndicatorWidth: CGFloat = 34
+    static let keyboardHintWidth: CGFloat = 76
+    static let spacing: CGFloat = 8
+    static let horizontalPadding: CGFloat = 20
+    static let minimumTitleWidth: CGFloat = 24
+
+    struct TitleWidths: Equatable {
+        let task: CGFloat
+        let project: CGFloat
+        let model: CGFloat
+    }
+
+    static func titleWidths(width: CGFloat) -> TitleWidths {
+        let available = max(0, width - horizontalPadding)
+        let optional = isCompact(width: width) ? 0 : contextIndicatorWidth + keyboardHintWidth + 2 * spacing
+        let fixed = 4 * spacing + sendButtonWidth + 3 * pillChrome + optional
+        let each = min(200, max(minimumTitleWidth, ((available - fixed) / 3).rounded(.down)))
+        return TitleWidths(task: each, project: each, model: each)
     }
 }
-enum ComposerToolbarLayout {
-    static func isCompact(width: CGFloat) -> Bool { width < 660 }
+
+/// All three selection menus share one row at every supported width. Full
+/// values remain in tooltips/accessibility while visible titles truncate.
+struct ComposerSelectionToolbar<SendButton: View>: View {
+    @ObservedObject var model: ChatModel
+    let width: CGFloat
+    var showsKeyboardHint: Bool = false
+    @ViewBuilder var sendButton: () -> SendButton
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        let widths = ComposerToolbarLayout.titleWidths(width: width)
+        HStack(spacing: ComposerToolbarLayout.spacing) {
+            taskPill(maxTitleWidth: widths.task)
+            projectPill(maxTitleWidth: widths.project)
+            AgentModelMenu(model: model, maxTitleWidth: widths.model)
+            Spacer(minLength: 0)
+            if !ComposerToolbarLayout.isCompact(width: width) {
+                contextIndicator
+                if showsKeyboardHint { keyboardHint }
+            }
+            sendButton()
+        }
+    }
+
+    @ViewBuilder private var contextIndicator: some View {
+        // Context window indicator (shown when the active session has a
+        // known token budget), left of Send.
+        if let session = model.activeSession, session.contextBudget > 0 {
+            ContextWindowIndicator(
+                remaining: session.remainingContextTokens,
+                budget: session.contextBudget,
+                colorScheme: colorScheme
+            )
+            .transition(.opacity)
+        }
+    }
+
+    private var keyboardHint: some View {
+        HStack(spacing: 3) {
+            Text("⇧⏎")
+                .font(.system(size: 9, weight: .semibold, design: .rounded))
+            Text("newline")
+                .font(.system(size: 9, weight: .medium))
+        }
+        .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.55))
+        .padding(.horizontal, 6)
+        .transition(.opacity)
+    }
+
+    @ViewBuilder private func taskPill(maxTitleWidth: CGFloat) -> some View {
+        if !model.availableTaskTemplates.isEmpty || !model.canChangeSessionSetup {
+            Menu {
+                ForEach(model.availableTaskTemplates) { tpl in
+                    Button {
+                        model.setDefaultTaskTemplate(id: tpl.id)
+                    } label: {
+                        if tpl.id == model.defaultTaskTemplate?.id {
+                            Label(tpl.heading, systemImage: "checkmark")
+                        } else {
+                            Text(tpl.heading)
+                        }
+                    }
+                }
+                Divider()
+                Button("No instruction") {
+                    model.setDefaultTaskTemplate(id: nil)
+                }
+            } label: {
+                ComposerPillLabel(
+                    icon: model.canChangeSessionSetup ? "text.badge.star" : "lock.fill",
+                    title: model.displayedTaskInstructionTitle,
+                    isActive: model.hasDisplayedTaskInstruction,
+                    activeColor: NordTheme.accent(colorScheme),
+                    colorScheme: colorScheme,
+                    showsChevron: model.canChangeSessionSetup,
+                    maxTitleWidth: maxTitleWidth
+                )
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .disabled(model.isUpdatingDefaultTaskTemplate || !model.canChangeSessionSetup)
+            .help(model.displayedTaskInstructionHelp)
+            .accessibilityLabel("Task instructions")
+            .accessibilityValue(model.displayedTaskInstructionTitle)
+            .accessibilityHint(model.canChangeSessionSetup ? "Choose task instructions" : "Locked to this session")
+        } else {
+            Button {
+                AppDelegate.shared?.showTaskInstructionsWindow()
+            } label: {
+                ComposerPillLabel(
+                    icon: "plus",
+                    title: "Add instruction",
+                    isActive: false,
+                    activeColor: NordTheme.accent(colorScheme),
+                    colorScheme: colorScheme,
+                    showsChevron: false,
+                    maxTitleWidth: maxTitleWidth
+                )
+            }
+            .buttonStyle(.plain)
+            .help("Add task instructions")
+            .accessibilityLabel("Add task instructions")
+        }
+    }
+
+    private func projectPill(maxTitleWidth: CGFloat) -> some View {
+        Menu {
+            Button {
+                guard model.canChangeSessionSetup else { return }
+                model.selectedGroup = nil
+            } label: {
+                if model.selectedGroup == nil {
+                    Label("Select project", systemImage: "checkmark")
+                } else {
+                    Text("Select project")
+                }
+            }
+
+            let distinctGroups: [AgentGroupInfo] = {
+                var seen = Set<String>()
+                return model.availableGroups.filter { seen.insert($0.groupName).inserted }
+            }()
+            if !distinctGroups.isEmpty {
+                Divider()
+                ForEach(distinctGroups) { group in
+                    Button {
+                        guard model.canChangeSessionSetup else { return }
+                        model.selectedGroup = group
+                    } label: {
+                        if model.selectedGroup?.groupName == group.groupName {
+                            Label(group.groupName, systemImage: "checkmark")
+                        } else {
+                            Text(group.groupName)
+                        }
+                    }
+                }
+            }
+        } label: {
+            ComposerPillLabel(
+                icon: model.canChangeSessionSetup ? "folder" : "lock.fill",
+                title: model.displayedProjectName,
+                isActive: model.hasDisplayedProject,
+                activeColor: NordTheme.accentGreen(colorScheme),
+                colorScheme: colorScheme,
+                showsChevron: model.canChangeSessionSetup,
+                maxTitleWidth: maxTitleWidth
+            )
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .disabled(!model.canChangeSessionSetup)
+        .help(model.displayedProjectHelp)
+        .accessibilityLabel("Project")
+        .accessibilityValue(model.displayedProjectName)
+        .accessibilityHint(model.canChangeSessionSetup ? "Choose project" : "Locked to this session")
+    }
 }
 private struct LandingInputComposer: View {
     @ObservedObject var model: ChatModel
@@ -2204,143 +2377,14 @@ private struct LandingInputComposer: View {
             // dropdowns off the right edge of the composer at the
             // window's default (non-maximised) width — the user could
             // not click those controls until they resized the window
-            // wider. See `ComposerPillLabel.maxTitleWidth`.
-            HStack(spacing: 8) {
-                // Task instruction dropdown
-                if !model.availableTaskTemplates.isEmpty || !model.canChangeSessionSetup {
-                    Menu {
-                        ForEach(model.availableTaskTemplates) { tpl in
-                            Button {
-                                model.setDefaultTaskTemplate(id: tpl.id)
-                            } label: {
-                                if tpl.id == model.defaultTaskTemplate?.id {
-                                    Label(tpl.heading, systemImage: "checkmark")
-                                } else {
-                                    Text(tpl.heading)
-                                }
-                            }
-                        }
-                        Divider()
-                        Button("No instruction") {
-                            model.setDefaultTaskTemplate(id: nil)
-                        }
-                    } label: {
-                        ComposerPillLabel(
-                            icon: model.canChangeSessionSetup ? "text.badge.star" : "lock.fill",
-                            title: model.displayedTaskInstructionTitle,
-                            isActive: model.hasDisplayedTaskInstruction,
-                            activeColor: NordTheme.accent(colorScheme),
-                            colorScheme: colorScheme,
-                            showsChevron: model.canChangeSessionSetup
-                        )
-                    }
-                    .menuStyle(.borderlessButton)
-                    .fixedSize()
-                    .disabled(model.isUpdatingDefaultTaskTemplate || !model.canChangeSessionSetup)
-                    .help(
-                        model.canChangeSessionSetup
-                            ? "Choose task instructions" : "Task instructions are locked after a session starts")
-                } else {
-                    Button {
-                        AppDelegate.shared?.showTaskInstructionsWindow()
-                    } label: {
-                        ComposerPillLabel(
-                            icon: "plus",
-                            title: "Add instruction",
-                            isActive: false,
-                            activeColor: NordTheme.accent(colorScheme),
-                            colorScheme: colorScheme,
-                            showsChevron: false
-                        )
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!model.canChangeSessionSetup)
-                    .help(
-                        model.canChangeSessionSetup
-                            ? "Add instruction" : "Task instructions are locked after a session starts")
-                }
-
-                // Project path / group dropdown
-                Menu {
-                    Button {
-                        guard model.canChangeSessionSetup else { return }
-                        model.selectedGroup = nil
-                    } label: {
-                        if model.selectedGroup == nil {
-                            Label("Select project", systemImage: "checkmark")
-                        } else {
-                            Text("Select project")
-                        }
-                    }
-
-                    let distinctGroups: [AgentGroupInfo] = {
-                        var seen = Set<String>()
-                        return model.availableGroups.filter { seen.insert($0.groupName).inserted }
-                    }()
-                    if !distinctGroups.isEmpty {
-                        Divider()
-                        ForEach(distinctGroups) { group in
-                            Button {
-                                guard model.canChangeSessionSetup else { return }
-                                model.selectedGroup = group
-                            } label: {
-                                if model.selectedGroup?.groupName == group.groupName {
-                                    Label(group.groupName, systemImage: "checkmark")
-                                } else {
-                                    Text(group.groupName)
-                                }
-                            }
-                        }
-                    }
-                } label: {
-                    ComposerPillLabel(
-                        icon: model.canChangeSessionSetup ? "folder" : "lock.fill",
-                        title: model.displayedProjectName,
-                        isActive: model.hasDisplayedProject,
-                        activeColor: NordTheme.accentGreen(colorScheme),
-                        colorScheme: colorScheme,
-                        showsChevron: model.canChangeSessionSetup
-                    )
-                }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
-                .disabled(!model.canChangeSessionSetup)
-                .help(
-                    model.canChangeSessionSetup
-                        ? "Choose project" : "Project is locked after a session starts")
-
-                Spacer()
-
-                // Context window indicator (shown when the active
-                // session has a known token budget). Sits to the left
-                // of Send so the spinner mirrors the "tokens left"
-                // badge from the Omni Agent session view.
-                if let session = model.activeSession, session.contextBudget > 0 {
-                    ContextWindowIndicator(
-                        remaining: session.remainingContextTokens,
-                        budget: session.contextBudget,
-                        colorScheme: colorScheme
-                    )
-                    .transition(.opacity)
-                }
-
-                // Subtle keyboard hint (`⏎` / `⇧⏎`) — only visible when
-                // the composer has focus and content, mirroring the
-                // hints surfaced by other production AI chat inputs.
-                if isFocused, !inputIsEmpty {
-                    HStack(spacing: 3) {
-                        Text("⇧⏎")
-                            .font(.system(size: 9, weight: .semibold, design: .rounded))
-                        Text("newline")
-                            .font(.system(size: 9, weight: .medium))
-                    }
-                    .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.55))
-                    .padding(.horizontal, 6)
-                    .transition(.opacity)
-                }
-
-                AgentModelMenu(model: model)
-
+            // wider. Titles are now capped per available width by
+            // `ComposerToolbarLayout.titleWidths`, and narrow composers
+            // keep all three selectors on one row with readable fitted titles.
+            ComposerSelectionToolbar(
+                model: model,
+                width: composerWidth,
+                showsKeyboardHint: isFocused && !inputIsEmpty
+            ) {
                 // Send / Steer / Stop
                 // • Has text + idle → start a new turn
                 // • Has text + running → steer the active turn over its existing socket
@@ -2383,9 +2427,8 @@ private struct LandingInputComposer: View {
             .animation(.easeInOut(duration: 0.12), value: isFocused)
             .animation(.easeInOut(duration: 0.12), value: inputIsEmpty)
         }
-        .environment(\.compactComposer, ComposerToolbarLayout.isCompact(width: composerWidth))
         .background(GeometryReader { geometry in
-            Color.clear.onAppear { composerWidth = geometry.size.width }
+            Color.clear.allowsHitTesting(false).onAppear { composerWidth = geometry.size.width }
                 .onChange(of: geometry.size.width) { _, width in composerWidth = width }
         })
         .background(
@@ -2401,6 +2444,7 @@ private struct LandingInputComposer: View {
                         : NordTheme.border(colorScheme),
                     lineWidth: isFocused ? 1.4 : 1
                 )
+                .allowsHitTesting(false)
         )
         .shadow(
             color: .black.opacity(
@@ -2454,6 +2498,7 @@ private struct LandingInputComposer: View {
 
 private struct AgentModelMenu: View {
     @ObservedObject var model: ChatModel
+    var maxTitleWidth: CGFloat = 140
     @Environment(\.colorScheme) private var colorScheme
     @State private var showsCustomModelPopover = false
     @State private var customModelInput = ""
@@ -2499,13 +2544,16 @@ private struct AgentModelMenu: View {
                     title: model.activeAgentModelLabel,
                     isActive: true,
                     activeColor: NordTheme.accentPurple(colorScheme),
-                    colorScheme: colorScheme
+                    colorScheme: colorScheme,
+                    maxTitleWidth: maxTitleWidth
                 )
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
             .disabled(model.isRunning || !model.hasLoadedAgentModelOptions)
-            .help(model.isRunning ? "Model is locked while a turn is running" : "Choose agent model")
+            .help(model.agentModelHelp)
+            .accessibilityLabel("Model")
+            .accessibilityValue(model.activeAgentModelLabel)
             .popover(isPresented: $showsCustomModelPopover) {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Custom model")
@@ -2553,7 +2601,6 @@ private struct AgentModelMenu: View {
 /// visually consistent and gives the composer a tighter, more
 /// production-ready look.
 private struct ComposerPillLabel: View {
-    @Environment(\.compactComposer) private var compact
     let icon: String
     let title: String
     let isActive: Bool
@@ -2573,14 +2620,12 @@ private struct ComposerPillLabel: View {
         HStack(spacing: 5) {
             Image(systemName: icon)
                 .font(.system(size: 10, weight: .semibold))
-            if !compact {
-            Text(title)
-                .font(.system(size: 11.5, weight: .medium))
+            Text(PillTitle.fitted(title, maxWidth: maxTitleWidth))
+                .font(.system(size: PillTitle.fontSize, weight: .medium))
                 .lineLimit(1)
-                .truncationMode(.tail)
+                .truncationMode(.middle)
                 .frame(maxWidth: maxTitleWidth, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
-            }
             if showsChevron {
                 Image(systemName: "chevron.down")
                     .font(.system(size: 8, weight: .semibold))

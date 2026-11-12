@@ -21,18 +21,26 @@ import { CandidateSet, projectContextDirectory } from './candidates';
 import {
   comparablePath,
   countPatchFiles,
+  GIT_DIFF_DISPLAY_LIMIT,
   GIT_DIFF_MAX_CANDIDATES,
+  GIT_DIFF_MAX_REPOSITORIES,
   GIT_DIFF_RESPONSE_TIMEOUT_MS,
+  GIT_MAX_REASON_LENGTH,
+  GIT_TURN_BASELINE_TIMEOUT_MS,
   GIT_MAX_COMMIT_OBSERVATIONS,
   GitDiffValidationError,
   isGitOid,
   isSafeAbsolutePath,
+  validateGitBaselineResponse,
   validateGitDiffResponse,
+  validateGitTurnFinalResponse,
   type EligibleCommit,
   type GitCommitObservation,
   type GitDiffRepository,
   type GitDiffRequest,
   type GitDiffResponse,
+  type GitTurnBaseline,
+  type GitTurnBaselineSource,
   type SessionDiffPayload,
   type SessionDiffSummary,
   type SessionDiffSummaryScope,
@@ -48,6 +56,20 @@ export interface GitRunState {
   send: AgentSendFn;
   candidates: CandidateSet;
   observations: GitCommitObservation[];
+  /**
+   * Contract v3 (`supports_git_turn_diff: true`): one immutable set of HEAD
+   * baselines per outer run, reused by every recursion/steering continuation
+   * and never reset or rebased within the run.
+   */
+  turnDiff: boolean;
+  startedAt: number;
+  turnStartRequested: boolean;
+  /** At most one baseline per canonical root (first verified wins). */
+  baselines: GitTurnBaseline[];
+  /** Candidate paths a baseline was already requested for (never retried). */
+  baselineAttempted: Set<string>;
+  /** Count of baseline requests that failed (timeout/invalid/unavailable). */
+  baselineFailures: number;
 }
 
 export function createGitRunState(input: {
@@ -55,6 +77,7 @@ export function createGitRunState(input: {
   subscriptionId: string;
   connection?: AbortSignal;
   send: AgentSendFn;
+  turnDiff?: boolean;
 }): GitRunState {
   return {
     runId: `grun_${cuid()}`,
@@ -64,6 +87,12 @@ export function createGitRunState(input: {
     send: input.send,
     candidates: new CandidateSet(),
     observations: [],
+    turnDiff: input.turnDiff === true,
+    startedAt: Date.now(),
+    turnStartRequested: false,
+    baselines: [],
+    baselineAttempted: new Set(),
+    baselineFailures: 0,
   };
 }
 
@@ -86,6 +115,7 @@ type PendingCapture = {
   subscriptionId: string;
   connection?: AbortSignal;
   request: GitDiffRequest;
+  validate: (raw: unknown) => GitDiffResponse;
   settle: (response: GitDiffResponse | null) => void;
 };
 
@@ -119,7 +149,7 @@ export function handleGitDiffResponseFrame(
     return true;
   }
   try {
-    pending.settle(validateGitDiffResponse(raw, pending.request));
+    pending.settle(pending.validate(raw));
   } catch (err) {
     log.warn('Rejected invalid git diff reply', {
       sessionId: message.session_id,
@@ -135,6 +165,8 @@ function awaitCapture(
   request: GitDiffRequest,
   signal: AbortSignal | undefined,
   timeoutMs: number,
+  validate: (raw: unknown) => GitDiffResponse = (raw) => validateGitDiffResponse(raw, request),
+  maxTimeoutMs = GIT_DIFF_RESPONSE_TIMEOUT_MS,
 ): Promise<GitDiffResponse | null> {
   return new Promise((resolve) => {
     const timing: { timer?: ReturnType<typeof setTimeout> } = {};
@@ -152,6 +184,7 @@ function awaitCapture(
       subscriptionId: run.subscriptionId,
       connection: run.connection,
       request,
+      validate,
       settle,
     });
     if (signals.some((s) => s.aborted)) {
@@ -159,10 +192,7 @@ function awaitCapture(
       return;
     }
     for (const s of signals) s.addEventListener('abort', onAbort, { once: true });
-    timing.timer = setTimeout(
-      () => settle(null),
-      Math.min(timeoutMs, GIT_DIFF_RESPONSE_TIMEOUT_MS),
-    );
+    timing.timer = setTimeout(() => settle(null), Math.min(timeoutMs, maxTimeoutMs));
     run.send({
       session_id: run.sessionId,
       sender: 'agent',
@@ -317,11 +347,13 @@ export async function saveSessionDiff(
   run: GitRunState,
   repositories: GitDiffRepository[],
   notice: string | undefined,
+  turn?: { baselines: GitTurnBaseline[]; displayLimit: number },
 ): Promise<SessionDiffSummary> {
   const payload: SessionDiffPayload = {
     version: 1,
     repositories,
     ...(notice ? { notice } : {}),
+    ...(turn ? { baselines: turn.baselines, displayLimit: turn.displayLimit } : {}),
   };
   const scope = summaryScope(repositories);
   const commit =
@@ -345,6 +377,15 @@ export async function saveSessionDiff(
     createdAt: (row.createdAt ?? new Date()).toISOString(),
     scope,
     ...(commit ? { commit } : {}),
+    ...(turn
+      ? {
+          displayLimit: turn.displayLimit,
+          baselineSource: repositories.some((r) => r.baselineSource === 'before_tool')
+            ? ('before_tool' as const)
+            : ('turn_start' as const),
+          baselineUnavailable: repositories.some((r) => r.scope !== 'turn'),
+        }
+      : {}),
   };
 }
 
@@ -395,6 +436,222 @@ export function eligibleCommitsFor(
   return result;
 }
 
+// ---------------------------------------------------------------------------
+// Contract v3: per-turn baselines.
+// ---------------------------------------------------------------------------
+
+const MAX_BASELINE_ATTEMPTS = GIT_DIFF_MAX_CANDIDATES * 8;
+
+/** Record verified baselines once per canonical root; never overwrite. */
+export function recordTurnBaselines(
+  run: GitRunState,
+  baselines: readonly GitTurnBaseline[],
+): number {
+  let added = 0;
+  for (const baseline of baselines) {
+    const key = comparablePath(baseline.root);
+    if (run.baselines.some((existing) => comparablePath(existing.root) === key)) continue;
+    if (run.baselines.length >= GIT_DIFF_MAX_REPOSITORIES) break;
+    run.baselines.push({ ...baseline });
+    added += 1;
+  }
+  return added;
+}
+
+function hasBaselineFor(run: GitRunState, path: string): boolean {
+  const key = comparablePath(path);
+  return run.baselines.some((b) => comparablePath(b.root) === key);
+}
+
+/**
+ * Request HEAD baselines for candidate paths not yet attempted in this run and
+ * await the bounded reply. Each path is attempted at most once, so a repeated
+ * shell in the same directory never rebases, and a failed attempt is never
+ * retried later (it would no longer be a baseline). Never throws.
+ */
+export async function captureTurnBaselines(
+  run: GitRunState | undefined,
+  paths: readonly string[],
+  source: GitTurnBaselineSource,
+  signal: AbortSignal | undefined,
+  log: Logger,
+  timeoutMs = GIT_TURN_BASELINE_TIMEOUT_MS,
+): Promise<void> {
+  if (!run?.turnDiff) return;
+  const fresh: string[] = [];
+  for (const path of paths) {
+    const key = comparablePath(path);
+    if (run.baselineAttempted.has(key) || hasBaselineFor(run, path)) continue;
+    if (fresh.some((p) => comparablePath(p) === key)) continue;
+    if (run.baselineAttempted.size >= MAX_BASELINE_ATTEMPTS) break;
+    fresh.push(path);
+    if (fresh.length >= GIT_DIFF_MAX_CANDIDATES) break;
+  }
+  if (!fresh.length) return;
+  for (const path of fresh) run.baselineAttempted.add(comparablePath(path));
+  if (signal?.aborted || run.connection?.aborted) {
+    run.baselineFailures += 1;
+    return;
+  }
+  const request: GitDiffRequest = {
+    request_id: cuid(),
+    candidate_paths: fresh,
+    eligible_commits: [],
+    phase: 'baseline',
+    baseline_source: source,
+    baselines: [],
+  };
+  try {
+    const response = await awaitCapture(
+      run,
+      request,
+      signal,
+      timeoutMs,
+      (raw) =>
+        validateGitBaselineResponse(
+          raw,
+          request,
+          { notBefore: run.startedAt, now: Date.now() },
+          run.baselines,
+        ),
+      GIT_TURN_BASELINE_TIMEOUT_MS,
+    );
+    if (!response || response.status === 'unavailable') {
+      run.baselineFailures += 1;
+      log.info('Git turn baseline unavailable', {
+        sessionId: run.sessionId,
+        source,
+        status: response?.status ?? 'no_reply',
+      });
+      return;
+    }
+    const added = recordTurnBaselines(run, response.baselines ?? []);
+    log.info('Recorded git turn baselines', {
+      sessionId: run.sessionId,
+      source,
+      added,
+      total: run.baselines.length,
+    });
+  } catch (err) {
+    run.baselineFailures += 1;
+    log.warn('Git turn baseline failed', {
+      sessionId: run.sessionId,
+      error: err instanceof Error ? err.name : 'error',
+    });
+  }
+}
+
+/**
+ * Once per outer run, after the session ownership check and before the first
+ * model request or tool: baseline the project context, the paths the user
+ * typed, and the immediately previous run's candidates.
+ */
+export async function captureTurnStartBaselines(
+  run: GitRunState | undefined,
+  history: ReadonlyArray<{ role: string; content: unknown }>,
+  signal: AbortSignal | undefined,
+  log: Logger,
+  timeoutMs = GIT_TURN_BASELINE_TIMEOUT_MS,
+): Promise<void> {
+  if (!run?.turnDiff || run.turnStartRequested) return;
+  run.turnStartRequested = true;
+  try {
+    run.candidates.add(latestProjectDirectory(history), 'project');
+    const previous = await previousRunProvenance(run).catch(() => ({
+      commits: [] as GitCommitObservation[],
+      candidates: [] as string[],
+    }));
+    run.candidates.addAll(previous.candidates, 'previous_run');
+  } catch {
+    // Evidence is best-effort; the request below uses whatever is known.
+  }
+  await captureTurnBaselines(
+    run,
+    run.candidates.list(GIT_DIFF_MAX_CANDIDATES),
+    'turn_start',
+    signal,
+    log,
+    timeoutMs,
+  );
+}
+
+function turnNotice(
+  repositories: readonly GitDiffRepository[],
+  reason: string | undefined,
+): string | undefined {
+  const parts: string[] = [];
+  const missing = repositories.filter((r) => r.scope === 'working_tree');
+  if (missing.length) {
+    parts.push(
+      `Turn baseline unavailable for ${missing.map((r) => r.root).join(', ')}; showing only current uncommitted changes there (no commit history is inferred).`,
+    );
+  }
+  if (reason) parts.push(reason);
+  const notice = parts.join(' ').slice(0, GIT_MAX_REASON_LENGTH * 3);
+  return notice || undefined;
+}
+
+async function captureTurnSnapshot(
+  run: GitRunState,
+  history: ReadonlyArray<{ role: string; content: unknown }>,
+  signal: AbortSignal | undefined,
+  log: Logger,
+  timeoutMs: number,
+): Promise<SessionDiffSummary | undefined> {
+  run.candidates.add(latestProjectDirectory(history), 'project');
+  const previous = await previousRunProvenance(run).catch(() => ({
+    commits: [] as GitCommitObservation[],
+    candidates: [] as string[],
+  }));
+  run.candidates.addAll(previous.candidates, 'previous_run');
+  const ordered: string[] = [];
+  for (const path of [...run.baselines.map((b) => b.root), ...run.candidates.list()]) {
+    if (!ordered.some((p) => comparablePath(p) === comparablePath(path))) ordered.push(path);
+  }
+  const candidatePaths = ordered.slice(0, GIT_DIFF_MAX_CANDIDATES);
+  if (!candidatePaths.length) return undefined;
+  const baselines = run.baselines.map((b) => ({ ...b }));
+  const request: GitDiffRequest = {
+    request_id: cuid(),
+    candidate_paths: candidatePaths,
+    // Never a latest-commit fallback in turn mode.
+    eligible_commits: [],
+    phase: 'final',
+    baselines,
+    display_limit: GIT_DIFF_DISPLAY_LIMIT,
+  };
+  const response = await awaitCapture(run, request, signal, timeoutMs, (raw) =>
+    validateGitTurnFinalResponse(raw, request),
+  );
+  if (!response || response.status !== 'ok') {
+    log.info('No git turn snapshot for final answer', {
+      sessionId: run.sessionId,
+      status: response?.status ?? 'no_reply',
+    });
+    return undefined;
+  }
+  const repositories = response.repositories.filter((r) => r.patch.trim().length > 0);
+  if (!repositories.length) return undefined;
+  const summary = await saveSessionDiff(
+    run,
+    repositories,
+    turnNotice(repositories, response.reason),
+    {
+      baselines,
+      displayLimit: GIT_DIFF_DISPLAY_LIMIT,
+    },
+  );
+  log.info('Saved git turn snapshot for final answer', {
+    sessionId: run.sessionId,
+    diffId: summary.id,
+    repositoryCount: summary.repositoryCount,
+    fileCount: summary.fileCount,
+    scope: summary.scope,
+    baselineCount: baselines.length,
+  });
+  return summary;
+}
+
 /**
  * Capture, validate and persist the snapshot for the final answer about to be
  * delivered. Returns the summary to attach, or undefined (no button).
@@ -408,6 +665,7 @@ export async function captureSessionDiffBeforeFinal(
 ): Promise<SessionDiffSummary | undefined> {
   if (!run || signal?.aborted || run.connection?.aborted) return undefined;
   try {
+    if (run.turnDiff) return await captureTurnSnapshot(run, history, signal, log, timeoutMs);
     run.candidates.add(latestProjectDirectory(history), 'project');
     const previous = await previousRunProvenance(run).catch(() => ({
       commits: [] as GitCommitObservation[],

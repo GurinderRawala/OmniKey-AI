@@ -31,7 +31,8 @@ export type DiffTheme = 'dark' | 'light';
 export type DiffLayout = 'unified' | 'split';
 export type FileKind = 'added' | 'deleted' | 'modified' | 'renamed' | 'binary';
 
-export const SSR_MAX_RENDERED_FILES = 120;
+/** File panels (rendered or honest per-file notice) across all repositories. */
+export const SSR_MAX_RENDERED_FILES = 50;
 export const SSR_MAX_FILE_SECTION_BYTES = 512 * 1024;
 export const SSR_MAX_HTML_BYTES = 16 * 1024 * 1024;
 export const SSR_RENDER_TIMEOUT_MS = 15_000;
@@ -186,14 +187,26 @@ export async function renderSnapshotDocument(
   };
   let totalFiles = 0;
   for (const repo of payload.repositories) totalFiles += splitPatchSections(repo.patch).length;
+  // At most this many file panels exist in the DOM; the rest are counted in
+  // one summary line, never as per-file placeholders.
+  const requestedLimit =
+    typeof payload.displayLimit === 'number' && payload.displayLimit > 0
+      ? Math.floor(payload.displayLimit)
+      : limits.maxRenderedFiles;
+  const panelLimit = Math.min(requestedLimit, limits.maxRenderedFiles);
 
   const scopes = new Set(payload.repositories.map((r) => r.scope));
-  const scopeLabel =
-    scopes.size > 1
+  const isTurn = scopes.has('turn');
+  const scopeLabel = isTurn
+    ? 'Turn changes'
+    : scopes.size > 1
       ? 'Working tree and commit changes'
       : scopes.has('commit')
         ? 'Commit changes'
         : 'Working tree changes';
+  const disclaimer = isTurn
+    ? 'Net committed and uncommitted changes from the turn baseline to the working tree when the answer was produced; it may include changes not made by the agent.'
+    : 'Snapshot taken when the answer was produced; it may include changes not made by the agent.';
   const repoCount = payload.repositories.length;
   const head = [
     '<!doctype html>',
@@ -202,14 +215,21 @@ export async function renderSnapshotDocument(
     `<meta name="color-scheme" content="${theme}">`,
     `<style>${limits.pageCss}</style></head><body>`,
     `<header class="snapshot"><h1>${scopeLabel}</h1>`,
-    `<p>${repoCount} repositor${repoCount === 1 ? 'y' : 'ies'} · ${totalFiles} file${totalFiles === 1 ? '' : 's'}. Snapshot taken when the answer was produced; it may include changes not made by the agent.</p>`,
+    `<p>${repoCount} repositor${repoCount === 1 ? 'y' : 'ies'} · ${totalFiles} file${totalFiles === 1 ? '' : 's'}. ${disclaimer}</p>`,
     payload.notice ? `<p>${escapeHtml(payload.notice)}</p>` : '',
   ].join('');
   const tail = '</main></body></html>';
   const skippedNote = (n: number) =>
     n ? `<p>${n} of ${totalFiles} files were not rendered (viewer limit).</p>` : '';
-  // Shell + worst-case skipped note + '</header><main>'.
-  const reserved = bytes(head) + bytes(tail) + bytes(skippedNote(totalFiles)) + 16;
+  const showingNote = (shown: number) =>
+    shown < totalFiles ? `<p class="limit">Showing ${shown} of ${totalFiles} files.</p>` : '';
+  // Shell + worst-case notes + '</header><main>'.
+  const reserved =
+    bytes(head) +
+    bytes(tail) +
+    bytes(skippedNote(totalFiles)) +
+    bytes(showingNote(Math.max(totalFiles - 1, 0))) +
+    16;
   if (reserved > limits.maxHtmlBytes) throw new Error('Diff document shell exceeds HTML limit');
   let remaining = limits.maxHtmlBytes - reserved;
   const parts: string[] = [];
@@ -221,15 +241,24 @@ export async function renderSnapshotDocument(
     return true;
   };
   const sectionClose = '</section>';
-  let renderedFiles = 0;
   let skippedFiles = 0;
+  let panels = 0;
+  const oid = (value: string | null | undefined) =>
+    value
+      ? `<code class="oid">${escapeHtml(value.slice(0, 12))}</code>`
+      : '<code class="oid">unborn</code>';
 
   for (const repo of payload.repositories) {
     const sections = splitPatchSections(repo.patch);
+    if (panels >= panelLimit) continue; // counted by the "Showing" note
     const title =
-      repo.scope === 'commit' && repo.commit
-        ? `${escapeHtml(repo.root)} · commit <code class="oid">${escapeHtml(repo.commit.slice(0, 12))}</code>`
-        : `${escapeHtml(repo.root)} · working tree vs HEAD`;
+      repo.scope === 'turn'
+        ? `${escapeHtml(repo.root)} · ${oid(repo.baselineHead)} → ${oid(repo.head)} + working tree · baseline ${repo.baselineSource === 'before_tool' ? 'before first tool use' : 'at turn start'}${repo.baselineCapturedAt ? ` (${escapeHtml(repo.baselineCapturedAt)})` : ''}`
+        : repo.scope === 'commit' && repo.commit
+          ? `${escapeHtml(repo.root)} · commit <code class="oid">${escapeHtml(repo.commit.slice(0, 12))}</code>`
+          : isTurn
+            ? `${escapeHtml(repo.root)} · working tree vs HEAD (turn baseline unavailable)`
+            : `${escapeHtml(repo.root)} · working tree vs HEAD`;
     // Always keep room to close the section we open.
     const sectionOpen = `<section class="repo"><h2>${title}</h2>`;
     if (bytes(sectionOpen) + bytes(sectionClose) > remaining || !tryPush(sectionOpen)) {
@@ -238,19 +267,19 @@ export async function renderSnapshotDocument(
     }
     remaining -= sectionClose.length;
     for (const section of sections) {
+      if (panels >= panelLimit) break; // no DOM for files past the panel cap
+      panels += 1;
       const filePath = headerPath(section);
       const stub = (label: string, reason: string) =>
         `<details class="file"><summary><span class="kind">${label}</span>${escapeHtml(filePath)}</summary><div class="note">${reason}</div></details>`;
-      if (
-        renderedFiles >= limits.maxRenderedFiles ||
-        bytes(section) > limits.maxFileSectionBytes ||
-        remaining <= 0
-      ) {
+      if (bytes(section) > limits.maxFileSectionBytes || remaining <= 0) {
         skippedFiles += 1;
         tryPush(
           stub(
             kindLabel[classifySection(section)],
-            'Not rendered: this snapshot exceeds the viewer limit.',
+            bytes(section) > limits.maxFileSectionBytes
+              ? 'Not rendered: this file is larger than the viewer limit.'
+              : 'Not rendered: this snapshot exceeds the viewer limit.',
           ),
         );
         continue;
@@ -279,9 +308,7 @@ export async function renderSnapshotDocument(
             ? file.name
             : filePath;
       const chunk = `<details class="file" open><summary><span class="kind">${kindLabel[kind]}</span>${escapeHtml(displayPath)}</summary>${body}</details>`;
-      if (tryPush(chunk)) {
-        renderedFiles += 1;
-      } else {
+      if (!tryPush(chunk)) {
         skippedFiles += 1;
         tryPush(
           stub(kindLabel[kind], 'Not rendered: this snapshot exceeds the viewer HTML limit.'),
@@ -290,7 +317,14 @@ export async function renderSnapshotDocument(
     }
     parts.push(sectionClose); // already reserved above
   }
-  return head + skippedNote(skippedFiles) + '</header><main>' + parts.join('') + tail;
+  return (
+    head +
+    showingNote(Math.min(panels, totalFiles)) +
+    skippedNote(skippedFiles) +
+    '</header><main>' +
+    parts.join('') +
+    tail
+  );
 }
 
 /** Worker entry. Dependencies are injected by the bootstrap source. */

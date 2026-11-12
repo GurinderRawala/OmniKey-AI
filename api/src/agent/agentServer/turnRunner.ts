@@ -58,6 +58,7 @@ import {
 import { userInputDirectories } from '../gitDiff/candidates';
 import {
   captureSessionDiffBeforeFinal,
+  captureTurnStartBaselines,
   createGitRunState,
   persistGitRunProvenance,
   type GitRunState,
@@ -279,6 +280,14 @@ async function runAgentTurnInternal(
     } else {
       await writeInputCheckpoint();
     }
+  }
+
+  // Contract v3: baseline HEADs once per outer run, after the ownership check
+  // above and before the first model request or tool. Bounded; never throws.
+  // Recursions/steering reuse the same run and never rebase.
+  if (session.gitRun?.turnDiff && !session.gitRun.turnStartRequested) {
+    await captureTurnStartBaselines(session.gitRun, session.history, session.signal, log);
+    throwIfTurnCancelled(session.signal);
   }
 
   const mcpBundle = await getMcpToolsForSubscription(subscription.id, log);
@@ -932,9 +941,11 @@ export async function runAgentTurn(
   // Git snapshots: only interactive inputs of a client that advertised the
   // capability (literal true). Cron/internal/other clients never get one, and
   // the server never inspects its own repository on their behalf.
+  const supportsAnyGitDiff =
+    options?.supportsGitDiff === true || options?.supportsGitTurnDiff === true;
   const gitRun =
     options?.interactiveInput &&
-    options.supportsGitDiff === true &&
+    supportsAnyGitDiff &&
     !options.isCronJob &&
     !options.extraTools?.length &&
     !options.toolHandlers?.size
@@ -943,6 +954,7 @@ export async function runAgentTurn(
           subscriptionId: subscription.id,
           connection: options.signal,
           send,
+          turnDiff: options.supportsGitTurnDiff === true,
         })
       : undefined;
   const provenanceRun =
