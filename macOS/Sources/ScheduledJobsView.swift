@@ -131,7 +131,6 @@ struct ScheduledJobsView: View {
                     .buttonStyle(.bordered)
                     .tint(NordTheme.accentBlue(colorScheme))
                     .disabled(isLoading)
-                    .help("Reload scheduled jobs and their latest status")
 
                     Button(action: startAddingJob) {
                         Label("Add New Job", systemImage: "plus")
