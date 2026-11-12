@@ -36,8 +36,9 @@ function sectionPaths(header: string, meta: string[]): string[] {
     if (p && isSafeRelativePath(p)) out.add(p);
   };
   for (const line of meta) {
-    if (line.startsWith('--- a/')) add(line.slice(6));
-    else if (line.startsWith('+++ b/')) add(line.slice(6));
+    // Git appends one TAB to ---/+++ names that contain a space.
+    if (line.startsWith('--- a/')) add(line.slice(6).replace(/\t$/, ''));
+    else if (line.startsWith('+++ b/')) add(line.slice(6).replace(/\t$/, ''));
     else if (line.startsWith('rename from ')) add(line.slice(12));
     else if (line.startsWith('rename to ')) add(line.slice(10));
     else if (line.startsWith('copy to ')) add(line.slice(8));
@@ -217,6 +218,7 @@ export function coverageAssessment(input: CoverageInput): CoverageAssessment {
   if (state) {
     if (state.omitted > 0) blocking.push('records_over_budget');
     if ((state.nativeOmitted ?? 0) > 0) blocking.push('native_omitted');
+    if ((state.replayOmitted ?? 0) > 0) blocking.push('checkpoint_replay_incomplete');
     if ((state.writesOmitted ?? 0) > 0) blocking.push('writes_over_budget');
     for (const write of state.writes) {
       if (write.truncated) blocking.push('write_evidence_truncated');

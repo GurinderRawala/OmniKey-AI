@@ -914,6 +914,7 @@ final class DiffRecoveryStore: @unchecked Sendable {
         guard path != homeDirectory,
               !Self.deniedPrefixes.contains(where: { path == $0 || path.hasPrefix($0 + "/") }),
               !path.hasPrefix(homeDirectory + "/Library/"),
+              !Self.isHiddenHomePath(path, home: homeDirectory),
               !GitSensitivePathPolicy.isSensitive(path)
         else { return nil }
         // Only the home directory, temporary locations and mounted volumes.
@@ -927,6 +928,12 @@ final class DiffRecoveryStore: @unchecked Sendable {
             if let mode = attributes[.posixPermissions] as? Int, mode & 0o111 != 0 { return nil }
         }
         return path
+    }
+
+    /// Hidden home configuration and credential files are not project diffs.
+    static func isHiddenHomePath(_ path: String, home: String) -> Bool {
+        guard home != "/", path.hasPrefix(home + "/") else { return false }
+        return path.dropFirst(home.count + 1).split(separator: "/").contains { $0.hasPrefix(".") }
     }
 
     /// Bounded read; never follows a symlink, never reads a directory.

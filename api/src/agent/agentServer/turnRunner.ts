@@ -910,6 +910,23 @@ async function runAgentTurnInternal(
   }
 }
 
+/**
+ * Fail closed: only a setting explicitly read as enabled allows Git work.
+ * `diffViewEnabled` defaults to true in the settings store; a missing field
+ * (older store) keeps the previous enabled behavior.
+ */
+async function diffViewEnabledForRun(log: Logger): Promise<boolean> {
+  try {
+    const settings = (await getAgentSettings()) as { diffViewEnabled?: unknown };
+    return settings.diffViewEnabled !== false;
+  } catch (err) {
+    log.warn('Failed to read diff view setting; Git snapshots disabled for this run', {
+      error: err instanceof Error ? err.name : 'error',
+    });
+    return false;
+  }
+}
+
 export async function runAgentTurn(
   sessionId: string,
   subscription: Subscription,
@@ -962,12 +979,20 @@ export async function runAgentTurn(
   // the server never inspects its own repository on their behalf.
   const supportsAnyGitDiff =
     options?.supportsGitDiff === true || options?.supportsGitTurnDiff === true;
-  const gitRun =
+  const gitCapable = Boolean(
     options?.interactiveInput &&
     supportsAnyGitDiff &&
     !options.isCronJob &&
     !options.extraTools?.length &&
-    !options.toolHandlers?.size
+    !options.toolHandlers?.size,
+  );
+  // The persisted diff-view setting is authoritative over client flags. It is
+  // read once per outer run, before any Git state exists; disabled (or an
+  // unreadable setting) means no capture, recovery, native checkpoints, shell
+  // Git context or recovery model calls for this whole run. Clients without
+  // the flags never reach this read and behave exactly as before.
+  const gitRun =
+    gitCapable && options && (await diffViewEnabledForRun(log))
       ? createGitRunState({
           sessionId,
           subscriptionId: subscription.id,

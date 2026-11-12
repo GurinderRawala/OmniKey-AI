@@ -393,6 +393,28 @@ exists and is an ancestor of (or equal to) the current HEAD; detached HEAD is fi
 reset/divergence or a HEAD that moves during capture, report `unavailable` and do not fall
 back. The patch stays within the existing 2 MiB budget.
 
+## Persisted diff view setting (`diffViewEnabled`)
+
+The agent settings store persists `diffViewEnabled` (boolean, default `true`). It is
+authoritative over the client flags: `runAgentTurn` reads it once per outer run, before any
+Git run state is created, and only for an input that would otherwise get Git support
+(interactive, `supports_git_diff` or `supports_git_turn_diff`, no cron/internal tools).
+
+When it is `false`, or the setting cannot be read (fail closed), the run behaves exactly like
+a client without the Git flags, even if `supports_git_diff`, `supports_git_turn_diff` and
+`supports_diff_recovery` are all `true`:
+
+- no baseline/final/recover `git_diff_request`, no `git_diff_context` on shells and no
+  structured `working_directory` parameter, so the native client records no checkpoints;
+- reply observations and `diff_recovery_evidence` are ignored, and no write evidence is kept;
+- no manifest or reconstruction model call, so no extra AI token cost;
+- no Git context is added from user input or the project, and the run's provenance row is the
+  same empty row a client without the flags leaves (it only keeps "the immediately previous
+  run" exact, so a later enabled run never reuses an older run's commits).
+
+Clients without the flags are unchanged and trigger no extra settings read. A change takes
+effect for the next outer run; recursions and steering of a running turn keep its decision.
+
 ## Diff recovery (contract v4, `supports_diff_recovery`)
 
 Additive and opt-in. A client that does not send `supports_diff_recovery: true` on its
@@ -436,7 +458,8 @@ used exactly as before.
 
 **Fallback trigger.** It runs at most once per outer run, and only when all of these hold:
 the run has the v4 capability, the normal outcome is not `captured`, and the run holds at
-least one verified record. No records means no model call. Both the success final and the
+least one verified record or current-turn write evidence (see the AI-reconstructed fallback
+below). With neither, no model call is made. Both the success final and the
 failure final go through the same helper (`captureFinalSessionDiff`). The existing steering
 recheck still runs after the capture and before history is persisted.
 
@@ -445,6 +468,9 @@ It has no tools, a fixed literal system prompt (`DIFF_RECOVERY_SYSTEM_PROMPT`), 
 `maxTokens: 1000`. Its input is limited to:
 
 - this run's own user input, trimmed to 2,000 characters;
+- `steeringUpdates` (only when present): steering text that was actually applied to this
+  run's history, at most 8 entries and 2,000 characters in total. Queued, rejected or
+  earlier runs' steering is never included;
 - the records' id, toolCallId, kind, root, up to 20 paths, path count and `complete` flag.
 
 It receives no history, script text, terminal output or hashes. The reply must be exactly
@@ -472,7 +498,9 @@ The backend checks the reply strictly:
 **Budget and cancellation.** One 20 s budget covers the AI call and the native request
 together. The provider call receives a real `AbortSignal` that is aborted on deadline, cancel
 or disconnect, and the backend never waits past that point. After a cancel or deadline,
-nothing is stored or attached. The original final answer is never changed, delayed past the
+nothing is attached. A database insert that was already in flight cannot be cancelled and
+may still finish, leaving an unattached snapshot row (see below); it is never attached to
+the final answer late. The original final answer is never changed, delayed past the
 bound, or lost.
 
 **Storage and viewer.** The existing compressed payload is reused and gains
@@ -487,7 +515,7 @@ from turn checkpoints". A partial recovery shows an explicit **Partial recovery*
 fixed limitation lines, such as:
 
 - records that were not selected;
-- records the native store omitted;
+- records the native store omitted (reported with shell evidence);
 - records over the backend budget;
 - records truncated by native limits;
 - selected roots that returned no patch.
@@ -564,7 +592,25 @@ structured `working_directory` or a literal `cd`. `$HOME` is inferred from a
 dropped. Words whose `$` comes from single quotes are literal text, so they are never
 resolved. At most 300 paths are kept. Paths inside roots that the normal capture
 authoritatively reported net-empty are removed, so a reverted change can never be brought
-back. If nothing is left, no model call is made.
+back. An empty allowlist does not skip the model call: the one bounded attempt is still
+made and must answer `{"unavailable":true}` (see below).
+
+Escaped (`\$PWD`, `"\$PWD"`) and single-quoted `$` references are literal text and are never
+expanded; such a target stays unresolved (blocking). A `$` inside an interpreter string
+literal (`open('$HOME/x','w')`) is never resolved either, because whether the shell
+expanded it first is unknown. Classification reads the client's **raw** terminal output
+(the WebSocket layer forwards it separately from the formatted `TERMINAL OUTPUT:` tool
+result), so a bare `mktemp` path is recognised in the real flow; tool history still gets the
+formatted result. Only interpreter **write** calls count as resolved; a read-only
+`open(…, 'r')` never offsets a computed-path write.
+
+**Sensitive operands.** An operand that cannot be resolved (for example `../.env`,
+`"$DIR/.ssh/config"` or `~/.config/…` without a known home) is still checked by its literal
+components; a sensitive one withholds the script and output excerpts exactly like a resolved
+sensitive target. Any dot-prefixed entry directly in a home directory (`~/.config/gh/…`,
+`~/.terraform.d/…`, `~/.zshrc`, also of another user's home) is sensitive, except the
+agent's own `~/.omniAgent` and `~/.omnikey` task directories. Such targets are never
+offered to the reconstruction model.
 
 **Python `Path` variables.** `NAME.write_text(…)` or `NAME.write_bytes(…)` resolves only
 when `NAME` has exactly **one** binding in the whole script, and that binding is a
@@ -629,15 +675,15 @@ target now invalidates every checkpointed path below it, not only an exact match
 **Creation and deletion.**
 
 - `creationVerified` requires explicit evidence on a script that succeeded and either uses
-  `set -e` or is a single command. The accepted evidence is exclusive creation
-  (`open(…,'x')`), `mkdir` without `-p` around the path, a noclobber `>`, or a temp-dir path
-  printed by `mktemp`.
+  `set -e` or is a single command. The accepted evidence is `mkdir` without `-p` around the
+  path, a noclobber `>`, or a temp-dir path printed by `mktemp`. Python exclusive open
+  (`open(…, 'x')`) is not creation proof.
 - `deletionAllowed` requires an `rm`/`unlink` target or an `mv` source.
 
 **Model call.** One `aiClient.complete` call under the same 20 s budget, abort signal and
 usage accounting as above, with no tools, the fixed `DIFF_RECONSTRUCTION_SYSTEM_PROMPT` and
-`maxTokens: 4096`. Its input is limited to this run's input, the allowlist and this run's
-write evidence. It gets no history and no earlier turn. The reply must be exactly
+`maxTokens: 4096`. Its input is limited to this run's input, the same bounded applied
+`steeringUpdates` as the manifest call, the allowlist and this run's write evidence. It gets no history and no earlier turn. The reply must be exactly
 `{"files":[{path,before,after}],"limitations":[…]}` or `{"unavailable":true}`; any other
 shape yields no snapshot. The backend rejects the whole reply in any of these cases:
 
@@ -705,7 +751,12 @@ complete known coverage is saved and attached as before, with no extra model cal
 
 A path is **covered** when an actual patch section of a verified repository names it. A path
 is **exempt** when it lies inside a root the automatic capture reported as net-empty, or a
-root that was reverted.
+root that was reverted. Net-empty roots are returned with both `no_changes` and `captured`
+outcomes: a recorded baseline root (the native collector captures every baselined root of an
+`ok` turn final and omits empty patches) or a validated `turn` entry without a non-empty
+patch. A working-tree entry never qualifies, and neither does a root that contains, or lies
+inside, a changed repository. Git's single trailing TAB on `---`/`+++` names that contain a
+space is stripped before comparison (recovery reply validation and coverage).
 
 Paths are compared in normalised absolute form, with the macOS `/private` aliases folded.
 Header paths come from `--- a/`, `+++ b/`, `rename from/to` and `copy to`, or from the
@@ -733,10 +784,14 @@ verified evidence.
   the model about secrets;
 - per-run write or record budget overflow, `omitted` counts from the native store, and
   native records with `complete: false`;
+- `omitted` in a `recover` reply: selected records the native replay could not reproduce
+  (`checkpoint_replay_incomplete`). These are tracked separately from store omissions
+  (`native_omitted`) and are never reported as such;
 - any native `reason` other than the "Turn baseline unavailable" sentence, for example
   "Excluded N sensitive files";
-- a baseline-less root whose uncommitted diff contains files that this turn's known writes do
-  not explain.
+- a baseline-less root whose uncommitted diff contains files that neither a verified
+  checkpoint replay of this turn covers nor this turn's known writes explain. Its
+  working-tree patch itself is never saved.
 
 The 300-file viewer cap (`displayLimit`) is a display limit, not a coverage gap. A complete
 raw patch of 100 files is attached normally.

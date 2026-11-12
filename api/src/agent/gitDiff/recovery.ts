@@ -92,9 +92,13 @@ export const DIFF_RECOVERY_SYSTEM_PROMPT = [
   `{"evidenceIds":["<id>", ...]} listing 1 to ${DIFF_RECOVERY_MAX_SELECTED} ids, copied exactly from the provided records, of the changes that belong to the user's task;`,
   'or {"unavailable":true} if no record applies.',
   'Prefer selecting every provided record unless it is clearly unrelated to the task.',
+  'steeringUpdates, when present, are later instructions from the same user during this task and supersede userInput where they conflict.',
 ].join('\n');
 
 const MAX_INPUT_CHARS = 2_000;
+/** Applied steering of this run: total characters and entries offered to the model. */
+const MAX_STEERING_CHARS = 2_000;
+const MAX_STEERING_ENTRIES = 8;
 const MAX_PROMPT_PATHS_PER_RECORD = 20;
 const MAX_ISSUED_TOOL_CALLS = 512;
 const USAGE_RECORD_TIMEOUT_MS = 2_000;
@@ -130,6 +134,32 @@ export function setDiffRecoveryInput(run: GitRunState | undefined, content: stri
   // eslint-disable-next-line no-control-regex
   const clean = content.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '').trim();
   run.recovery.input = clean.slice(0, MAX_INPUT_CHARS);
+}
+
+/**
+ * Record steering text that was actually applied to this outer run (drained
+ * into its history). Queued, rejected or other runs' steering never reaches
+ * here. Bounded: at most MAX_STEERING_ENTRIES entries / MAX_STEERING_CHARS
+ * characters in total; later entries beyond the budget are dropped (the
+ * earliest task changes are kept, nothing from prior runs is added).
+ */
+export function addDiffRecoverySteering(
+  run: GitRunState | undefined,
+  contents: readonly string[],
+): void {
+  const state = run?.recovery;
+  if (!state) return;
+  const steering = (state.steering ??= []);
+  let used = steering.reduce((n, s) => n + s.length, 0);
+  for (const content of contents) {
+    if (steering.length >= MAX_STEERING_ENTRIES || used >= MAX_STEERING_CHARS) return;
+    // eslint-disable-next-line no-control-regex
+    const clean = content.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '').trim();
+    if (!clean) continue;
+    const text = clean.slice(0, MAX_STEERING_CHARS - used);
+    steering.push(text);
+    used += text.length;
+  }
 }
 
 /**
@@ -244,6 +274,7 @@ function buildManifestMessages(
 ): AIMessage[] {
   const payload = {
     userInput: run.recovery?.input ?? '',
+    ...(run.recovery?.steering?.length ? { steeringUpdates: [...run.recovery.steering] } : {}),
     maxSelect: DIFF_RECOVERY_MAX_SELECTED,
     records: records.map((r) => ({
       id: r.id,
@@ -449,8 +480,17 @@ export async function recoverSessionDiff(
     // Phase 2: what is still known-missing after the verified evidence?
     const coverage = coverageAssessment({ state, verified, unchangedRoots, records, blocking });
     // A root without a turn baseline is only acceptable when the turn's own
-    // known writes explain every file of its uncommitted diff (they are then
-    // reconstructed turn-relative); otherwise its content is unattributable.
+    // evidence explains every file of its uncommitted diff: either a verified
+    // checkpoint already covers it (replayed turn-relative) or a known write
+    // still requires it (reconstructed turn-relative). Otherwise its content
+    // is unattributable. Its working-tree patch itself is never saved.
+    const checkpointCovered = new Set<string>();
+    for (const v of verified) {
+      if (v.source !== 'checkpoint') continue;
+      for (const p of patchCoveredPaths(v.repository.root, v.repository.patch)) {
+        checkpointCovered.add(p);
+      }
+    }
     for (const repo of missingBaseline) {
       const paths = patchCoveredPaths(repo.root, repo.patch);
       const sections = repo.patch
@@ -459,7 +499,7 @@ export async function recoverSessionDiff(
       if (
         !sections.length ||
         sections.some((s) => !patchCoveredPaths(repo.root, s).size) ||
-        ![...paths].every((p) => coverage.missing.has(p))
+        ![...paths].every((p) => coverage.missing.has(p) || checkpointCovered.has(p))
       ) {
         coverage.blocking.push('baseline_unavailable');
         break;
@@ -677,8 +717,11 @@ async function replayCheckpoints(
     });
     return none;
   }
-  const nativeOmitted = Math.max(state.nativeOmitted ?? 0, response.recovery?.omitted ?? 0);
-  if (nativeOmitted > 0) state.nativeOmitted = nativeOmitted;
+  // Records the native replay could not reproduce (e.g. a file no longer
+  // matches its checkpoint hash). Distinct from store omissions reported with
+  // shell evidence (`nativeOmitted`); both still block an incomplete card.
+  const replayOmitted = response.recovery?.omitted ?? 0;
+  if (replayOmitted > 0) state.replayOmitted = Math.max(state.replayOmitted ?? 0, replayOmitted);
   const covered = new Set<string>();
   for (const v of verified) {
     for (const p of patchCoveredPaths(v.repository.root, v.repository.patch)) covered.add(p);

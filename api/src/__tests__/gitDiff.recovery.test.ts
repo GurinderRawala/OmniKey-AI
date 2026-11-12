@@ -98,6 +98,7 @@ import { Subscription } from '../models/subscription';
 import { AgentSessionDiff } from '../models/agentSessionDiff';
 import { runAgentTurn, createAgentRouter } from '../agent/agentServer';
 import {
+  captureSessionDiffCandidate,
   captureSessionDiffBeforeFinal,
   captureSessionDiffOutcome,
   createGitRunState,
@@ -137,6 +138,11 @@ import {
 } from '../agent/gitDiff/coverage';
 import { setSkillResolverForTesting } from '../agent/skillContext';
 import { buildTranscript } from '../agent/agentServer/transcript';
+import { getAgentSettings } from '../agentSettingsStore';
+import { sessionSteeringMessages } from '../agent/agentServer/runtimeState';
+import { addDiffRecoverySteering } from '../agent/gitDiff/recovery';
+import { buildReconstructionMessages } from '../agent/gitDiff/aiReconstruction';
+import { validateGitRecoveryResponse as validateRecoverReply } from '../agent/gitDiff/contracts';
 
 const log = mocks.log as any;
 const ROOT = '/Users/dev/projects/app';
@@ -192,6 +198,8 @@ interface ClientOptions {
   shellError?: boolean;
   /** Evidence for one shell request (receives the correlation context). */
   evidence?: (ctx: Record<string, unknown> | undefined, frame: AgentMessage) => unknown;
+  /** Raw terminal content forwarded separately (the WebSocket path always does). */
+  rawOutput?: string;
 }
 
 function defaultBaseline(heads: Record<string, string | null>) {
@@ -266,10 +274,11 @@ function fakeClient(sessionId: string, opts: ClientOptions) {
           pendingShellScripts
             .get(sessionId)
             ?.resolve(
-              `TERMINAL OUTPUT:\n${SECRET_OUTPUT_MARKER}`,
+              `TERMINAL OUTPUT:\n${opts.rawOutput ?? SECRET_OUTPUT_MARKER}`,
               opts.shellError ?? false,
               undefined,
               evidence,
+              ...(opts.rawOutput !== undefined ? [opts.rawOutput] : []),
             ),
         1,
       );
@@ -2735,4 +2744,452 @@ describe('bootstrap + README patch + scratch append + cleanup in a real agent tu
       expect.arrayContaining(['checkpoint_not_final', 'write_target_unknown']),
     );
   }, 60_000);
+});
+
+// ---------------------------------------------------------------------------
+// Persisted diff-view setting and review follow-ups
+// ---------------------------------------------------------------------------
+
+describe('persisted diff view setting (authoritative over client flags)', () => {
+  const settings = vi.mocked(getAgentSettings);
+  let original: ReturnType<typeof settings.getMockImplementation>;
+  beforeEach(() => {
+    original = settings.getMockImplementation();
+  });
+  afterEach(() => {
+    if (original) settings.mockImplementation(original);
+  });
+  const withDiffView = (enabled: boolean) =>
+    settings.mockImplementation(async () => ({ ...(await original!()), diffViewEnabled: enabled }));
+  const writeAndRecord = () => {
+    queueResults(
+      toolCalls([
+        {
+          id: 'c1',
+          name: 'shell_script',
+          arguments: { script: `printf hi > ${NOTES}/todo.md`, working_directory: NOTES },
+        },
+      ]),
+      finalAnswer('done'),
+    );
+    mocks.recoveryResult.mockResolvedValue(manifest({ evidenceIds: ['f-1'] }));
+    mocks.reconstructionResult.mockResolvedValue(
+      manifest({ files: [{ path: `${NOTES}/todo.md`, before: 'old\n', after: 'hi\n' }] }),
+    );
+  };
+
+  it('false + every native flag true: no capture, correlation, evidence or recovery model call; true next turn works', async () => {
+    withDiffView(false);
+    writeAndRecord();
+    const off = await turn('dv-toggle', `Fix ${ROOT}`, {
+      heads: { [ROOT]: OID_1 },
+      evidence: evidenceFor((tc) => [rec('f-1', tc, NOTES, ['todo.md'], 'file')]),
+      final: emptyTurnFinal,
+    });
+    expect(off.requests).toEqual([]);
+    const shell = off.frames.find((f) => f.content.startsWith('<shell_script>'))!;
+    expect(shell.git_diff_context).toBeUndefined();
+    // No structured working_directory parameter is advertised either.
+    const tools = (mocks.nextResult.mock.calls[0][2] as { tools?: any[] }).tools ?? [];
+    expect(JSON.stringify(tools)).not.toContain('working_directory');
+    expect(off.events).not.toContain('recovery-model');
+    expect(off.events).not.toContain('reconstruction-model');
+    expect(recoveryCalls()).toHaveLength(0);
+    expect(off.final!.content).toBe('<final_answer>\ndone\n</final_answer>');
+    expect(off.final!.session_diff).toBeUndefined();
+    expect(await diffCount('dv-toggle')).toBe(0);
+    // Only the main model call is accounted; no recovery token cost.
+    expect(mocks.recordTokenUsage).toHaveBeenCalledTimes(0);
+
+    // Toggled back on: the next turn captures normally.
+    withDiffView(true);
+    writeAndRecord();
+    const on = await turn('dv-toggle', `Fix ${ROOT}`, {
+      heads: { [ROOT]: OID_1 },
+      evidence: evidenceFor((tc) => [rec('f-1', tc, NOTES, ['todo.md'], 'file')]),
+      final: emptyTurnFinal,
+    });
+    expect(on.requests.some((r) => r.phase === 'baseline')).toBe(true);
+    const onShell = on.frames.find((f) => f.content.startsWith('<shell_script>'))!;
+    expect(onShell.git_diff_context).toMatchObject({ turn_id: expect.stringMatching(/^grun_/) });
+    expect(on.events).toContain('recovery-model');
+  }, 60_000);
+
+  it('an unreadable setting fails closed for the run (the turn itself still answers)', async () => {
+    settings.mockRejectedValueOnce(new Error('db down'));
+    writeAndRecord();
+    const t = await turn('dv-error', `Fix ${ROOT}`, {
+      heads: { [ROOT]: OID_1 },
+      evidence: evidenceFor((tc) => [rec('f-1', tc, NOTES, ['todo.md'], 'file')]),
+    });
+    expect(t.requests).toEqual([]);
+    expect(t.events).not.toContain('recovery-model');
+    expect(t.final!.content).toBe('<final_answer>\ndone\n</final_answer>');
+  });
+
+  it('a client without Git flags is unchanged and never reads the setting for Git', async () => {
+    withDiffView(false);
+    writeAndRecord();
+    const t = await turn('dv-old-client', 'hello', {}, { recovery: false, turn: false });
+    // `turn` always passes supportsGitDiff; emulate an old client directly.
+    expect(t.final).toBeDefined();
+    const oldClientTurn = async (id: string, flags: Record<string, boolean> = {}) => {
+      settings.mockClear();
+      queueResults(finalAnswer('done'));
+      const frames: AgentMessage[] = [];
+      await runAgentTurn(
+        id,
+        { id: 'sub-a' } as any,
+        { session_id: id, sender: 'client', content: 'hi', platform: 'macos' },
+        (m) => void frames.push(m),
+        log,
+        { interactiveInput: true, skipGrouping: true, ...flags },
+      );
+      expect(frames.find((f) => f.content.includes('<final_answer>'))).toBeDefined();
+      return { reads: settings.mock.calls.length, frames };
+    };
+    const disabled = await oldClientTurn('dv-old-client-2');
+    withDiffView(true);
+    const enabled = await oldClientTurn('dv-old-client-3');
+    // Same settings reads either way: the Git gate is never consulted for it.
+    expect(disabled.reads).toBe(enabled.reads);
+    expect(disabled.frames.some((f) => f.git_diff_request)).toBe(false);
+    // A capable client reads it exactly once more per outer run.
+    const capable = await oldClientTurn('dv-capable', { supportsGitDiff: true });
+    expect(capable.reads).toBe(enabled.reads + 1);
+  });
+});
+
+describe('raw terminal output for write evidence', () => {
+  const reconstructionPayload = () =>
+    JSON.parse(
+      (
+        mocks.complete.mock.calls.find(
+          (c) => (c[1] as any)[0]?.content === DIFF_RECONSTRUCTION_SYSTEM_PROMPT,
+        )![1] as any
+      )[1].content,
+    );
+
+  it('a bare mktemp path is allowlisted from the raw output, not the formatted tool result', async () => {
+    queueResults(
+      toolCalls([
+        { id: 'c1', name: 'shell_script', arguments: { script: 'mktemp /tmp/tmp.XXXXXX' } },
+      ]),
+      finalAnswer('done'),
+    );
+    mocks.reconstructionResult.mockResolvedValue(manifest({ unavailable: true }));
+    await turn('raw-mktemp', 'make a temp file', { rawOutput: '/tmp/tmp.Ab12Cd\n' });
+    expect(reconstructionPayload().allowedPaths).toEqual([
+      { path: '/tmp/tmp.Ab12Cd', creationVerified: true, deletionAllowed: false },
+    ]);
+  });
+
+  it('the formatted result alone (prefix) never proves the mktemp path', () => {
+    expect(
+      classifyShellWrites('mktemp /tmp/tmp.XXXXXX', {
+        status: 'succeeded',
+        output: 'TERMINAL OUTPUT:\n/tmp/tmp.Ab12Cd',
+      })?.targets ?? [],
+    ).toEqual([]);
+  });
+});
+
+describe('applied steering in recovery inputs', () => {
+  it('only steering applied to this run reaches the manifest and reconstruction payloads', async () => {
+    queueResults(
+      toolCalls([
+        {
+          id: 'c1',
+          name: 'shell_script',
+          arguments: { script: `printf hi > ${NOTES}/todo.md`, working_directory: NOTES },
+        },
+      ]),
+      finalAnswer('done'),
+    );
+    mocks.recoveryResult.mockResolvedValue(manifest({ unavailable: true }));
+    mocks.reconstructionResult.mockResolvedValue(manifest({ unavailable: true }));
+    let injected = false;
+    const t = await turn('steer-recovery', 'update my notes', {
+      evidence: (ctx, frame) => {
+        if (!injected) {
+          injected = true;
+          // Arrives while the shell runs; the tool loop applies it to this run.
+          sessionSteeringMessages.set('steer-recovery', [
+            {
+              steeringId: 'st-1',
+              content: 'Actually rename the heading only',
+              receivedAt: new Date().toISOString(),
+            },
+          ]);
+        }
+        void frame;
+        return evidenceFor((tc) => [rec('f-1', tc, NOTES, ['todo.md'], 'file')])(ctx);
+      },
+    });
+    expect(t.final).toBeDefined();
+    const manifestPayload = JSON.parse((recoveryCalls()[0][1] as any)[1].content);
+    expect(manifestPayload.userInput).toBe('update my notes');
+    expect(manifestPayload.steeringUpdates).toEqual(['Actually rename the heading only']);
+    const recon = mocks.complete.mock.calls.find(
+      (c) => (c[1] as any)[0]?.content === DIFF_RECONSTRUCTION_SYSTEM_PROMPT,
+    );
+    expect(JSON.parse((recon![1] as any)[1].content).steeringUpdates).toEqual([
+      'Actually rename the heading only',
+    ]);
+
+    // The next run never inherits it.
+    queueResults(
+      toolCalls([
+        {
+          id: 'c2',
+          name: 'shell_script',
+          arguments: { script: `printf x > ${NOTES}/b.md`, working_directory: NOTES },
+        },
+      ]),
+      finalAnswer('done'),
+    );
+    mocks.complete.mockClear();
+    await turn('steer-recovery', 'next task', {});
+    const next = mocks.complete.mock.calls.find(
+      (c) => (c[1] as any)[0]?.content === DIFF_RECONSTRUCTION_SYSTEM_PROMPT,
+    );
+    expect(JSON.parse((next![1] as any)[1].content).steeringUpdates).toBeUndefined();
+  }, 60_000);
+
+  it('is bounded in entries and characters and ignored without the capability', () => {
+    const run = createGitRunState({
+      sessionId: 's',
+      subscriptionId: 'sub-a',
+      send: () => undefined,
+      diffRecovery: true,
+    });
+    addDiffRecoverySteering(
+      run,
+      Array.from({ length: 20 }, (_, i) => `step ${i}\u0007`),
+    );
+    expect(run.recovery!.steering).toHaveLength(8);
+    expect(run.recovery!.steering![0]).toBe('step 0');
+    const big = createGitRunState({
+      sessionId: 's',
+      subscriptionId: 'sub-a',
+      send: () => undefined,
+      diffRecovery: true,
+    });
+    addDiffRecoverySteering(big, ['x'.repeat(5_000), 'more']);
+    expect(big.recovery!.steering).toEqual(['x'.repeat(2_000)]);
+    const payload = JSON.parse(buildReconstructionMessages(big.recovery!, new Map())[1].content);
+    expect(payload.steeringUpdates).toEqual(['x'.repeat(2_000)]);
+    const plain = createGitRunState({ sessionId: 's', subscriptionId: 'sub-a', send: () => {} });
+    addDiffRecoverySteering(plain, ['ignored']);
+    expect(plain.recovery).toBeUndefined();
+  });
+});
+
+describe('review follow-ups: coverage, replay and patch headers', () => {
+  it('accepts a recovery patch whose ---/+++ names carry Git’s trailing TAB (path with a space)', () => {
+    const request = { request_id: 'q1', recovery: { turn_id: 'grun_x', evidence_ids: ['r1'] } };
+    const patch = [
+      'diff --git a/my file.txt b/my file.txt',
+      'index 1111111..2222222 100644',
+      '--- a/my file.txt\t',
+      '+++ b/my file.txt\t',
+      '@@ -1 +1 @@',
+      '-old',
+      '+new',
+      '',
+    ].join('\n');
+    const reply = {
+      request_id: 'q1',
+      status: 'ok',
+      repositories: [{ root: ROOT, patch, scope: 'working_tree' }],
+      recovery: { turn_id: 'grun_x', evidence_ids: ['r1'], omitted: 0 },
+    };
+    expect(
+      validateRecoverReply(reply, request as any, [
+        { id: 'r1', root: ROOT, paths: ['my file.txt'] },
+      ]).repositories,
+    ).toHaveLength(1);
+    expect([...patchCoveredPaths(ROOT, patch)]).toEqual([`${ROOT}/my file.txt`]);
+    // A different name with a TAB still fails closed.
+    expect(() =>
+      validateRecoverReply(
+        {
+          ...reply,
+          repositories: [
+            {
+              root: ROOT,
+              patch: patch.replace('+++ b/my file.txt\t', '+++ b/other\t'),
+              scope: 'working_tree',
+            },
+          ],
+        },
+        request as any,
+        [{ id: 'r1', root: ROOT, paths: ['my file.txt'] }],
+      ),
+    ).toThrow();
+  });
+
+  it('returns net-empty roots with a captured candidate so their writes need no coverage', async () => {
+    const connection = new AbortController();
+    const run = createGitRunState({
+      sessionId: 'net-empty-captured',
+      subscriptionId: 'sub-a',
+      connection: connection.signal,
+      send: () => undefined,
+      turnDiff: true,
+      diffRecovery: true,
+    });
+    recordTurnBaselines(run, [
+      { root: ROOT, head: OID_1, capturedAt: new Date().toISOString(), source: 'turn_start' },
+      { root: NOTES, head: OID_1, capturedAt: new Date().toISOString(), source: 'turn_start' },
+    ] as any);
+    const send = (msg: AgentMessage) => {
+      const req = msg.git_diff_request!;
+      const b = req.baselines!;
+      setTimeout(() =>
+        handleGitDiffResponseFrame(
+          {
+            session_id: run.sessionId,
+            sender: 'client',
+            content: '',
+            git_diff_response: {
+              request_id: req.request_id,
+              status: 'ok',
+              repositories: [
+                {
+                  root: ROOT,
+                  patch: filePatch('a.ts'),
+                  scope: 'turn',
+                  baselineHead: b[0].head,
+                  head: OID_2,
+                  baselineCapturedAt: b[0].capturedAt,
+                  baselineSource: b[0].source,
+                },
+              ],
+            },
+          },
+          'sub-a',
+          connection.signal,
+          log,
+        ),
+      );
+    };
+    run.send = send;
+    const result = await captureSessionDiffCandidate(run, [], undefined, log);
+    expect(result.status).toBe('captured');
+    expect(result.unchangedRoots).toEqual([NOTES]);
+  });
+
+  it('a baseline-less root fully covered by verified checkpoints is accepted', async () => {
+    queueResults(
+      toolCalls([{ id: 'c1', name: 'shell_script', arguments: { script: `cd ${ROOT} && make` } }]),
+      toolCalls([
+        { id: 'c2', name: 'shell_script', arguments: { script: `cd ${WORKTREE} && make` } },
+      ]),
+      finalAnswer('done'),
+    );
+    mocks.recoveryResult.mockResolvedValue(manifest({ evidenceIds: ['r-b'] }));
+    const t = await turn('baseline-less-covered', `Fix ${ROOT}`, {
+      heads: { [ROOT]: OID_1 },
+      evidence: (ctx) =>
+        ctx?.tool_call_id === 'c2'
+          ? { turn_id: ctx.turn_id, records: [rec('r-b', 'c2', WORKTREE, ['b.ts'])] }
+          : { turn_id: ctx!.turn_id, records: [] },
+      final: (req) => ({
+        status: 'ok',
+        repositories: [
+          ...(emptyTurnFinal(req)!.repositories as unknown[]),
+          // No baseline for the worktree: "working tree vs HEAD" only.
+          { root: WORKTREE, patch: filePatch('b.ts'), scope: 'working_tree' },
+        ],
+        reason: 'Turn baseline unavailable for 1 repository; showing uncommitted changes only.',
+      }),
+    });
+    expect(t.events).not.toContain('reconstruction-model');
+    expect(t.final!.session_diff).toMatchObject({
+      recovered: true,
+      recoveryIncomplete: false,
+      recoveryMethod: 'checkpoint',
+    });
+  }, 60_000);
+
+  it('replay failures are not store omissions and still block an incomplete card', () => {
+    const state = (extra: Record<string, unknown>) =>
+      ({
+        records: new Map(),
+        issuedToolCalls: new Set(),
+        omitted: 0,
+        attempted: false,
+        writes: [],
+        revertedRoots: [],
+        ...extra,
+      }) as any;
+    const base = { verified: [], unchangedRoots: [], records: [] };
+    expect(coverageAssessment({ ...base, state: state({ replayOmitted: 1 }) }).blocking).toEqual([
+      'checkpoint_replay_incomplete',
+    ]);
+    expect(coverageAssessment({ ...base, state: state({ nativeOmitted: 1 }) }).blocking).toEqual([
+      'native_omitted',
+    ]);
+  });
+});
+
+describe('write evidence: literal dollars, sensitive unresolved operands, read-only calls', () => {
+  const cwd = '/Users/alice/project';
+  const classify = (script: string) => classifyShellWrites(script, { cwd, status: 'succeeded' });
+
+  it('never expands a single-quoted, escaped or double-quote-escaped $PWD', () => {
+    for (const script of [
+      "printf x > '$PWD.txt'",
+      'printf x > \\$PWD.txt',
+      'printf x > "\\$PWD.txt"',
+    ]) {
+      const found = classify(script)!;
+      expect(found.targets).toEqual([]);
+      expect(found.unresolved).toBe(true);
+    }
+    // An unquoted / double-quoted reference is a real expansion.
+    expect(classify('printf x > "$PWD/out.txt"')!.targets.map((t) => t.path)).toEqual([
+      `${cwd}/out.txt`,
+    ]);
+  });
+
+  it('interpreter string literals never expand $ (preserve-or-refuse)', () => {
+    const found = classify(`python3 -c "open('$HOME/x.txt','w').write('1')"`)!;
+    expect(found.targets).toEqual([]);
+    expect(found.unresolved).toBe(true);
+  });
+
+  it('withholds excerpts when a sensitive write operand cannot be resolved', async () => {
+    for (const script of [
+      'printf KEY=1 > ../.env',
+      'echo t >> "$CFG/.ssh/config"',
+      'cp a ~/.config/gh/hosts.yml',
+    ]) {
+      const found = classifyShellWrites(script, { status: 'succeeded' })!;
+      expect(found.sensitive, script).toBe(true);
+      expect(found.unresolved, script).toBe(true);
+    }
+  });
+
+  it('treats dot entries directly in any home directory as sensitive, except the agent task dirs', () => {
+    expect(classify('printf x > /Users/alice/.config/gh/hosts.yml')!.sensitive).toBe(true);
+    expect(classify('printf x > /Users/bob/.terraform.d/credentials.tfrc.json')!.sensitive).toBe(
+      true,
+    );
+    expect(classify('printf x > /home/carol/.zshrc')!.sensitive).toBe(true);
+    // Repository dotfiles and the agent's own task directories stay normal targets.
+    const repo = classify('printf x > /Users/alice/project/.github/ci.yml')!;
+    expect(repo.sensitive).toBe(false);
+    expect(repo.targets.map((t) => t.path)).toEqual(['/Users/alice/project/.github/ci.yml']);
+    const task = classify('printf x > /Users/alice/.omniAgent/garbage/t1/worktrees/w/a.ts')!;
+    expect(task.sensitive).toBe(false);
+  });
+
+  it('a read-only open does not offset a computed-path write', () => {
+    const found = classify(
+      `python3 -c "from pathlib import Path; p='/tmp/out.txt'; open('in.txt','r').close(); Path(p).write_text('x')"`,
+    )!;
+    expect(found.unresolved).toBe(true);
+  });
 });

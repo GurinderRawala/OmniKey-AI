@@ -449,6 +449,7 @@ export async function runToolLoop(
             isError?: boolean,
             gitCommitObservations?: unknown,
             diffRecoveryEvidence?: unknown,
+            rawOutput?: string,
           ) => {
             if (settled) return;
             settled = true;
@@ -465,7 +466,9 @@ export async function runToolLoop(
               recordShellWriteEvidence(session.gitRun, tc.id, {
                 script,
                 cwd: gitPlan.workingDirectory,
-                output,
+                // Unformatted client output when available (WebSocket path);
+                // the formatted result carries a prefix and keyword filtering.
+                output: rawOutput ?? output,
                 isError,
               });
             }

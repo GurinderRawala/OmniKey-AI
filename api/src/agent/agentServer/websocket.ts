@@ -348,18 +348,16 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
         const isError = typeof message.is_error === 'boolean' ? message.is_error : undefined;
         // Raw observations are validated by the tool loop against the exact
         // shell request it issued; absent for clients without Git support.
-        if (message.diff_recovery_evidence !== undefined) {
-          pendingShell.resolve(
-            content,
-            isError,
-            message.git_commit_observations,
-            message.diff_recovery_evidence,
-          );
-        } else if (message.git_commit_observations === undefined) {
-          pendingShell.resolve(content, isError);
-        } else {
-          pendingShell.resolve(content, isError, message.git_commit_observations);
-        }
+        // The raw terminal text is passed separately from the formatted tool
+        // result so write evidence (e.g. a bare mktemp path) sees what the
+        // command actually printed.
+        pendingShell.resolve(
+          content,
+          isError,
+          message.git_commit_observations,
+          message.diff_recovery_evidence,
+          message.content ?? '',
+        );
         return;
       }
 

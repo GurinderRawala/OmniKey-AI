@@ -21,6 +21,7 @@ import { CandidateSet, projectContextDirectory } from './candidates';
 import type { ShellWriteEvidence } from './writeEvidence';
 import {
   comparablePath,
+  pathIsWithin,
   countPatchFiles,
   GIT_DIFF_DISPLAY_LIMIT,
   GIT_DIFF_MAX_CANDIDATES,
@@ -90,12 +91,16 @@ export interface DiffRecoveryRunState {
   issuedToolCalls: Set<string>;
   /** New records dropped because the per-run backend budget was full. */
   omitted: number;
-  /** Largest `omitted` count the native store reported for this run. */
+  /** Largest `omitted` count the native store reported with shell evidence. */
   nativeOmitted?: number;
+  /** Selected records the native `recover` replay could not reproduce. */
+  replayOmitted?: number;
   /** Fallback runs at most once per outer run. */
   attempted: boolean;
   /** Trimmed text of this run's own user input (never prior history). */
   input?: string;
+  /** Bounded steering text applied to this run (never queued/rejected/older). */
+  steering?: string[];
   /** Write-like shells of this run, recorded only after the client replied. */
   writes: ShellWriteEvidence[];
   priorNonShellTool?: boolean;
@@ -715,19 +720,35 @@ async function captureTurnSnapshot(
     return { status: noSnapshotStatus(response?.status), reason: response?.status ?? 'no_reply' };
   }
   const repositories = response.repositories.filter((r) => r.patch.trim().length > 0);
+  // Net-empty roots: a recorded baseline root (the native collector captures
+  // every baselined root of an `ok` turn final and omits empty patches) or a
+  // validated turn-scope entry, without a non-empty patch. A working-tree
+  // entry (no baseline: a commit may still have happened) never qualifies.
+  // Returned on both branches so coverage exempts them also next to another
+  // root's captured changes.
+  // A root nested in (or containing) a changed repository is not exempted:
+  // its exemption would also cover the other repository's paths.
+  const overlapsChanged = (root: string) =>
+    repositories.some((r) => pathIsWithin(r.root, root) || pathIsWithin(root, r.root));
+  const unchangedRoots = [
+    ...new Map(
+      [
+        ...baselines.map((b) => b.root),
+        ...response.repositories.filter((r) => r.scope === 'turn').map((r) => r.root),
+      ]
+        .filter((root) => !overlapsChanged(root))
+        .map((root) => [comparablePath(root), root] as const),
+    ).values(),
+  ];
   if (!repositories.length) {
     return {
       status: !baselines.length && run.baselineFailures > 0 ? 'missing_baseline' : 'no_changes',
-      unchangedRoots: [
-        ...new Set([
-          ...baselines.map((b) => b.root),
-          ...response.repositories.filter((r) => r.scope === 'turn').map((r) => r.root),
-        ]),
-      ],
+      unchangedRoots,
     };
   }
   return {
     status: 'captured',
+    ...(unchangedRoots.length ? { unchangedRoots } : {}),
     candidate: {
       repositories,
       notice: turnNotice(repositories, response.reason),

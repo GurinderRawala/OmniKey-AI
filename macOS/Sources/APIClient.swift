@@ -1206,6 +1206,8 @@ final class APIClient: @unchecked Sendable {
         let browserAccessMethod: String?
         let browserJavascriptEventBrowsers: [String]?
         let grammarEnhancementModel: String?
+        /// Absent on older backends: treated as enabled.
+        let diffViewEnabled: Bool?
     }
 
     /// Server response shape for the GET endpoint. The "runtime" object is
@@ -1221,6 +1223,8 @@ final class APIClient: @unchecked Sendable {
         let browserAccessMethod: String?
         let browserJavascriptEventBrowsers: [String]?
         let grammarEnhancementModel: String?
+        /// Absent on older backends: treated as enabled.
+        let diffViewEnabled: Bool?
     }
 
     /// Response from the PATCH endpoint and the browser-access POST endpoint.
@@ -1230,6 +1234,7 @@ final class APIClient: @unchecked Sendable {
         let browserAccessEnabled: Bool
         let usageRecordingEnabled: Bool?
         let grammarEnhancementModel: String?
+        let diffViewEnabled: Bool?
         let restartScheduled: Bool?
         let message: String?
     }
@@ -1273,7 +1278,8 @@ final class APIClient: @unchecked Sendable {
                     browserDebugPort: decoded.browserDebugPort,
                     browserAccessMethod: decoded.browserAccessMethod,
                     browserJavascriptEventBrowsers: decoded.browserJavascriptEventBrowsers,
-                    grammarEnhancementModel: decoded.grammarEnhancementModel
+                    grammarEnhancementModel: decoded.grammarEnhancementModel,
+                    diffViewEnabled: decoded.diffViewEnabled
                 )))
             } catch { completion(.failure(error)) }
         }
@@ -1287,6 +1293,7 @@ final class APIClient: @unchecked Sendable {
         terminalAccess: TerminalAccessMode?,
         webSearchEnabled: Bool?,
         usageRecordingEnabled: Bool? = nil,
+        diffViewEnabled: Bool? = nil,
         completion: @escaping @Sendable (Result<AppSettingsMutationResponse, Error>) -> Void
     ) {
         var request = URLRequest(url: appSettingsBaseURL)
@@ -1299,6 +1306,7 @@ final class APIClient: @unchecked Sendable {
         if let mode = terminalAccess { payload["terminalAccess"] = mode.rawValue }
         if let webSearch = webSearchEnabled { payload["webSearchEnabled"] = webSearch }
         if let usageRecording = usageRecordingEnabled { payload["usageRecordingEnabled"] = usageRecording }
+        if let diffView = diffViewEnabled { payload["diffViewEnabled"] = diffView }
         guard !payload.isEmpty,
               let body = try? JSONSerialization.data(withJSONObject: payload) else {
             completion(.failure(NSError(domain: "APIClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Nothing to update"])))

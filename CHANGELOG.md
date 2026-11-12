@@ -1,5 +1,22 @@
 # Changelog
 
+## macOS 1.9.18 (build 78) · CLI/API 1.8.20 — 2026-11-13
+
+### Added
+- Agent chat settings gear beside the context controls opens Agent Access settings directly.
+- Persistent Diff view toggle explains that recovery may consume extra AI tokens. Disabling it stops new-turn Git capture, native checkpoints and AI recovery—not just the display. Running turns retain their start-time setting.
+- Missing-diff recovery uses current-turn checkpoints and bounded AI reconstruction, clearly distinguishing unverified content. Known partial snapshots are withheld and checked against all known turn evidence.
+- Raised the viewer and recovery file cap to 300 while preserving byte and time limits.
+
+### Fixed
+- Python literal Path bindings and narrowly recognized task bookkeeping no longer hide complete repository-plus-temporary-file snapshots.
+- Protected non-Git credential/configuration paths, sensitive unresolved write targets, raw terminal evidence, applied steering, normalized history filtering, and mixed changed/unchanged repository coverage.
+- Corrected temporary-directory aliases, rename paths, stale replay handling, and macOS CI physical-path assertions.
+
+### Validation and scope
+- Non-E2E regression coverage includes persistent settings, actual diff-cost opt-out, narrow composer layout and CodeRabbit findings. No app/E2E launch performed.
+- Signed, notarized universal macOS package; Windows unchanged. The separate per-shell fingerprint cache proposal is deferred until cache invalidation covers Git configuration, attributes and concurrent writers safely.
+
 ## macOS 1.9.17 (build 77) · CLI/API 1.8.19 — 2026-11-12
 
 ### Fixed

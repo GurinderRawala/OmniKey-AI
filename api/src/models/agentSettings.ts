@@ -23,6 +23,8 @@ export interface AgentSettingsAttributes {
   nemotronModel?: string | null;
   grammarEnhancementModel?: string | null;
   grammarEnhancementProvider?: AIProvider | null;
+  /** Session diff view (Git snapshots, provenance, AI recovery). Default on. */
+  diffViewEnabled?: boolean | null;
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -46,6 +48,7 @@ interface AgentSettingsCreationAttributes extends Optional<
   | 'nemotronModel'
   | 'grammarEnhancementModel'
   | 'grammarEnhancementProvider'
+  | 'diffViewEnabled'
   | 'createdAt'
   | 'updatedAt'
 > {}
@@ -71,6 +74,7 @@ export class AgentSettings
   public nemotronModel?: string | null;
   public grammarEnhancementModel?: string | null;
   public grammarEnhancementProvider?: AIProvider | null;
+  public diffViewEnabled?: boolean | null;
   public readonly createdAt!: Date;
   public readonly updatedAt!: Date;
 }
@@ -166,6 +170,12 @@ AgentSettings.init(
       type: DataTypes.STRING,
       allowNull: true,
       field: 'grammar_enhancement_provider',
+    },
+    diffViewEnabled: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: true,
+      field: 'diff_view_enabled',
     },
   },
   {

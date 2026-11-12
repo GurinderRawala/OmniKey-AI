@@ -27,6 +27,8 @@ struct ChatView: View {
     /// of icons (new chat + recent sessions) so the conversation area
     /// gets more room without losing one-click access to chat history.
     @AppStorage("chatSidebarCollapsed") private var sidebarCollapsed: Bool = false
+    /// Mirror of the Agent Access diff view setting; off hides snapshots.
+    @AppStorage(AgentDiffViewSetting.defaultsKey) private var diffViewEnabled: Bool = true
 
     // Give project names and session titles a little more breathing room.
     // 264 pt is exactly 10% wider than the previous 240 pt sidebar while
@@ -47,7 +49,7 @@ struct ChatView: View {
         ZStack {
             NordTheme.windowBackground(colorScheme).ignoresSafeArea()
             GeometryReader { proxy in
-                let inspector = model.inspectedSessionDiff
+                let inspector = diffViewEnabled ? model.inspectedSessionDiff : nil
                 // With the inspector open in a narrow window, show the rail
                 // without changing the user's saved sidebar preference.
                 let compact = ChatLayoutMetrics.usesCompactSidebar(
@@ -86,6 +88,9 @@ struct ChatView: View {
                     }
                 }
             }
+        }
+        .onChange(of: diffViewEnabled) { _, enabled in
+            if !enabled { model.closeSessionDiff() }
         }
         .onAppear {
             model.refreshSessions()
@@ -2103,6 +2108,35 @@ struct ContextWindowIndicator: View {
     }
 }
 
+/// Gear beside the context-window ring. Opens Settings directly on the
+/// Agent Access pane, which hosts the diff view toggle.
+struct AgentAccessSettingsButton: View {
+    let colorScheme: ColorScheme
+    @State private var isHovered = false
+
+    static let helpText = "Agent Access settings (diff view, terminal, web)"
+
+    var body: some View {
+        Button {
+            AppDelegate.shared?.showAgentAccessSettings()
+        } label: {
+            Image(systemName: "gearshape")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(isHovered
+                                 ? NordTheme.primaryText(colorScheme)
+                                 : NordTheme.secondaryText(colorScheme))
+                .frame(width: ComposerToolbarLayout.settingsButtonWidth,
+                       height: ComposerToolbarLayout.settingsButtonWidth)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+        .onHover { isHovered = $0 }
+        .help(Self.helpText)
+        .accessibilityLabel("Agent Access settings")
+    }
+}
+
 // MARK: - Landing Input Composer
 
 /// Polished, single-card chat composer used at the bottom of the
@@ -2116,6 +2150,8 @@ enum ComposerToolbarLayout {
     static func isCompact(width: CGFloat) -> Bool { width < 660 }
     static let pillChrome: CGFloat = 52
     static let sendButtonWidth: CGFloat = 32
+    /// Agent Access gear; shown at every width, unlike the optional hints.
+    static let settingsButtonWidth: CGFloat = 22
     static let contextIndicatorWidth: CGFloat = 34
     static let keyboardHintWidth: CGFloat = 76
     static let spacing: CGFloat = 8
@@ -2128,12 +2164,23 @@ enum ComposerToolbarLayout {
         let model: CGFloat
     }
 
+    /// Width of everything except the three pill titles.
+    static func fixedWidth(width: CGFloat) -> CGFloat {
+        let optional = isCompact(width: width) ? 0 : contextIndicatorWidth + keyboardHintWidth + 2 * spacing
+        return 5 * spacing + sendButtonWidth + settingsButtonWidth + 3 * pillChrome + optional
+    }
+
     static func titleWidths(width: CGFloat) -> TitleWidths {
         let available = max(0, width - horizontalPadding)
-        let optional = isCompact(width: width) ? 0 : contextIndicatorWidth + keyboardHintWidth + 2 * spacing
-        let fixed = 4 * spacing + sendButtonWidth + 3 * pillChrome + optional
-        let each = min(200, max(minimumTitleWidth, ((available - fixed) / 3).rounded(.down)))
+        let each = min(200, max(minimumTitleWidth, ((available - fixedWidth(width: width)) / 3).rounded(.down)))
         return TitleWidths(task: each, project: each, model: each)
+    }
+
+    /// Total single-row width at `width`; must not exceed the row so the
+    /// gear and Send stay on screen.
+    static func requiredRowWidth(width: CGFloat) -> CGFloat {
+        let titles = titleWidths(width: width)
+        return horizontalPadding + fixedWidth(width: width) + titles.task + titles.project + titles.model
     }
 }
 
@@ -2155,7 +2202,11 @@ struct ComposerSelectionToolbar<SendButton: View>: View {
             Spacer(minLength: 0)
             if !ComposerToolbarLayout.isCompact(width: width) {
                 contextIndicator
-                if showsKeyboardHint { keyboardHint }
+            }
+            // Always visible (also when compact) beside the context ring.
+            AgentAccessSettingsButton(colorScheme: colorScheme)
+            if !ComposerToolbarLayout.isCompact(width: width), showsKeyboardHint {
+                keyboardHint
             }
             sendButton()
         }
@@ -3185,6 +3236,8 @@ struct AssistantMessageView: View {
     let message: ChatMessage
     var isStreaming: Bool = false
     @Environment(\.colorScheme) private var colorScheme
+    /// Diff view off hides saved snapshot cards (they stay stored).
+    @AppStorage(AgentDiffViewSetting.defaultsKey) private var diffViewEnabled: Bool = true
 
     private var thinkingBlocks: [ChatBlock] {
         message.blocks.filter { block in
@@ -3205,7 +3258,7 @@ struct AssistantMessageView: View {
     }
 
     private var sessionDiffBlocks: [ChatBlock] {
-        ChatSessionDiffPlacement.cards(beforeFinalIn: message.blocks)
+        diffViewEnabled ? ChatSessionDiffPlacement.cards(beforeFinalIn: message.blocks) : []
     }
 
     var body: some View {

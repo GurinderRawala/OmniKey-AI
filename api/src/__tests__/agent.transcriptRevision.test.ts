@@ -167,6 +167,63 @@ describe('normalized transcript source revisions', () => {
     );
   });
 
+  it('rebuilds stored rows that still carry a known-partial diff card', async () => {
+    const partial = {
+      id: 'sdiff_partial0001',
+      fileCount: 1,
+      repositoryCount: 1,
+      createdAt: new Date().toISOString(),
+      scope: 'working_tree',
+      displayLimit: 300,
+      recovered: true,
+      recoveryIncomplete: true,
+    };
+    const history = [
+      { role: 'user', content: '<user_input>Question</user_input>' },
+      { role: 'assistant', content: '<final_answer>Answer</final_answer>', session_diff: partial },
+    ];
+    // Rows written before the known-partial filter: the card is in previewJson
+    // and the stored revision still matches the session.
+    const current = buildTranscript(history);
+    const stale = current.map((message) =>
+      message.role !== 'assistant'
+        ? message
+        : {
+            ...message,
+            blocks: (message.blocks ?? []).map((b) =>
+              b.kind === 'finalAnswer' ? { ...b, sessionDiff: partial as any } : b,
+            ),
+          },
+    );
+    const oldRevision = completedTranscriptRevision(stale);
+    mocks.findAll.mockResolvedValue(
+      previewTranscript(stale).map((message) => ({
+        previewJson: JSON.stringify(message),
+        sourceRevision: oldRevision,
+      })),
+    );
+    const result = await readOrBackfillNormalizedTranscript(
+      'session-partial',
+      JSON.stringify(history),
+      oldRevision,
+      'sub-a',
+    );
+    expect(JSON.stringify(result)).not.toContain('sdiff_partial0001');
+    expect(result.at(-1)?.text).toBe('Answer');
+    const newRevision = completedTranscriptRevision(current);
+    expect(newRevision).not.toBe(oldRevision);
+    expect(mocks.bulkCreate).toHaveBeenCalledWith(
+      expect.arrayContaining([expect.objectContaining({ sourceRevision: newRevision })]),
+      expect.any(Object),
+    );
+    expect(mocks.sessionUpdate).toHaveBeenCalledWith(
+      { transcriptRevision: newRevision },
+      {
+        where: { id: 'session-partial', subscriptionId: 'sub-a', transcriptRevision: oldRevision },
+      },
+    );
+  });
+
   it('backfills an interrupted tail instead of serving older completed rows', async () => {
     const completedHistory = [
       { role: 'user', content: '<user_input>Question A</user_input>' },

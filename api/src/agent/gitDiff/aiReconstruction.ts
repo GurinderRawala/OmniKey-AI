@@ -76,6 +76,7 @@ export function buildReconstructionMessages(
 ): AIMessage[] {
   const payload = {
     userInput: state.input ?? '',
+    ...(state.steering?.length ? { steeringUpdates: [...state.steering] } : {}),
     limits: {
       maxFiles: DIFF_RECONSTRUCTION_MAX_FILES,
       maxFileBytes: DIFF_RECONSTRUCTION_MAX_FILE_BYTES,

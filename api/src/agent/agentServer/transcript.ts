@@ -308,6 +308,21 @@ export function hasLegacyDeferredContentIds(messages: TranscriptMessage[]): bool
   );
 }
 
+/**
+ * Normalized rows written before the known-partial filter can still carry a
+ * partial session diff card that `buildTranscript` now omits. Such rows are
+ * treated like legacy rows: the caller rebuilds and rewrites them.
+ */
+export function hasKnownPartialSessionDiff(messages: TranscriptMessage[]): boolean {
+  return messages.some((message) =>
+    (message.blocks ?? []).some(
+      (block) =>
+        block.sessionDiff !== undefined &&
+        isKnownPartialSummary(cleanSessionDiffSummary(block.sessionDiff)),
+    ),
+  );
+}
+
 export function markdownBoundaryPreview(text: string, maximumCharacters: number): string {
   if (text.length <= maximumCharacters) return text;
   const lines = text.split(/(?<=\n)/);

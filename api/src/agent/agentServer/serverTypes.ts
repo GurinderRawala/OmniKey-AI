@@ -70,6 +70,10 @@ export type PendingShellScript = {
     isError: boolean | undefined,
     gitCommitObservations?: unknown,
     diffRecoveryEvidence?: unknown,
+    // The client's unformatted terminal content (no prefix, no keyword
+    // filtering). Only write-evidence classification reads it; tool history
+    // keeps the formatted `output`.
+    rawOutput?: string,
   ) => void;
   filterKeywords: string[];
 };

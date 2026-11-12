@@ -5,6 +5,16 @@ import XCTest
 /// "shell" is simulated by mutating the tree between the before/after
 /// hooks, exactly where the runner executes the script.
 final class DiffRecoveryTests: XCTestCase {
+    /// Isolated, visible stand-in for the home directory. Non-Git fixtures
+    /// live below it so the hidden-home policy is exercised against this
+    /// home, never the real one, wherever TMPDIR points.
+    private var home: FakeHome!
+
+    override func setUpWithError() throws { home = try FakeHome() }
+    override func tearDown() { home = nil }
+
+    private func makeStore() -> DiffRecoveryStore { DiffRecoveryStore(homeDirectory: home.root) }
+
     private func q(_ path: String) -> String { "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'" }
 
     @discardableResult
@@ -61,7 +71,7 @@ final class DiffRecoveryTests: XCTestCase {
         try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(atPath: directory) }
         let path = directory + "/note.md"
-        let store = DiffRecoveryStore()
+        let store = makeStore()
         let first = try XCTUnwrap(shell(store, "printf 'first\\n' > \(q(path))") {
             try "first\n".write(toFile: path, atomically: true, encoding: .utf8)
         })
@@ -103,7 +113,7 @@ final class DiffRecoveryTests: XCTestCase {
         let repo = try GitTestRepo()
         try repo.write("old.txt", "original\n")
         _ = try repo.commitAll()
-        let store = DiffRecoveryStore()
+        let store = makeStore()
         let evidence = try XCTUnwrap(shell(store, "git mv old.txt new.txt", candidates: [repo.root]) {
             try repo.git("mv", "old.txt", "new.txt")
         })
@@ -116,7 +126,7 @@ final class DiffRecoveryTests: XCTestCase {
         let repo = try GitTestRepo()
         try repo.write("base", "base\n")
         _ = try repo.commitAll()
-        let store = DiffRecoveryStore()
+        let store = makeStore()
         let evidence = try XCTUnwrap(shell(store, "generate files", candidates: [repo.root]) {
             for i in 0..<310 { try repo.write(String(format: "f%03d.txt", i), "new\n") }
             try repo.git("add", ".")
@@ -129,9 +139,9 @@ final class DiffRecoveryTests: XCTestCase {
     }
 
     func testNonGitReplayRejectsLaterUnobservedDeletion() throws {
-        let repo = try GitTestRepo()
+        let repo = try home.directory(gitInit: true)
         let file = (repo.root as NSString).appendingPathComponent("note.txt")
-        let store = DiffRecoveryStore()
+        let store = makeStore()
         let evidence = try XCTUnwrap(shell(store, "echo hi > \(q(file))") {
             try "hi\n".write(toFile: file, atomically: true, encoding: .utf8)
         })
@@ -149,7 +159,7 @@ final class DiffRecoveryTests: XCTestCase {
         try repo.write("a.txt", "a\n")
         _ = try repo.commitAll()
         try repo.write("a.txt", "pre-existing dirt\n")
-        let store = DiffRecoveryStore()
+        let store = makeStore()
         XCTAssertNil(shell(store, "cd \(q(repo.root)) && ls", candidates: [repo.root]))
         XCTAssertNil(shell(store, "git status", candidates: [repo.root], tool: "call-2"))
     }
@@ -160,7 +170,7 @@ final class DiffRecoveryTests: XCTestCase {
         try repo.write("b.txt", "b\n")
         let head = try repo.commitAll()
         try repo.write("dirty.txt", "pre-existing\n")
-        let store = DiffRecoveryStore()
+        let store = makeStore()
         let evidence = try XCTUnwrap(shell(store, "cd \(q(repo.root)) && echo edit >> b.txt") {
             try repo.write("b.txt", "b\nedit\n")
         })
@@ -200,7 +210,7 @@ final class DiffRecoveryTests: XCTestCase {
         let head = try repo.commitAll()
         let worktree = repo.root + "-wt"
         defer { try? FileManager.default.removeItem(atPath: worktree) }
-        let store = DiffRecoveryStore()
+        let store = makeStore()
 
         // 1: create the worktree via a literal variable.
         let create = "R=\(q(worktree))\ngit -C \(q(repo.root)) worktree add -q \"$R\" -b feat"
@@ -248,7 +258,7 @@ final class DiffRecoveryTests: XCTestCase {
         _ = try repo.commitAll()
         let worktree = repo.root + "-wt1"
         defer { try? FileManager.default.removeItem(atPath: worktree) }
-        let store = DiffRecoveryStore()
+        let store = makeStore()
         let script = "git -C \(q(repo.root)) worktree add -q \(q(worktree)) -b one && cd \(q(worktree)) && git commit -qm x"
         let evidence = try XCTUnwrap(shell(store, script, candidates: [repo.root]) {
             try repo.git("worktree", "add", "-q", worktree, "-b", "one")
@@ -268,7 +278,7 @@ final class DiffRecoveryTests: XCTestCase {
         let repo = try GitTestRepo()
         try repo.write("a.txt", "a\n")
         _ = try repo.commitAll()
-        let store = DiffRecoveryStore()
+        let store = makeStore()
         let evidence = try XCTUnwrap(shell(store, "cd \(q(repo.root)) && touch .env app.txt") {
             try repo.write(".env", "SECRET=1\n")
             try repo.write("app.txt", "x\n")
@@ -281,13 +291,13 @@ final class DiffRecoveryTests: XCTestCase {
 
     // MARK: Files outside Git
 
-    private func plainDirectory() throws -> GitTestRepo { try GitTestRepo(initialize: false) }
+    private func plainDirectory() throws -> FakeHome.Directory { try home.directory() }
 
     func testNonGitFileBeforeAfterIsRecordedFromExplicitQuotedPath() throws {
         let dir = try plainDirectory()
         let path = dir.root + "/notes.txt"
         try "one\ntwo\nthree\n".write(toFile: path, atomically: true, encoding: .utf8)
-        let store = DiffRecoveryStore()
+        let store = makeStore()
         let evidence = try XCTUnwrap(shell(store, "cat > \(q(path)) <<'EOF'\none\nTWO\nthree\nEOF") {
             try "one\nTWO\nthree\n".write(toFile: path, atomically: true, encoding: .utf8)
         })
@@ -315,7 +325,7 @@ final class DiffRecoveryTests: XCTestCase {
     func testCreatedFileFromVerifiedAbsenceAndPythonPathLiteral() throws {
         let dir = try plainDirectory()
         let path = dir.root + "/new.py"
-        let store = DiffRecoveryStore()
+        let store = makeStore()
         let script = "python3 - <<'EOF'\nfrom pathlib import Path\nPath(\(q(path))).write_text('x = 1')\nEOF"
         let evidence = try XCTUnwrap(shell(store, script) {
             try "x = 1".write(toFile: path, atomically: true, encoding: .utf8)
@@ -328,7 +338,7 @@ final class DiffRecoveryTests: XCTestCase {
 
     func testUnsafeOrUnreliableFilesProduceNoRecord() throws {
         let dir = try plainDirectory()
-        let store = DiffRecoveryStore()
+        let store = makeStore()
         let secret = dir.root + "/.env"
         let tool = dir.root + "/run.sh"
         try "#!/bin/sh\n".write(toFile: tool, atomically: true, encoding: .utf8)
@@ -358,7 +368,7 @@ final class DiffRecoveryTests: XCTestCase {
     func testOverwrittenWithoutReliableBeforeImageIsSkipped() throws {
         let dir = try plainDirectory()
         let path = dir.root + "/grows.txt"
-        let store = DiffRecoveryStore()
+        let store = makeStore()
         // Before is unavailable (the file does not exist yet *and* is created
         // as something unrepresentable): a directory is never guessed.
         XCTAssertNil(shell(store, "mkdir \(q(path))") {
@@ -371,7 +381,7 @@ final class DiffRecoveryTests: XCTestCase {
     func testNextTurnNeverSeesOrReplaysAnOldRecord() throws {
         let dir = try plainDirectory()
         let path = dir.root + "/f.txt"
-        let store = DiffRecoveryStore()
+        let store = makeStore()
         let first = try XCTUnwrap(shell(store, "echo a > \(q(path))") {
             try "a\n".write(toFile: path, atomically: true, encoding: .utf8)
         })
@@ -384,13 +394,13 @@ final class DiffRecoveryTests: XCTestCase {
         XCTAssertEqual(recover(store, turn: "run-1", ids: [oldID]).status, .unavailable)
         XCTAssertEqual(recover(store, turn: "run-2", ids: [oldID]).status, .unavailable)
         // A fresh store (the next outer run) has nothing at all.
-        XCTAssertEqual(recover(DiffRecoveryStore(), turn: "run-1", ids: [oldID]).status, .unavailable)
+        XCTAssertEqual(recover(makeStore(), turn: "run-1", ids: [oldID]).status, .unavailable)
     }
 
     func testRecoverRejectsMaliciousSelections() throws {
         let dir = try plainDirectory()
         let path = dir.root + "/f.txt"
-        let store = DiffRecoveryStore()
+        let store = makeStore()
         let id = try XCTUnwrap(shell(store, "echo a > \(q(path))") {
             try "a\n".write(toFile: path, atomically: true, encoding: .utf8)
         }?.records.first?.id)
@@ -509,7 +519,8 @@ final class DiffRecoveryTests: XCTestCase {
             collectGitDiff: { request, _ in
                 XCTFail("recover must not reach the collector")
                 return GitDiffResponsePayload(requestID: request.requestID, status: .unavailable)
-            }
+            },
+            diffRecovery: makeStore()
         )
         let script = "printf 'hello\\n' > \(q(path))"
         let content = String(decoding: try JSONEncoder().encode("<shell_script>\(script)</shell_script>"), as: UTF8.self)

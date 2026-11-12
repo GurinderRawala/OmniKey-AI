@@ -657,7 +657,10 @@ final class ChatSessionRunner {
         gitProvenance: GitProvenanceTracker = GitProvenanceTracker(),
         // Evaluated per call: one recovery store per outer run, so a later
         // turn can never see or replay this run's evidence.
-        diffRecovery: DiffRecoveryStore = DiffRecoveryStore()
+        diffRecovery: DiffRecoveryStore = DiffRecoveryStore(),
+        // Snapshotted once per run (evaluated per call). Toggling the
+        // setting never changes the protocol of a run already in flight.
+        diffViewEnabled: Bool = AgentDiffViewSetting.isEnabled()
     ) {
         var request = URLRequest(url: url)
         request.addValue("Bearer \(jwt)", forHTTPHeaderField: "Authorization")
@@ -764,8 +767,15 @@ final class ChatSessionRunner {
                         {
                             gitQueue.async {
                                 guard !completion.isFinished, !handle.isCancelledByUser else { return }
+                                // Diff view off: answer immediately without any
+                                // Git work so a stale server never waits on us.
                                 // Recovery replays only this run's stored evidence.
-                                let payload = gitRequest.phase == .recover
+                                let payload = !diffViewEnabled
+                                    ? GitDiffResponsePayload(
+                                        requestID: gitRequest.requestID, status: .unavailable,
+                                        reason: "diff_view_disabled"
+                                    )
+                                    : gitRequest.phase == .recover
                                     ? diffRecovery.recover(gitRequest)
                                     : collectGitDiff(gitRequest, turnBaselines)
                                 let reply = AgentMessage(
@@ -843,7 +853,9 @@ final class ChatSessionRunner {
                         print("[ChatSessionRunner] Final answer received (length: \(final.count))")
                         finishWithFinal(
                             final,
-                            sessionDiff: ChatSessionRunner.acceptedSessionDiff(from: response, sessionID: sessionID)
+                            sessionDiff: diffViewEnabled
+                                ? ChatSessionRunner.acceptedSessionDiff(from: response, sessionID: sessionID)
+                                : nil
                         )
                         return
                     }
@@ -890,12 +902,17 @@ final class ChatSessionRunner {
                             // Apply the structured directory as a quoted literal cd
                             // so production and injected executors share identical semantics.
                             let executionScript = Self.script(script, in: response.workingDirectory)
-                            let gitBaseline = gitProvenance.baseline(script: executionScript, context: response.gitDiffContext)
+                            // Diff view off: no provenance or recovery checkpoint work.
+                            let gitBaseline = diffViewEnabled
+                                ? gitProvenance.baseline(script: executionScript, context: response.gitDiffContext)
+                                : nil
                             // Bounded read-only before-checkpoint (no script execution).
-                            let recoveryCheckpoint = diffRecovery.before(
-                                script: executionScript, context: response.gitDiffContext,
-                                initialDirectory: GitProvenanceTracker.shellWorkingDirectory
-                            )
+                            let recoveryCheckpoint = diffViewEnabled
+                                ? diffRecovery.before(
+                                    script: executionScript, context: response.gitDiffContext,
+                                    initialDirectory: GitProvenanceTracker.shellWorkingDirectory
+                                )
+                                : nil
                             guard !completion.isFinished, !handle.isCancelledByUser else { return }
                             let (output, status) = executeShell(
                                 executionScript,
@@ -909,7 +926,7 @@ final class ChatSessionRunner {
                             )
 
                             completion.setShellRunning(false)
-                            let commitObservations = gitProvenance.observations(after: gitBaseline)
+                            let commitObservations = gitBaseline.map(gitProvenance.observations(after:)) ?? []
                             // Skipped on cancellation: nothing late is recorded.
                             let recoveryEvidence = handle.isCancelledByUser ? nil : recoveryCheckpoint.flatMap(diffRecovery.after)
                             guard !completion.isFinished else { return }
@@ -998,6 +1015,7 @@ final class ChatSessionRunner {
 
         task.resume()
 
+        let capabilities = AgentDiffViewSetting.capabilities(enabled: diffViewEnabled)
         let initial = AgentMessage(
             sessionID: sessionID,
             sender: "client",
@@ -1008,9 +1026,9 @@ final class ChatSessionRunner {
             groupName: groupName,
             model: model,
             supportsSkillStatus: true,
-            supportsGitDiff: true,
-            supportsGitTurnDiff: true,
-            supportsDiffRecovery: true
+            supportsGitDiff: capabilities.gitDiff,
+            supportsGitTurnDiff: capabilities.gitTurnDiff,
+            supportsDiffRecovery: capabilities.diffRecovery
         )
 
         guard let data = try? encoder.encode(initial),

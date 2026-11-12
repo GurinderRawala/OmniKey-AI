@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-private enum SettingsTab: String, CaseIterable, Identifiable {
+enum SettingsTab: String, CaseIterable, Identifiable {
     case providers, agentAccess, usage, updates, manual
 
     var id: String { rawValue }
@@ -29,7 +29,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
     var subtitle: String {
         switch self {
         case .providers:    return "Manage API keys"
-        case .agentAccess:  return "Terminal, web & browser"
+        case .agentAccess:  return "Terminal, web, browser & diffs"
         case .usage:        return "Tokens & cost"
         case .updates:      return "App version & updates"
         case .manual:       return "Shortcuts & usage"
@@ -37,11 +37,24 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
     }
 }
 
+/// Selected Settings pane, owned by the window controller so callers (for
+/// example the chat composer's gear) can open a specific pane.
+@MainActor
+final class SettingsNavigation: ObservableObject {
+    @Published var selection: SettingsTab
+
+    init(selection: SettingsTab = .providers) {
+        self.selection = selection
+    }
+}
+
 /// Top-level Settings window. Provides a fixed-width sidebar on the left and
 /// swaps the detail pane on the right based on the selected tab.
 struct SettingsView: View {
     @Environment(\.colorScheme) private var colorScheme
-    @State private var selection: SettingsTab = .providers
+    @ObservedObject var navigation: SettingsNavigation
+
+    private var selection: SettingsTab { navigation.selection }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -93,7 +106,7 @@ struct SettingsView: View {
 
     private func sidebarRow(_ tab: SettingsTab) -> some View {
         let isSelected = selection == tab
-        return Button(action: { selection = tab }) {
+        return Button(action: { navigation.selection = tab }) {
             HStack(spacing: 10) {
                 Image(systemName: tab.iconName)
                     .font(.system(size: 14, weight: .semibold))

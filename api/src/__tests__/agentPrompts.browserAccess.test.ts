@@ -21,6 +21,7 @@ function settings(overrides: Partial<AgentSettingsSnapshot> = {}): AgentSettings
     nemotronModel: 'nvidia/nemotron-3-ultra-550b-a55b',
     grammarEnhancementModel: null,
     grammarEnhancementProvider: null,
+    diffViewEnabled: true,
     ...overrides,
   };
 }

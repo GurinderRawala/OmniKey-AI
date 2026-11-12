@@ -94,8 +94,19 @@ const SENSITIVE_NAMES = new Set(
 const SENSITIVE_EXT = new Set('pem key p12 pfx keystore jks p8 ppk asc gpg kdbx'.split(' '));
 const SAFE_PATH_CHARS = /^\/[A-Za-z0-9._@+\-/]+$/;
 
-/** Mirrors the native GitSensitivePathPolicy (plus Git internals). */
+/** The agent's own task directories: bookkeeping/worktrees, not tool configs. */
+const OWN_HIDDEN_HOME_DIRS = new Set(['.omniagent', '.omnikey']);
+
+/**
+ * Mirrors the native GitSensitivePathPolicy (plus Git internals). Also any
+ * dot-prefixed entry directly in a home directory (`~/.config/gh/hosts.yml`,
+ * `~/.terraform.d/…`, `~/.zshrc`) of any user: tool configs and credentials
+ * live there, and normal Git capture never reached them. The agent's own
+ * `~/.omniAgent` / `~/.omnikey` task directories are excluded.
+ */
 export function isSensitiveWritePath(path: string): boolean {
+  const hidden = /^\/(?:Users|home)\/[^/]+\/(\.[^/]*)(?:\/|$)/.exec(path);
+  if (hidden && !OWN_HIDDEN_HOME_DIRS.has(hidden[1].toLowerCase())) return true;
   const parts = path.toLowerCase().split('/').filter(Boolean);
   const name = parts[parts.length - 1] ?? '';
   if (parts.slice(0, -1).some((p) => SENSITIVE_DIRS.has(p))) return true;
@@ -164,10 +175,16 @@ function lex(script: string): Token[] {
       const stop = end < 0 ? script.length : end;
       word ??= { value: '', tilde: false };
       const quoted = script.slice(i + 1, stop);
-      if (ch === "'" && quoted.includes('$')) word.quotedDollar = true;
+      // Single quotes make every `$` literal; inside double quotes `\$` does.
+      if (ch === "'" ? quoted.includes('$') : quoted.includes('\\$')) word.quotedDollar = true;
       word.value += quoted;
       i = stop;
     } else if (ch === '\\' && i + 1 < script.length) {
+      // An escaped `$` is literal text: never expanded by `resolve`.
+      if (script[i + 1] === '$') {
+        word ??= { value: '', tilde: false };
+        word.quotedDollar = true;
+      }
       push(script[++i], true);
     } else if (ch === '#' && !word) {
       while (i + 1 < script.length && script[i + 1] !== '\n') i++;
@@ -365,9 +382,27 @@ function addAuxiliary(s: Scan, target: AuxiliaryTarget): void {
   else s.auxiliary.push(target);
 }
 
-function addTarget(s: Scan, path: string | undefined, flags: Partial<WriteTarget> = {}): void {
+/**
+ * Sensitivity of an operand that could not be resolved to a safe absolute
+ * path (`../.env`, `$DIR/.ssh/config`, `~/.config/x` without a home): judged
+ * by its literal components so its script/output excerpts are still withheld.
+ */
+function sensitiveOperand(raw: string): boolean {
+  const value = raw.replace(/^~(?=\/|$)/, '/Users/~');
+  if (isSensitiveWritePath(value.startsWith('/') ? value : `/${value}`)) return true;
+  // `$HOME/.x`, `${HOME}/.x`, `~/.x`: a dot entry directly in a home directory.
+  return /^(?:\$HOME|\$\{HOME\}|~)\/\.(?!omniagent(?:\/|$)|omnikey(?:\/|$))/i.test(raw);
+}
+
+function addTarget(
+  s: Scan,
+  path: string | undefined,
+  flags: Partial<WriteTarget> = {},
+  raw?: string,
+): void {
   if (!path) {
     s.unresolved = true;
+    if (raw !== undefined && sensitiveOperand(raw)) s.sensitive = true;
     return;
   }
   if (path.startsWith('/dev/')) return;
@@ -424,7 +459,7 @@ function scanCommand(
         ? patternBookkeeping(w, r, removed)
         : undefined;
     if (name) addAuxiliary(s, { name, ...(path ? { path } : {}), removed });
-    else addTarget(s, path, flags);
+    else addTarget(s, path, flags, w.value);
   };
   for (const [op, target] of redirects) {
     if (!op.startsWith('>') || target.value.startsWith('/dev/')) continue;
@@ -463,7 +498,10 @@ function scanCommand(
     s.kinds.add(cmd);
     s.unresolved = true; // Metadata symlinks can redirect later auxiliary writes.
     const ops = operands();
-    if (ops.length >= 2) addTarget(s, resolve(ops[ops.length - 1], r));
+    if (ops.length >= 2) {
+      const dest = ops[ops.length - 1];
+      addTarget(s, resolve(dest, r), {}, dest.value);
+    }
   } else if (cmd === 'cp' || cmd === 'mv' || cmd === 'install' || cmd === 'rsync') {
     s.kinds.add(cmd);
     const ops = operands(/^-[mogt]$/);
@@ -484,7 +522,7 @@ function scanCommand(
   } else if (cmd === 'dd') {
     s.kinds.add('dd');
     const of = args.find((a) => a.value.startsWith('of='));
-    if (of) write({ value: of.value.slice(3), tilde: false });
+    if (of) write({ value: of.value.slice(3), tilde: false, quotedDollar: of.quotedDollar });
     else s.kinds.delete('dd'); // stdout only
   } else if (cmd === 'curl' || cmd === 'wget') {
     const k = args.findIndex(
@@ -648,6 +686,9 @@ export function classifyShellWrites(
   }
   end();
   const pyCwd = input.cwd ?? leadingDirectory(text);
+  // Only write calls count as resolved; a read-only `open(…, 'r')` must not
+  // offset a computed-path write in the comparison below.
+  let literalInterpreterWrites = 0;
   for (const [re, kind] of [
     [PY_PATH_WRITE, 'python write'],
     [PY_OPEN, 'python open'],
@@ -657,14 +698,17 @@ export function classifyShellWrites(
       const mode = re === PY_OPEN ? m[4] : 'w';
       if (!/[wax+]/.test(mode)) continue;
       s.kinds.add(kind);
-      const p = resolve({ value: m[2], tilde: false }, { cwd: pyCwd, vars: new Map() });
-      addTarget(s, p); // Interpreter execution alone cannot prove absence at turn start.
+      literalInterpreterWrites += 1;
+      // Whether the shell expanded a `$` before the interpreter saw the
+      // literal is unknown (quoting/heredoc), so a `$` is never resolved.
+      const p = resolve(
+        { value: m[2], tilde: false, quotedDollar: m[2].includes('$') },
+        { cwd: pyCwd, vars: new Map() },
+      );
+      // Interpreter execution alone cannot prove absence at turn start.
+      addTarget(s, p, {}, m[2]);
     }
   }
-  let literalInterpreterWrites = [PY_PATH_WRITE, PY_OPEN, NODE_WRITE].reduce(
-    (n, re) => n + [...text.matchAll(re)].length,
-    0,
-  );
   // `p = Path('<literal>')` … `p.write_text(…)`: one provable binding only.
   // Relative literals need the starting cwd to still hold (no cd/chdir later).
   const cds = text.match(/(?:^|[;&|(\n]|\bthen|\bdo)\s*(?:cd|pushd|popd)\b/g)?.length ?? 0;
@@ -678,7 +722,7 @@ export function classifyShellWrites(
     const p = resolve({ value: literal, tilde: false }, { cwd: varCwd, vars: new Map() });
     if (!p) continue;
     s.kinds.add('python write');
-    addTarget(s, p);
+    addTarget(s, p, {}, literal);
     literalInterpreterWrites += 1;
   }
   const genericInterpreterWrites = (

@@ -7,6 +7,7 @@ import {
   completedTranscriptSnapshot,
   completedTranscriptRevision,
   findTranscriptBlockContent,
+  hasKnownPartialSessionDiff,
   hasLegacyDeferredContentIds,
   previewTranscript,
   type RawHistoryMessage,
@@ -125,8 +126,11 @@ export async function readFreshNormalizedTranscript(
   );
   // Preview rows written before content-addressed IDs used positional block
   // IDs. Force one safe legacy backfill instead of returning previews whose
-  // deferred-content request can no longer be verified.
-  return !hasLegacyDeferredContentIds(messages) ? messages : null;
+  // deferred-content request can no longer be verified. Rows holding a
+  // known-partial diff card (written before that filter) are rebuilt too.
+  return !hasLegacyDeferredContentIds(messages) && !hasKnownPartialSessionDiff(messages)
+    ? messages
+    : null;
 }
 
 export async function readOrBackfillNormalizedTranscript(
