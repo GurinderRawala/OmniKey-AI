@@ -22,6 +22,7 @@ import './models/appDownload';
 // Importing models ensures they are registered with Sequelize before initDatabase().
 import './models/agentSession';
 import './models/agentTranscriptMessage';
+import './models/agentSessionDiff';
 import './models/scheduledJob';
 import './models/mcpServer';
 import './models/subscriptionTaskTemplate';
@@ -172,8 +173,8 @@ app.get('/macos/appcast', (req, res) => {
 
   // These should match the values embedded into the macOS app
   // Info.plist in macOS/build_release_dmg.sh.
-  const bundleVersion = '75';
-  const shortVersion = '1.9.15';
+  const bundleVersion = '76';
+  const shortVersion = '1.9.16';
 
   const xml = `<?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0"

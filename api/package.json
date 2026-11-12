@@ -1,6 +1,6 @@
 {
   "name": "omnikey-ai-api",
-  "version": "1.8.17",
+  "version": "1.8.18",
   "main": "dist/index.js",
   "description": "Omnikey AI backend API. Use Yarn for install/build/start.",
   "scripts": {
@@ -15,7 +15,7 @@
     "lint": "eslint --config ../eslint.config.mjs \"src/**/*.ts\""
   },
   "engines": {
-    "node": ">=14.0.0",
+    "node": ">=22",
     "yarn": ">=1.22.0"
   },
   "dependencies": {
@@ -23,6 +23,7 @@
     "@google-cloud/storage": "^7.19.0",
     "@google/genai": "^1.46.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@pierre/diffs": "1.6.4",
     "axios": "^1.13.5",
     "compression": "^1.8.2",
     "cors": "^2.8.5",

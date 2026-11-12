@@ -24,6 +24,28 @@ struct SessionHistoryEntry: Decodable, Identifiable {
     let role: String   // "user" or "assistant"
     let text: String
     let blocks: [SessionHistoryBlock]?
+    /// Snapshot saved for this assistant final (legacy, block-less history).
+    let sessionDiff: SavedSessionDiff?
+
+    enum CodingKeys: String, CodingKey { case id, role, text, blocks, sessionDiff }
+
+    init(id: String, role: String, text: String, blocks: [SessionHistoryBlock]? = nil, sessionDiff: SavedSessionDiff? = nil) {
+        self.id = id
+        self.role = role
+        self.text = text
+        self.blocks = blocks
+        self.sessionDiff = sessionDiff
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        role = try c.decode(String.self, forKey: .role)
+        text = try c.decode(String.self, forKey: .text)
+        blocks = try c.decodeIfPresent([SessionHistoryBlock].self, forKey: .blocks)
+        // A malformed optional snapshot never breaks history loading.
+        sessionDiff = try? c.decodeIfPresent(SavedSessionDiff.self, forKey: .sessionDiff)
+    }
 }
 
 struct SessionHistoryBlock: Decodable, Identifiable {
@@ -35,6 +57,25 @@ struct SessionHistoryBlock: Decodable, Identifiable {
     let contentLength: Int?
     let isContentTruncated: Bool?
     let contentId: String?
+    /// Snapshot bound to this `finalAnswer` block, if one was saved.
+    let sessionDiff: SavedSessionDiff?
+
+    enum CodingKeys: String, CodingKey {
+        case id, kind, text, activityId, activityPhase, contentLength, isContentTruncated, contentId, sessionDiff
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        kind = try c.decode(String.self, forKey: .kind)
+        text = try c.decode(String.self, forKey: .text)
+        activityId = try c.decodeIfPresent(String.self, forKey: .activityId)
+        activityPhase = try c.decodeIfPresent(ChatActivityPhase.self, forKey: .activityPhase)
+        contentLength = try c.decodeIfPresent(Int.self, forKey: .contentLength)
+        isContentTruncated = try c.decodeIfPresent(Bool.self, forKey: .isContentTruncated)
+        contentId = try c.decodeIfPresent(String.self, forKey: .contentId)
+        sessionDiff = try? c.decodeIfPresent(SavedSessionDiff.self, forKey: .sessionDiff)
+    }
 }
 
 struct SessionHistoryPageInfo: Decodable {

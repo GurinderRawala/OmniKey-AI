@@ -21,6 +21,7 @@ import {
 import { isSessionIdAvailableTo, SESSION_UNAVAILABLE_MESSAGE } from './sessionStore';
 import { buildShellToolResult } from './terminalOutput';
 import { runAgentTurn } from './turnRunner';
+import { handleGitDiffResponseFrame } from '../gitDiff/coordinator';
 
 export function rejectPendingSteeringAtTurnEnd(
   sessionId: string,
@@ -77,6 +78,7 @@ async function processNextInQueue(sessionId: string): Promise<void> {
       interactiveInput: true,
       // Capability of the connection that sent (and receives frames for) this input.
       supportsSkillStatus: next.message.supports_skill_status === true,
+      supportsGitDiff: next.message.supports_git_diff === true,
     });
   } catch (err) {
     next.log.error('Queued agent turn failed', { sessionId, error: err });
@@ -156,6 +158,11 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
         log.warn('Received invalid AgentMessage payload over WebSocket', { error: err });
         return;
       }
+
+      // A Git snapshot reply settles only its own outstanding capture (same
+      // request id, session, subscription and connection). It is never a
+      // turn input, steering, terminal feedback or model message.
+      if (handleGitDiffResponseFrame(message, subscription.id, connection.signal, log)) return;
 
       const sessionId = message.session_id || 'default';
       connectionSessionIds.add(sessionId);
@@ -336,10 +343,14 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
           rawContentLength: (message.content ?? '').length,
           refinedContentLength: content.length,
         });
-        pendingShell.resolve(
-          content,
-          typeof message.is_error === 'boolean' ? message.is_error : undefined,
-        );
+        const isError = typeof message.is_error === 'boolean' ? message.is_error : undefined;
+        // Raw observations are validated by the tool loop against the exact
+        // shell request it issued; absent for clients without Git support.
+        if (message.git_commit_observations === undefined) {
+          pendingShell.resolve(content, isError);
+        } else {
+          pendingShell.resolve(content, isError, message.git_commit_observations);
+        }
         return;
       }
 

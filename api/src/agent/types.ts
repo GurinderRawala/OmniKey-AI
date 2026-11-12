@@ -2,6 +2,8 @@ import { AIMessage } from '../ai-client';
 import { Subscription } from '../models/subscription';
 import type { SkillStatus } from '../skills/contracts';
 import type { SkillRunState } from './skillContext';
+import type { GitRunState } from './gitDiff/coordinator';
+import type { GitDiffRequest, GitDiffShellContext, SessionDiffSummary } from './gitDiff/contracts';
 
 // In-memory conversation state per session.
 export interface SessionState {
@@ -35,6 +37,9 @@ export interface SessionState {
   // Runtime-only Skills state of the outer run this invocation belongs to.
   // Never persisted, never part of history; applied only to provider request copies.
   skillRun?: SkillRunState;
+  // Runtime-only Git snapshot evidence of the outer run (supporting macOS
+  // clients only). Never persisted as session state, never sent to a model.
+  gitRun?: GitRunState;
 }
 
 export interface AgentMessage {
@@ -61,6 +66,22 @@ export interface AgentMessage {
   supports_skill_status?: boolean;
   // Server -> client: Skills status metadata (refs only, never instructions).
   skill_status?: SkillStatus;
+  // Client -> server (initial input): the client can collect Git snapshots on
+  // its own execution host. Literal true only; never inferred.
+  supports_git_diff?: boolean;
+  // Server -> client control frame sent before a final answer.
+  git_diff_request?: GitDiffRequest;
+  // Client -> server reply to git_diff_request (validated; never a turn input).
+  git_diff_response?: unknown;
+  // Server -> client on a shell_script request: verified candidate paths so
+  // the client can record HEAD before/after the script.
+  git_diff_context?: GitDiffShellContext;
+  // Server -> client on a shell_script request: structured directory to run in.
+  working_directory?: string;
+  // Client -> server on the terminal reply of an outstanding shell_script.
+  git_commit_observations?: unknown;
+  // Server -> client on a final answer: immutable snapshot summary.
+  session_diff?: SessionDiffSummary;
 }
 
 export type AgentSendFn = (msg: AgentMessage) => void;
