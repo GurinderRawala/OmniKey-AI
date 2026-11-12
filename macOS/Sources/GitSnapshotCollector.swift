@@ -201,7 +201,7 @@ struct GitSnapshotCollector: Sendable {
         var maxCandidates = 8
         var maxRepositories = 8
         var maxPatchBytes = 2 * 1024 * 1024
-        var maxUntrackedFiles = 200
+        var maxUntrackedFiles = 300
         var maxTrackedFiles = 2_000
         var maxUntrackedFileBytes = 1 * 1024 * 1024
         var timeout: TimeInterval = 10

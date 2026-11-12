@@ -22,7 +22,7 @@ import {
   type GitDiffRepository,
 } from './contracts';
 import type { DiffRecoveryRunState } from './coordinator';
-import type { WriteTarget } from './writeEvidence';
+import { TASK_ENTRY_PATH, type ShellWriteEvidence, type WriteTarget } from './writeEvidence';
 
 /** Bounded so an adversarial patch cannot make coverage checks expensive. */
 const MAX_PATCH_PATHS = 4_096;
@@ -140,6 +140,30 @@ export function reasonDisclosesExclusion(reason: string | undefined): boolean {
 const isGitLikeKind = (kind: string) => kind.startsWith('git ') || kind === 'patch';
 
 /**
+ * Could `write` have changed the (comparable) path `p`? Unknown targets
+ * always may; a removal also reaches everything below it. Task bookkeeping
+ * needs no coverage of its own but still touches what it names, and a
+ * pattern-only entry (task directory not literal) touches that entry of ANY
+ * task directory.
+ */
+function writeMayTouch(write: ShellWriteEvidence, p: string): boolean {
+  if (write.unresolved) return true;
+  const hits = (path: string, removed: boolean) =>
+    comparablePath(path) === p || (removed && pathIsWithin(p, path));
+  if (write.targets.some((t) => hits(t.path, t.removed))) return true;
+  return (write.auxiliaryTargets ?? []).some((a) => {
+    if (a.path) return hits(a.path, a.removed);
+    const parts = p.split('/');
+    for (let depth = 6; depth <= parts.length; depth++) {
+      const prefix = parts.slice(0, depth).join('/');
+      const m = TASK_ENTRY_PATH.exec(prefix);
+      if (m && m[1] === a.name) return depth === parts.length || a.removed;
+    }
+    return false;
+  });
+}
+
+/**
  * Coverage of the known turn evidence by the verified repositories. Missing
  * paths keep the strictest creation/deletion evidence (all writes must agree).
  */
@@ -168,9 +192,7 @@ export function coverageAssessment(input: CoverageInput): CoverageAssessment {
         ...relevant.filter((r) => ids.has(r.id)).map((r) => order.indexOf(r.toolCallId)),
       );
       const laterWrite = input.state?.writes.some(
-        (w) =>
-          order.indexOf(w.toolCallId) > latest &&
-          (w.unresolved || w.targets.some((t) => comparablePath(t.path) === p)),
+        (w) => order.indexOf(w.toolCallId) > latest && writeMayTouch(w, p),
       );
       if (!allReplayed || laterWrite) blocking.push('checkpoint_not_final');
       else covered.add(p);

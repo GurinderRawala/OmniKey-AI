@@ -21,7 +21,7 @@ import type { DiffRecoveryRunState } from './coordinator';
 import type { WriteTarget } from './writeEvidence';
 
 export const DIFF_RECONSTRUCTION_MAX_OUTPUT_TOKENS = 4_096;
-export const DIFF_RECONSTRUCTION_MAX_FILES = 50;
+export const DIFF_RECONSTRUCTION_MAX_FILES = 300;
 export const DIFF_RECONSTRUCTION_MAX_FILE_BYTES = 256 * 1024;
 export const DIFF_RECONSTRUCTION_MAX_TOTAL_BYTES = 2 * 1024 * 1024;
 const MAX_REPLY_CHARS = 512 * 1024;
@@ -244,7 +244,7 @@ export function reconstructionRepositories(
         .sort((x, y) => y.length - x.length)[0];
     const cwd = within(preferredRoots) ?? within(cwds);
     const root = cwd ?? f.path.slice(0, f.path.lastIndexOf('/'));
-    const rel = f.path.slice(root.length + 1);
+    const rel = comparablePath(f.path).slice(comparablePath(root).length + 1);
     if (!root || !isSafeRelativePath(rel)) {
       dropped += 1;
       continue;

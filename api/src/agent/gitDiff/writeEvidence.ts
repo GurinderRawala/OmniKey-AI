@@ -9,7 +9,7 @@ import { isSafeAbsolutePath, isSafeToolCallId, normalizeAbsolutePath } from './c
 import type { GitRunState } from './coordinator';
 
 export const WRITE_EVIDENCE_MAX_SCRIPTS = 16;
-export const WRITE_EVIDENCE_MAX_TARGETS = 50;
+export const WRITE_EVIDENCE_MAX_TARGETS = 300;
 const MAX_SCRIPT_EXCERPT = 4_000;
 const MAX_OUTPUT_EXCERPT = 1_000;
 const MAX_SCAN_CHARS = 64_000;
@@ -39,6 +39,47 @@ export interface ShellWriteEvidence {
    * uncertain and a snapshot is never claimed complete.
    */
   unresolved?: boolean;
+  /**
+   * Writes recognised as agent task bookkeeping (see `auxiliaryTarget`):
+   * well-known metadata files and scratch directories of a provable task
+   * directory under `~/.omniAgent/garbage/<id>` or `~/.omnikey/garbage/<id>`.
+   * They need no diff coverage but still invalidate a checkpoint they touch.
+   * Absent when none were recognised (older evidence shape unchanged).
+   */
+  auxiliaryTargets?: AuxiliaryTarget[];
+}
+
+export interface AuxiliaryTarget {
+  /** Well-known entry name inside the task directory (e.g. `summary.md`, `tmp`). */
+  name: string;
+  /** Literal absolute path when resolvable; absent when only the pattern is proven. */
+  path?: string;
+  removed: boolean;
+}
+
+/** Exact metadata children of a task directory (any write). */
+export const TASK_METADATA_NAMES: ReadonlySet<string> = new Set([
+  'summary.md',
+  'status',
+  'ledger.tsv',
+  '.omniagent-owned',
+]);
+/** Scratch directories of a task directory (removal only). */
+export const TASK_SCRATCH_NAMES: ReadonlySet<string> = new Set([
+  'prompts',
+  'logs',
+  'handoffs',
+  'tmp',
+]);
+const MAX_AUXILIARY_TARGETS = 32;
+/** `<home>/.omniAgent|.omnikey/garbage/<task-id>/<name>` (one child level only). */
+export const TASK_ENTRY_PATH =
+  /^\/(?:Users|home)\/[^/]+\/\.(?:omniAgent|omnikey)\/garbage\/[A-Za-z0-9_-][A-Za-z0-9._-]*\/([^/]+)$/;
+
+function bookkeepingName(name: string, removed: boolean): string | undefined {
+  return TASK_METADATA_NAMES.has(name) || (removed && TASK_SCRATCH_NAMES.has(name))
+    ? name
+    : undefined;
 }
 
 // eslint-disable-next-line no-control-regex
@@ -98,6 +139,8 @@ export function redactSecrets(text: string): { text: string; redacted: boolean }
 interface Word {
   value: string;
   tilde: boolean;
+  /** A `$` came from single quotes (literal, not an expansion): never resolved. */
+  quotedDollar?: boolean;
 }
 type Token = Word | { op: string };
 
@@ -120,7 +163,9 @@ function lex(script: string): Token[] {
       const end = script.indexOf(ch, i + 1);
       const stop = end < 0 ? script.length : end;
       word ??= { value: '', tilde: false };
-      word.value += script.slice(i + 1, stop);
+      const quoted = script.slice(i + 1, stop);
+      if (ch === "'" && quoted.includes('$')) word.quotedDollar = true;
+      word.value += quoted;
       i = stop;
     } else if (ch === '\\' && i + 1 < script.length) {
       push(script[++i], true);
@@ -176,6 +221,85 @@ function lex(script: string): Token[] {
 interface Resolver {
   cwd?: string;
   vars: Map<string, string | null>;
+  /** Variables with proven task-directory provenance (see `taskDirectoryVariables`). */
+  taskDirCandidates?: ReadonlySet<string>;
+  /** Candidates whose single assignment has already been executed (lexical order). */
+  taskDirs?: Set<string>;
+}
+
+/**
+ * Pieces a task id may be built from: safe literal characters, `date +FMT`
+ * with directives that never produce `/`, and random/pid sources.
+ */
+const TASK_ID_PIECE = String.raw`(?:[A-Za-z0-9_-]|\$\((?:date(?: -u)? \+(?:%[YmdHMSjyFTsz]|[A-Za-z0-9_-])+|uuidgen|openssl rand -hex \d{1,2})\)|\$RANDOM|\$\$)`;
+const COMPOUND_LINE =
+  /^\s*(?:if|elif|else|then|while|until|for|case|do|select|function)\b|^\s*[({]|[{(]\s*$|\)\s*\{|(?:&&|\|\||\\)\s*$/;
+
+/**
+ * Shell variables that provably name ONE task directory
+ * `$HOME/.omniAgent|.omnikey/garbage/<child>`: assigned exactly once, on a
+ * top-level line before any compound construct, from either a safe child
+ * built of literals/timestamp/random pieces (possibly via a task-id variable)
+ * or the bounded "current task" lookup
+ * `$(ls -td "$HOME/.omniAgent/garbage"/<glob> 2>/dev/null | head -1)`.
+ * Nothing is executed; anything else is not proven.
+ */
+function taskDirectoryVariables(text: string): Set<string> {
+  if (/\\\r?\n/.test(text)) return new Set();
+  const dequoted = text.replace(/['"\\]/g, '');
+  if (/\b(?:eval|source|trap)\b|(?:^|[;&|\n])\s*\.\s|(?:^|[;&|\n])\s*\$/.test(dequoted))
+    return new Set();
+  if (
+    /\b(?:export|declare|typeset|readonly|local|integer|float|read|mapfile|readarray|getopts|let|unset)\b|\bprintf\s+-v\b/.test(
+      dequoted,
+    )
+  )
+    return new Set();
+  const proven = new Set<string>();
+  const ids = new Set<string>();
+  const singlyAssigned = (name: string) => {
+    // Every bare occurrence must be the one declaration. References are
+    // allowed, but quoted exports, array assignments and hidden rebinding
+    // all contribute another bare occurrence and therefore fail closed.
+    const referencesRemoved = dequoted.replace(
+      new RegExp(`\\$\\{${name}\\}|\\$${name}(?!\\w)`, 'g'),
+      '',
+    );
+    const occurrences = referencesRemoved.match(new RegExp(`(?<![\\w$])${name}(?!\\w)`, 'g'));
+    return occurrences?.length === 1;
+  };
+  const ref = (set: Set<string>) =>
+    set.size ? `|\\$(?:\\{(?:${[...set].join('|')})\\}|(?:${[...set].join('|')})(?!\\w))` : '';
+  const lines = text.split('\n');
+  for (const line of lines) {
+    if (COMPOUND_LINE.test(line)) break;
+    const m = /^(?:export )?([A-Za-z_]\w*)=(\S.*)$/.exec(line.trimEnd());
+    if (!m || !singlyAssigned(m[1])) continue;
+    const raw = m[2];
+    if (/['`\\]/.test(raw) || raw.startsWith('"~')) continue;
+    const norm = raw.replace(/"/g, '').replace(/\s+/g, ' ');
+    const home = raw.startsWith('~/')
+      ? '~'
+      : String.raw`\$HOME|\$\{HOME\}|/(?:Users|home)/[A-Za-z0-9._-]+`;
+    const piece = `(?:${TASK_ID_PIECE}${ref(ids)})`;
+    if (new RegExp(`^(?!\\.)${piece}+$`).test(norm)) ids.add(m[1]);
+    else if (
+      new RegExp(`^(?:${home})/\\.(?:omniAgent|omnikey)/garbage/(?![.])${piece}+$`).test(norm) ||
+      new RegExp(
+        String.raw`^\$\(ls -(?:td|dt) (?:\$HOME|\$\{HOME\})/\.(?:omniAgent|omnikey)/garbage/(?![.])[A-Za-z0-9._*-]+(?: 2>/dev/null)? \| head -(?:n ?)?1\)$`,
+      ).test(norm)
+    )
+      proven.add(m[1]);
+  }
+  return proven;
+}
+
+/** Bookkeeping entry named by `$TASK_DIR/<name>` for an active proven variable. */
+function patternBookkeeping(word: Word, r: Resolver, removed: boolean): string | undefined {
+  if (word.tilde || word.quotedDollar) return undefined;
+  const m = /^\$(?:\{(\w+)\}|(\w+))\/([^/]+)$/.exec(word.value);
+  if (!m || !r.taskDirs?.has(m[1] ?? m[2])) return undefined;
+  return bookkeepingName(m[3], removed);
 }
 
 function homeOf(cwd: string | undefined): string | undefined {
@@ -184,6 +308,7 @@ function homeOf(cwd: string | undefined): string | undefined {
 
 /** Literal path resolution: absolute, ~/$HOME and $PWD/relative only with a known cwd. */
 function resolve(word: Word, r: Resolver): string | undefined {
+  if (word.quotedDollar) return undefined;
   let v = word.value;
   const home = homeOf(r.cwd);
   if (word.tilde) {
@@ -222,6 +347,17 @@ interface Scan {
   sensitive: boolean;
   unresolved: boolean;
   commands: number;
+  auxiliary: AuxiliaryTarget[];
+}
+
+function addAuxiliary(s: Scan, target: AuxiliaryTarget): void {
+  const same = s.auxiliary.find(
+    (a) => a.name === target.name && a.path === target.path && a.removed === target.removed,
+  );
+  if (same) return;
+  // Over the bound the remainder is unknown rather than silently ignored.
+  if (s.auxiliary.length >= MAX_AUXILIARY_TARGETS) s.unresolved = true;
+  else s.auxiliary.push(target);
 }
 
 function addTarget(s: Scan, path: string | undefined, flags: Partial<WriteTarget> = {}): void {
@@ -262,14 +398,33 @@ function scanCommand(
     for (const w of words.slice(words[i]?.value === 'export' ? i + 1 : 0)) {
       const m = /^([A-Za-z_]\w*)=(.*)$/.exec(w.value);
       if (!m) continue;
-      const value = resolve({ value: m[2], tilde: m[2].startsWith('~') }, r) ?? null;
+      const value =
+        resolve({ value: m[2], tilde: m[2].startsWith('~'), quotedDollar: w.quotedDollar }, r) ??
+        null;
       r.vars.set(m[1], r.vars.has(m[1]) ? null : value); // reassigned => unknown
+      if (r.taskDirCandidates?.has(m[1])) r.taskDirs?.add(m[1]);
     }
   }
+  /** One write operand: bookkeeping is recorded separately, anything else as a target. */
+  const write = (w: Word, flags: Partial<WriteTarget> = {}) => {
+    const removed = flags.removed === true;
+    const path = resolve(w, r);
+    // A path built from any variable but $HOME is bookkeeping only through a
+    // proven task-directory variable; a literal one only by its exact shape.
+    const viaVariable = /\$(?!HOME\b|\{HOME\})/.test(w.value);
+    const literal = path && !viaVariable ? TASK_ENTRY_PATH.exec(path) : null;
+    const name = literal
+      ? bookkeepingName(literal[1], removed)
+      : viaVariable
+        ? patternBookkeeping(w, r, removed)
+        : undefined;
+    if (name) addAuxiliary(s, { name, ...(path ? { path } : {}), removed });
+    else addTarget(s, path, flags);
+  };
   for (const [op, target] of redirects) {
     if (!op.startsWith('>') || target.value.startsWith('/dev/')) continue;
     s.kinds.add('redirect');
-    addTarget(s, resolve(target, r), { created: ctx.noclobber && op === '>' });
+    write(target, { created: ctx.noclobber && op === '>' });
   }
   while (i < words.length && PREFIXES.has(words[i].value)) i++;
   const cmd = (words[i]?.value ?? '').split('/').pop() ?? '';
@@ -294,20 +449,25 @@ function scanCommand(
     r.cwd = undefined;
   } else if (cmd === 'tee' || cmd === 'touch' || cmd === 'truncate') {
     if (cmd !== 'tee' || operands().length > 0) s.kinds.add(cmd);
-    paths(operands(/^-s$/)).forEach((p) => addTarget(s, p));
+    operands(/^-s$/).forEach((w) => write(w));
   } else if (cmd === 'mkdir') {
     s.kinds.add('mkdir');
     if (!args.some((a) => /^-\w*p|^--parents/.test(a.value)))
       paths(operands(/^-m$/)).forEach((p) => p && s.createdDirs.push(p));
-  } else if (cmd === 'cp' || cmd === 'mv' || cmd === 'install' || cmd === 'ln' || cmd === 'rsync') {
+  } else if (cmd === 'ln') {
+    s.kinds.add(cmd);
+    s.unresolved = true; // Metadata symlinks can redirect later auxiliary writes.
+    const ops = operands();
+    if (ops.length >= 2) addTarget(s, resolve(ops[ops.length - 1], r));
+  } else if (cmd === 'cp' || cmd === 'mv' || cmd === 'install' || cmd === 'rsync') {
     s.kinds.add(cmd);
     const ops = operands(/^-[mogt]$/);
-    if (ops.length >= 2) addTarget(s, resolve(ops[ops.length - 1], r));
+    if (ops.length >= 2) write(ops[ops.length - 1]);
     else s.unresolved = true;
-    if (cmd === 'mv') paths(ops.slice(0, -1)).forEach((p) => addTarget(s, p, { removed: true }));
+    if (cmd === 'mv') ops.slice(0, -1).forEach((w) => write(w, { removed: true }));
   } else if (cmd === 'rm' || cmd === 'unlink' || cmd === 'rmdir') {
     s.kinds.add(cmd);
-    paths(operands()).forEach((p) => addTarget(s, p, { removed: true }));
+    operands().forEach((w) => write(w, { removed: true }));
   } else if (
     (cmd === 'sed' || cmd === 'perl') &&
     args.some((a) => /^-\w*i|^--in-place/.test(a.value))
@@ -315,11 +475,11 @@ function scanCommand(
     s.kinds.add(`${cmd} -i`);
     const exprFlag = args.some((a) => /^-\w*[eEf]$/.test(a.value));
     const ops = operands(/^-\w*[eEf]$/);
-    paths(cmd === 'sed' && !exprFlag ? ops.slice(1) : ops).forEach((p) => addTarget(s, p));
+    (cmd === 'sed' && !exprFlag ? ops.slice(1) : ops).forEach((w) => write(w));
   } else if (cmd === 'dd') {
     s.kinds.add('dd');
     const of = args.find((a) => a.value.startsWith('of='));
-    if (of) addTarget(s, resolve({ value: of.value.slice(3), tilde: false }, r));
+    if (of) write({ value: of.value.slice(3), tilde: false });
     else s.kinds.delete('dd'); // stdout only
   } else if (cmd === 'curl' || cmd === 'wget') {
     const k = args.findIndex(
@@ -327,7 +487,7 @@ function scanCommand(
     );
     if (k >= 0 && args[k + 1]) {
       s.kinds.add(cmd);
-      addTarget(s, resolve(args[k + 1], r));
+      write(args[k + 1]);
     }
   } else if (cmd === 'patch') {
     s.kinds.add('patch');
@@ -343,6 +503,49 @@ const PY_PATH_WRITE = /Path\(\s*(['"])([^'"\n]+)\1\s*\)\s*\.\s*write_(?:text|byt
 const PY_OPEN = /\bopen\(\s*(['"])([^'"\n]+)\1\s*,\s*(?:mode\s*=\s*)?(['"])([rwaxbt+]+)\3/g;
 const NODE_WRITE =
   /\b(?:writeFileSync|appendFileSync|writeFile|appendFile)\(\s*(['"])([^'"\n]+)\1/g;
+
+const PY_VAR_WRITE = /(?<![\w.])([A-Za-z_]\w*)\s*\.\s*write_(?:text|bytes)\(/g;
+/** Python constructs that can rebind names or change cwd invisibly: no variable resolution. */
+const PY_OPAQUE =
+  /\b(?:match|case)\b|\bdef\s+\w+\s*\(|\blambda\b[^:\n]*:|\bclass\s+\w+\s*[(:]|\b(?:exec|eval|globals|locals|vars|setattr|getattr|chdir|__import__)\s*\(|\bimportlib\b/;
+
+/**
+ * Literal path of `NAME.write_text(…)`/`write_bytes(…)` when NAME has exactly
+ * one binding in the whole script, and that binding is a top-level, unconditional
+ * `NAME = Path('<literal>')` statement. Any other binding form (reassignment,
+ * augmented/tuple/walrus/for/with/import/del/global, attribute mutation, use
+ * as a call keyword), indentation, a single-line compound (`:` before it), or
+ * a non-literal value leaves the write unknown. Python is never evaluated.
+ */
+function pythonVariablePath(text: string, name: string): string | undefined {
+  if (name === 'Path' || PY_OPAQUE.test(text)) return undefined;
+  const token = new RegExp(`(?<![\\w.])${name}(?!\\w)`, 'g');
+  let binding: { index: number; literal: string } | undefined;
+  for (const m of text.matchAll(token)) {
+    const index = m.index ?? 0;
+    const before = text.slice(Math.max(0, index - 40), index);
+    const after = text.slice(index + name.length, index + name.length + 400);
+    const rebinds =
+      /(?:\bas|\bfor|\bdel|\bglobal|\bnonlocal|\bimport|,|\*)\s*$/.test(before) ||
+      /^\s*[)\]]*\s*(?:,|(?:\/\/|\*\*|>>|<<|[-+*/%&|^@])?=(?!=)|:=|\.\s*\w+\s*=(?!=)|\[)/.test(
+        after,
+      );
+    if (!rebinds) continue;
+    if (binding) return undefined; // more than one binding
+    const value =
+      /^\s*=\s*(?:pathlib\s*\.\s*)?Path\(\s*(['"])([^'"\n\\$`{}]+)\1\s*\)\s*(?=[;\n#"']|$)/.exec(
+        after,
+      );
+    if (!value) return undefined;
+    const lineStart = text.lastIndexOf('\n', index - 1) + 1;
+    const prefix = text.slice(lineStart, index);
+    // Top level: no indentation, no single-line compound header, statement start.
+    if (/^\s/.test(prefix) || prefix.includes(':')) return undefined;
+    if (prefix && !/(?:;|-c\s+["'])\s*$/.test(prefix)) return undefined;
+    binding = { index, literal: value[2] };
+  }
+  return binding?.literal;
+}
 
 /** Classify one script; `undefined` when nothing write-like was recognised. */
 export function classifyShellWrites(
@@ -363,8 +566,14 @@ export function classifyShellWrites(
     sensitive: false,
     unresolved: false,
     commands: 0,
+    auxiliary: [],
   };
-  const r: Resolver = { cwd: input.cwd, vars: new Map() };
+  const r: Resolver = {
+    cwd: input.cwd,
+    vars: new Map(),
+    taskDirCandidates: taskDirectoryVariables(text),
+    taskDirs: new Set(),
+  };
   // No creation claims for conditional/error-masking or mode-changing
   // scripts. Detecting a write remains deliberately broader than proving creation.
   const conditional =
@@ -447,10 +656,26 @@ export function classifyShellWrites(
       addTarget(s, p); // Interpreter execution alone cannot prove absence at turn start.
     }
   }
-  const literalInterpreterWrites = [PY_PATH_WRITE, PY_OPEN, NODE_WRITE].reduce(
+  let literalInterpreterWrites = [PY_PATH_WRITE, PY_OPEN, NODE_WRITE].reduce(
     (n, re) => n + [...text.matchAll(re)].length,
     0,
   );
+  // `p = Path('<literal>')` … `p.write_text(…)`: one provable binding only.
+  // Relative literals need the starting cwd to still hold (no cd/chdir later).
+  const cds = text.match(/(?:^|[;&|(\n]|\bthen|\bdo)\s*(?:cd|pushd|popd)\b/g)?.length ?? 0;
+  const lead = leadingDirectory(text);
+  const varCwd = cds === 0 ? input.cwd : cds === 1 && lead ? lead : undefined;
+  const bindings = new Map<string, string | undefined>();
+  for (const m of text.matchAll(PY_VAR_WRITE)) {
+    if (!bindings.has(m[1])) bindings.set(m[1], pythonVariablePath(text, m[1]));
+    const literal = bindings.get(m[1]);
+    if (!literal) continue;
+    const p = resolve({ value: literal, tilde: false }, { cwd: varCwd, vars: new Map() });
+    if (!p) continue;
+    s.kinds.add('python write');
+    addTarget(s, p);
+    literalInterpreterWrites += 1;
+  }
   const genericInterpreterWrites = (
     text.match(
       /\.write_(?:text|bytes)\(|\bopen\([^)\n]*,\s*['"][wax]|\b(?:writeFileSync|appendFileSync|writeFile|appendFile)\(/g,
@@ -499,6 +724,7 @@ export function classifyShellWrites(
     targets,
     sensitive: s.sensitive,
     unresolved: s.unresolved,
+    auxiliaryTargets: s.auxiliary,
   };
 }
 
@@ -549,6 +775,7 @@ export function recordShellWriteEvidence(
     redacted: script.redacted || output.redacted,
     kinds: found.kinds,
     ...(found.unresolved ? { unresolved: true } : {}),
+    ...(found.auxiliaryTargets?.length ? { auxiliaryTargets: found.auxiliaryTargets } : {}),
     targets: found.targets.map((t) => ({
       ...t,
       // Absence proven only in the first issued shell can describe turn start.

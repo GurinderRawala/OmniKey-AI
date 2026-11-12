@@ -440,7 +440,7 @@ describe('diff_recovery_evidence validation', () => {
       { ...ok, records: Array.from({ length: 33 }, (_, i) => rec(`r${i}`, 'c1', ROOT, ['a'])) },
     ],
     [
-      '51 paths',
+      '301 paths',
       {
         ...ok,
         records: [
@@ -448,7 +448,7 @@ describe('diff_recovery_evidence validation', () => {
             'r1',
             'c1',
             ROOT,
-            Array.from({ length: 51 }, (_, i) => `f${i}`),
+            Array.from({ length: 301 }, (_, i) => `f${i}`),
           ),
         ],
       },
@@ -610,7 +610,7 @@ describe('recovered summary hydration', () => {
       repositoryCount: 1,
       createdAt: new Date().toISOString(),
       scope: 'working_tree',
-      displayLimit: 50,
+      displayLimit: 300,
       recovered: true,
       recoveryIncomplete: true,
       evidence: ['leak'],
@@ -621,7 +621,7 @@ describe('recovered summary hydration', () => {
       repositoryCount: 1,
       createdAt: summary.createdAt,
       scope: 'working_tree',
-      displayLimit: 50,
+      displayLimit: 300,
       recovered: true,
       recoveryIncomplete: true,
     });
@@ -882,7 +882,7 @@ describe('agent-assisted recovery in a real agent turn', () => {
       fileCount: 2,
       recovered: true,
       recoveryIncomplete: false,
-      displayLimit: 50,
+      displayLimit: 300,
     });
     const stored = await loadSessionDiffPayload('r-wt', 'sub-a', t.final!.session_diff!.id);
     expect(stored!.row.payload.startsWith('gz1:')).toBe(true);
@@ -1327,7 +1327,7 @@ describe('recovered snapshot viewer', () => {
   const app = express();
   app.use('/api/agent', createAgentRouter());
 
-  it('replays a complete 100-file recovered payload with provenance and the 50-panel cap', async () => {
+  it('replays a complete 100-file recovered payload with provenance and the 300-panel cap', async () => {
     await AgentSession.create({ id: 'v-rec', subscriptionId: 'sub-a' } as any);
     const patch = Array.from({ length: 100 }, (_, i) =>
       filePatch(`src/f${String(i).padStart(3, '0')}.ts`),
@@ -1388,7 +1388,7 @@ describe('recovered snapshot viewer', () => {
       complete: (async () => manifest({ evidenceIds: ['r1', 'r2'] })) as any,
     });
     const summary = (await recoverSessionDiff(r, { model: 'm', signal: undefined, log }))!;
-    // The 50-panel viewer cap is a display limit, never a coverage gap.
+    // The 300-panel viewer cap is a display limit, never a coverage gap.
     expect(summary).toMatchObject({ recovered: true, recoveryIncomplete: false, fileCount: 100 });
     const res = await request(app)
       .get(`/api/agent/sessions/v-rec/diffs/${summary.id}`)
@@ -1398,8 +1398,8 @@ describe('recovered snapshot viewer', () => {
     expect(html).toContain('Recovered turn changes');
     expect(html).not.toContain('Partial recovery');
     expect(html).toContain('recovered from turn checkpoints');
-    expect((html.match(/<details class="file"/g) ?? []).length).toBe(50);
-    expect(html).toContain('Showing 50 of 100 files');
+    expect((html.match(/<details class="file"/g) ?? []).length).toBe(100);
+    expect(html).not.toContain('Showing ');
     expect(html).not.toContain('<script>x</script>');
     expect(
       (
@@ -1428,7 +1428,7 @@ describe('recovered snapshot viewer', () => {
     const repo = { root: ROOT, patch: filePatch('a.ts'), scope: 'working_tree' };
     await store('sdiff_oldpartial1', {
       repositories: [repo],
-      displayLimit: 50,
+      displayLimit: 300,
       recovery: {
         kind: 'agent_assisted',
         turnId: 'grun_old',
@@ -1437,7 +1437,7 @@ describe('recovered snapshot viewer', () => {
         limitations: [],
       },
     });
-    await store('sdiff_oldnobase01', { repositories: [repo], baselines: [], displayLimit: 50 });
+    await store('sdiff_oldnobase01', { repositories: [repo], baselines: [], displayLimit: 300 });
     await store('sdiff_legacywt001', { repositories: [repo] });
     const get = (id: string) =>
       request(app).get(`/api/agent/sessions/v-old/diffs/${id}`).set('x-test-subscription', 'sub-a');
@@ -1937,7 +1937,7 @@ printf 'hi\\n' > todo.md`;
     expect(t.final!.session_diff).toMatchObject({
       scope: 'turn',
       fileCount: 100,
-      displayLimit: 50,
+      displayLimit: 300,
     });
     expect(t.final!.session_diff!.recovered).toBeUndefined();
   });
@@ -2327,4 +2327,404 @@ describe('coverage assessment', () => {
     expect(classifyShellWrites('echo x > a.ts 2>/dev/null', ok)?.unresolved).toBe(false);
     expect(classifyShellWrites('echo x > rel.ts', { status: 'succeeded' })?.unresolved).toBe(true);
   });
+});
+
+// ---------------------------------------------------------------------------
+// Task bookkeeping and Python Path variables (agent bootstrap/cleanup turns)
+// ---------------------------------------------------------------------------
+
+const TASK_BOOTSTRAP = `TASK_ID="$(date +%Y%m%d-%H%M%S)-repo-and-tmp"
+TASK_DIR="$HOME/.omniAgent/garbage/$TASK_ID"
+CONFIG_DIR="$HOME/.omnikey/garbage/$TASK_ID"
+mkdir -p "$TASK_DIR"/{prompts,logs,handoffs,tmp} "$CONFIG_DIR"
+touch "$TASK_DIR/.omniagent-owned"
+printf 'running\\n' > "$TASK_DIR/status"
+printf 'type\\tpath\\n' > "$TASK_DIR/ledger.tsv"
+printf 'tmp\\t%s\\n' "$TASK_DIR" >> "$TASK_DIR/ledger.tsv"`;
+const TASK_CLEANUP = `TASK_DIR=$(ls -td "$HOME/.omniAgent/garbage"/*-repo-and-tmp 2>/dev/null | head -1)
+cat > "$TASK_DIR/summary.md" <<'EOF'
+# Summary
+Patched README and appended the scratch note.
+EOF
+printf 'complete\\n' > "$TASK_DIR/status"
+rm -rf "$TASK_DIR/prompts" "$TASK_DIR/logs" "$TASK_DIR/handoffs" "$TASK_DIR/tmp"`;
+const README_PATCH = `python3 - <<'PY'
+from pathlib import Path
+p=Path('${ROOT}/README.md');s=p.read_text();assert 'old' in s;p.write_text(s.replace('old','new'))
+PY`;
+const SCRATCH = '/private/tmp/omni-scratch';
+const SCRATCH_APPEND = `printf 'more\\n' >> ${SCRATCH}/notes.txt`;
+
+describe('task bookkeeping and Python Path variable classification', () => {
+  const ok = { cwd: ROOT, status: 'succeeded' as const };
+  const classify = (script: string, input: Parameters<typeof classifyShellWrites>[1] = ok) =>
+    classifyShellWrites(script, input)!;
+  const names = (script: string) =>
+    (classify(script).auxiliaryTargets ?? []).map((a) => `${a.name}${a.removed ? ':rm' : ''}`);
+
+  it('bootstrap and cleanup bookkeeping resolve to auxiliary entries, not unknown targets', () => {
+    const boot = classify(TASK_BOOTSTRAP);
+    expect(boot.unresolved).toBe(false);
+    expect(boot.targets).toEqual([]);
+    expect(names(TASK_BOOTSTRAP)).toEqual(['.omniagent-owned', 'status', 'ledger.tsv']);
+    const clean = classify(TASK_CLEANUP);
+    expect(clean.unresolved).toBe(false);
+    expect(clean.targets).toEqual([]);
+    expect(names(TASK_CLEANUP)).toEqual([
+      'summary.md',
+      'status',
+      'prompts:rm',
+      'logs:rm',
+      'handoffs:rm',
+      'tmp:rm',
+    ]);
+    expect(clean.auxiliaryTargets!.every((a) => a.path === undefined)).toBe(true);
+    // Literal task directories carry the resolved path.
+    const literal = classify(
+      `echo done > /Users/dev/.omniAgent/garbage/t-1/summary.md; rm -rf /Users/dev/.omnikey/garbage/t-1/tmp`,
+    );
+    expect(literal).toMatchObject({ unresolved: false, targets: [] });
+    expect(literal.auxiliaryTargets).toEqual([
+      { name: 'summary.md', path: '/Users/dev/.omniAgent/garbage/t-1/summary.md', removed: false },
+      { name: 'tmp', path: '/Users/dev/.omnikey/garbage/t-1/tmp', removed: true },
+    ]);
+  });
+
+  it.each([
+    [
+      'a worktree under the task directory',
+      `${TASK_BOOTSTRAP}\necho x > "$TASK_DIR/worktree/a.ts"`,
+    ],
+    ['an integration file', `${TASK_BOOTSTRAP}\necho x > "$TASK_DIR/integration.md"`],
+    ['an arbitrary markdown file', `${TASK_BOOTSTRAP}\necho x > "$TASK_DIR/notes.md"`],
+    ['removing the whole task directory', `${TASK_BOOTSTRAP}\nrm -rf "$TASK_DIR"`],
+    ['writing a scratch name as a file', `${TASK_BOOTSTRAP}\necho x > "$TASK_DIR/tmp"`],
+    ['a nested metadata name', `${TASK_BOOTSTRAP}\necho x > "$TASK_DIR/tmp/status"`],
+    ['an unrelated unknown write (mixed script)', `${TASK_BOOTSTRAP}\necho x > "$OUT/a.md"`],
+    [
+      'a reassigned task variable',
+      `${TASK_BOOTSTRAP}\nTASK_DIR="$HOME/work"\necho x > "$TASK_DIR/status"`,
+    ],
+    [
+      'eval rebinding',
+      `${TASK_BOOTSTRAP}\neval "TASK_DIR=/Users/dev/repo"\nrm -rf "$TASK_DIR/tmp"; echo x > "$TASK_DIR/status"`,
+    ],
+    ['source rebinding', `${TASK_BOOTSTRAP}\nsource /tmp/config.sh\necho x > "$TASK_DIR/status"`],
+    ['dot source rebinding', `${TASK_BOOTSTRAP}\n. /tmp/config.sh\necho x > "$TASK_DIR/status"`],
+    [
+      'metadata symlink',
+      `${TASK_BOOTSTRAP}\nln -sf /Users/dev/repo/README.md "$TASK_DIR/summary.md"\necho x >> "$TASK_DIR/summary.md"`,
+    ],
+    ...[
+      'export "TASK_DIR=/Users/dev/repo"',
+      "export 'TASK_DIR=/Users/dev/repo'",
+      'readonly "TASK_DIR=/Users/dev/repo"',
+      'TASK_DIR[0]=/Users/dev/repo',
+      "trap 'TASK_DIR=/Users/dev/repo' DEBUG",
+      `e''val "TASK_DIR=/Users/dev/repo"`,
+    ].map((rebind) => [
+      'obscured rebinding ' + rebind,
+      `${TASK_BOOTSTRAP}\n${rebind}\nrm -rf "$TASK_DIR/tmp"; echo x > "$TASK_DIR/status"`,
+    ]),
+    ...[
+      'export "TASK""_DIR=/Users/dev/repo"',
+      `declare -g TA''SK_DIR=/Users/dev/repo`,
+      String.raw`export TASK\_DIR=/Users/dev/repo`,
+      `printf -v TASK''_DIR %s /Users/dev/repo`,
+      'read -r TASK""_DIR <<< /Users/dev/repo',
+      'p=TASK; export "${p}_DIR=/Users/dev/repo"',
+      ': ${TASK_DIR::=/Users/dev/repo}',
+    ].map((rebind) => [
+      'split-name rebinding ' + rebind,
+      `${TASK_BOOTSTRAP}\n${rebind}\nrm -rf "$TASK_DIR/tmp"; echo x > "$TASK_DIR/status"`,
+    ]),
+    [
+      'continued assignment',
+      `${TASK_BOOTSTRAP}\nTASK_` +
+        String.fromCharCode(92, 10) +
+        `DIR=/Users/dev/repo\nrm -rf "$TASK_DIR/tmp"; echo x > "$TASK_DIR/status"`,
+    ],
+    ['an argument-provided directory', `TASK_DIR="$1"\necho x > "$TASK_DIR/status"`],
+    ['a traversal child', `TASK_DIR="$HOME/.omniAgent/garbage/.."\necho x > "$TASK_DIR/status"`],
+    [
+      'a slash-producing date format',
+      `TASK_DIR="$HOME/.omniAgent/garbage/$(date +%D)"\necho x > "$TASK_DIR/status"`,
+    ],
+    [
+      'ls without -d',
+      `TASK_DIR=$(ls -t "$HOME/.omniAgent/garbage"/* | head -1)\necho x > "$TASK_DIR/status"`,
+    ],
+    [
+      'a single-quoted assignment',
+      `TASK_DIR='$HOME/.omniAgent/garbage/t'\necho x > "$TASK_DIR/status"`,
+    ],
+    [
+      'use before the assignment',
+      `echo x > "$TASK_DIR/status"\nTASK_DIR="$HOME/.omniAgent/garbage/t"`,
+    ],
+    [
+      'a literal non-metadata entry',
+      `echo x > /Users/dev/.omniAgent/garbage/t-1/worktree/a.ts\necho y > "$Q/z"`,
+    ],
+  ])('%s is never treated as bookkeeping', (_label, script) => {
+    expect(classify(script).unresolved).toBe(true);
+  });
+
+  it.each([
+    ['a non-garbage directory', `TASK_DIR="$HOME/projects/app"`, '/Users/dev/projects/app/status'],
+    [
+      'a conditional assignment',
+      `if true; then\nTASK_DIR="$HOME/.omniAgent/garbage/t"\nfi`,
+      '/Users/dev/.omniAgent/garbage/t/status',
+    ],
+    [
+      'a variable-built literal task path',
+      `D="$HOME/.omniAgent/garbage/t"\nTASK_DIR="$D"`,
+      '/Users/dev/.omniAgent/garbage/t/status',
+    ],
+  ])('%s that resolves literally stays a normal target', (_label, prefix, path) => {
+    const found = classify(`${prefix}\necho x > "$TASK_DIR/status"`);
+    expect(found.auxiliaryTargets).toEqual([]);
+    expect(found.targets.map((t) => t.path)).toEqual([path]);
+  });
+
+  it('a literal deliverable inside the task directory stays a normal target', () => {
+    const found = classify(`echo x > /Users/dev/.omniAgent/garbage/t-1/worktree/a.ts`);
+    expect(found.targets.map((t) => t.path)).toEqual([
+      '/Users/dev/.omniAgent/garbage/t-1/worktree/a.ts',
+    ]);
+    expect(found.auxiliaryTargets).toEqual([]);
+  });
+
+  it('a mixed script keeps its bookkeeping and its unknown write separately', () => {
+    const found = classify(`${TASK_CLEANUP}\necho x > "$DEST/out.md"`);
+    expect(found.unresolved).toBe(true);
+    expect(found.auxiliaryTargets!.map((a) => a.name)).toContain('summary.md');
+  });
+
+  it('resolves one literal Path variable binding to its write target', () => {
+    expect(classify(README_PATCH)).toMatchObject({
+      unresolved: false,
+      targets: [{ path: `${ROOT}/README.md`, created: false, removed: false }],
+    });
+    expect(classify(README_PATCH).kinds).toContain('python write');
+    const inline = `python3 -c "from pathlib import Path; out = Path('docs/a.md'); out.write_bytes(b'x')"`;
+    expect(classify(inline)).toMatchObject({
+      unresolved: false,
+      targets: [{ path: `${ROOT}/docs/a.md` }],
+    });
+    // A leading literal cd is the base of a relative literal.
+    expect(
+      classify(`cd /elsewhere\npython3 -c "p=Path('a.md');p.write_text('z')"`).targets,
+    ).toMatchObject([{ path: '/elsewhere/a.md' }]);
+    // A relative literal without a known cwd stays unknown.
+    expect(classify(inline, { status: 'succeeded' }).unresolved).toBe(true);
+  });
+
+  it.each([
+    ['reassignment', `p=Path('/a/x');p=Path('/a/y');p.write_text('z')`],
+    ['augmented assignment', `p=Path('/a');p/='x';p.write_text('z')`],
+    ['aliasing', `p=Path('/a/x');q=p;q.write_text('z')`],
+    ['tuple binding', `p=Path('/a/x');a, p = 1, Path('/b');p.write_text('z')`],
+    ['for loop', `p=Path('/a/x')\nfor p in []: pass\np.write_text('z')`],
+    ['with-as', `p=Path('/a/x')\nwith open('/a/y') as p: pass\np.write_text('z')`],
+    ['walrus', `p=Path('/a/x');(p := Path('/b'));p.write_text('z')`],
+    ['conditional statement', `if c: p=Path('/a/x')\np.write_text('z')`],
+    ['indented (block) binding', `if c:\n    p=Path('/a/x')\np.write_text('z')`],
+    ['a ternary value', `p=Path('/a/x') if c else Path('/b');p.write_text('z')`],
+    ['a dynamic path', `p=Path(base)/'x';p.write_text('z')`],
+    ['a joined path', `p=Path('/a') / 'x';p.write_text('z')`],
+    ['a function parameter', `p=Path('/a/x')\ndef f(p):\n    p.write_text('z')`],
+    ['exec', `p=Path('/a/x');exec('p=1');p.write_text('z')`],
+    ['an unbound variable', `p.write_text('z')`],
+    ['a keyword argument', `f(\np=Path('/a/x'))\np.write_text('z')`],
+    [
+      'a relative path after a second cd',
+      `cd /elsewhere\ncd sub\npython3 -c "p=Path('a.md');p.write_text('z')"`,
+    ],
+  ])('python %s stays unknown', (_label, body) => {
+    const script = body.startsWith('cd ') ? body : `python3 - <<'PY'\n${body}\nPY`;
+    expect(classify(script).unresolved).toBe(true);
+  });
+});
+
+describe('task bookkeeping coverage', () => {
+  const TASK = '/Users/dev/.omniAgent/garbage/t-1';
+  const state = (writes: any[]) =>
+    ({
+      records: new Map(),
+      issuedToolCalls: new Set(['c1', 'c2']),
+      omitted: 0,
+      attempted: false,
+      writes,
+      revertedRoots: [],
+    }) as any;
+  const write = (extra: Record<string, unknown>) => ({
+    toolCallId: 'c2',
+    status: 'succeeded',
+    cwd: ROOT,
+    script: '',
+    output: '',
+    truncated: false,
+    redacted: false,
+    kinds: ['rm'],
+    targets: [],
+    ...extra,
+  });
+  const checkpoint = (root: string, rel: string) => ({
+    repository: { root, patch: filePatch(rel), scope: 'working_tree' as const },
+    source: 'checkpoint' as const,
+    turnVerified: false,
+    evidenceIds: ['r1'],
+  });
+  const assess = (w: any, root: string, rel: string) =>
+    coverageAssessment({
+      state: state([w]),
+      verified: [checkpoint(root, rel)],
+      unchangedRoots: [],
+      records: [rec('r1', 'c1', root, [rel], 'file')],
+    });
+
+  it('bookkeeping needs no coverage and keeps an unrelated checkpoint final', () => {
+    const c = assess(
+      write({
+        auxiliaryTargets: [
+          { name: 'tmp', removed: true },
+          { name: 'status', removed: false },
+        ],
+      }),
+      SCRATCH,
+      'notes.txt',
+    );
+    expect(c).toMatchObject({ complete: true, blocking: [] });
+    expect(c.missing.size).toBe(0);
+  });
+
+  it('bookkeeping that reaches a checkpointed path still invalidates it', () => {
+    // Pattern-only removal of tmp/ covers tmp/ of any task directory.
+    expect(
+      assess(write({ auxiliaryTargets: [{ name: 'tmp', removed: true }] }), `${TASK}/tmp`, 'a.txt')
+        .blocking,
+    ).toContain('checkpoint_not_final');
+    expect(
+      assess(
+        write({ auxiliaryTargets: [{ name: 'summary.md', removed: false }] }),
+        TASK,
+        'summary.md',
+      ).blocking,
+    ).toContain('checkpoint_not_final');
+    // A literal directory removal reaches files below it.
+    expect(
+      assess(
+        write({ targets: [{ path: SCRATCH, created: false, removed: true }] }),
+        SCRATCH,
+        'notes.txt',
+      ).blocking,
+    ).toContain('checkpoint_not_final');
+    // An unknown target in the same later script always invalidates.
+    expect(
+      assess(
+        write({ unresolved: true, auxiliaryTargets: [{ name: 'tmp', removed: true }] }),
+        SCRATCH,
+        'notes.txt',
+      ).blocking,
+    ).toEqual(expect.arrayContaining(['checkpoint_not_final', 'write_target_unknown']));
+  });
+});
+
+describe('bootstrap + README patch + scratch append + cleanup in a real agent turn', () => {
+  const PREEXISTING = Array.from({ length: 10 }, (_, i) => `src/dirty${i}.ts`);
+  const shell = (id: string, script: string) =>
+    toolCalls([{ id, name: 'shell_script', arguments: { script, working_directory: ROOT } }]);
+  const autoFinal = (req: GitDiffRequest): Body => ({
+    status: 'ok',
+    repositories: (req.baselines ?? []).map((b) => ({
+      root: b.root,
+      patch: [...PREEXISTING, 'README.md'].map((p) => filePatch(p)).join(''),
+      scope: 'turn',
+      baselineHead: b.head,
+      head: OID_1,
+      baselineCapturedAt: b.capturedAt,
+      baselineSource: b.source,
+    })),
+  });
+  const evidence = (ctx: Record<string, unknown> | undefined) => {
+    const tc = String(ctx?.tool_call_id);
+    if (!ctx?.turn_id || (tc !== 'c2' && tc !== 'c3')) return undefined;
+    return {
+      turn_id: ctx.turn_id,
+      records:
+        tc === 'c2'
+          ? [rec('r-readme', tc, ROOT, ['README.md'])]
+          : [rec('r-tmp', tc, SCRATCH, ['notes.txt'], 'file')],
+    };
+  };
+  const finished = () =>
+    log.info.mock.calls
+      .filter((c: any[]) => c[0] === 'Diff recovery finished')
+      .map((c: any[]) => c[1]);
+
+  it('yields one combined complete snapshot (automatic README + checkpointed scratch file)', async () => {
+    queueResults(
+      shell('c1', TASK_BOOTSTRAP),
+      shell('c2', README_PATCH),
+      shell('c3', SCRATCH_APPEND),
+      shell('c4', TASK_CLEANUP),
+      finalAnswer('done'),
+    );
+    mocks.recoveryResult.mockImplementation(async (_m: unknown, messages: any[]) =>
+      manifest({ evidenceIds: JSON.parse(messages[1].content).records.map((r: any) => r.id) }),
+    );
+    const t = await turn('task-bookkeeping-ok', `Patch ${ROOT}/README.md`, {
+      heads: { [ROOT]: OID_1 },
+      final: autoFinal,
+      evidence,
+    });
+    expect(t.events.filter((e) => e === 'reconstruction-model')).toHaveLength(0);
+    expect(t.final!.content).toBe('<final_answer>\ndone\n</final_answer>');
+    expect(t.final!.session_diff).toMatchObject({
+      recovered: true,
+      recoveryIncomplete: false,
+      recoveryMethod: 'checkpoint',
+      fileCount: 12,
+    });
+    expect(finished().map((f: any) => f.result)).toEqual(['saved_checkpoint']);
+    const stored = await loadSessionDiffPayload(
+      'task-bookkeeping-ok',
+      'sub-a',
+      t.final!.session_diff!.id,
+    );
+    expect(stored!.payload.recovery).toMatchObject({ kind: 'agent_assisted', complete: true });
+    expect(stored!.payload.repositories.map((r) => [r.root, r.scope])).toEqual([
+      [ROOT, 'turn'],
+      [SCRATCH, 'working_tree'],
+    ]);
+  }, 60_000);
+
+  it('an unknown write after the scratch checkpoint still withholds the snapshot', async () => {
+    queueResults(
+      shell('c1', TASK_BOOTSTRAP),
+      shell('c2', README_PATCH),
+      shell('c3', SCRATCH_APPEND),
+      shell('c4', `${TASK_CLEANUP}\necho x > "$DEST/notes.txt"`),
+      finalAnswer('done'),
+    );
+    mocks.recoveryResult.mockImplementation(async (_m: unknown, messages: any[]) =>
+      manifest({ evidenceIds: JSON.parse(messages[1].content).records.map((r: any) => r.id) }),
+    );
+    mocks.reconstructionResult.mockResolvedValue(manifest({ unavailable: true }));
+    const t = await turn('task-bookkeeping-unknown', `Patch ${ROOT}/README.md`, {
+      heads: { [ROOT]: OID_1 },
+      final: autoFinal,
+      evidence,
+    });
+    expect(t.final!.content).toBe('<final_answer>\ndone\n</final_answer>');
+    expect(t.final!.session_diff).toBeUndefined();
+    expect(await diffCount('task-bookkeeping-unknown')).toBe(0);
+    const [result] = finished();
+    expect(result.result).toBe('withheld_uncertain');
+    expect(result.blocking).toEqual(
+      expect.arrayContaining(['checkpoint_not_final', 'write_target_unknown']),
+    );
+  }, 60_000);
 });

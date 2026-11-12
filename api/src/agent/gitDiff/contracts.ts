@@ -10,7 +10,7 @@
 export const GIT_DIFF_MAX_CANDIDATES = 8;
 export const GIT_DIFF_MAX_REPOSITORIES = 8;
 export const GIT_DIFF_MAX_PATCH_BYTES = 2 * 1024 * 1024; // combined UTF-8
-export const GIT_DIFF_MAX_UNTRACKED_FILES = 200;
+export const GIT_DIFF_MAX_UNTRACKED_FILES = 300;
 export const GIT_DIFF_NATIVE_TIMEOUT_MS = 10_000;
 /** Backend wait for the native reply: native budget plus transport slack. */
 export const GIT_DIFF_RESPONSE_TIMEOUT_MS = 12_000;
@@ -20,7 +20,7 @@ export const GIT_MAX_REASON_LENGTH = 500;
 export const GIT_MAX_REQUEST_ID_LENGTH = 64;
 
 /** Viewer cap: rendered file panels across all repositories of one snapshot. */
-export const GIT_DIFF_DISPLAY_LIMIT = 50;
+export const GIT_DIFF_DISPLAY_LIMIT = 300;
 /** Backend wait for a baseline (HEAD-only) reply; it delays the model/shell. */
 export const GIT_TURN_BASELINE_TIMEOUT_MS = 6_000;
 /** Accepted clock skew for client baseline timestamps. */
@@ -38,7 +38,7 @@ export type GitDiffPhase = 'baseline' | 'final' | 'recover';
 
 /** Records accepted per shell reply and retained per outer run. */
 export const DIFF_RECOVERY_MAX_RECORDS = 32;
-export const DIFF_RECOVERY_MAX_PATHS = 50;
+export const DIFF_RECOVERY_MAX_PATHS = 300;
 /** Records one recovery control request may select (first version). */
 export const DIFF_RECOVERY_MAX_SELECTED = 6;
 /** Whole fallback budget: AI manifest call + native recover request. */
@@ -839,7 +839,7 @@ export function validateGitRecoveryResponse(
       }
       if (inHunk) continue;
       if (line.startsWith('--- ') || line.startsWith('+++ ')) {
-        const value = line.slice(4);
+        const value = line.slice(4).replace(/\t$/, '');
         if (
           value !== '/dev/null' &&
           ![...allowedPaths].some((p) => value === `a/${p}` || value === `b/${p}`)

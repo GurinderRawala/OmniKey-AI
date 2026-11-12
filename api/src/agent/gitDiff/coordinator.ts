@@ -719,7 +719,10 @@ async function captureTurnSnapshot(
     return {
       status: !baselines.length && run.baselineFailures > 0 ? 'missing_baseline' : 'no_changes',
       unchangedRoots: [
-        ...new Set([...baselines.map((b) => b.root), ...response.repositories.map((r) => r.root)]),
+        ...new Set([
+          ...baselines.map((b) => b.root),
+          ...response.repositories.filter((r) => r.scope === 'turn').map((r) => r.root),
+        ]),
       ],
     };
   }

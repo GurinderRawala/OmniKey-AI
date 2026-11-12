@@ -420,7 +420,7 @@ final class DiffRecoveryStore: @unchecked Sendable {
     struct Limits: Sendable {
         var maxRecords = 32
         var maxRoots = 8
-        var maxPathsPerRecord = 50
+        var maxPathsPerRecord = 300
         var maxTotalPatchBytes = 2 * 1024 * 1024
         var maxFileBytes = 256 * 1024
         var maxFileReadBytesPerHook = 2 * 1024 * 1024

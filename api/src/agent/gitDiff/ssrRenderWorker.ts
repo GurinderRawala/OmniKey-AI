@@ -32,7 +32,7 @@ export type DiffLayout = 'unified' | 'split';
 export type FileKind = 'added' | 'deleted' | 'modified' | 'renamed' | 'binary';
 
 /** File panels (rendered or honest per-file notice) across all repositories. */
-export const SSR_MAX_RENDERED_FILES = 50;
+export const SSR_MAX_RENDERED_FILES = 300;
 export const SSR_MAX_FILE_SECTION_BYTES = 512 * 1024;
 export const SSR_MAX_HTML_BYTES = 16 * 1024 * 1024;
 export const SSR_RENDER_TIMEOUT_MS = 15_000;

@@ -35,6 +35,12 @@ final class DiffRecoveryTests: XCTestCase {
         })
     }
 
+    private func physicalPath(_ path: String) -> String {
+        guard let resolved = realpath(path, nil) else { return path }
+        defer { free(resolved) }
+        return String(cString: resolved)
+    }
+
     func testDeletedBaselineIsNotReportedCleanBecauseAnotherRootExists() throws {
         let first = try GitTestRepo()
         try first.write("a", "a\n")
@@ -106,19 +112,20 @@ final class DiffRecoveryTests: XCTestCase {
         XCTAssertTrue(recover(store, ids: [record.id]).repositories.first?.patch.contains("rename from old.txt") == true)
     }
 
-    func testSixtyFilesReplayOnlyAllowlistedFiftyWithPartialFlag() throws {
+    func testOverThreeHundredFilesReplayOnlyAllowlistedCapWithPartialFlag() throws {
         let repo = try GitTestRepo()
         try repo.write("base", "base\n")
         _ = try repo.commitAll()
         let store = DiffRecoveryStore()
         let evidence = try XCTUnwrap(shell(store, "generate files", candidates: [repo.root]) {
-            for i in 0..<60 { try repo.write(String(format: "f%03d.txt", i), "new\n") }
+            for i in 0..<310 { try repo.write(String(format: "f%03d.txt", i), "new\n") }
+            try repo.git("add", ".")
         })
         let record = try XCTUnwrap(evidence.records.first)
-        XCTAssertEqual(record.paths.count, 50)
+        XCTAssertEqual(record.paths.count, 300)
         XCTAssertFalse(record.complete)
         let replay = recover(store, ids: [record.id])
-        XCTAssertEqual(files(in: try XCTUnwrap(replay.repositories.first?.patch)).count, 50)
+        XCTAssertEqual(files(in: try XCTUnwrap(replay.repositories.first?.patch)).count, 300)
     }
 
     func testNonGitReplayRejectsLaterUnobservedDeletion() throws {
@@ -286,7 +293,7 @@ final class DiffRecoveryTests: XCTestCase {
         })
         let record = try XCTUnwrap(evidence.records.first)
         XCTAssertEqual(record.kind, .file)
-        XCTAssertEqual(record.root, dir.root)
+        XCTAssertEqual(record.root, physicalPath(dir.root))
         XCTAssertEqual(record.paths, ["notes.txt"])
         XCTAssertEqual(record.before, DiffRecoveryStore.hash(Data("one\ntwo\nthree\n".utf8)))
         XCTAssertEqual(record.after, DiffRecoveryStore.hash(Data("one\nTWO\nthree\n".utf8)))
@@ -520,7 +527,7 @@ final class DiffRecoveryTests: XCTestCase {
         let response = try XCTUnwrap(responseBox.get())
         XCTAssertEqual(response.status, .ok)
         XCTAssertEqual(response.recovery?.evidenceIDs, [record.id])
-        XCTAssertEqual(response.repositories.first?.root, dir.root)
+        XCTAssertEqual(response.repositories.first?.root, physicalPath(dir.root))
         XCTAssertTrue(response.repositories.first?.patch.contains("+hello") ?? false)
     }
 }

@@ -226,7 +226,7 @@ external service.
 'unsafe-inline'; img-src data:; …`. It has no scripts, network access, forms, frames or
   CDN assets. Pierre escapes code and file names, and every root, path, notice and OID that
   the backend adds is escaped too.
-- Limits: 50 file panels across all repositories (files past the cap get no DOM; one
+- Limits: 300 file panels across all repositories (files past the cap get no DOM; one
   `Showing 50 of N files.` line reports them, and `fileCount` stays exact), 512 KiB per file section, about 16 MiB of HTML, and 15 s
   wall time (the route returns 503 when it is exceeded). Renders run in an isolated worker thread (one active, at most two waiting).
   Queue time counts against the deadline, and timed-out workers are terminated.
@@ -370,7 +370,7 @@ The first verified baseline per canonical root wins (`/private/tmp` aliases merg
 - A timeout, invalid/foreign/stale reply or `unavailable` marks the attempt failed; it is
   never retried or captured late.
 
-**Final phase**: `{ phase: "final", baselines: [recorded…], display_limit: 50,
+**Final phase**: `{ phase: "final", baselines: [recorded…], display_limit: 300,
 eligible_commits: [] }`; baseline roots lead `candidate_paths`. A root with a recorded
 baseline may only be reported as `scope: "turn"` echoing exactly `baselineHead`,
 `baselineCapturedAt` and `baselineSource`, plus the endpoint `head` (an OID, or `null` only
@@ -510,7 +510,7 @@ fixed limitation lines, such as:
 Recovery runs only with current-turn native evidence. A successful empty automatic
 capture supersedes older Git checkpoints for the roots it checked. Non-Git files
 are hash-checked again before replay; changed/deleted checkpoints are omitted.
-Native records keep at most50allowlisted paths (both rename sides included), and
+Native records keep at most300allowlisted paths (both rename sides included), and
 oversized records are explicitly partial. Unsupported C-quoted/ambiguous filenames
 fail closed; this is not a general filesystem audit or an exhaustive write tracker.
 Read-only shell checkpoints can add up to2seconds before and2seconds after each
@@ -561,9 +561,70 @@ sensitive path, its excerpt is withheld entirely. This uses the same policy as t
 `$PWD`, single literal assignments and relative paths, but only against a known cwd: the
 structured `working_directory` or a literal `cd`. `$HOME` is inferred from a
 `/Users/<name>` or `/home/<name>` cwd. Paths with dynamic, glob or unusual characters are
-dropped. At most 50 paths are kept. Paths inside roots that the normal capture
+dropped. Words whose `$` comes from single quotes are literal text, so they are never
+resolved. At most 300 paths are kept. Paths inside roots that the normal capture
 authoritatively reported net-empty are removed, so a reverted change can never be brought
 back. If nothing is left, no model call is made.
+
+**Python `Path` variables.** `NAME.write_text(…)` or `NAME.write_bytes(…)` resolves only
+when `NAME` has exactly **one** binding in the whole script, and that binding is a
+top-level, unconditional `NAME = Path('<literal>')` statement. Top-level means no
+indentation, no single-line compound header (`if c: …`), and the statement is at the start
+of the line, after `;` or right after `-c "`. A relative literal also needs a known cwd that
+no later `cd` changes. The write stays unknown (and blocking) for any of these:
+
+- a reassignment, augmented, tuple or walrus binding;
+- aliasing (`q = p`) or attribute mutation;
+- a `for`, `with … as`, `import`, `del` or `global` binding, or use as a keyword argument;
+- a ternary, joined or computed value;
+- `def`, `lambda`, `class`, `exec`/`eval`, `globals()`/`setattr()`/`chdir()` anywhere in the
+  script.
+
+Python is never evaluated.
+
+**Agent task bookkeeping (`auxiliaryTargets`).** Agent bootstrap and cleanup scripts write
+metadata into their own task directory. These writes are recorded separately as
+`ShellWriteEvidence.auxiliaryTargets` (`{name, path?, removed}`), not as targets. They need no
+diff coverage, so they never make a turn's coverage unknown, and they are never offered to
+the reconstruction model. The recognised entries are deliberately narrow. Each must be a
+direct child of one task directory `~/.omniAgent/garbage/<id>` or `~/.omnikey/garbage/<id>`:
+
+- the metadata files `summary.md`, `status`, `ledger.tsv` and `.omniagent-owned` (any
+  write);
+- the scratch directories `prompts`, `logs`, `handoffs` and `tmp` (removal only).
+
+Anything else under a task directory stays a normal target and must be covered. This
+includes worktrees, deliverables, `integration*`, arbitrary `.md` files, nested paths, a
+scratch name written as a file, and removal of the task directory itself. An explicit user
+file that happens to be named `summary.md` directly in a task directory is treated as
+bookkeeping by policy.
+
+The task directory is proven either literally from the path shape, or through a shell
+variable. A variable proves it only when all of these hold:
+
+- it is assigned exactly once in the script (with no `read`, `for`, `unset`, `local` or
+  `${V:=…}` binding);
+- the assignment is a whole top-level line before any compound construct (`if`/`for`/`{`/
+  `&&` continuation), and it runs before the variable is used;
+- its value is either `$HOME/.omniAgent|.omnikey/garbage/<child>` (or a literal
+  `/Users/<name>` home), or the bounded current-task lookup
+  `$(ls -td "$HOME/.omniAgent/garbage"/<glob> 2>/dev/null | head -1)`.
+
+`<child>` is built only from safe literal characters, `$(date +FMT)` with slash-free
+directives, `$RANDOM`, `$$`, `uuidgen`, `openssl rand -hex N`, or another task-id variable
+proven the same way. It never starts with `.`. Nothing is executed or looked up. When the
+directory is only proven by pattern, `path` is absent.
+
+These rules are bounds, not proof of the filesystem. An empty lookup result names `/status`
+etc. at the filesystem root, which a normal user cannot write. The lookup may also pick
+another task's directory, but it is still bookkeeping. At most 32 entries are kept; any
+overflow is unknown.
+
+A script that mixes bookkeeping with any unknown write is still `unresolved` and blocks.
+Bookkeeping is never a blanket exemption for the command. Coverage still treats an
+auxiliary entry as a write that may touch what it names: a later `rm -rf "$TASK_DIR/tmp"`
+invalidates a checkpoint of a file inside any task's `tmp/`. More generally, a removal
+target now invalidates every checkpointed path below it, not only an exact match.
 
 **Creation and deletion.**
 
@@ -585,7 +646,7 @@ shape yields no snapshot. The backend rejects the whole reply in any of these ca
   turned into a fake new file);
 - `after: null` is given without allowed deletion;
 - a NUL byte appears;
-- a file exceeds 256 KiB, or all files together exceed 2 MiB or 50 files.
+- a file exceeds 256 KiB, or all files together exceed 2 MiB or 300 files.
 
 **Diff.** The backend builds the unified diff itself (`buildFilePatch`). It emits one hunk
 around the changed region with 3 context lines, correct `\ No newline at end of file`
@@ -677,7 +738,7 @@ verified evidence.
 - a baseline-less root whose uncommitted diff contains files that this turn's known writes do
   not explain.
 
-The 50-file viewer cap (`displayLimit`) is a display limit, not a coverage gap. A complete
+The 300-file viewer cap (`displayLimit`) is a display limit, not a coverage gap. A complete
 raw patch of 100 files is attached normally.
 
 **Bounded recovery when coverage is incomplete.** This applies only to v4-capable runs, at
