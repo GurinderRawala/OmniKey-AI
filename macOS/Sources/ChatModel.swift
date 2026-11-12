@@ -47,6 +47,9 @@ enum ChatBlockKind: Equatable {
     /// persisted or hydrated; rendered as its own neutral timeline row so it
     /// cannot become the summary of preceding tool activity.
     case skillStatus
+    /// Saved Git snapshot card bound to the final answer that follows it.
+    /// Never part of the thinking timeline.
+    case sessionDiff
     case finalAnswer
 }
 
@@ -63,6 +66,7 @@ enum TranscriptContentIntegrity {
         case .finalAnswer: wireKind = "finalAnswer"
         // Never sent by the server; a distinct tag can never match a server id.
         case .skillStatus: wireKind = "skillStatus"
+        case .sessionDiff: wireKind = "sessionDiff"
         }
         let digest = SHA256.hash(
             data: Data("transcript-content-v1\0\(wireKind)\0\(text)".utf8)
@@ -105,6 +109,7 @@ struct ChatBlock: Identifiable, Equatable {
     var isContentTruncated: Bool = false
     var fullContentID: String? = nil
     var previewText: String? = nil
+    var sessionDiff: SavedSessionDiff? = nil
 
     init(
         id: String = "local:block:\(UUID().uuidString)",
@@ -116,7 +121,8 @@ struct ChatBlock: Identifiable, Equatable {
         contentLength: Int? = nil,
         isContentTruncated: Bool = false,
         fullContentID: String? = nil,
-        previewText: String? = nil
+        previewText: String? = nil,
+        sessionDiff: SavedSessionDiff? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -128,6 +134,7 @@ struct ChatBlock: Identifiable, Equatable {
         self.isContentTruncated = isContentTruncated
         self.fullContentID = fullContentID
         self.previewText = previewText
+        self.sessionDiff = sessionDiff
     }
 
     static func == (lhs: ChatBlock, rhs: ChatBlock) -> Bool {
@@ -139,6 +146,7 @@ struct ChatBlock: Identifiable, Equatable {
             && lhs.isContentTruncated == rhs.isContentTruncated
             && lhs.fullContentID == rhs.fullContentID
             && lhs.previewText == rhs.previewText
+            && lhs.sessionDiff == rhs.sessionDiff
     }
 }
 
@@ -359,11 +367,30 @@ final class ChatModel: ObservableObject {
         didSet {
             guard oldValue != activeSessionId else { return }
             sentMessageID = nil
+            // A snapshot belongs to one session; never show it over another.
+            if inspectedSessionDiff?.sessionId != activeSessionId { inspectedSessionDiff = nil }
             let draft = readingStore.draft(for: activeSessionId ?? pendingNewChatKey)
             inputText = draft.text
         }
     }
     @Published var activeSessionTitle: String = "New Chat"
+
+    /// The saved snapshot shown in the right-hand inspector, if any. Each
+    /// card selects its own immutable ID; switching sessions clears it.
+    @Published private(set) var inspectedSessionDiff: SessionDiffSelection? = nil
+
+    func toggleSessionDiff(_ diff: SavedSessionDiff) {
+        guard let sessionId = activeSessionId, diff.hasSafeID else { return }
+        if inspectedSessionDiff?.sessionId == sessionId, inspectedSessionDiff?.diff.id == diff.id {
+            inspectedSessionDiff = nil
+        } else {
+            inspectedSessionDiff = SessionDiffSelection(sessionId: sessionId, diff: diff)
+        }
+    }
+
+    func closeSessionDiff() {
+        inspectedSessionDiff = nil
+    }
 
     /// True when the user has tapped "New Chat" but has not yet sent
     /// the first message. Drives a synthetic placeholder row at the
@@ -1196,7 +1223,7 @@ final class ChatModel: ObservableObject {
     /// The persisted agent history contains intermediate assistant messages
     /// as well as final answers. For chat resume, render each turn as a clean
     /// user message plus the last useful assistant response.
-    nonisolated private static func hydrateTranscript(from entries: [SessionHistoryEntry]) -> [ChatMessage] {
+    nonisolated static func hydrateTranscript(from entries: [SessionHistoryEntry]) -> [ChatMessage] {
         // One shared stamp for every hydrated block. The timeline treats a
         // zero-length span as "no real timing available" and hides the
         // duration badges, so replayed history never shows invented timings.
@@ -1213,9 +1240,31 @@ final class ChatModel: ObservableObject {
 
                 guard entry.role == "assistant" else { return nil }
                 var message = ChatMessage.assistant(id: "server:\(entry.id)")
-                message.blocks = (entry.blocks ?? []).compactMap { block in
-                    guard let kind = ChatModel.blockKind(from: block.kind) else { return nil }
-                    return ChatBlock(
+                message.blocks = (entry.blocks ?? []).flatMap { block -> [ChatBlock] in
+                    // Each historical final keeps its own snapshot card,
+                    // placed immediately before it.
+                    if let diff = block.sessionDiff, diff.hasSafeID,
+                       block.kind == "finalAnswer" || block.kind == "sessionDiff"
+                    {
+                        let card = ChatBlock(
+                            id: "server:\(block.id):session-diff:\(diff.id)",
+                            kind: .sessionDiff, text: "", createdAt: hydratedAt, sessionDiff: diff
+                        )
+                        if block.kind == "sessionDiff" { return [card] }
+                        return [card] + ChatModel.hydratedBlock(block, at: hydratedAt)
+                    }
+                    return ChatModel.hydratedBlock(block, at: hydratedAt)
+                }
+                return message.blocks.isEmpty ? nil : message
+            }
+        }
+
+        return legacyHydrateTranscript(from: entries, hydratedAt: hydratedAt)
+    }
+
+    nonisolated private static func hydratedBlock(_ block: SessionHistoryBlock, at hydratedAt: Date) -> [ChatBlock] {
+                    guard let kind = ChatModel.blockKind(from: block.kind) else { return [] }
+                    return [ChatBlock(
                         id: "server:\(block.id)",
                         kind: kind,
                         text: block.text,
@@ -1226,12 +1275,12 @@ final class ChatModel: ObservableObject {
                         isContentTruncated: block.isContentTruncated ?? false,
                         fullContentID: block.contentId,
                         previewText: block.isContentTruncated == true ? block.text : nil
-                    )
-                }
-                return message.blocks.isEmpty ? nil : message
-            }
-        }
+                    )]
+    }
 
+    nonisolated private static func legacyHydrateTranscript(
+        from entries: [SessionHistoryEntry], hydratedAt: Date
+    ) -> [ChatMessage] {
         var result: [ChatMessage] = []
         var pendingAssistantEntries: [SessionHistoryEntry] = []
 
@@ -1244,6 +1293,12 @@ final class ChatModel: ObservableObject {
             }
 
             var message = ChatMessage.assistant(id: "server:\(displayEntry.id)")
+            if let diff = displayEntry.sessionDiff, diff.hasSafeID {
+                message.blocks.append(ChatBlock(
+                    id: "server:\(displayEntry.id):session-diff:\(diff.id)",
+                    kind: .sessionDiff, text: "", createdAt: hydratedAt, sessionDiff: diff
+                ))
+            }
             message.blocks.append(ChatBlock(
                 id: "server:\(displayEntry.id):final",
                 kind: .finalAnswer,

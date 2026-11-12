@@ -55,6 +55,15 @@ import {
   startSkillRun,
   type SkillRunState,
 } from '../skillContext';
+import { userInputDirectories } from '../gitDiff/candidates';
+import {
+  captureSessionDiffBeforeFinal,
+  createGitRunState,
+  persistGitRunProvenance,
+  type GitRunState,
+} from '../gitDiff/coordinator';
+import type { SessionDiffSummary } from '../gitDiff/contracts';
+import { withWorkingDirectoryParameter } from '../gitDiff/shellContext';
 
 type InternalAgentTurnOptions = AgentTurnOptions & {
   progressGuard?: ToolProgressGuard;
@@ -63,6 +72,8 @@ type InternalAgentTurnOptions = AgentTurnOptions & {
   steeringRestartCount?: number;
   // Outer-run Skills state, threaded unchanged through every recursion.
   skillRun?: SkillRunState;
+  // Outer-run Git snapshot evidence, threaded unchanged through every recursion.
+  gitRun?: GitRunState;
 };
 
 /** Same fixed text the WebSocket layer uses for a foreign session/run. */
@@ -112,6 +123,7 @@ async function runAgentTurnInternal(
   session.signal = options?.signal;
   // Runtime-only; each recursive invocation reloads the session, so reattach.
   session.skillRun = options?.skillRun;
+  session.gitRun = options?.gitRun;
   throwIfTurnCancelled(session.signal);
 
   // Count this call as one agent iteration.
@@ -162,6 +174,14 @@ async function runAgentTurnInternal(
 
   const currentGroupName = clientMessage.group_name ?? groupName;
 
+  // Deterministic Git candidates: absolute paths the user typed in this run.
+  if (session.gitRun && !isTerminalOutput && !isErrorFlag && !clientMessage.is_web_call) {
+    session.gitRun.candidates.addAll(
+      userInputDirectories(clientMessage.content || ''),
+      'user_input',
+    );
+  }
+
   // Prepend the <project_context> block whenever the client has a group
   // selected AND the session's persisted history does NOT already carry one.
   if (
@@ -180,6 +200,9 @@ async function runAgentTurnInternal(
         [clientMessage.content || ''],
         sessionId,
       );
+      if (session.gitRun && ctx?.workingDirectory) {
+        session.gitRun.candidates.add(ctx.workingDirectory, 'project');
+      }
       if (ctx?.text) {
         logger.info('Prepending <project_context> block to user content', {
           sessionId,
@@ -265,7 +288,11 @@ async function runAgentTurnInternal(
   const toolSettings = options?.disableWebTools
     ? { ...agentSettings, webSearchEnabled: false }
     : agentSettings;
-  const shellTools: AITool[] = [shellTool];
+  // Capable clients run a script in an explicit structured directory, which is
+  // also the strongest repository evidence for the Git snapshot.
+  const shellTools: AITool[] = [
+    session.gitRun ? withWorkingDirectoryParameter(shellTool) : shellTool,
+  ];
   const tools = buildAvailableTools(toolSettings, [
     ...shellTools,
     ...mcpBundle.aiTools,
@@ -357,14 +384,27 @@ async function runAgentTurnInternal(
     }
   };
 
+  // Snapshot immediately before a final answer is persisted and delivered.
+  // Bounded by the coordinator timeout; never throws; undefined = no button.
+  const captureSessionDiff = (): Promise<SessionDiffSummary | undefined> =>
+    captureSessionDiffBeforeFinal(session.gitRun, session.history, session.signal, log);
+
   const persistAndSendFailure = async (message: string): Promise<void> => {
     const displayMessage = message.startsWith('**Error:**') ? message : `**Error:** ${message}`;
+    const sessionDiff = await captureSessionDiff();
     pushToSessionHistory(logger, session, {
       role: 'assistant',
       content: `<final_answer>\n${displayMessage}\n</final_answer>`,
+      ...(sessionDiff ? { session_diff: sessionDiff } : {}),
     });
     await persistSessionToDB(sessionId, session);
-    sendFinalAnswer(send, sessionId, displayMessage, true);
+    sendFinalAnswer(
+      send,
+      sessionId,
+      displayMessage,
+      true,
+      sessionDiff ? { session_diff: sessionDiff } : undefined,
+    );
   };
 
   const restartAfterPendingSteering = async (): Promise<boolean> => {
@@ -706,7 +746,15 @@ async function runAgentTurnInternal(
         hasFinalAnswerTag,
       });
 
-      pushToSessionHistory(logger, session, { role: 'assistant', content });
+      const sessionDiff = await captureSessionDiff();
+      // Capture is asynchronous; steering received while it ran supersedes
+      // this candidate final BEFORE it is written to durable history.
+      if (await restartAfterPendingSteering()) return;
+      pushToSessionHistory(logger, session, {
+        role: 'assistant',
+        content,
+        ...(sessionDiff ? { session_diff: sessionDiff } : {}),
+      });
       await persistSessionToDB(sessionId, session);
       if (await restartAfterPendingSteering()) return;
 
@@ -714,6 +762,7 @@ async function runAgentTurnInternal(
         session_id: sessionId,
         sender: 'agent',
         content: hasFinalAnswerTag ? content : `<final_answer>\n${content}\n</final_answer>`,
+        ...(sessionDiff ? { session_diff: sessionDiff } : {}),
       });
 
       if (!options?.skipGrouping && !session.groupName && !session.groupLocked) {
@@ -880,6 +929,30 @@ export async function runAgentTurn(
     if (run === 'blocked' || run === 'cancelled') return;
     skillRun = run;
   }
+  // Git snapshots: only interactive inputs of a client that advertised the
+  // capability (literal true). Cron/internal/other clients never get one, and
+  // the server never inspects its own repository on their behalf.
+  const gitRun =
+    options?.interactiveInput &&
+    options.supportsGitDiff === true &&
+    !options.isCronJob &&
+    !options.extraTools?.length &&
+    !options.toolHandlers?.size
+      ? createGitRunState({
+          sessionId,
+          subscriptionId: subscription.id,
+          connection: options.signal,
+          send,
+        })
+      : undefined;
+  const provenanceRun =
+    gitRun ??
+    createGitRunState({
+      sessionId,
+      subscriptionId: subscription.id,
+      connection: options?.signal,
+      send,
+    });
   // untaggedDepth always starts at 0 for external callers; it is only threaded
   // through the internal recursive path.
   try {
@@ -887,6 +960,7 @@ export async function runAgentTurn(
       ...options,
       progressGuard: new ToolProgressGuard(),
       skillRun,
+      gitRun,
     });
   } catch (err) {
     if (err instanceof SessionAccessError) {
@@ -911,5 +985,9 @@ export async function runAgentTurn(
     // Outer boundary only: after every recursive/tool continuation, error,
     // cancellation or disconnect.
     if (skillRun) closeSkillRun(skillRun);
+    // Every capable run leaves one provenance row (possibly empty), also
+    // without a final (cancel/disconnect), so "the immediately previous run"
+    // is exact and an older run's commit is never reused.
+    await persistGitRunProvenance(provenanceRun, log);
   }
 }

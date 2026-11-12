@@ -45,6 +45,20 @@ private final class ChatSessionCompletion: @unchecked Sendable {
     }
 }
 
+/// Accepts each server `request_id` once per turn (bounded), so a replayed
+/// control frame never triggers a second collection.
+final class GitDiffRequestLedger: @unchecked Sendable {
+    private let lock = NSLock()
+    private var seen = Set<String>()
+
+    func begin(_ requestID: String) -> Bool {
+        lock.withLock {
+            guard !requestID.isEmpty, requestID.count <= 128, seen.count < 32 else { return false }
+            return seen.insert(requestID).inserted
+        }
+    }
+}
+
 // MARK: - Per-turn cancellation handle
 
 /// Owns one `URLSessionWebSocketTask` and one cancellation flag for exactly one
@@ -424,6 +438,19 @@ final class ChatSessionRunner {
         /// Client -> server opt-in for nonterminal Skills notices. Sent only
         /// on genuine user input (the initial message and steering).
         let supportsSkillStatus: Bool?
+        /// Client -> server opt-in for per-final Git snapshots (initial message only).
+        let supportsGitDiff: Bool?
+        let workingDirectory: String?
+        /// Server -> client control frame; never a model/tool/transcript message.
+        let gitDiffRequest: GitDiffRequestPayload?
+        /// Client -> server reply to `gitDiffRequest`.
+        let gitDiffResponse: GitDiffResponsePayload?
+        /// Server -> client: repository hints attached to a shell request.
+        let gitDiffContext: GitDiffContext?
+        /// Client -> server on a terminal reply: commits observed during it.
+        let gitCommitObservations: [GitCommitObservation]?
+        /// Server -> client on the final answer: the saved snapshot summary.
+        let sessionDiff: SavedSessionDiff?
 
         init(
             sessionID: String,
@@ -443,7 +470,14 @@ final class ChatSessionRunner {
             platform: String? = nil,
             groupName: String? = nil,
             model: String? = nil,
-            supportsSkillStatus: Bool? = nil
+            supportsSkillStatus: Bool? = nil,
+            supportsGitDiff: Bool? = nil,
+            workingDirectory: String? = nil,
+            gitDiffRequest: GitDiffRequestPayload? = nil,
+            gitDiffResponse: GitDiffResponsePayload? = nil,
+            gitDiffContext: GitDiffContext? = nil,
+            gitCommitObservations: [GitCommitObservation]? = nil,
+            sessionDiff: SavedSessionDiff? = nil
         ) {
             self.sessionID = sessionID
             self.sender = sender
@@ -463,6 +497,13 @@ final class ChatSessionRunner {
             self.groupName = groupName
             self.model = model
             self.supportsSkillStatus = supportsSkillStatus
+            self.supportsGitDiff = supportsGitDiff
+            self.workingDirectory = workingDirectory
+            self.gitDiffRequest = gitDiffRequest
+            self.gitDiffResponse = gitDiffResponse
+            self.gitDiffContext = gitDiffContext
+            self.gitCommitObservations = gitCommitObservations
+            self.sessionDiff = sessionDiff
         }
 
         enum CodingKeys: String, CodingKey {
@@ -484,7 +525,55 @@ final class ChatSessionRunner {
             case model
             case groupName = "group_name"
             case supportsSkillStatus = "supports_skill_status"
+            case supportsGitDiff = "supports_git_diff"
+            case workingDirectory = "working_directory"
+            case gitDiffRequest = "git_diff_request"
+            case gitDiffResponse = "git_diff_response"
+            case gitDiffContext = "git_diff_context"
+            case gitCommitObservations = "git_commit_observations"
+            case sessionDiff = "session_diff"
         }
+
+        /// Tolerant decode: a malformed optional Git field is dropped rather
+        /// than discarding the whole frame (which may carry the final answer).
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            sessionID = try c.decode(String.self, forKey: .sessionID)
+            sender = try c.decode(String.self, forKey: .sender)
+            content = try c.decode(String.self, forKey: .content)
+            isTerminalOutput = try c.decodeIfPresent(Bool.self, forKey: .isTerminalOutput)
+            isError = try c.decodeIfPresent(Bool.self, forKey: .isError)
+            isWebCall = try c.decodeIfPresent(Bool.self, forKey: .isWebCall)
+            isImageRendering = try c.decodeIfPresent(Bool.self, forKey: .isImageRendering)
+            isMcpCall = try c.decodeIfPresent(Bool.self, forKey: .isMcpCall)
+            activityID = try c.decodeIfPresent(String.self, forKey: .activityID)
+            activityPhase = try c.decodeIfPresent(ChatActivityPhase.self, forKey: .activityPhase)
+            isSteering = try c.decodeIfPresent(Bool.self, forKey: .isSteering)
+            steeringID = try c.decodeIfPresent(String.self, forKey: .steeringID)
+            steeringStatus = try c.decodeIfPresent(SteeringServerStatus.self, forKey: .steeringStatus)
+            steeringPendingCount = try c.decodeIfPresent(Int.self, forKey: .steeringPendingCount)
+            platform = try c.decodeIfPresent(String.self, forKey: .platform)
+            groupName = try c.decodeIfPresent(String.self, forKey: .groupName)
+            model = try c.decodeIfPresent(String.self, forKey: .model)
+            supportsSkillStatus = try c.decodeIfPresent(Bool.self, forKey: .supportsSkillStatus)
+            supportsGitDiff = try? c.decodeIfPresent(Bool.self, forKey: .supportsGitDiff)
+            workingDirectory = try? c.decodeIfPresent(String.self, forKey: .workingDirectory)
+            gitDiffRequest = try? c.decodeIfPresent(GitDiffRequestPayload.self, forKey: .gitDiffRequest)
+            gitDiffResponse = try? c.decodeIfPresent(GitDiffResponsePayload.self, forKey: .gitDiffResponse)
+            gitDiffContext = try? c.decodeIfPresent(GitDiffContext.self, forKey: .gitDiffContext)
+            gitCommitObservations = try? c.decodeIfPresent([GitCommitObservation].self, forKey: .gitCommitObservations)
+            sessionDiff = try? c.decodeIfPresent(SavedSessionDiff.self, forKey: .sessionDiff)
+        }
+    }
+
+    nonisolated static func script(_ script: String, in directory: String?) -> String {
+        guard let directory else { return script }
+        guard directory.hasPrefix("/"), directory.utf8.count <= 4096,
+              !directory.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else {
+            return "printf '%s\\n' 'Invalid working_directory' >&2; exit 1"
+        }
+        let literal = "'" + directory.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
+        return "cd -- \(literal) || exit 1\n" + script
     }
 
     nonisolated static func steeringEvent(
@@ -538,7 +627,11 @@ final class ChatSessionRunner {
         socket: (any ChatSessionSocket)? = nil,
         executeShell: @escaping @Sendable (String, @escaping @Sendable (Process?) -> Void) -> (output: String, status: Int32) = {
             runShellCommandWithStatus($0, processRegistrar: $1)
-        }
+        },
+        collectGitDiff: @escaping @Sendable (GitDiffRequestPayload) -> GitDiffResponsePayload = {
+            GitSnapshotCollector().collect($0)
+        },
+        gitProvenance: GitProvenanceTracker = GitProvenanceTracker()
     ) {
         var request = URLRequest(url: url)
         request.addValue("Bearer \(jwt)", forHTTPHeaderField: "Authorization")
@@ -558,6 +651,9 @@ final class ChatSessionRunner {
         let completion = ChatSessionCompletion()
         // Live-only Skills feedback, deduplicated for this turn alone.
         let skillNotices = SkillStatusTracker()
+        // Git snapshot work runs serially off the receive/main paths.
+        let gitQueue = DispatchQueue(label: "ChatSessionRunner.git-snapshot", qos: .userInitiated)
+        let gitRequests = GitDiffRequestLedger()
 
         @Sendable func finishWithError(_ error: Error) {
             guard completion.finish() else { return }
@@ -566,9 +662,14 @@ final class ChatSessionRunner {
             handle.detach()
         }
 
-        @Sendable func finishWithFinal(_ text: String) {
+        @Sendable func finishWithFinal(_ text: String, sessionDiff: SavedSessionDiff? = nil) {
             guard completion.finish() else { return }
-            DispatchQueue.main.async { onFinal(text) }
+            // One main-queue hop keeps the snapshot card strictly before the
+            // final answer it belongs to.
+            DispatchQueue.main.async {
+                if let sessionDiff { onBlock(ChatSessionRunner.sessionDiffBlock(sessionDiff)) }
+                onFinal(text)
+            }
             task.cancel(with: .goingAway, reason: nil)
             handle.detach()
         }
@@ -625,6 +726,33 @@ final class ChatSessionRunner {
 
                     let content = response.content
 
+                    // Git snapshot control frame: consumed here, before any
+                    // error/final/shell parsing, and never shown in the chat.
+                    if let gitRequest = response.gitDiffRequest {
+                        if response.sender == "agent", response.sessionID == sessionID,
+                           gitRequests.begin(gitRequest.requestID)
+                        {
+                            gitQueue.async {
+                                guard !completion.isFinished, !handle.isCancelledByUser else { return }
+                                let payload = collectGitDiff(gitRequest)
+                                let reply = AgentMessage(
+                                    sessionID: sessionID, sender: "client", content: "",
+                                    platform: "macos", gitDiffResponse: payload
+                                )
+                                guard let data = try? encoder.encode(reply),
+                                      let json = String(data: data, encoding: .utf8)
+                                else { return }
+                                completion.withActiveTurn {
+                                    // A failed reply only loses the snapshot; the
+                                    // server times out and still delivers the final.
+                                    task.send(.string(json)) { _ in }
+                                }
+                            }
+                        }
+                        receiveNext()
+                        return
+                    }
+
                     // Side-channel notifications (web/image/MCP). Surface them
                     // as thinking blocks and keep listening.
                     if response.isWebCall == true {
@@ -680,7 +808,10 @@ final class ChatSessionRunner {
                     // what the live chat displayed.
                     if let final = ChatSessionRunner.finalAnswerDisplayText(from: response) {
                         print("[ChatSessionRunner] Final answer received (length: \(final.count))")
-                        finishWithFinal(final)
+                        finishWithFinal(
+                            final,
+                            sessionDiff: ChatSessionRunner.acceptedSessionDiff(from: response, sessionID: sessionID)
+                        )
                         return
                     }
 
@@ -723,8 +854,13 @@ final class ChatSessionRunner {
                             // `AgentSessionState.shared.shellProcess` slot is
                             // intentionally untouched here.
                             guard !completion.isFinished, !handle.isCancelledByUser else { return }
+                            // Apply the structured directory as a quoted literal cd
+                            // so production and injected executors share identical semantics.
+                            let executionScript = Self.script(script, in: response.workingDirectory)
+                            let gitBaseline = gitProvenance.baseline(script: executionScript, context: response.gitDiffContext)
+                            guard !completion.isFinished, !handle.isCancelledByUser else { return }
                             let (output, status) = executeShell(
-                                script,
+                                executionScript,
                                 { process in
                                     if let process {
                                         handle.attach(process: process)
@@ -735,6 +871,7 @@ final class ChatSessionRunner {
                             )
 
                             completion.setShellRunning(false)
+                            let commitObservations = gitProvenance.observations(after: gitBaseline)
                             guard !completion.isFinished else { return }
 
                             // If the user cancelled this specific turn while the
@@ -760,7 +897,8 @@ final class ChatSessionRunner {
                                 isTerminalOutput: true,
                                 isError: status != 0,
                                 platform: "macos",
-                                model: model
+                                model: model,
+                                gitCommitObservations: commitObservations.isEmpty ? nil : commitObservations
                             )
 
                             guard let jsonData = try? encoder.encode(reply),
@@ -828,7 +966,8 @@ final class ChatSessionRunner {
             platform: "macos",
             groupName: groupName,
             model: model,
-            supportsSkillStatus: true
+            supportsSkillStatus: true,
+            supportsGitDiff: true
         )
 
         guard let data = try? encoder.encode(initial),
@@ -856,6 +995,19 @@ final class ChatSessionRunner {
     /// reclassification, the reasoning noise filter, and milestone grouping,
     /// so a notice can never relabel the preceding tool activity. The
     /// timeline renders it literally via `Text(String)`.
+    nonisolated static func sessionDiffBlock(_ diff: SavedSessionDiff) -> ChatBlock {
+        ChatBlock(kind: .sessionDiff, text: "", sessionDiff: diff)
+    }
+
+    /// Only a well-formed summary on a successful final for this turn's
+    /// session is shown; error finals never get a snapshot card.
+    nonisolated static func acceptedSessionDiff(from response: AgentMessage, sessionID: String) -> SavedSessionDiff? {
+        guard  response.sessionID == sessionID,
+              let diff = response.sessionDiff, diff.hasSafeID, diff.fileCount >= 0, diff.repositoryCount > 0
+        else { return nil }
+        return diff
+    }
+
     nonisolated static func skillStatusBlock(_ text: String) -> ChatBlock {
         ChatBlock(kind: .skillStatus, text: text)
     }

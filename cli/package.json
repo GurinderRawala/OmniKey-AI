@@ -4,10 +4,10 @@
     "access": "public",
     "registry": "https://registry.npmjs.org/"
   },
-  "version": "1.8.17",
+  "version": "1.8.18",
   "description": "CLI for onboarding users to Omnikey AI and configuring OPENAI_API_KEY. Use Yarn for install/build.",
   "engines": {
-    "node": ">=14.0.0",
+    "node": ">=22",
     "yarn": ">=1.22.0"
   },
   "bin": {
@@ -37,6 +37,7 @@
     "@google-cloud/storage": "^7.19.0",
     "@google/genai": "^1.46.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@pierre/diffs": "1.6.4",
     "axios": "^1.13.5",
     "commander": "^11.0.0",
     "compression": "^1.8.2",

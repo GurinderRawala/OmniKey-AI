@@ -8,6 +8,15 @@ import Textual
 enum ChatLayoutMetrics {
     static let sidebarExpandedWidth: CGFloat = 264
     static let sidebarCollapsedWidth: CGFloat = 52
+    static let conversationMinWidth: CGFloat = 420
+    static let inspectorMinWidth: CGFloat = 340
+    static let inspectorIdealWidth: CGFloat = 480
+
+    /// Sidebar + conversation + inspector must fit; below this the
+    /// expanded sidebar yields to the rail while the inspector is open.
+    static func usesCompactSidebar(windowWidth: CGFloat, inspectorOpen: Bool) -> Bool {
+        inspectorOpen && windowWidth < sidebarExpandedWidth + 1 + conversationMinWidth + inspectorIdealWidth
+    }
 }
 
 struct ChatView: View {
@@ -37,21 +46,45 @@ struct ChatView: View {
     var body: some View {
         ZStack {
             NordTheme.windowBackground(colorScheme).ignoresSafeArea()
-            HStack(spacing: 0) {
-                Group {
-                    if sidebarCollapsed {
-                        ChatSidebarRailView(model: model, onExpand: toggleSidebar)
-                    } else {
-                        ChatSidebarView(model: model, onCollapse: toggleSidebar)
+            GeometryReader { proxy in
+                let inspector = model.inspectedSessionDiff
+                // With the inspector open in a narrow window, show the rail
+                // without changing the user's saved sidebar preference.
+                let compact = ChatLayoutMetrics.usesCompactSidebar(
+                    windowWidth: proxy.size.width, inspectorOpen: inspector != nil
+                )
+                let collapsed = sidebarCollapsed || compact
+                HStack(spacing: 0) {
+                    Group {
+                        if collapsed {
+                            ChatSidebarRailView(model: model, onExpand: {
+                                if sidebarCollapsed { toggleSidebar() } else { model.closeSessionDiff() }
+                            })
+                        } else {
+                            ChatSidebarView(model: model, onCollapse: toggleSidebar)
+                        }
+                    }
+                    .frame(width: collapsed
+                        ? ChatLayoutMetrics.sidebarCollapsedWidth
+                        : ChatLayoutMetrics.sidebarExpandedWidth)
+
+                    Rectangle()
+                        .fill(NordTheme.border(colorScheme))
+                        .frame(width: 1)
+                    // Keep the conversation at the same structural location
+                    // when opening/closing a saved snapshot inspector.
+                    HSplitView {
+                        ChatConversationView(model: model, onToggleSidebar: toggleSidebar)
+                            .frame(minWidth: ChatLayoutMetrics.conversationMinWidth,
+                                   maxWidth: .infinity, maxHeight: .infinity)
+                        if let inspector {
+                            SessionDiffInspectorView(model: model, selection: inspector)
+                                .frame(minWidth: ChatLayoutMetrics.inspectorMinWidth,
+                                       idealWidth: ChatLayoutMetrics.inspectorIdealWidth,
+                                       maxWidth: .infinity, maxHeight: .infinity)
+                        }
                     }
                 }
-                .frame(width: sidebarWidth)
-
-                Rectangle()
-                    .fill(NordTheme.border(colorScheme))
-                    .frame(width: 1)
-                ChatConversationView(model: model, onToggleSidebar: toggleSidebar)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .onAppear {
@@ -2078,12 +2111,23 @@ struct ContextWindowIndicator: View {
 /// context-window indicator, a keyboard-hint, and a circular send /
 /// stop button. The whole surface uses a real fill + soft drop shadow
 /// so it reads as a self-contained card lifted above the transcript.
+private struct CompactComposerKey: EnvironmentKey { static let defaultValue = false }
+private extension EnvironmentValues {
+    var compactComposer: Bool {
+        get { self[CompactComposerKey.self] }
+        set { self[CompactComposerKey.self] = newValue }
+    }
+}
+enum ComposerToolbarLayout {
+    static func isCompact(width: CGFloat) -> Bool { width < 660 }
+}
 private struct LandingInputComposer: View {
     @ObservedObject var model: ChatModel
     @Environment(\.colorScheme) private var colorScheme
     @State private var isFocused = false
     @State private var inputHeight: CGFloat = ChatComposerMetrics.minimumHeight
     @State private var isSendHovered = false
+    @State private var composerWidth: CGFloat = 0
 
     private var inputIsEmpty: Bool {
         model.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -2339,6 +2383,11 @@ private struct LandingInputComposer: View {
             .animation(.easeInOut(duration: 0.12), value: isFocused)
             .animation(.easeInOut(duration: 0.12), value: inputIsEmpty)
         }
+        .environment(\.compactComposer, ComposerToolbarLayout.isCompact(width: composerWidth))
+        .background(GeometryReader { geometry in
+            Color.clear.onAppear { composerWidth = geometry.size.width }
+                .onChange(of: geometry.size.width) { _, width in composerWidth = width }
+        })
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(surfaceFill)
@@ -2504,6 +2553,7 @@ private struct AgentModelMenu: View {
 /// visually consistent and gives the composer a tighter, more
 /// production-ready look.
 private struct ComposerPillLabel: View {
+    @Environment(\.compactComposer) private var compact
     let icon: String
     let title: String
     let isActive: Bool
@@ -2523,18 +2573,21 @@ private struct ComposerPillLabel: View {
         HStack(spacing: 5) {
             Image(systemName: icon)
                 .font(.system(size: 10, weight: .semibold))
+            if !compact {
             Text(title)
                 .font(.system(size: 11.5, weight: .medium))
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .frame(maxWidth: maxTitleWidth, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
+            }
             if showsChevron {
                 Image(systemName: "chevron.down")
                     .font(.system(size: 8, weight: .semibold))
                     .opacity(0.65)
             }
         }
+        .accessibilityLabel(title)
         .foregroundColor(
             isActive
                 ? activeColor
@@ -3090,7 +3143,7 @@ struct AssistantMessageView: View {
 
     private var thinkingBlocks: [ChatBlock] {
         message.blocks.filter { block in
-            guard block.kind != .finalAnswer else { return false }
+            guard block.kind != .finalAnswer, block.kind != .sessionDiff else { return false }
             // Only genuine reasoning is subject to the noise filter. A block
             // that reclassifies to a tool kind is a real step and must be
             // kept — it is shown as that tool, not as reasoning.
@@ -3104,6 +3157,10 @@ struct AssistantMessageView: View {
 
     private var finalBlock: ChatBlock? {
         message.blocks.first { $0.kind == .finalAnswer }
+    }
+
+    private var sessionDiffBlocks: [ChatBlock] {
+        ChatSessionDiffPlacement.cards(beforeFinalIn: message.blocks)
     }
 
     var body: some View {
@@ -3127,6 +3184,12 @@ struct AssistantMessageView: View {
                     )
                 }
                 if let final = finalBlock {
+                    // Snapshot cards bound to this final render right before it.
+                    ForEach(sessionDiffBlocks) { block in
+                        if let diff = block.sessionDiff {
+                            SessionDiffCardView(diff: diff)
+                        }
+                    }
                     FinalAnswerView(block: final)
                 }
             }

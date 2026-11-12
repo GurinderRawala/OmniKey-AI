@@ -12,6 +12,7 @@ import '../models/subscriptionTaskTemplate';
 import '../models/subscriptionUsage';
 import '../models/agentSettings';
 import '../models/agentTranscriptMessage';
+import '../models/agentSessionDiff';
 
 export interface BootstrapOptions {
   /**

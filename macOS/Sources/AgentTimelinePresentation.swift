@@ -37,6 +37,7 @@ struct AgentCommandActivity: Identifiable, Equatable {
         case .agentReasoning: return "Progress"
         case .skillStatus: return AgentTimelinePresentation.skillNoticeTitle
         case .finalAnswer: return "Answer"
+        case .sessionDiff: return "Changes"
         }
     }
 
@@ -61,6 +62,7 @@ struct AgentCommandActivity: Identifiable, Equatable {
         case .agentReasoning: return "progress"
         case .skillStatus: return "skills"
         case .finalAnswer: return "answer"
+        case .sessionDiff: return "changes"
         }
     }
 }
@@ -347,7 +349,7 @@ struct AgentTimelinePresentation {
 
         for block in blocks {
             let kind = AgentTimelineSummarizer.classify(kind: block.kind, text: block.text)
-            guard kind != .finalAnswer else { continue }
+            guard kind != .finalAnswer, kind != .sessionDiff else { continue }
             if kind == .skillStatus {
                 if activityBlocks.isEmpty {
                     steps.append(skillNoticeStep(block))
@@ -711,7 +713,7 @@ struct AgentTimelinePresentation {
             case .mcpCall: mcp += 1
             case .imageRendering: images += 1
             case .toolCall: tools += 1
-            case .agentReasoning, .skillStatus, .finalAnswer: break
+            case .agentReasoning, .skillStatus, .finalAnswer, .sessionDiff: break
             }
         }
 

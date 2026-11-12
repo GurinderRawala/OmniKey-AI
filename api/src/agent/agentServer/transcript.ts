@@ -3,6 +3,7 @@ import { MCP_TOOL_PREFIX } from '../mcpRuntime';
 import { isInjectedUserPrompt } from '../injectedUserPrompts';
 import type { SessionState } from '../types';
 import { extractProgressSummary, isProgressOnlyResponse } from './progressSummary';
+import { cleanSessionDiffSummary, type SessionDiffSummary } from '../gitDiff/contracts';
 
 export type HistoryBlockKind =
   | 'agentReasoning'
@@ -19,6 +20,8 @@ export type RawHistoryMessage = {
   tool_name?: string;
   tool_call_id?: string;
   tool_calls?: unknown[];
+  // Immutable Git snapshot summary attached to a final assistant answer.
+  session_diff?: unknown;
 };
 
 export type TranscriptBlock = {
@@ -30,6 +33,9 @@ export type TranscriptBlock = {
   contentLength?: number;
   isContentTruncated?: boolean;
   contentId?: string;
+  // finalAnswer only: the snapshot captured immediately before this answer.
+  // Clients render its card before the block; older clients ignore it.
+  sessionDiff?: SessionDiffSummary;
 };
 
 export type TranscriptMessage = {
@@ -69,6 +75,10 @@ function transcriptPrefixRevision(messages: TranscriptMessage[], before: number)
       hash.update(block.id);
       hash.update('\0');
       hash.update(block.text);
+      if (block.sessionDiff) {
+        hash.update('\0');
+        hash.update(block.sessionDiff.id);
+      }
     }
   }
   return hash.digest('base64url').slice(0, 22);
@@ -246,6 +256,8 @@ export function completedTranscriptRevision(messages: TranscriptMessage[]): stri
       text: block.text,
       activityId: block.activityId ?? null,
       activityPhase: block.activityPhase ?? null,
+      // Only present keys change the digest, so existing revisions are stable.
+      ...(block.sessionDiff ? { sessionDiffId: block.sessionDiff.id } : {}),
     })),
   }));
   return createHash('sha256')
@@ -508,10 +520,13 @@ export function buildTranscript(raw: RawHistoryMessage[]): TranscriptMessage[] {
     text: string,
     activityId?: string,
     activityPhase?: TranscriptBlock['activityPhase'],
+    sessionDiff?: SessionDiffSummary,
   ) => {
     const cleaned = text.trim();
     if (!cleaned) return;
-    ensureAssistant().blocks?.push(makeBlock(kind, cleaned, activityId, activityPhase));
+    const block = makeBlock(kind, cleaned, activityId, activityPhase);
+    if (sessionDiff && kind === 'finalAnswer') block.sessionDiff = sessionDiff;
+    ensureAssistant().blocks?.push(block);
   };
 
   raw.forEach((entry, index) => {
@@ -563,9 +578,10 @@ export function buildTranscript(raw: RawHistoryMessage[]): TranscriptMessage[] {
       return;
     }
 
+    const sessionDiff = cleanSessionDiffSummary(entry.session_diff);
     const finalAnswer = extractTaggedBlock(content, 'final_answer');
     if (finalAnswer) {
-      appendAssistantBlock('finalAnswer', finalAnswer);
+      appendAssistantBlock('finalAnswer', finalAnswer, undefined, undefined, sessionDiff);
       return;
     }
 
@@ -597,7 +613,7 @@ export function buildTranscript(raw: RawHistoryMessage[]): TranscriptMessage[] {
     }
     const visible = cleanAssistantTranscriptText(content);
     if (!visible) return;
-    appendAssistantBlock('finalAnswer', visible);
+    appendAssistantBlock('finalAnswer', visible, undefined, undefined, sessionDiff);
   });
 
   flushAssistant();
