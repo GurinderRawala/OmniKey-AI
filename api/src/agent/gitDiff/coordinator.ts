@@ -41,7 +41,10 @@ import {
   type GitDiffResponse,
   type GitTurnBaseline,
   type GitTurnBaselineSource,
+  type DiffRecoveryRecord,
+  type SessionDiffCaptureOutcome,
   type SessionDiffPayload,
+  type SessionDiffRecoveryProvenance,
   type SessionDiffSummary,
   type SessionDiffSummaryScope,
 } from './contracts';
@@ -70,6 +73,27 @@ export interface GitRunState {
   baselineAttempted: Set<string>;
   /** Count of baseline requests that failed (timeout/invalid/unavailable). */
   baselineFailures: number;
+  /**
+   * Contract v4 (`supports_diff_recovery: true`): run-local verified change
+   * metadata. Absent for clients without the capability. Never persisted.
+   */
+  recovery?: DiffRecoveryRunState;
+}
+
+/** Runtime-only v4 recovery evidence of one outer run (turn_id = runId). */
+export interface DiffRecoveryRunState {
+  /** Latest verified metadata per opaque native id, in first-seen order. */
+  records: Map<string, DiffRecoveryRecord>;
+  /** Provider tool call ids issued to the client with this run's turn id. */
+  issuedToolCalls: Set<string>;
+  /** New records dropped because the per-run backend budget was full. */
+  omitted: number;
+  /** Largest `omitted` count the native store reported for this run. */
+  nativeOmitted?: number;
+  /** Fallback runs at most once per outer run. */
+  attempted: boolean;
+  /** Trimmed text of this run's own user input (never prior history). */
+  input?: string;
 }
 
 export function createGitRunState(input: {
@@ -78,6 +102,7 @@ export function createGitRunState(input: {
   connection?: AbortSignal;
   send: AgentSendFn;
   turnDiff?: boolean;
+  diffRecovery?: boolean;
 }): GitRunState {
   return {
     runId: `grun_${cuid()}`,
@@ -93,6 +118,16 @@ export function createGitRunState(input: {
     baselines: [],
     baselineAttempted: new Set(),
     baselineFailures: 0,
+    ...(input.diffRecovery === true
+      ? {
+          recovery: {
+            records: new Map(),
+            issuedToolCalls: new Set(),
+            omitted: 0,
+            attempted: false,
+          },
+        }
+      : {}),
   };
 }
 
@@ -200,6 +235,20 @@ function awaitCapture(
       git_diff_request: request,
     });
   });
+}
+
+/**
+ * Send one validated control request on the run's own connection and await
+ * its bounded reply (null on timeout/abort/disconnect/invalid). Never throws.
+ */
+export function requestGitControl(
+  run: GitRunState,
+  request: GitDiffRequest,
+  signal: AbortSignal | undefined,
+  timeoutMs: number,
+  validate: (raw: unknown) => GitDiffResponse,
+): Promise<GitDiffResponse | null> {
+  return awaitCapture(run, request, signal, timeoutMs, validate);
 }
 
 function parseCommits(json: string | null | undefined): GitCommitObservation[] {
@@ -348,12 +397,14 @@ export async function saveSessionDiff(
   repositories: GitDiffRepository[],
   notice: string | undefined,
   turn?: { baselines: GitTurnBaseline[]; displayLimit: number },
+  recovery?: SessionDiffRecoveryProvenance,
 ): Promise<SessionDiffSummary> {
   const payload: SessionDiffPayload = {
     version: 1,
     repositories,
     ...(notice ? { notice } : {}),
     ...(turn ? { baselines: turn.baselines, displayLimit: turn.displayLimit } : {}),
+    ...(recovery ? { displayLimit: GIT_DIFF_DISPLAY_LIMIT, recovery } : {}),
   };
   const scope = summaryScope(repositories);
   const commit =
@@ -384,6 +435,13 @@ export async function saveSessionDiff(
             ? ('before_tool' as const)
             : ('turn_start' as const),
           baselineUnavailable: repositories.some((r) => r.scope !== 'turn'),
+        }
+      : {}),
+    ...(recovery
+      ? {
+          displayLimit: GIT_DIFF_DISPLAY_LIMIT,
+          recovered: true,
+          recoveryIncomplete: !recovery.complete,
         }
       : {}),
   };
@@ -591,13 +649,21 @@ function turnNotice(
   return notice || undefined;
 }
 
+function noSnapshotStatus(
+  status: GitDiffResponse['status'] | undefined,
+): SessionDiffCaptureOutcome['status'] {
+  if (status === 'not_repository') return 'no_repository';
+  if (status === 'unavailable') return 'workspace_unavailable';
+  return 'capture_failed';
+}
+
 async function captureTurnSnapshot(
   run: GitRunState,
   history: ReadonlyArray<{ role: string; content: unknown }>,
   signal: AbortSignal | undefined,
   log: Logger,
   timeoutMs: number,
-): Promise<SessionDiffSummary | undefined> {
+): Promise<SessionDiffCaptureOutcome> {
   run.candidates.add(latestProjectDirectory(history), 'project');
   const previous = await previousRunProvenance(run).catch(() => ({
     commits: [] as GitCommitObservation[],
@@ -609,7 +675,7 @@ async function captureTurnSnapshot(
     if (!ordered.some((p) => comparablePath(p) === comparablePath(path))) ordered.push(path);
   }
   const candidatePaths = ordered.slice(0, GIT_DIFF_MAX_CANDIDATES);
-  if (!candidatePaths.length) return undefined;
+  if (!candidatePaths.length) return { status: 'no_repository', reason: 'no candidates' };
   const baselines = run.baselines.map((b) => ({ ...b }));
   const request: GitDiffRequest = {
     request_id: cuid(),
@@ -628,10 +694,17 @@ async function captureTurnSnapshot(
       sessionId: run.sessionId,
       status: response?.status ?? 'no_reply',
     });
-    return undefined;
+    return { status: noSnapshotStatus(response?.status), reason: response?.status ?? 'no_reply' };
   }
   const repositories = response.repositories.filter((r) => r.patch.trim().length > 0);
-  if (!repositories.length) return undefined;
+  if (!repositories.length) {
+    return {
+      status: !baselines.length && run.baselineFailures > 0 ? 'missing_baseline' : 'no_changes',
+      unchangedRoots: [
+        ...new Set([...baselines.map((b) => b.root), ...response.repositories.map((r) => r.root)]),
+      ],
+    };
+  }
   const summary = await saveSessionDiff(
     run,
     repositories,
@@ -649,21 +722,24 @@ async function captureTurnSnapshot(
     scope: summary.scope,
     baselineCount: baselines.length,
   });
-  return summary;
+  return { status: 'captured', summary };
 }
 
 /**
- * Capture, validate and persist the snapshot for the final answer about to be
- * delivered. Returns the summary to attach, or undefined (no button).
+ * Structured outcome of the normal (automatic) capture for the final answer
+ * about to be delivered. Never throws; provenance is persisted either way.
  */
-export async function captureSessionDiffBeforeFinal(
+export async function captureSessionDiffOutcome(
   run: GitRunState | undefined,
   history: ReadonlyArray<{ role: string; content: unknown }>,
   signal: AbortSignal | undefined,
   log: Logger,
   timeoutMs = GIT_DIFF_RESPONSE_TIMEOUT_MS,
-): Promise<SessionDiffSummary | undefined> {
-  if (!run || signal?.aborted || run.connection?.aborted) return undefined;
+): Promise<SessionDiffCaptureOutcome> {
+  if (!run) return { status: 'workspace_unavailable', reason: 'no capability' };
+  if (signal?.aborted || run.connection?.aborted) {
+    return { status: 'workspace_unavailable', reason: 'cancelled' };
+  }
   try {
     if (run.turnDiff) return await captureTurnSnapshot(run, history, signal, log, timeoutMs);
     run.candidates.add(latestProjectDirectory(history), 'project');
@@ -676,7 +752,7 @@ export async function captureSessionDiffBeforeFinal(
     for (const commit of previous.commits) run.candidates.add(commit.root, 'previous_run');
     for (const commit of run.observations) run.candidates.add(commit.root, 'command');
     const candidatePaths = run.candidates.list(GIT_DIFF_MAX_CANDIDATES);
-    if (!candidatePaths.length) return undefined;
+    if (!candidatePaths.length) return { status: 'no_repository', reason: 'no candidates' };
 
     const request: GitDiffRequest = {
       request_id: cuid(),
@@ -689,10 +765,10 @@ export async function captureSessionDiffBeforeFinal(
         sessionId: run.sessionId,
         status: response?.status ?? 'no_reply',
       });
-      return undefined;
+      return { status: noSnapshotStatus(response?.status), reason: response?.status ?? 'no_reply' };
     }
     const repositories = response.repositories.filter((r) => r.patch.trim().length > 0);
-    if (!repositories.length) return undefined;
+    if (!repositories.length) return { status: 'no_changes' };
     const summary = await saveSessionDiff(run, repositories, response.reason);
     log.info('Saved git snapshot for final answer', {
       sessionId: run.sessionId,
@@ -701,14 +777,29 @@ export async function captureSessionDiffBeforeFinal(
       fileCount: summary.fileCount,
       scope: summary.scope,
     });
-    return summary;
+    return { status: 'captured', summary };
   } catch (err) {
     log.warn('Git snapshot capture failed; delivering final answer without it', {
       sessionId: run.sessionId,
       error: err instanceof Error ? err.name : 'error',
     });
-    return undefined;
+    return { status: 'capture_failed', reason: err instanceof Error ? err.name : 'error' };
   } finally {
     await persistGitRunProvenance(run, log);
   }
+}
+
+/**
+ * Legacy API: capture, validate and persist the snapshot for the final answer
+ * about to be delivered. Returns the summary to attach, or undefined (no button).
+ */
+export async function captureSessionDiffBeforeFinal(
+  run: GitRunState | undefined,
+  history: ReadonlyArray<{ role: string; content: unknown }>,
+  signal: AbortSignal | undefined,
+  log: Logger,
+  timeoutMs = GIT_DIFF_RESPONSE_TIMEOUT_MS,
+): Promise<SessionDiffSummary | undefined> {
+  if (!run || signal?.aborted || run.connection?.aborted) return undefined;
+  return (await captureSessionDiffOutcome(run, history, signal, log, timeoutMs)).summary;
 }

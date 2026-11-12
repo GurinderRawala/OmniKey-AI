@@ -197,16 +197,35 @@ export async function renderSnapshotDocument(
 
   const scopes = new Set(payload.repositories.map((r) => r.scope));
   const isTurn = scopes.has('turn');
-  const scopeLabel = isTurn
-    ? 'Turn changes'
-    : scopes.size > 1
-      ? 'Working tree and commit changes'
-      : scopes.has('commit')
-        ? 'Commit changes'
-        : 'Working tree changes';
-  const disclaimer = isTurn
-    ? 'Net committed and uncommitted changes from the turn baseline to the working tree when the answer was produced; it may include changes not made by the agent.'
-    : 'Snapshot taken when the answer was produced; it may include changes not made by the agent.';
+  // v4 provenance: an agent-assisted recovery is labelled as such, never as a
+  // normal snapshot, with an explicit partial warning and its limitations.
+  const recovery =
+    payload.recovery && payload.recovery.kind === 'agent_assisted' ? payload.recovery : undefined;
+  const recoveryNotes = recovery
+    ? (recovery.complete
+        ? ''
+        : '<p class="limit"><strong>Partial recovery:</strong> some changes from this turn may be missing.</p>') +
+      (Array.isArray(recovery.limitations)
+        ? recovery.limitations
+            .slice(0, 8)
+            .map((l) => `<p>${escapeHtml(String(l).slice(0, 500))}</p>`)
+            .join('')
+        : '')
+    : '';
+  const scopeLabel = recovery
+    ? 'Recovered turn changes'
+    : isTurn
+      ? 'Turn changes'
+      : scopes.size > 1
+        ? 'Working tree and commit changes'
+        : scopes.has('commit')
+          ? 'Commit changes'
+          : 'Working tree changes';
+  const disclaimer = recovery
+    ? 'Recovered with agent assistance from native per-command checkpoints of this turn (not a full repository snapshot); it may include changes not made by the agent.'
+    : isTurn
+      ? 'Net committed and uncommitted changes from the turn baseline to the working tree when the answer was produced; it may include changes not made by the agent.'
+      : 'Snapshot taken when the answer was produced; it may include changes not made by the agent.';
   const repoCount = payload.repositories.length;
   const head = [
     '<!doctype html>',
@@ -216,7 +235,8 @@ export async function renderSnapshotDocument(
     `<style>${limits.pageCss}</style></head><body>`,
     `<header class="snapshot"><h1>${scopeLabel}</h1>`,
     `<p>${repoCount} repositor${repoCount === 1 ? 'y' : 'ies'} · ${totalFiles} file${totalFiles === 1 ? '' : 's'}. ${disclaimer}</p>`,
-    payload.notice ? `<p>${escapeHtml(payload.notice)}</p>` : '',
+    payload.notice && !recovery ? `<p>${escapeHtml(payload.notice)}</p>` : '',
+    recoveryNotes,
   ].join('');
   const tail = '</main></body></html>';
   const skippedNote = (n: number) =>
@@ -256,9 +276,11 @@ export async function renderSnapshotDocument(
         ? `${escapeHtml(repo.root)} · ${oid(repo.baselineHead)} → ${oid(repo.head)} + working tree · baseline ${repo.baselineSource === 'before_tool' ? 'before first tool use' : 'at turn start'}${repo.baselineCapturedAt ? ` (${escapeHtml(repo.baselineCapturedAt)})` : ''}`
         : repo.scope === 'commit' && repo.commit
           ? `${escapeHtml(repo.root)} · commit <code class="oid">${escapeHtml(repo.commit.slice(0, 12))}</code>`
-          : isTurn
-            ? `${escapeHtml(repo.root)} · working tree vs HEAD (turn baseline unavailable)`
-            : `${escapeHtml(repo.root)} · working tree vs HEAD`;
+          : recovery
+            ? `${escapeHtml(repo.root)} · recovered from turn checkpoints`
+            : isTurn
+              ? `${escapeHtml(repo.root)} · working tree vs HEAD (turn baseline unavailable)`
+              : `${escapeHtml(repo.root)} · working tree vs HEAD`;
     // Always keep room to close the section we open.
     const sectionOpen = `<section class="repo"><h2>${title}</h2>`;
     if (bytes(sectionOpen) + bytes(sectionClose) > remaining || !tryPush(sectionOpen)) {

@@ -80,6 +80,7 @@ async function processNextInQueue(sessionId: string): Promise<void> {
       supportsSkillStatus: next.message.supports_skill_status === true,
       supportsGitDiff: next.message.supports_git_diff === true,
       supportsGitTurnDiff: next.message.supports_git_turn_diff === true,
+      supportsDiffRecovery: next.message.supports_diff_recovery === true,
     });
   } catch (err) {
     next.log.error('Queued agent turn failed', { sessionId, error: err });
@@ -347,7 +348,14 @@ export function attachAgentWebSocketServer(server: http.Server): WebSocketServer
         const isError = typeof message.is_error === 'boolean' ? message.is_error : undefined;
         // Raw observations are validated by the tool loop against the exact
         // shell request it issued; absent for clients without Git support.
-        if (message.git_commit_observations === undefined) {
+        if (message.diff_recovery_evidence !== undefined) {
+          pendingShell.resolve(
+            content,
+            isError,
+            message.git_commit_observations,
+            message.diff_recovery_evidence,
+          );
+        } else if (message.git_commit_observations === undefined) {
           pendingShell.resolve(content, isError);
         } else {
           pendingShell.resolve(content, isError, message.git_commit_observations);

@@ -445,6 +445,9 @@ final class ChatSessionRunner {
         /// Client -> server opt-in for v3 per-turn baseline diffs (initial
         /// message only). The server uses turn mode only when literally true.
         let supportsGitTurnDiff: Bool?
+        /// Client -> server opt-in for agent-assisted diff recovery
+        /// (initial message only).
+        let supportsDiffRecovery: Bool?
         let workingDirectory: String?
         /// Server -> client control frame; never a model/tool/transcript message.
         let gitDiffRequest: GitDiffRequestPayload?
@@ -454,6 +457,9 @@ final class ChatSessionRunner {
         let gitDiffContext: GitDiffContext?
         /// Client -> server on a terminal reply: commits observed during it.
         let gitCommitObservations: [GitCommitObservation]?
+        /// Client -> server on a terminal reply: metadata of recovery
+        /// evidence recorded around that shell (never patch content).
+        let diffRecoveryEvidence: DiffRecoveryEvidence?
         /// Server -> client on the final answer: the saved snapshot summary.
         let sessionDiff: SavedSessionDiff?
 
@@ -478,11 +484,13 @@ final class ChatSessionRunner {
             supportsSkillStatus: Bool? = nil,
             supportsGitDiff: Bool? = nil,
             supportsGitTurnDiff: Bool? = nil,
+            supportsDiffRecovery: Bool? = nil,
             workingDirectory: String? = nil,
             gitDiffRequest: GitDiffRequestPayload? = nil,
             gitDiffResponse: GitDiffResponsePayload? = nil,
             gitDiffContext: GitDiffContext? = nil,
             gitCommitObservations: [GitCommitObservation]? = nil,
+            diffRecoveryEvidence: DiffRecoveryEvidence? = nil,
             sessionDiff: SavedSessionDiff? = nil
         ) {
             self.sessionID = sessionID
@@ -505,11 +513,13 @@ final class ChatSessionRunner {
             self.supportsSkillStatus = supportsSkillStatus
             self.supportsGitDiff = supportsGitDiff
             self.supportsGitTurnDiff = supportsGitTurnDiff
+            self.supportsDiffRecovery = supportsDiffRecovery
             self.workingDirectory = workingDirectory
             self.gitDiffRequest = gitDiffRequest
             self.gitDiffResponse = gitDiffResponse
             self.gitDiffContext = gitDiffContext
             self.gitCommitObservations = gitCommitObservations
+            self.diffRecoveryEvidence = diffRecoveryEvidence
             self.sessionDiff = sessionDiff
         }
 
@@ -534,11 +544,13 @@ final class ChatSessionRunner {
             case supportsSkillStatus = "supports_skill_status"
             case supportsGitDiff = "supports_git_diff"
             case supportsGitTurnDiff = "supports_git_turn_diff"
+            case supportsDiffRecovery = "supports_diff_recovery"
             case workingDirectory = "working_directory"
             case gitDiffRequest = "git_diff_request"
             case gitDiffResponse = "git_diff_response"
             case gitDiffContext = "git_diff_context"
             case gitCommitObservations = "git_commit_observations"
+            case diffRecoveryEvidence = "diff_recovery_evidence"
             case sessionDiff = "session_diff"
         }
 
@@ -566,11 +578,13 @@ final class ChatSessionRunner {
             supportsSkillStatus = try c.decodeIfPresent(Bool.self, forKey: .supportsSkillStatus)
             supportsGitDiff = try? c.decodeIfPresent(Bool.self, forKey: .supportsGitDiff)
             supportsGitTurnDiff = try? c.decodeIfPresent(Bool.self, forKey: .supportsGitTurnDiff)
+            supportsDiffRecovery = try? c.decodeIfPresent(Bool.self, forKey: .supportsDiffRecovery)
             workingDirectory = try? c.decodeIfPresent(String.self, forKey: .workingDirectory)
             gitDiffRequest = try? c.decodeIfPresent(GitDiffRequestPayload.self, forKey: .gitDiffRequest)
             gitDiffResponse = try? c.decodeIfPresent(GitDiffResponsePayload.self, forKey: .gitDiffResponse)
             gitDiffContext = try? c.decodeIfPresent(GitDiffContext.self, forKey: .gitDiffContext)
             gitCommitObservations = try? c.decodeIfPresent([GitCommitObservation].self, forKey: .gitCommitObservations)
+            diffRecoveryEvidence = try? c.decodeIfPresent(DiffRecoveryEvidence.self, forKey: .diffRecoveryEvidence)
             sessionDiff = try? c.decodeIfPresent(SavedSessionDiff.self, forKey: .sessionDiff)
         }
     }
@@ -640,7 +654,10 @@ final class ChatSessionRunner {
         collectGitDiff: @escaping @Sendable (GitDiffRequestPayload, GitTurnBaselineStore) -> GitDiffResponsePayload = {
             GitSnapshotCollector().collect($0, turnStore: $1)
         },
-        gitProvenance: GitProvenanceTracker = GitProvenanceTracker()
+        gitProvenance: GitProvenanceTracker = GitProvenanceTracker(),
+        // Evaluated per call: one recovery store per outer run, so a later
+        // turn can never see or replay this run's evidence.
+        diffRecovery: DiffRecoveryStore = DiffRecoveryStore()
     ) {
         var request = URLRequest(url: url)
         request.addValue("Bearer \(jwt)", forHTTPHeaderField: "Authorization")
@@ -747,7 +764,10 @@ final class ChatSessionRunner {
                         {
                             gitQueue.async {
                                 guard !completion.isFinished, !handle.isCancelledByUser else { return }
-                                let payload = collectGitDiff(gitRequest, turnBaselines)
+                                // Recovery replays only this run's stored evidence.
+                                let payload = gitRequest.phase == .recover
+                                    ? diffRecovery.recover(gitRequest)
+                                    : collectGitDiff(gitRequest, turnBaselines)
                                 let reply = AgentMessage(
                                     sessionID: sessionID, sender: "client", content: "",
                                     platform: "macos", gitDiffResponse: payload
@@ -871,6 +891,11 @@ final class ChatSessionRunner {
                             // so production and injected executors share identical semantics.
                             let executionScript = Self.script(script, in: response.workingDirectory)
                             let gitBaseline = gitProvenance.baseline(script: executionScript, context: response.gitDiffContext)
+                            // Bounded read-only before-checkpoint (no script execution).
+                            let recoveryCheckpoint = diffRecovery.before(
+                                script: executionScript, context: response.gitDiffContext,
+                                initialDirectory: GitProvenanceTracker.shellWorkingDirectory
+                            )
                             guard !completion.isFinished, !handle.isCancelledByUser else { return }
                             let (output, status) = executeShell(
                                 executionScript,
@@ -885,6 +910,8 @@ final class ChatSessionRunner {
 
                             completion.setShellRunning(false)
                             let commitObservations = gitProvenance.observations(after: gitBaseline)
+                            // Skipped on cancellation: nothing late is recorded.
+                            let recoveryEvidence = handle.isCancelledByUser ? nil : recoveryCheckpoint.flatMap(diffRecovery.after)
                             guard !completion.isFinished else { return }
 
                             // If the user cancelled this specific turn while the
@@ -911,7 +938,8 @@ final class ChatSessionRunner {
                                 isError: status != 0,
                                 platform: "macos",
                                 model: model,
-                                gitCommitObservations: commitObservations.isEmpty ? nil : commitObservations
+                                gitCommitObservations: commitObservations.isEmpty ? nil : commitObservations,
+                                diffRecoveryEvidence: recoveryEvidence
                             )
 
                             guard let jsonData = try? encoder.encode(reply),
@@ -981,7 +1009,8 @@ final class ChatSessionRunner {
             model: model,
             supportsSkillStatus: true,
             supportsGitDiff: true,
-            supportsGitTurnDiff: true
+            supportsGitTurnDiff: true,
+            supportsDiffRecovery: true
         )
 
         guard let data = try? encoder.encode(initial),

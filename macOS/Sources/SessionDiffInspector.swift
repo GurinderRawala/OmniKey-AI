@@ -332,7 +332,7 @@ struct SessionDiffInspectorView: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            Image(systemName: selection.diff.scope == .commit || selection.diff.scope == .turn ? "point.3.connected.trianglepath.dotted" : "doc.text.magnifyingglass")
+            Image(systemName: selection.diff.isRecovered ? "arrow.uturn.backward.circle" : selection.diff.scope == .commit || selection.diff.scope == .turn ? "point.3.connected.trianglepath.dotted" : "doc.text.magnifyingglass")
                 .foregroundColor(NordTheme.accent(colorScheme))
             VStack(alignment: .leading, spacing: 1) {
                 Text(selection.diff.headerTitle)
@@ -415,7 +415,7 @@ struct SessionDiffCardView: View {
             model.toggleSessionDiff(diff)
         } label: {
             HStack(spacing: 10) {
-                Image(systemName: diff.scope == .commit || diff.scope == .turn ? "point.3.connected.trianglepath.dotted" : "plusminus.circle")
+                Image(systemName: diff.isRecovered ? "arrow.uturn.backward.circle" : diff.scope == .commit || diff.scope == .turn ? "point.3.connected.trianglepath.dotted" : "plusminus.circle")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundColor(NordTheme.accent(colorScheme))
                 VStack(alignment: .leading, spacing: 2) {

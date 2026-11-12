@@ -57,7 +57,6 @@ import {
 } from '../skillContext';
 import { userInputDirectories } from '../gitDiff/candidates';
 import {
-  captureSessionDiffBeforeFinal,
   captureTurnStartBaselines,
   createGitRunState,
   persistGitRunProvenance,
@@ -65,6 +64,7 @@ import {
 } from '../gitDiff/coordinator';
 import type { SessionDiffSummary } from '../gitDiff/contracts';
 import { withWorkingDirectoryParameter } from '../gitDiff/shellContext';
+import { captureFinalSessionDiff, setDiffRecoveryInput } from '../gitDiff/recovery';
 
 type InternalAgentTurnOptions = AgentTurnOptions & {
   progressGuard?: ToolProgressGuard;
@@ -181,6 +181,8 @@ async function runAgentTurnInternal(
       userInputDirectories(clientMessage.content || ''),
       'user_input',
     );
+    // Contract v4: the recovery manifest call sees only this run's own input.
+    setDiffRecoveryInput(session.gitRun, clientMessage.content || '');
   }
 
   // Prepend the <project_context> block whenever the client has a group
@@ -394,9 +396,26 @@ async function runAgentTurnInternal(
   };
 
   // Snapshot immediately before a final answer is persisted and delivered.
-  // Bounded by the coordinator timeout; never throws; undefined = no button.
+  // One helper for success and failure finals: the normal capture (bounded by
+  // the coordinator timeout), then at most one agent-assisted recovery per
+  // outer run (contract v4, 20 s budget). Never throws; undefined = no button.
   const captureSessionDiff = (): Promise<SessionDiffSummary | undefined> =>
-    captureSessionDiffBeforeFinal(session.gitRun, session.history, session.signal, log);
+    captureFinalSessionDiff(session.gitRun, session.history, {
+      model: agentModel,
+      signal: session.signal,
+      log,
+      // Same accounting as every model call, but the small manifest request
+      // must not replace the run's prompt-size hint used for context budget.
+      onUsage: async (result) => {
+        const promptTokens = session.lastModelPromptTokens;
+        try {
+          await recordUsage(result);
+        } finally {
+          session.lastModelPromptTokens = promptTokens;
+        }
+      },
+      send,
+    });
 
   const persistAndSendFailure = async (message: string): Promise<void> => {
     const displayMessage = message.startsWith('**Error:**') ? message : `**Error:** ${message}`;
@@ -955,6 +974,7 @@ export async function runAgentTurn(
           connection: options.signal,
           send,
           turnDiff: options.supportsGitTurnDiff === true,
+          diffRecovery: options.supportsDiffRecovery === true,
         })
       : undefined;
   const provenanceRun =

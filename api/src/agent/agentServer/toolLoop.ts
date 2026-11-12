@@ -33,6 +33,7 @@ import {
   recordShellGitResult,
 } from '../gitDiff/shellContext';
 import { captureTurnBaselines } from '../gitDiff/coordinator';
+import { recordDiffRecoveryEvidence, shellRecoveryContext } from '../gitDiff/recovery';
 
 export { extractProgressSummary } from './progressSummary';
 
@@ -424,13 +425,30 @@ export async function runToolLoop(
             log,
           );
         }
+        // Contract v4: correlate this shell with the outer run and tool call
+        // so native change records can be attributed (and nothing else).
+        const recoveryContext = shellRecoveryContext(session.gitRun, tc.id);
+        const gitContext = recoveryContext
+          ? { candidate_paths: gitPlan.context?.candidate_paths ?? [], ...recoveryContext }
+          : gitPlan.context;
         const terminalOutput = await new Promise<string>((resolve) => {
-          const finish = (output: string, _isError?: boolean, gitCommitObservations?: unknown) => {
+          let settled = false;
+          const finish = (
+            output: string,
+            _isError?: boolean,
+            gitCommitObservations?: unknown,
+            diffRecoveryEvidence?: unknown,
+          ) => {
+            if (settled) return;
+            settled = true;
             session.signal?.removeEventListener('abort', cancel);
             if (pendingShellScripts.get(sessionId)?.resolve === finish) {
               pendingShellScripts.delete(sessionId);
             }
             recordShellGitResult(session.gitRun, gitPlan, script, output, gitCommitObservations);
+            if (recoveryContext && diffRecoveryEvidence !== undefined && !session.signal?.aborted) {
+              recordDiffRecoveryEvidence(session.gitRun, tc.id, diffRecoveryEvidence, log);
+            }
             resolve(output);
           };
           const cancel = () =>
@@ -453,7 +471,7 @@ export async function runToolLoop(
             activity_id: tc.id,
             activity_phase: 'started',
             ...(gitPlan.workingDirectory ? { working_directory: gitPlan.workingDirectory } : {}),
-            ...(gitPlan.context ? { git_diff_context: gitPlan.context } : {}),
+            ...(gitContext ? { git_diff_context: gitContext } : {}),
           });
         });
         return {

@@ -392,3 +392,129 @@ tree (empty tree when unborn) with `--no-ext-diff --no-textconv --no-color` (nev
 exists and is an ancestor of (or equal to) the current HEAD; detached HEAD is fine. On
 reset/divergence or a HEAD that moves during capture, report `unavailable` and do not fall
 back. The patch stays within the existing 2 MiB budget.
+
+## Diff recovery (contract v4, `supports_diff_recovery`)
+
+Additive and opt-in. A client that does not send `supports_diff_recovery: true` on its
+initial `AgentMessage` (alongside the existing Git flags) sees no change. The capability
+only matters for a run that already has Git snapshot support.
+
+**Shell correlation.** For a capable run, every `shell_script` request carries
+`git_diff_context: { candidate_paths, turn_id, tool_call_id }` (`candidate_paths` may be
+empty). `turn_id` is the outer run id (`grun_…`), and `tool_call_id` is the provider tool call
+id of that exact shell. The native client keeps a `DiffRecoveryStore` per run. It may add
+optional `diff_recovery_evidence` to the terminal reply of that shell:
+
+```json
+{ "turn_id": "grun_…", "omitted": 0,
+  "records": [{ "id": "opaque", "toolCallId": "call_1", "root": "/abs/root",
+                "paths": ["src/a.ts"], "kind": "git", "before": "<oid>|null",
+                "after": "<oid>|null", "complete": true }] }
+```
+
+The backend accepts this field only through the outstanding shell's own resolve path, after
+the WebSocket layer has proved session, subscription and owning connection. If any of the
+following holds, the whole reply is rejected and no records from it are kept:
+
+- `turn_id` is not this run's id.
+- A record's `toolCallId` is not the issued tool call.
+- The reply has more than 32 records, or a record has more than 50 paths.
+- A path is absolute, contains `..`, or has control characters.
+- An id repeats.
+- `before`/`after` is not a Git OID (`git`) or a 64-hex content hash (`file`), or `null`.
+
+A later record with the same id replaces the earlier metadata. Once the run holds 32 records,
+new ids are dropped and counted as omitted. Records hold metadata only: no patch, no file
+content, and no script output. The store is runtime-only and is never persisted, so a new
+run starts empty. An older run's records can never be selected.
+
+**Structured automatic outcome.** The normal capture now returns
+`{ status: captured | no_changes | no_repository | missing_baseline | workspace_unavailable |
+capture_failed, summary?, reason? }` (`captureSessionDiffOutcome`).
+`captureSessionDiffBeforeFinal` is unchanged for existing callers. A `captured` result is
+used exactly as before.
+
+**Fallback trigger.** It runs at most once per outer run, and only when all of these hold:
+the run has the v4 capability, the normal outcome is not `captured`, and the run holds at
+least one verified record. No records means no model call. Both the success final and the
+failure final go through the same helper (`captureFinalSessionDiff`). The existing steering
+recheck still runs after the capture and before history is persisted.
+
+**Restricted manifest call.** This is one `aiClient.complete` call on the run's current model.
+It has no tools, a fixed literal system prompt (`DIFF_RECOVERY_SYSTEM_PROMPT`), and
+`maxTokens: 1000`. Its input is limited to:
+
+- this run's own user input, trimmed to 2,000 characters;
+- the records' id, toolCallId, kind, root, up to 20 paths, path count and `complete` flag.
+
+It receives no history, script text, terminal output or hashes. The reply must be exactly
+`{"evidenceIds":[…]}` (1–6 unique ids from the offered allowlist) or `{"unavailable":true}`.
+A single fenced JSON block is tolerated. Anything else is rejected and no snapshot is made.
+The model chooses which evidence to use. It never writes a patch, path, OID or command.
+Usage is recorded through the existing recorder. That accounting is bounded (≤2 s), a
+failure in it is swallowed, and it does not overwrite the run's prompt-size hint.
+
+**Recover control.** `git_diff_request { phase: "recover", candidate_paths: [],
+eligible_commits: [], recovery: { turn_id, evidence_ids } }` goes over the run's own
+connection. Baseline fields are not used. The native client must answer from its run-local
+store with `repositories: [{ root, patch, scope: "working_tree" }]` and
+`recovery: { turn_id, evidence_ids, omitted }`. When several records share a root, the client
+combines them into one patch without duplicate paths, preferring the latest checkpoint.
+
+The backend checks the reply strictly:
+
+- It requires the exact turn id and the exact selected id set.
+- Each root must belong to a selected record, and no root may repeat.
+- Repositories may only carry `root`, `patch` and `scope: "working_tree"`. A commit,
+  baseline or turn claim is rejected.
+- Patches are limited to 2 MiB combined.
+
+**Budget and cancellation.** One 20 s budget covers the AI call and the native request
+together. The provider call receives a real `AbortSignal` that is aborted on deadline, cancel
+or disconnect, and the backend never waits past that point. After a cancel or deadline,
+nothing is stored or attached. The original final answer is never changed, delayed past the
+bound, or lost.
+
+**Storage and viewer.** The existing compressed payload is reused and gains
+`recovery: { kind: "agent_assisted", turnId, evidenceIds, complete, limitations[] }` and
+`displayLimit: 50`. The summary adds `recovered: true` and `recoveryIncomplete`, both of which
+survive `cleanSessionDiffSummary` and transcript hydration. `stripProviderMetadata` still
+keeps them out of provider requests.
+
+The viewer header reads **Recovered turn changes** and states that the diff was recovered
+with agent assistance from per-command checkpoints. Each repository is labelled "recovered
+from turn checkpoints". A partial recovery shows an explicit **Partial recovery** warning plus
+fixed limitation lines, such as:
+
+- records that were not selected;
+- records the native store omitted;
+- records over the backend budget;
+- records truncated by native limits;
+- selected roots that returned no patch.
+
+**Native obligations (summary).** These are owned by the macOS client:
+
+- Inspect candidates deterministically, without `eval`.
+- Resolve Git roots and worktrees, and discover new worktrees through a bounded
+  `git worktree list` of an already-known repository. Never scan the whole machine.
+- Checkpoint known roots before each shell, so a deleted worktree keeps its last verified
+  patch.
+- Capture the net change with the existing read-only collector flags.
+- For non-Git files, only handle explicit quoted absolute paths, with a verified before-image
+  and limits of 256 KiB per file and 2 MiB in total.
+- Apply `GitSensitivePathPolicy`.
+- Keep each hook within 2 s.
+
+### Recovery verification and boundaries
+
+Recovery runs only with current-turn native evidence. A successful empty automatic
+capture supersedes older Git checkpoints for the roots it checked. Non-Git files
+are hash-checked again before replay; changed/deleted checkpoints are omitted.
+Native records keep at most50allowlisted paths (both rename sides included), and
+oversized records are explicitly partial. Unsupported C-quoted/ambiguous filenames
+fail closed; this is not a general filesystem audit or an exhaustive write tracker.
+Read-only shell checkpoints can add up to2seconds before and2seconds after each
+command. Supported non-Git files require a reliable before-image or verified absence.
+The20second fallback budget covers model selection, native replay and waiting for
+persistence. An uninterruptible database insert may finish after timeout and leave
+an unattached snapshot row; its result is never attached to the final answer late.

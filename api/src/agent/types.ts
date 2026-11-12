@@ -72,6 +72,9 @@ export interface AgentMessage {
   // Client -> server (initial input, contract v3): the client can capture
   // per-turn HEAD baselines (`git_diff_request.phase`). Literal true only.
   supports_git_turn_diff?: boolean;
+  // Client -> server (initial input, contract v4): the client keeps a run-local
+  // DiffRecoveryStore and answers `phase: "recover"`. Literal true only.
+  supports_diff_recovery?: boolean;
   // Server -> client control frame sent before a final answer.
   git_diff_request?: GitDiffRequest;
   // Client -> server reply to git_diff_request (validated; never a turn input).
@@ -83,6 +86,9 @@ export interface AgentMessage {
   working_directory?: string;
   // Client -> server on the terminal reply of an outstanding shell_script.
   git_commit_observations?: unknown;
+  // Client -> server on the terminal reply of an outstanding shell_script
+  // (contract v4): raw, unvalidated change-record metadata for this run/tool.
+  diff_recovery_evidence?: unknown;
   // Server -> client on a final answer: immutable snapshot summary.
   session_diff?: SessionDiffSummary;
 }

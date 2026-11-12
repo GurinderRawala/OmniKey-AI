@@ -239,6 +239,10 @@ struct GitSnapshotCollector: Sendable {
         case .none: return collect(request)
         case .baseline: return collectBaseline(request, store: turnStore)
         case .final: return collectTurn(request, store: turnStore)
+        case .recover:
+            // Served only from the run's `DiffRecoveryStore`, never by
+            // collecting from request-provided paths.
+            return GitDiffResponsePayload(requestID: request.requestID, status: .unavailable, reason: "Recovery evidence is unavailable.")
         }
     }
 
@@ -303,7 +307,15 @@ struct GitSnapshotCollector: Sendable {
                 original = (original as NSString).deletingLastPathComponent
             }
             let levels = canonical.dropFirst(root.count).split(separator: "/").count
+            let originalLevels = original.split(separator: "/").count
+            // A symlinked candidate can be spelled with fewer components
+            // than its canonical depth below the root; walking up would then
+            // leave the repository (possibly reaching `/`). Fail closed to
+            // the canonical root.
+            guard levels < originalLevels else { continue }
             for _ in 0..<levels { original = (original as NSString).deletingLastPathComponent }
+            // The reported spelling must name exactly this repository root.
+            guard original != "/", original.hasPrefix("/"), canonicalDirectory(original) == root else { continue }
             return original
         }
         return root
@@ -726,7 +738,7 @@ extension GitSnapshotCollector {
             guard baseline.isWellFormed else { throw CollectionError.unavailable("Invalid turn baseline.") }
             guard let directory = Self.canonicalDirectory(baseline.root),
                   let root = try Self.repositoryRoot(of: directory, runner: runner, deadline: deadline)
-            else { continue }
+            else { throw CollectionError.unavailable("Turn baseline repository is no longer available.") }
             if let (existing, existingIndex) = chosen[root] {
                 let lhs = (rank(baseline), date(baseline.capturedAt), index)
                 let rhs = (rank(existing), date(existing.capturedAt), existingIndex)
