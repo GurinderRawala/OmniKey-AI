@@ -13,6 +13,13 @@
       <description>Five example workflows using OmniAgent with terminal access, authenticated browser sessions, and MCP integrations, plus permission and safety guidance.</description>
     </item>
     <item>
+      <title>OmniKey v1.8.22</title>
+      <link>https://omnikeyai.ca/changelog#v1.8.22</link>
+      <guid isPermaLink="false">omnikey-v1.8.22</guid>
+      <pubDate>Fri, 13 Nov 2026 00:00:00 +0000</pubDate>
+      <description><![CDATA[<ul><li>Serialize transcript writes and retry busy transactions from a fresh snapshot</li><li>Retain worker reply listener across readiness notifications</li><li>Initialize SQLite busy timeout asynchronously once per connection</li><li>Bump CLI and bundled API to 1.8.22</li><li>Recover daemon safely from SQLite failures and worker crashes</li><li>Publish 1.8.21 and macOS 1.9.21 changelog</li></ul>]]></description>
+    </item>
+    <item>
       <title>OmniKey v1.8.21</title>
       <link>https://omnikeyai.ca/changelog#v1.8.21</link>
       <guid isPermaLink="false">omnikey-v1.8.21</guid>
@@ -144,13 +151,6 @@
       <guid isPermaLink="false">omnikey-v1.8.2</guid>
       <pubDate>Sun, 20 Sep 2026 00:00:00 +0000</pubDate>
       <description><![CDATA[<ul><li>Paginate command activity timeline</li><li>Show latest timeline activity status</li></ul>]]></description>
-    </item>
-    <item>
-      <title>OmniKey v1.8.1</title>
-      <link>https://omnikeyai.ca/changelog#v1.8.1</link>
-      <guid isPermaLink="false">omnikey-v1.8.1</guid>
-      <pubDate>Sat, 19 Sep 2026 00:00:00 +0000</pubDate>
-      <description><![CDATA[<ul><li>Include compression in daemon package</li></ul>]]></description>
     </item>
   </channel>
 </rss>
