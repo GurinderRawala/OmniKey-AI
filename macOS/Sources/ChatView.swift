@@ -3822,6 +3822,9 @@ struct ChatMarkdownView: View, @MainActor Equatable {
         guard count >= 3 else { return nil }
         let marker = String(repeating: String(first), count: count)
         let info = String(line.dropFirst(count))
+        // CommonMark: a backtick fence's info string cannot contain a
+        // backtick. Same-line inline code is prose, not an empty code block.
+        guard first != "`" || !info.contains("`") else { return nil }
         return (marker, info)
     }
 
@@ -4244,7 +4247,9 @@ struct ChatCodeBlockView: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
                     .frame(minWidth: 0, alignment: .leading)
+                    .background(ChatCodeScrollAffordance())
             }
+            .scrollIndicators(.visible, axes: .horizontal)
             .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
         }
     }

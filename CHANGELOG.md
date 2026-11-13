@@ -1,5 +1,16 @@
 # Changelog
 
+## macOS 1.9.19 (build 80) — 2026-11-13
+
+### Fixed
+- Code blocks expose a persistent horizontal scrollbar while retaining code selection, fixed copy controls and vertical transcript scrolling.
+- The chat Markdown editor no longer auto-inserts an extra closing fence, preserving typed code-fenced prompts exactly across send/reset.
+- Same-line backtick spans are no longer misparsed as an empty fenced block with the rest of the message swallowed as its language hint.
+
+### Validation
+- Isolated native component tests cover code-first prompts, narrow/normal widths, wheel routing, copy controls, literal composer reset and malformed/unfinished fences. No app/E2E launch performed.
+- No process crash was reproduced for the reported code-first session; that session reached the backend and was cancelled. Real trackpad phased-gesture acceptance still requires user testing.
+
 ## macOS 1.9.18 (build 79) · CLI/API 1.8.20 — 2026-11-13
 
 ### Added

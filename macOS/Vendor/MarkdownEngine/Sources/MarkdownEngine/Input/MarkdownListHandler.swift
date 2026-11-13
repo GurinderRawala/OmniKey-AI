@@ -217,7 +217,8 @@ struct MarkdownLists {
 
             // Horizontal rules render via the styler; source stays literal `---` so files round-trip.
 
-            if currentLine.range(of: "^```\\w*$", options: .regularExpression) != nil {
+            if activeConfig.lists.autoCloseCodeFencesEnabled,
+               currentLine.range(of: "^```\\w*$", options: .regularExpression) != nil {
                 // Non-overlapping ``` count before the line (what
                 // components(separatedBy:).count-1 computed, without
                 // materializing an O(doc) substring array).

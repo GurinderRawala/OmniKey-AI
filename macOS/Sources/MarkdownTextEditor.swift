@@ -105,6 +105,9 @@ struct MarkdownTextEditor: View {
             paragraphSpacing: 6,
             horizontalIndent: 12
         )
+        // Chat input is literal user intent: do not synthesize a trailing
+        // code fence that survives sending or changes the next typed block.
+        configuration.lists.autoCloseCodeFencesEnabled = false
         configuration.inlineCode = InlineCodeStyle(fontSizeScale: 0.95)
         configuration.paragraph = ParagraphStyle(
             spacingFactor: 0.22,

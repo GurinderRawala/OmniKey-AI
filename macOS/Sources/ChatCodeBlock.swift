@@ -298,6 +298,36 @@ enum ChatCodeBlockPalette {
 /// Code block style for Textual's `StructuredText`, used by the
 /// assistant's final answer.
 ///
+/// Keep a discoverable horizontal scrollbar for code independently of the
+/// system's auto-hidden scroll indicator preference. This targets only the
+/// enclosing horizontal code scroll view, never the transcript's viewport.
+struct ChatCodeScrollAffordance: NSViewRepresentable {
+    final class Probe: NSView {
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+        override func viewDidMoveToSuperview() { super.viewDidMoveToSuperview(); configureSoon() }
+        override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); configureSoon() }
+        func configureSoon() {
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                var ancestor = self.superview
+                while let view = ancestor {
+                    if let scroll = view as? NSScrollView {
+                        guard scroll.hasHorizontalScroller, !scroll.hasVerticalScroller,
+                              let document = scroll.documentView,
+                              document.frame.width > scroll.contentView.bounds.width + 1 else { return }
+                        if scroll.autohidesScrollers { scroll.autohidesScrollers = false }
+                        if scroll.scrollerStyle != .legacy { scroll.scrollerStyle = .legacy }
+                        return
+                    }
+                    ancestor = view.superview
+                }
+            }
+        }
+    }
+    func makeNSView(context: Context) -> Probe { Probe() }
+    func updateNSView(_ view: Probe, context: Context) { view.configureSoon() }
+}
+
 /// Textual's bundled `.gitHub` style renders a bare scrollable slab with
 /// no language label and no copy affordance. This style keeps Textual's
 /// syntax highlighting and — critically — its `Overflow` container
@@ -342,7 +372,9 @@ struct ChatStructuredCodeBlockStyle: StructuredText.CodeBlockStyle {
                     .monospaced()
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
+                    .background(ChatCodeScrollAffordance())
             }
+            .scrollIndicators(.visible, axes: .horizontal)
         }
         .modifier(ChatCodeBlockSurface())
         .textual.blockSpacing(.init(top: 4, bottom: 14))
