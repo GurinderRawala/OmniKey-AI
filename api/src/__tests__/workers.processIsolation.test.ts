@@ -48,11 +48,17 @@ describe('database worker process isolation', () => {
     worker.worker.kill('SIGKILL');
     await closed;
     await vi.waitFor(() => expect(mocks.forks).toBe(2), { timeout: 7_000, interval: 20 });
-    const reply = once(worker.worker, 'message');
+    const child = worker.worker;
+    const reply = new Promise<unknown>((resolve) => {
+      const onMessage = (message: { ready?: boolean }) => {
+        if (message.ready) return;
+        child.off('message', onMessage);
+        resolve(message);
+      };
+      child.on('message', onMessage);
+    });
     worker.postMessage({ type: 'runJob', jobId: 'job', sessionId: 'session' });
-    // The first message can be the new child's ready notification.
-    let [message] = await reply;
-    if (message.ready) [message] = await once(worker.worker, 'message');
+    const message = await reply;
     expect(message).toEqual({ type: 'runJob', jobId: 'job', sessionId: 'session' });
     expect(worker.worker.pid).not.toBe(originalPid);
     await worker.stop();
