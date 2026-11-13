@@ -379,7 +379,7 @@ final class ChatModel: ObservableObject {
     /// card selects its own immutable ID; switching sessions clears it.
     @Published private(set) var inspectedSessionDiff: SessionDiffSelection? = nil
 
-    func toggleSessionDiff(_ diff: SavedSessionDiff, diffViewEnabled: Bool = AgentDiffViewSetting.isEnabled()) {
+    func toggleSessionDiff(_ diff: SavedSessionDiff, diffViewEnabled: Bool = AgentDiffViewSetting.currentRunValue()) {
         guard diffViewEnabled else { inspectedSessionDiff = nil; return }
         guard let sessionId = activeSessionId, diff.isEligibleForViewer else { return }
         if inspectedSessionDiff?.sessionId == sessionId, inspectedSessionDiff?.diff.id == diff.id {

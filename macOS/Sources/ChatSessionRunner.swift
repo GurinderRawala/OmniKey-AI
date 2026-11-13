@@ -412,7 +412,10 @@ final class ChatSessionRunner {
             onBlock: onBlock,
             onSteeringEvent: onSteeringEvent,
             onFinal: onFinal,
-            onError: onError
+            onError: onError,
+            // The mirror of the identity this turn connects as, never a
+            // value saved for another subscription or backend.
+            diffViewEnabled: AgentDiffViewSetting.runValue(for: connection.identity)
         )
     }
 
@@ -660,7 +663,7 @@ final class ChatSessionRunner {
         diffRecovery: DiffRecoveryStore = DiffRecoveryStore(),
         // Snapshotted once per run (evaluated per call). Toggling the
         // setting never changes the protocol of a run already in flight.
-        diffViewEnabled: Bool = AgentDiffViewSetting.isEnabled()
+        diffViewEnabled: Bool = AgentDiffViewSetting.currentRunValue()
     ) {
         var request = URLRequest(url: url)
         request.addValue("Bearer \(jwt)", forHTTPHeaderField: "Authorization")

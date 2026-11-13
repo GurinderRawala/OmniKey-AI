@@ -607,10 +607,15 @@ formatted result. Only interpreter **write** calls count as resolved; a read-onl
 **Sensitive operands.** An operand that cannot be resolved (for example `../.env`,
 `"$DIR/.ssh/config"` or `~/.config/…` without a known home) is still checked by its literal
 components; a sensitive one withholds the script and output excerpts exactly like a resolved
-sensitive target. Any dot-prefixed entry directly in a home directory (`~/.config/gh/…`,
-`~/.terraform.d/…`, `~/.zshrc`, also of another user's home) is sensitive, except the
-agent's own `~/.omniAgent` and `~/.omnikey` task directories. Such targets are never
-offered to the reconstruction model.
+sensitive target. Any dot-prefixed component anywhere below a home directory
+(`~/.config/gh/…`, `~/work/.config/gh/hosts.yml`, `~/.zshrc`, repository dot directories such
+as `~/project/.github/…`, also of another user's home) is sensitive, matching the native
+non-Git policy. The only exceptions are the agent's own top-level `~/.omniAgent` /
+`~/.omnikey` component and the exact task metadata entry
+`~/.omniAgent|.omnikey/garbage/<id>/.omniagent-owned`; hidden components deeper inside a task
+directory (for example `…/worktrees/repo/.config/…`) stay sensitive. An unresolved operand
+with any hidden component (`../.config/x`) is sensitive too. Such targets are never offered
+to the reconstruction model, and their excerpts are withheld (which blocks the card).
 
 **Python `Path` variables.** `NAME.write_text(…)` or `NAME.write_bytes(…)` resolves only
 when `NAME` has exactly **one** binding in the whole script, and that binding is a
@@ -749,9 +754,15 @@ complete known coverage is saved and attached as before, with no extra model cal
 - literal write targets of this run's write-like shells (see the allowlist above);
 - the root plus relative paths of every verified native record.
 
-A path is **covered** when an actual patch section of a verified repository names it. A path
-is **exempt** when it lies inside a root the automatic capture reported as net-empty, or a
-root that was reverted. Net-empty roots are returned with both `no_changes` and `captured`
+A path is **covered** when an actual patch section of a verified repository names it. A
+net-empty root is **not** a blanket exemption: Git does not report ignored or otherwise
+unobserved files, so a write to `report.txt` ignored by repo A leaves repo A net-empty while
+the file changed. A path is **exempt** only with per-path proof: it is named by a native
+`git` record of this run (Git observed it) and lies inside a root the automatic capture
+reported net-empty. Such records are dropped (never resurrected) and their paths kept as
+`revertedPaths`, so a later write target naming the same path stays exempt. Every other
+known write target inside a net-empty root is still required and goes to the bounded AI
+reconstruction; if that is unavailable, nothing is attached. Net-empty roots are returned with both `no_changes` and `captured`
 outcomes: a recorded baseline root (the native collector captures every baselined root of an
 `ok` turn final and omits empty patches) or a validated `turn` entry without a non-empty
 patch. A working-tree entry never qualifies, and neither does a root that contains, or lies
@@ -777,8 +788,13 @@ verified evidence.
 - a write target that could not be resolved to a literal path (variables, globs, a relative
   path without a cwd, over-cap targets, or dynamic interpreter writes; see
   `ShellWriteEvidence.unresolved`);
-- `git`/`patch` writes whose cwd is not inside an authoritative turn root or a net-empty
-  root;
+- `git`/`patch` writes whose directory is not inside an authoritative turn root or a
+  net-empty root. The directory is the shell cwd at that command after every literal
+  `git -C` (a chained relative `-C` resolves against the previous one; nothing is looked up
+  on the filesystem), recorded as `ShellWriteEvidence.gitDirs`. A non-literal `-C`
+  (`-C "$REPO"`), a relative `-C` without a known cwd, `--git-dir`/`--work-tree`/
+  `--namespace` or `patch -d` make the write `unresolved`. A literal `-C` into another
+  repository is not covered by a capture of the cwd repository;
 - truncated or withheld command evidence. This includes scripts that target sensitive
   paths: sensitive exclusions are policy limits, so the card is withheld rather than asking
   the model about secrets;
@@ -829,14 +845,21 @@ does not mean the content was verified, and it does not mean every change on dis
 writes by unrecognised scripts cannot be detected, and the limitation lines say so. The
 viewer always shows the **Unverified** notice. A merged snapshot is headed **Turn changes
 with AI-reconstructed files**, labels only the marked entries "AI-reconstructed
-(unverified)", and stores `recovery.base: "automatic" | "checkpoint"`.
+(unverified)", and stores `recovery.base: "automatic" | "checkpoint"`. When every
+reconstructed path was reported unchanged, the saved payload has a `base` but no
+`reconstructed` entry; the viewer then keeps the verified labels (**Turn changes** /
+**Recovered turn changes**, per-repository baseline or checkpoint titles) and only notes that
+the model's "unchanged" claim is unverified. Legacy AI payloads without `base` and without
+entry markers are still treated as AI-only.
 
 **Older partial snapshots.**
 
 - `GET /api/agent/sessions/:id/diffs/:diffId` answers
   `409 {"error":"Diff incomplete","code":"diff_incomplete"}`, without rendering, for any
-  stored payload with `recovery.complete !== true`, and for a turn payload (`baselines`
-  present) with a non-`turn` repository.
+  stored payload whose recovery metadata has `complete !== true`. Recovery metadata takes
+  precedence: a complete recovery may legitimately mix `turn` entries with checkpoint or
+  AI-reconstructed `working_tree` entries and is served. Only when recovery metadata is
+  absent is a turn payload (`baselines` present) with a non-`turn` repository rejected.
 - Transcript replay drops `session_diff` summaries with `recoveryIncomplete === true` or
   `baselineUnavailable === true`.
 - Legacy working-tree payloads without these flags are served as before.

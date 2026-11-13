@@ -771,10 +771,16 @@ export async function captureFinalSessionDiff(
     // last shell checkpoint. Do not resurrect Git edits reverted since it.
     if (unchangedRoots.length && run.recovery) {
       const emptyRoots = new Set(unchangedRoots.map(comparablePath));
+      const revertedPaths = new Set(run.recovery.revertedPaths ?? []);
       for (const [id, record] of run.recovery.records) {
-        if (record.kind === 'git' && emptyRoots.has(comparablePath(record.root)))
+        if (record.kind === 'git' && emptyRoots.has(comparablePath(record.root))) {
+          // Git observed these paths, so the net-empty root proves them reverted.
+          for (const rel of record.paths)
+            revertedPaths.add(comparablePath(`${record.root}/${rel}`));
           run.recovery.records.delete(id);
+        }
       }
+      run.recovery.revertedPaths = [...revertedPaths];
       // Never let AI reconstruction revive writes inside those roots either.
       run.recovery.revertedRoots.push(...unchangedRoots);
     }

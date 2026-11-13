@@ -129,7 +129,11 @@ import {
   buildFilePatch,
   parseReconstructionFiles,
 } from '../agent/gitDiff/aiReconstruction';
-import { classifyShellWrites, redactSecrets } from '../agent/gitDiff/writeEvidence';
+import {
+  classifyShellWrites,
+  isSensitiveWritePath,
+  redactSecrets,
+} from '../agent/gitDiff/writeEvidence';
 import {
   coverageAssessment,
   patchCoveredPaths,
@@ -1921,6 +1925,122 @@ printf 'hi\\n' > todo.md`;
     expect(await diffCount('ai-merge-none')).toBe(0);
   }, 60_000);
 
+  it('a verified base whose every reconstructed path is unchanged keeps verified viewer labels', async () => {
+    queueResults(
+      writeShell(`echo x > a.ts`, 'c1', ROOT),
+      writeShell(`echo more >> n.md`, 'c2', NOTES),
+      finalAnswer('done'),
+    );
+    mocks.reconstructionResult.mockResolvedValue(
+      manifest({ files: [{ path: `${NOTES}/n.md`, before: 'n\n', after: 'n\n' }] }),
+    );
+    const t = await turn('ai-merge-same', `Fix ${ROOT}`, {
+      heads: { [ROOT]: OID_1 },
+      final: (req) => ({
+        status: 'ok',
+        repositories: (req.baselines ?? []).map((b) => ({
+          root: b.root,
+          patch: filePatch('a.ts'),
+          scope: 'turn',
+          baselineHead: b.head,
+          head: OID_1,
+          baselineCapturedAt: b.capturedAt,
+          baselineSource: b.source,
+        })),
+      }),
+    });
+    const stored = await loadSessionDiffPayload(
+      'ai-merge-same',
+      'sub-a',
+      t.final!.session_diff!.id,
+    );
+    expect(stored!.payload.recovery).toMatchObject({
+      kind: 'ai_reconstructed',
+      base: 'automatic',
+      complete: true,
+    });
+    expect(stored!.payload.repositories.some((r) => r.reconstructed)).toBe(false);
+    const res = await request(app)
+      .get(`/api/agent/sessions/ai-merge-same/diffs/${t.final!.session_diff!.id}`)
+      .set('x-test-subscription', 'sub-a');
+    expect(res.status).toBe(200);
+    const html: string = res.body.html;
+    expect(html).toContain('<h1>Turn changes</h1>');
+    expect(html).toContain('All files shown are from the automatic Git capture of this turn.');
+    expect(html).not.toContain('AI-reconstructed (unverified)');
+    expect(html).not.toContain('Turn changes with AI-reconstructed files');
+    expect(html).not.toContain('AI-reconstructed from this turn');
+    expect(html).toContain('No file is AI-reconstructed');
+    expect(html).not.toContain('were reconstructed by the AI model');
+    expect(html).toContain('reported the remaining known write targets of this turn unchanged');
+    expect(html).toContain(`${ROOT} · <code class="oid">`);
+  }, 60_000);
+
+  it('a write in a net-empty root is still required next to another changed root', async () => {
+    // Repo A (ROOT) is net-empty because report.txt is ignored; repo B
+    // (WORKTREE) has a verified change. The automatic capture alone must
+    // not be attached as complete.
+    const final = (req: GitDiffRequest): Body => ({
+      status: 'ok',
+      repositories: (req.baselines ?? []).map((b) => ({
+        root: b.root,
+        patch: b.root === WORKTREE ? filePatch('b.ts') : '',
+        scope: 'turn',
+        baselineHead: b.head,
+        head: b.head,
+        baselineCapturedAt: b.capturedAt,
+        baselineSource: b.source,
+      })),
+    });
+    const heads = { [ROOT]: OID_1, [WORKTREE]: OID_1 };
+    queueResults(
+      writeShell(`echo r > report.txt`, 'c1', ROOT),
+      writeShell(`echo x > b.ts`, 'c2', WORKTREE),
+      finalAnswer('done'),
+    );
+    mocks.reconstructionResult.mockResolvedValue(manifest({ unavailable: true }));
+    const blocked = await turn('ai-ignored-a', `Fix ${ROOT} and ${WORKTREE}`, { heads, final });
+    expect(reconstructionCalls()).toHaveLength(1);
+    const payload = JSON.parse((reconstructionCalls()[0][1] as any)[1].content);
+    expect(payload.allowedPaths.map((p: any) => p.path)).toEqual([`${ROOT}/report.txt`]);
+    expect(blocked.final!.session_diff).toBeUndefined();
+    expect(await diffCount('ai-ignored-a')).toBe(0);
+
+    // The AI fills the ignored file from this turn's evidence: merged card.
+    mocks.complete.mockClear();
+    queueResults(
+      writeShell(`echo r > report.txt`, 'c1', ROOT),
+      writeShell(`echo x > b.ts`, 'c2', WORKTREE),
+      finalAnswer('done'),
+    );
+    mocks.reconstructionResult.mockResolvedValue(
+      manifest({ files: [{ path: `${ROOT}/report.txt`, before: 'old\n', after: 'r\n' }] }),
+    );
+    const filled = await turn('ai-ignored-b', `Fix ${ROOT} and ${WORKTREE}`, { heads, final });
+    const stored = await loadSessionDiffPayload(
+      'ai-ignored-b',
+      'sub-a',
+      filled.final!.session_diff!.id,
+    );
+    expect(stored!.payload.repositories.map((r) => [r.root, r.reconstructed])).toEqual([
+      [WORKTREE, undefined],
+      [ROOT, true],
+    ]);
+  }, 60_000);
+
+  it('a Git-observed path reverted to a net-empty root needs no AI and leaves no artifact', async () => {
+    queueResults(writeShell(`echo x > a.ts`, 'c1', ROOT), finalAnswer('done'));
+    const t = await turn('ai-true-revert', `Fix ${ROOT}`, {
+      heads: { [ROOT]: OID_1 },
+      final: emptyTurnFinal,
+      evidence: (ctx) => ({ turn_id: ctx!.turn_id, records: [rec('r-a', 'c1', ROOT, ['a.ts'])] }),
+    });
+    expect(reconstructionCalls()).toHaveLength(0);
+    expect(recoveryCalls()).toHaveLength(0);
+    expect(t.final!.session_diff).toBeUndefined();
+    expect(await diffCount('ai-true-revert')).toBe(0);
+  });
+
   it('a complete automatic capture of 100 files attaches with no extra model call', async () => {
     queueResults(writeShell(`echo x > f000.ts`, 'c1', ROOT), finalAnswer('done'));
     const patch = Array.from({ length: 100 }, (_, i) =>
@@ -2081,7 +2201,7 @@ printf 'hi\\n' > todo.md`;
     expect(t.final!.session_diff).toMatchObject({ recovered: true, recoveryMethod: 'checkpoint' });
   });
 
-  it('no_changes still attempts, but never revives writes inside a net-empty root', async () => {
+  it('no_changes still attempts; a net-empty root alone never exempts its write targets', async () => {
     queueResults(
       writeShell(`echo x > a.ts`, 'c1', ROOT),
       writeShell(`set -e\nmkdir new\necho hi > new/n.md`, 'c2', NOTES),
@@ -2091,18 +2211,25 @@ printf 'hi\\n' > todo.md`;
     await turn('ai-reverted', `Fix ${ROOT}`, { heads: { [ROOT]: OID_1 }, final: emptyTurnFinal });
     expect(reconstructionCalls()).toHaveLength(1);
     const payload = JSON.parse((reconstructionCalls()[0][1] as any)[1].content);
-    expect(payload.allowedPaths.map((p: any) => p.path)).toEqual([`${NOTES}/new/n.md`]);
-    expect(payload.allowedPaths[0].creationVerified).toBe(false);
+    // The ROOT target has no Git-observed proof of revert (it may be ignored).
+    expect(payload.allowedPaths.map((p: any) => p.path)).toEqual([
+      `${ROOT}/a.ts`,
+      `${NOTES}/new/n.md`,
+    ]);
+    expect(payload.allowedPaths.every((p: any) => p.creationVerified === false)).toBe(true);
 
-    // Writes only inside a net-empty root are exempt: nothing is missing, so
-    // there is nothing to show and no model call.
+    // A net-empty root alone is no per-path proof (the write may be to an
+    // ignored file): the target is still required, so one bounded AI attempt
+    // is made; unavailable leaves no card.
     mocks.complete.mockClear();
     queueResults(writeShell(`echo x > a.ts`, 'c1', ROOT), finalAnswer('done'));
     const t2 = await turn('ai-reverted-2', `Fix ${ROOT}`, {
       heads: { [ROOT]: OID_1 },
       final: emptyTurnFinal,
     });
-    expect(reconstructionCalls()).toHaveLength(0);
+    expect(reconstructionCalls()).toHaveLength(1);
+    const p2 = JSON.parse((reconstructionCalls()[0][1] as any)[1].content);
+    expect(p2.allowedPaths.map((p: any) => p.path)).toEqual([`${ROOT}/a.ts`]);
     expect(t2.final!.session_diff).toBeUndefined();
   });
 
@@ -2243,14 +2370,33 @@ describe('coverage assessment', () => {
     expect(c.complete).toBe(false);
   });
 
-  it('exempts net-empty roots; unknown targets, truncation and budgets block', () => {
-    const ok = coverageAssessment({
+  it('exempts only Git-observed paths of net-empty roots; unknown targets, truncation and budgets block', () => {
+    // A net-empty root alone does not exempt a write target (it may be ignored).
+    const rootOnly = coverageAssessment({
       state: state([write(['/tmp/w/a.ts'])]),
       verified: [],
       unchangedRoots: ['/private/tmp/w'],
       records: [],
     });
+    expect(rootOnly.complete).toBe(false);
+    expect([...rootOnly.missing.keys()]).toEqual(['/tmp/w/a.ts']);
+    // A path a native Git record of this run named is proven reverted.
+    const ok = coverageAssessment({
+      state: state([write(['/tmp/w/a.ts'])], { revertedPaths: ['/tmp/w/a.ts'] }),
+      verified: [],
+      unchangedRoots: ['/private/tmp/w'],
+      records: [],
+    });
     expect(ok).toMatchObject({ complete: true, blocking: [] });
+    // Native git records of a net-empty root are exempt themselves.
+    expect(
+      coverageAssessment({
+        state: undefined,
+        verified: [],
+        unchangedRoots: ['/tmp/w'],
+        records: [rec('r1', 'c1', '/tmp/w', ['a.ts'])],
+      }).complete,
+    ).toBe(true);
     for (const [w, extra, flag] of [
       [write([], { unresolved: true }), {}, 'write_target_unknown'],
       [write([], { truncated: true }), {}, 'write_evidence_truncated'],
@@ -3178,12 +3324,125 @@ describe('write evidence: literal dollars, sensitive unresolved operands, read-o
       true,
     );
     expect(classify('printf x > /home/carol/.zshrc')!.sensitive).toBe(true);
-    // Repository dotfiles and the agent's own task directories stay normal targets.
+    // Hidden components anywhere below home are withheld (like the native
+    // policy), including repository dot directories; only the agent's own
+    // top-level task directory is exempt.
     const repo = classify('printf x > /Users/alice/project/.github/ci.yml')!;
-    expect(repo.sensitive).toBe(false);
-    expect(repo.targets.map((t) => t.path)).toEqual(['/Users/alice/project/.github/ci.yml']);
+    expect(repo.sensitive).toBe(true);
+    expect(repo.targets).toEqual([]);
     const task = classify('printf x > /Users/alice/.omniAgent/garbage/t1/worktrees/w/a.ts')!;
     expect(task.sensitive).toBe(false);
+  });
+
+  it('withholds hidden components anywhere below home except proven task metadata', () => {
+    // Nested config below a work directory.
+    expect(classify('printf x > /Users/alice/work/.config/gh/hosts.yml')!.sensitive).toBe(true);
+    // Unresolved traversal into a config directory is withheld too.
+    const traversal = classify('printf x > ../.config/gh/hosts.yml');
+    expect(traversal!.sensitive).toBe(true);
+    // Secrets inside an agent worktree are not exempt by the task directory.
+    expect(
+      classify('printf x > /Users/alice/.omniAgent/garbage/t1/worktrees/w/.config/x.yml')!
+        .sensitive,
+    ).toBe(true);
+    expect(
+      classify('printf x > /Users/alice/.omniAgent/garbage/t1/worktrees/w/.env.local')!.sensitive,
+    ).toBe(true);
+    // Valid task metadata stays bookkeeping, never sensitive.
+    const meta = classify(
+      'printf x > /Users/alice/.omniAgent/garbage/t1/.omniagent-owned; printf y > /Users/alice/.omniAgent/garbage/t1/status',
+    )!;
+    expect(meta.sensitive).toBe(false);
+    expect(meta.targets).toEqual([]);
+    expect(meta.auxiliaryTargets!.map((a) => a.name).sort()).toEqual([
+      '.omniagent-owned',
+      'status',
+    ]);
+    expect(isSensitiveWritePath('/Users/alice/.omniAgent/garbage/t1/.hidden')).toBe(true);
+  });
+
+  it('records the directory Git writes act on, following -C', () => {
+    const c = (script: string, dir: string | null = cwd) =>
+      classifyShellWrites(script, { cwd: dir ?? undefined, status: 'succeeded' })!;
+    // Literal absolute -C outside the cwd repository.
+    expect(c('git -C /Users/dev/other apply x.patch')).toMatchObject({
+      gitDirs: ['/Users/dev/other'],
+      unresolved: false,
+    });
+    // Chained relative -C resolves against the previous one (no lookup).
+    expect(c('git -C /Users/dev -C other/repo checkout -- a.ts').gitDirs).toEqual([
+      '/Users/dev/other/repo',
+    ]);
+    expect(c('git -C sub reset --hard').gitDirs).toEqual([`${cwd}/sub`]);
+    // A cd before the command moves the repository too.
+    expect(c('cd /Users/dev/other && git restore a.ts').gitDirs).toEqual(['/Users/dev/other']);
+    // Variable, relative-without-cwd and relocating options are unknown.
+    expect(c('git -C "$REPO" apply x.patch').unresolved).toBe(true);
+    expect(c('git -C sub apply x.patch', null).unresolved).toBe(true);
+    expect(c('git --git-dir=/x/.git apply p').unresolved).toBe(true);
+    expect(c('git --work-tree /x checkout -- a').unresolved).toBe(true);
+    expect(c('git -c core.worktree=/x checkout -- .').unresolved).toBe(true);
+    expect(c('git -c core.bare=false reset --hard').unresolved).toBe(true);
+    for (const script of [
+      'GIT_WORK_TREE=/Users/dev/b GIT_DIR=/Users/dev/b/.git git checkout -- .',
+      'export GIT_DIR=/Users/dev/b/.git; git reset --hard',
+      'env GIT_DIR=/Users/dev/b/.git git reset --hard',
+      'env -i -u HOME GIT_WORK_TREE=/Users/dev/b git restore x',
+    ])
+      expect(c(script).unresolved, script).toBe(true);
+    // Read-only Git never records a directory.
+    expect(c('git -C "$REPO" status && echo x > /tmp/o.txt').unresolved).toBe(false);
+  });
+
+  it('a literal foreign git -C write is not covered by the cwd repository', () => {
+    const write = (script: string) => ({
+      toolCallId: 'c1',
+      status: 'succeeded' as const,
+      cwd,
+      script: '',
+      output: '',
+      truncated: false,
+      redacted: false,
+      ...classifyShellWrites(script, { cwd, status: 'succeeded' })!,
+    });
+    const st = (w: any) =>
+      ({
+        records: new Map(),
+        issuedToolCalls: new Set(['c1']),
+        omitted: 0,
+        attempted: false,
+        writes: [w],
+        revertedRoots: [],
+      }) as any;
+    const verified = [
+      {
+        repository: { root: cwd, patch: filePatch('a.ts'), scope: 'turn' as const },
+        source: 'automatic' as const,
+        turnVerified: true,
+      },
+    ];
+    const foreign = coverageAssessment({
+      state: st(write('git -C /Users/dev/other apply x.patch')),
+      verified,
+      unchangedRoots: [],
+      records: [],
+    });
+    expect(foreign.complete).toBe(false);
+    expect(foreign.blocking).toContain('write_target_unknown');
+    const local = coverageAssessment({
+      state: st(write('git -C sub apply x.patch')),
+      verified,
+      unchangedRoots: [],
+      records: [],
+    });
+    expect(local.complete).toBe(true);
+    const variable = coverageAssessment({
+      state: st(write('git -C "$REPO" apply x.patch')),
+      verified,
+      unchangedRoots: [],
+      records: [],
+    });
+    expect(variable.blocking).toContain('write_target_unknown');
   });
 
   it('a read-only open does not offset a computed-path write', () => {

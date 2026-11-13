@@ -199,14 +199,22 @@ export function coverageAssessment(input: CoverageInput): CoverageAssessment {
       else covered.add(p);
     }
   }
-  const exempt = (path: string) =>
+  // A net-empty Git root is per-path proof only for paths Git itself
+  // observed: native `git` records of that root, or write targets a native
+  // Git record of this run named before the root was found net-empty
+  // (`revertedPaths`). Any other write target (an ignored or otherwise
+  // unobserved file) must still be covered by a patch or reconstructed.
+  const inEmptyRoot = (path: string) =>
     input.unchangedRoots.some((root) => pathIsWithin(path, root)) ||
     (input.state?.revertedRoots ?? []).some((root) => pathIsWithin(path, root));
+  const revertedPaths = new Set(input.state?.revertedPaths ?? []);
+  const exempt = (path: string, gitObserved: boolean) =>
+    (gitObserved || revertedPaths.has(comparablePath(path))) && inEmptyRoot(path);
   const turnRoots = input.verified.filter((v) => v.turnVerified).map((v) => v.repository.root);
   const missing = new Map<string, WriteTarget>();
-  const need = (target: WriteTarget) => {
+  const need = (target: WriteTarget, gitObserved = false) => {
     const key = comparablePath(target.path);
-    if (covered.has(key) || exempt(target.path)) return;
+    if (covered.has(key) || exempt(target.path, gitObserved)) return;
     const prev = missing.get(key);
     missing.set(key, {
       path: prev?.path ?? target.path,
@@ -224,12 +232,14 @@ export function coverageAssessment(input: CoverageInput): CoverageAssessment {
       if (write.truncated) blocking.push('write_evidence_truncated');
       if (write.unresolved) blocking.push('write_target_unknown');
       if (write.kinds.some(isGitLikeKind)) {
-        // Git/patch operations act on the repository at cwd; only an
-        // authoritative whole-root capture (or net-empty root) covers them.
-        const cwd = write.cwd;
+        // Git/patch operations act on the repository they were pointed at
+        // (`git -C`, the cwd at that command); only an authoritative
+        // whole-root capture (or net-empty root) of EVERY such directory
+        // covers them. Older evidence without `gitDirs` falls back to cwd.
+        const dirs = write.gitDirs ?? (write.cwd !== undefined ? [write.cwd] : []);
+        const roots = [...turnRoots, ...input.unchangedRoots];
         const inRoot =
-          cwd !== undefined &&
-          [...turnRoots, ...input.unchangedRoots].some((root) => pathIsWithin(cwd, root));
+          dirs.length > 0 && dirs.every((dir) => roots.some((root) => pathIsWithin(dir, root)));
         if (!inRoot) blocking.push('write_target_unknown');
       }
       for (const target of write.targets) need(target);
@@ -238,12 +248,15 @@ export function coverageAssessment(input: CoverageInput): CoverageAssessment {
   for (const record of input.records) {
     if (!record.complete) blocking.push('native_record_truncated');
     for (const rel of record.paths) {
-      need({
-        path: normalizeAbsolutePath(`${record.root}/${rel}`),
-        // Only file records carry verified absence/presence hashes.
-        created: record.kind === 'file' && record.before === null,
-        removed: record.kind === 'file' && record.after === null,
-      });
+      need(
+        {
+          path: normalizeAbsolutePath(`${record.root}/${rel}`),
+          // Only file records carry verified absence/presence hashes.
+          created: record.kind === 'file' && record.before === null,
+          removed: record.kind === 'file' && record.after === null,
+        },
+        record.kind === 'git',
+      );
     }
   }
   const unique = [...new Set(blocking)];

@@ -34,6 +34,86 @@ final class AgentDiffViewSettingTests: XCTestCase {
         XCTAssertEqual(AgentDiffViewSetting.explanation, "May use additional AI tokens to recover missing file changes.")
     }
 
+    // MARK: Identity scoping
+
+    private let backendA = BackendSelection(baseURL: URL(string: "https://a.example.invalid")!, isSelfHosted: false)
+    private let backendB = BackendSelection(baseURL: URL(string: "https://b.example.invalid")!, isSelfHosted: false)
+
+    func testAccountSwitchDoesNotCarryOffAndReturningRestoresIt() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        let a = SubscriptionIdentity.make(backend: backendA, userKey: "key-a")
+        let b = SubscriptionIdentity.make(backend: backendA, userKey: "key-b")
+        AgentDiffViewSetting.store(false, for: a, current: a, in: defaults)
+        XCTAssertFalse(AgentDiffViewSetting.runValue(for: a, in: defaults))
+        XCTAssertFalse(AgentDiffViewSetting.isEnabled(defaults), "display mirror follows A")
+
+        // Switch to B before its settings were ever loaded: the historical
+        // default (server stays authoritative), and the card mirror resets.
+        XCTAssertTrue(AgentDiffViewSetting.runValue(for: b, in: defaults))
+        XCTAssertTrue(AgentDiffViewSetting.isEnabled(defaults))
+
+        // Back to A: A's own off value applies again.
+        XCTAssertFalse(AgentDiffViewSetting.runValue(for: a, in: defaults))
+        XCTAssertFalse(AgentDiffViewSetting.isEnabled(defaults))
+    }
+
+    func testBackendChangeIsADifferentIdentity() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        let onA = SubscriptionIdentity.make(backend: backendA, userKey: "same-key")
+        let onB = SubscriptionIdentity.make(backend: backendB, userKey: "same-key")
+        let selfHosted = SubscriptionIdentity.make(
+            backend: BackendSelection(baseURL: URL(string: "http://localhost:7071")!, isSelfHosted: true), userKey: nil)
+        AgentDiffViewSetting.store(false, for: onA, current: onA, in: defaults)
+        XCTAssertTrue(AgentDiffViewSetting.runValue(for: onB, in: defaults))
+        XCTAssertTrue(AgentDiffViewSetting.runValue(for: selfHosted, in: defaults))
+        XCTAssertFalse(AgentDiffViewSetting.runValue(for: onA, in: defaults))
+    }
+
+    func testStaleReplyForPreviousIdentityNeverChangesCurrentMirror() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        let a = SubscriptionIdentity.make(backend: backendA, userKey: "key-a")
+        let b = SubscriptionIdentity.make(backend: backendA, userKey: "key-b")
+        XCTAssertTrue(AgentDiffViewSetting.runValue(for: b, in: defaults))
+        // A's late "off" reply lands after switching to B.
+        AgentDiffViewSetting.store(false, for: a, current: b, in: defaults)
+        XCTAssertTrue(AgentDiffViewSetting.isEnabled(defaults), "B's card mirror unchanged")
+        XCTAssertTrue(AgentDiffViewSetting.runValue(for: b, in: defaults))
+        XCTAssertFalse(AgentDiffViewSetting.isEnabled(for: a, in: defaults), "kept for A only")
+    }
+
+    func testScopedKeysAreOpaqueAndStable() {
+        let a = SubscriptionIdentity.make(backend: backendA, userKey: "secret-key-a")
+        let key = AgentDiffViewSetting.scopedKey(for: a)
+        XCTAssertEqual(key, AgentDiffViewSetting.scopedKey(for: SubscriptionIdentity.make(backend: backendA, userKey: "secret-key-a")))
+        XCTAssertTrue(key.hasPrefix(AgentDiffViewSetting.scopedKeyPrefix))
+        XCTAssertFalse(key.contains("secret"))
+        XCTAssertFalse(key.contains("example"))
+        XCTAssertFalse(key.contains(a!.subscription))
+        XCTAssertNotEqual(key, AgentDiffViewSetting.scopedKey(for: nil))
+    }
+
+    func testLegacyUnscopedValueMigratesOnceToFirstReadIdentity() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        let a = SubscriptionIdentity.make(backend: backendA, userKey: "key-a")
+        let b = SubscriptionIdentity.make(backend: backendA, userKey: "key-b")
+        AgentDiffViewSetting.store(false, in: defaults) // pre-scoping build
+        XCTAssertFalse(AgentDiffViewSetting.runValue(for: a, in: defaults))
+        XCTAssertTrue(AgentDiffViewSetting.runValue(for: b, in: defaults), "not re-attributed to B")
+        XCTAssertFalse(AgentDiffViewSetting.runValue(for: a, in: defaults))
+    }
+
+    func testUnsetAndLegacyServerDefaultToEnabled() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        let a = SubscriptionIdentity.make(backend: backendA, userKey: "key-a")
+        XCTAssertTrue(AgentDiffViewSetting.runValue(for: a, in: defaults))
+        // Older server omitting the field resolves to enabled.
+        AgentDiffViewSetting.store(AgentDiffViewSetting.resolve(serverValue: nil), for: a, current: a, in: defaults)
+        XCTAssertTrue(AgentDiffViewSetting.runValue(for: a, in: defaults))
+        // A failed load stores nothing: the last known value is kept.
+        AgentDiffViewSetting.store(false, for: a, current: a, in: defaults)
+        XCTAssertFalse(AgentDiffViewSetting.runValue(for: a, in: defaults))
+    }
+
     func testServerValueCompatibility() throws {
         XCTAssertTrue(AgentDiffViewSetting.resolve(serverValue: nil), "older backend omits the field")
         XCTAssertTrue(AgentDiffViewSetting.resolve(serverValue: true))

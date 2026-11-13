@@ -47,6 +47,14 @@ export interface ShellWriteEvidence {
    * Absent when none were recognised (older evidence shape unchanged).
    */
   auxiliaryTargets?: AuxiliaryTarget[];
+  /**
+   * Resolved directories that Git/patch writes of this script act on: the
+   * shell cwd at that command, after every literal `git -C` (chained `-C`
+   * resolve relative to the previous one). A write whose directory is not
+   * literal marks the evidence `unresolved` instead. Absent on older
+   * evidence; coverage then falls back to `cwd`.
+   */
+  gitDirs?: string[];
 }
 
 export interface AuxiliaryTarget {
@@ -72,6 +80,7 @@ export const TASK_SCRATCH_NAMES: ReadonlySet<string> = new Set([
   'tmp',
 ]);
 const MAX_AUXILIARY_TARGETS = 32;
+const MAX_GIT_DIRS = 32;
 /** `<home>/.omniAgent|.omnikey/garbage/<task-id>/<name>` (one child level only). */
 export const TASK_ENTRY_PATH =
   /^\/(?:Users|home)\/[^/]+\/\.(?:omniAgent|omnikey)\/garbage\/[A-Za-z0-9_-][A-Za-z0-9._-]*\/([^/]+)$/;
@@ -98,15 +107,34 @@ const SAFE_PATH_CHARS = /^\/[A-Za-z0-9._@+\-/]+$/;
 const OWN_HIDDEN_HOME_DIRS = new Set(['.omniagent', '.omnikey']);
 
 /**
+ * Hidden component anywhere below a home directory, mirroring the native
+ * non-Git policy (`isHiddenHomePath`). Only the agent's own top-level
+ * `~/.omniAgent` / `~/.omnikey` component is exempt, and below it only the
+ * exact task metadata entry `.omniagent-owned`; every deeper hidden
+ * component (`…/worktrees/repo/.config/…`) stays sensitive.
+ */
+function hasHiddenHomeComponent(path: string): boolean {
+  const home = /^\/(?:Users|home)\/[^/]+\//.exec(path);
+  if (!home) return false;
+  const parts = path.slice(home[0].length).split('/');
+  const task = TASK_ENTRY_PATH.exec(path);
+  return parts.some((part, index) => {
+    if (!part.startsWith('.')) return false;
+    if (index === 0 && OWN_HIDDEN_HOME_DIRS.has(part.toLowerCase())) return false;
+    return !(task && index === parts.length - 1 && TASK_METADATA_NAMES.has(part));
+  });
+}
+
+/**
  * Mirrors the native GitSensitivePathPolicy (plus Git internals). Also any
- * dot-prefixed entry directly in a home directory (`~/.config/gh/hosts.yml`,
- * `~/.terraform.d/…`, `~/.zshrc`) of any user: tool configs and credentials
- * live there, and normal Git capture never reached them. The agent's own
- * `~/.omniAgent` / `~/.omnikey` task directories are excluded.
+ * dot-prefixed component below a home directory (`~/.config/gh/hosts.yml`,
+ * `~/work/.config/gh/hosts.yml`, `~/.zshrc`) of any user: tool configs and
+ * credentials live there. This deliberately also withholds repository dot
+ * files (`.github/…`) below home; see `hasHiddenHomeComponent` for the only
+ * exceptions.
  */
 export function isSensitiveWritePath(path: string): boolean {
-  const hidden = /^\/(?:Users|home)\/[^/]+\/(\.[^/]*)(?:\/|$)/.exec(path);
-  if (hidden && !OWN_HIDDEN_HOME_DIRS.has(hidden[1].toLowerCase())) return true;
+  if (hasHiddenHomeComponent(path)) return true;
   const parts = path.toLowerCase().split('/').filter(Boolean);
   const name = parts[parts.length - 1] ?? '';
   if (parts.slice(0, -1).some((p) => SENSITIVE_DIRS.has(p))) return true;
@@ -370,6 +398,8 @@ interface Scan {
   unresolved: boolean;
   commands: number;
   auxiliary: AuxiliaryTarget[];
+  gitDirs: Set<string>;
+  gitEnvironmentRelocated: boolean;
 }
 
 function addAuxiliary(s: Scan, target: AuxiliaryTarget): void {
@@ -390,8 +420,18 @@ function addAuxiliary(s: Scan, target: AuxiliaryTarget): void {
 function sensitiveOperand(raw: string): boolean {
   const value = raw.replace(/^~(?=\/|$)/, '/Users/~');
   if (isSensitiveWritePath(value.startsWith('/') ? value : `/${value}`)) return true;
-  // `$HOME/.x`, `${HOME}/.x`, `~/.x`: a dot entry directly in a home directory.
-  return /^(?:\$HOME|\$\{HOME\}|~)\/\.(?!omniagent(?:\/|$)|omnikey(?:\/|$))/i.test(raw);
+  // Unresolved operands (relative, traversal, variables): any hidden
+  // component may lie below a home directory. Only `.`/`..` and a leading
+  // `$HOME|~/.omniAgent|.omnikey` component are not hidden entries.
+  const parts = raw.split('/');
+  const ownTop = /^(?:\$HOME|\$\{HOME\}|~)$/.test(parts[0] ?? '');
+  return parts.some(
+    (part, index) =>
+      part.startsWith('.') &&
+      part !== '.' &&
+      part !== '..' &&
+      !(ownTop && index === 1 && OWN_HIDDEN_HOME_DIRS.has(part.toLowerCase())),
+  );
 }
 
 function addTarget(
@@ -433,6 +473,10 @@ function scanCommand(
   ctx: { noclobber: boolean },
 ) {
   let i = 0;
+  // Conservatively retain any relocation assignment for the rest of this
+  // script; exported, prefix and env forms can all change Git's repository.
+  if (words.some((w) => /^GIT_(?:DIR|WORK_TREE|NAMESPACE|INDEX_FILE|COMMON_DIR)=/.test(w.value)))
+    s.gitEnvironmentRelocated = true;
   while (i < words.length && /^[A-Za-z_]\w*=/.test(words[i].value)) i++;
   if (i === words.length || words[i]?.value === 'export') {
     for (const w of words.slice(words[i]?.value === 'export' ? i + 1 : 0)) {
@@ -466,7 +510,31 @@ function scanCommand(
     s.kinds.add('redirect');
     write(target, { created: ctx.noclobber && op === '>' });
   }
-  while (i < words.length && PREFIXES.has(words[i].value)) i++;
+  while (i < words.length && PREFIXES.has(words[i].value)) {
+    const prefix = words[i++].value;
+    if (prefix === 'env') {
+      while (i < words.length) {
+        const value = words[i].value;
+        if (/^[A-Za-z_]\w*=/.test(value) || value === '-i' || value === '--ignore-environment') {
+          i++;
+          continue;
+        }
+        if (value === '-u' || value === '--unset') {
+          i += 2;
+          continue;
+        }
+        if (value.startsWith('--unset=')) {
+          i++;
+          continue;
+        }
+        if (value === '--') {
+          i++;
+          break;
+        }
+        break;
+      }
+    }
+  }
   const cmd = (words[i]?.value ?? '').split('/').pop() ?? '';
   const args = words.slice(i + 1);
   const operands = (skipValueOf: RegExp = /^$/) => {
@@ -534,11 +602,40 @@ function scanCommand(
     }
   } else if (cmd === 'patch') {
     s.kinds.add('patch');
+    // `patch -d DIR` (or `--directory`) changes where it applies.
+    if (args.some((a) => /^-d|^--directory/.test(a.value))) s.unresolved = true;
+    else if (r.cwd) s.gitDirs.add(r.cwd);
+    else s.unresolved = true;
   } else if (cmd === 'git') {
+    // The repository a write acts on is the cwd after every `-C` (each
+    // relative `-C` resolves against the previous directory). Nothing is
+    // looked up on any filesystem.
     let k = 0;
-    while (k < args.length && args[k].value.startsWith('-'))
-      k += /^-[Cc]$/.test(args[k].value) ? 2 : 1;
-    if (GIT_WRITES.has(args[k]?.value ?? '')) s.kinds.add(`git ${args[k].value}`);
+    let dir = r.cwd;
+    let dirKnown = dir !== undefined;
+    let relocated = false;
+    while (k < args.length && args[k].value.startsWith('-')) {
+      const v = args[k].value;
+      if (v === '-C') {
+        const target = args[k + 1];
+        const next = target && dirKnown ? resolve(target, { ...r, cwd: dir }) : undefined;
+        dir = next;
+        dirKnown = next !== undefined;
+        k += 2;
+      } else if (v === '-c') {
+        if (/^core\.(?:worktree|bare)=/i.test(args[k + 1]?.value ?? '')) relocated = true;
+        k += 2;
+      } else {
+        // `--git-dir`, `--work-tree` and `--namespace` select another repository.
+        if (/^--(?:git-dir|work-tree|namespace)\b/.test(v)) relocated = true;
+        k += /^--(?:git-dir|work-tree|namespace)$/.test(v) ? 2 : 1;
+      }
+    }
+    if (GIT_WRITES.has(args[k]?.value ?? '')) {
+      s.kinds.add(`git ${args[k].value}`);
+      if (!dirKnown || relocated || s.gitEnvironmentRelocated || !dir) s.unresolved = true;
+      else s.gitDirs.add(dir);
+    }
   }
 }
 
@@ -610,6 +707,8 @@ export function classifyShellWrites(
     unresolved: false,
     commands: 0,
     auxiliary: [],
+    gitDirs: new Set(),
+    gitEnvironmentRelocated: false,
   };
   const r: Resolver = {
     cwd: input.cwd,
@@ -756,6 +855,7 @@ export function classifyShellWrites(
     }
   }
   if (!s.kinds.size) return undefined;
+  if (s.gitDirs.size > MAX_GIT_DIRS) s.unresolved = true;
   // Creation evidence only holds if the script provably stopped on failure.
   const strict =
     input.status === 'succeeded' &&
@@ -774,6 +874,7 @@ export function classifyShellWrites(
     sensitive: s.sensitive,
     unresolved: s.unresolved,
     auxiliaryTargets: s.auxiliary,
+    gitDirs: [...s.gitDirs].slice(0, MAX_GIT_DIRS),
   };
 }
 
@@ -825,6 +926,7 @@ export function recordShellWriteEvidence(
     kinds: found.kinds,
     ...(found.unresolved ? { unresolved: true } : {}),
     ...(found.auxiliaryTargets?.length ? { auxiliaryTargets: found.auxiliaryTargets } : {}),
+    ...(found.gitDirs?.length ? { gitDirs: found.gitDirs } : {}),
     targets: found.targets.map((t) => ({
       ...t,
       // Absence proven only in the first issued shell can describe turn start.

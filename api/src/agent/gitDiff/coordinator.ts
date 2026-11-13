@@ -108,6 +108,13 @@ export interface DiffRecoveryRunState {
   writesOmitted?: number;
   /** Roots the normal capture authoritatively reported net-empty. */
   revertedRoots: string[];
+  /**
+   * Comparable absolute paths named by native `git` records of this run in
+   * a root later reported net-empty: Git observed them, so the net-empty
+   * capture proves them reverted. Writes to other paths in such a root
+   * (e.g. ignored files) are never exempted by the root alone.
+   */
+  revertedPaths?: string[];
 }
 
 export function createGitRunState(input: {

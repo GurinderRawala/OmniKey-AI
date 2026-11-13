@@ -1247,10 +1247,15 @@ final class APIClient: @unchecked Sendable {
         let restartScheduled: Bool?
     }
 
-    func fetchAppSettings(completion: @escaping @Sendable (Result<AppSettingsResponse, Error>) -> Void) {
-        var request = URLRequest(url: appSettingsBaseURL)
+    /// `auth` pins backend URL and token to one identity snapshot, so the
+    /// caller can attribute the reply to exactly that identity.
+    func fetchAppSettings(
+        auth: SubscriptionAuthSnapshot = SubscriptionManager.shared.authSnapshot(),
+        completion: @escaping @Sendable (Result<AppSettingsResponse, Error>) -> Void
+    ) {
+        var request = URLRequest(url: auth.baseURL.appendingPathComponent("api/app-settings"))
         request.httpMethod = "GET"
-        if let token = SubscriptionManager.shared.jwtToken {
+        if let token = auth.token {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         let task = URLSession.shared.dataTask(with: request) { data, response, error in
@@ -1294,12 +1299,13 @@ final class APIClient: @unchecked Sendable {
         webSearchEnabled: Bool?,
         usageRecordingEnabled: Bool? = nil,
         diffViewEnabled: Bool? = nil,
+        auth: SubscriptionAuthSnapshot = SubscriptionManager.shared.authSnapshot(),
         completion: @escaping @Sendable (Result<AppSettingsMutationResponse, Error>) -> Void
     ) {
-        var request = URLRequest(url: appSettingsBaseURL)
+        var request = URLRequest(url: auth.baseURL.appendingPathComponent("api/app-settings"))
         request.httpMethod = "PATCH"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if let token = SubscriptionManager.shared.jwtToken {
+        if let token = auth.token {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         var payload: [String: Any] = [:]

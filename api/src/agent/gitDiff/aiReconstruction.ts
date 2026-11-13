@@ -50,12 +50,20 @@ export interface ReconstructedFile {
   after: string | null;
 }
 
-/** Union of literal write targets of this run, minus authoritatively reverted roots. */
+/**
+ * Union of literal write targets of this run, minus paths a net-empty root
+ * proved reverted (Git-observed paths only; see `revertedPaths`).
+ */
 export function reconstructionAllowlist(state: DiffRecoveryRunState): Map<string, WriteTarget> {
   const allow = new Map<string, WriteTarget>();
+  const reverted = new Set(state.revertedPaths ?? []);
   for (const write of state.writes) {
     for (const t of write.targets) {
-      if (state.revertedRoots.some((root) => pathIsWithin(t.path, root))) continue;
+      if (
+        reverted.has(comparablePath(t.path)) &&
+        state.revertedRoots.some((root) => pathIsWithin(t.path, root))
+      )
+        continue;
       const key = comparablePath(t.path);
       const prev = allow.get(key);
       if (!prev && allow.size >= DIFF_RECONSTRUCTION_MAX_FILES) continue;
@@ -284,13 +292,19 @@ export function reconstructionLimitations(
     checkpointLimitations?: string[];
   },
 ): string[] {
-  const lines = [
-    "AI-reconstructed from this turn's write-like shell commands; not verified against the filesystem.",
-  ];
+  // With a verified base and no changed AI file, every shown file is verified;
+  // the model only claimed the remaining known targets unchanged.
+  const verifiedOnly = files.length === 0 && extra.base !== undefined;
+  const lines = verifiedOnly
+    ? ['No file is AI-reconstructed; the model was consulted only about known written files.']
+    : [
+        "AI-reconstructed from this turn's write-like shell commands; not verified against the filesystem.",
+      ];
+  const source = verifiedOnly ? 'All files shown are' : 'Other files are';
   if (extra.base === 'automatic')
-    lines.push('Other files are from the automatic Git capture of this turn.');
+    lines.push(`${source} from the automatic Git capture of this turn.`);
   if (extra.base === 'checkpoint')
-    lines.push('Other files are from native per-command checkpoints of this turn.');
+    lines.push(`${source} from native per-command checkpoints of this turn.`);
   if (files.some((f) => f.before !== null))
     lines.push('Earlier file contents were inferred by the model and may be inaccurate.');
   if (extra.unchanged > 0)
