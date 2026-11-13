@@ -1,5 +1,11 @@
 # Changelog
 
+## macOS 1.9.20 (build 81) — 2026-11-13
+
+### Fixed
+- Fixed the confirmed code-first send crash: a queued MarkdownEngine code-selection callback reused stale token ranges after the composer was cleared. Stale snapshots and invalid UTF-16 ranges are rejected before TextKit or substring access; unused overlay work is skipped.
+- Added engine regressions for queued callbacks after clear, same-length draft replacement, invalid ranges, and absent overlay subscribers. No app/E2E launch performed.
+
 ## macOS 1.9.19 (build 80) — 2026-11-13
 
 ### Fixed

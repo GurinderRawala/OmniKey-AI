@@ -14,6 +14,23 @@ import AppKit
 
 extension NativeTextViewCoordinator {
     func updateCodeBlockSelection(textView: NSTextView, parsed: ParsedDocument? = nil) {
+        // Queued callbacks can run after send cleared or replaced the draft.
+        // No subscriber means there is no overlay work to do (the chat
+        // composer does not use this callback).
+        guard onCodeBlockSelectionChange != nil else {
+            cachedCodeBlockTokens = []
+            lastCodeSelKey = nil
+            return
+        }
+        let snapshot = textView.string
+        let snapshotLength = (snapshot as NSString).length
+        guard let cached = cachedParsedText, cachedParsedLength == snapshotLength,
+              (cached as NSString).isEqual(to: snapshot) else {
+            cachedCodeBlockTokens = []
+            lastCodeSelKey = nil
+            onCodeBlockSelectionChange?([])
+            return
+        }
         guard let textContainer = textView.textContainer else {
             onCodeBlockSelectionChange?([])
             return
@@ -28,7 +45,11 @@ extension NativeTextViewCoordinator {
             return
         }
 
-        let nsText = textView.string as NSString
+        let nsText = snapshot as NSString
+        func valid(_ range: NSRange) -> Bool {
+            range.location != NSNotFound && range.location >= 0 && range.length >= 0
+                && range.location <= snapshotLength && range.length <= snapshotLength - range.location
+        }
         let scrollOffset = textView.enclosingScrollView?.contentView.bounds.origin ?? .zero
 
         // Identical inputs → identical selections. The delegate path calls
@@ -74,7 +95,8 @@ extension NativeTextViewCoordinator {
         }()
 
         let selections: [CodeBlockSelection] = cachedCodeBlockTokens.compactMap { originalIndex, token in
-            guard !activeTokenIndices.contains(originalIndex) else { return nil }
+            guard !activeTokenIndices.contains(originalIndex), valid(token.range), valid(token.contentRange),
+                  token.markerRanges.allSatisfy(valid) else { return nil }
             if let visibleRange, NSIntersectionRange(token.range, visibleRange).length == 0 { return nil }
             guard var boundingRect = textView.viewRect(forCharacterRange: token.range, using: layoutBridge) else { return nil }
 
@@ -84,7 +106,7 @@ extension NativeTextViewCoordinator {
             return CodeBlockSelection(
                 id: originalIndex,
                 rect: boundingRect,
-                language: MarkdownTokenizer.extractLanguage(from: token, in: textView.string),
+                language: MarkdownTokenizer.extractLanguage(from: token, in: snapshot),
                 code: nsText.substring(with: token.contentRange)
             )
         }

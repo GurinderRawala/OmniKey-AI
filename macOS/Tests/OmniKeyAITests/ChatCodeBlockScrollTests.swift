@@ -122,6 +122,50 @@ final class ChatCodeBlockScrollTests: XCTestCase {
         }
     }
 
+    /// Drags the real NSScroller knob through `NSWindow.sendEvent` (the knob's
+    /// own tracking loop consumes the queued drag/up events, as with a mouse),
+    /// with SwiftUI updates landing mid-drag, inside a transcript hosted the way
+    /// `ChatWindowController` hosts it. The far-end offset must then survive a
+    /// SwiftUI update and a narrower window, and the end must stay reachable.
+    @MainActor
+    func testScrollerKnobDragReachesFarEndAndSurvivesUpdatesAndNarrowResize() {
+        for (name, inner) in Self.fixtures {
+            let tick = TranscriptTick()
+            let controller = NSHostingController(rootView: TickingTranscript(tick: tick, inner: inner))
+            controller.sizingOptions = []
+            let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 900, height: 500),
+                                  styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentViewController = controller
+            window.setContentSize(NSSize(width: 900, height: 500))
+            window.orderFront(nil)
+            defer { window.orderOut(nil) }
+            let host = controller.view
+            Self.settle(host, passes: 8)
+            guard let scroll = Self.overflowing(in: host).first(where: { !$0.hasVerticalScroller }),
+                  let scroller = scroll.horizontalScroller else { XCTFail("\(name): no code scroller"); continue }
+            func maxX() -> CGFloat { (scroll.documentView?.frame.width ?? 0) - scroll.contentView.bounds.width }
+
+            Self.dragKnob(of: scroller, in: window, by: scroller.bounds.width, tick: tick)
+            Self.settle(host)
+            XCTAssertEqual(scroll.contentView.bounds.minX, maxX(), accuracy: 1, "\(name): knob drag did not reach the far end")
+
+            tick.value += 1
+            ChatModel.shared.objectWillChange.send()
+            Self.settle(host)
+            XCTAssertEqual(scroll.contentView.bounds.minX, maxX(), accuracy: 1, "\(name): update reset the offset")
+
+            window.setContentSize(NSSize(width: 520, height: 500))
+            Self.settle(host, passes: 6)
+            XCTAssertTrue(Self.descendants(host).contains { $0 === scroll }, "\(name): code scroll view was rebuilt")
+            XCTAssertGreaterThan(scroll.contentView.bounds.minX, 0, "\(name): narrow resize reset the offset")
+            XCTAssertLessThanOrEqual(scroll.contentView.bounds.minX, maxX() + 1)
+            Self.dragKnob(of: scroller, in: window, by: scroller.bounds.width, tick: tick)
+            Self.settle(host)
+            XCTAssertEqual(scroll.contentView.bounds.minX, maxX(), accuracy: 1, "\(name): far end unreachable after narrow resize")
+        }
+    }
+
     // MARK: - Harness
 
     @MainActor
@@ -174,5 +218,61 @@ final class ChatCodeBlockScrollTests: XCTestCase {
         RunLoop.main.run(until: Date().addingTimeInterval(0.1))
         return (scroll.contentView.bounds.minX - innerBefore,
                 (outer?.contentView.bounds.minY ?? 0) - outerBefore)
+    }
+
+    /// Real knob drag: mouse-down is dispatched by the window (hit-testing
+    /// included); the scroller's tracking loop pulls drag/up events that a
+    /// common-mode timer posts one at a time, publishing a SwiftUI update
+    /// before each so re-renders interleave with tracking.
+    @MainActor
+    private static func dragKnob(of scroller: NSScroller, in window: NSWindow, by distance: CGFloat,
+                                 tick: TranscriptTick) {
+        let knob = scroller.rect(for: .knob)
+        let start = scroller.convert(NSPoint(x: knob.midX, y: knob.midY), to: nil)
+        let hit = window.contentView?.superview?.hitTest(window.contentView!.superview!.convert(start, from: nil))
+        XCTAssertTrue(hit === scroller, "knob hit-tests to \(String(describing: hit)), not the scroller")
+        func mouse(_ type: NSEvent.EventType, _ dx: CGFloat) -> NSEvent {
+            NSEvent.mouseEvent(with: type, location: NSPoint(x: start.x + dx, y: start.y), modifierFlags: [],
+                               timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                               context: nil, eventNumber: 0, clickCount: 1, pressure: type == .leftMouseUp ? 0 : 1)!
+        }
+        let queue = EventQueue()
+        queue.events = (1...10).map { mouse(.leftMouseDragged, distance * CGFloat($0) / 10) }
+            + [mouse(.leftMouseUp, distance)]
+        nonisolated(unsafe) let tickRef = tick
+        let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
+            MainActor.assumeIsolated {
+                guard !queue.events.isEmpty else { return }
+                tickRef.value += 1
+                NSApp.postEvent(queue.events.removeFirst(), atStart: false)
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        window.sendEvent(mouse(.leftMouseDown, 0))
+        timer.invalidate()
+    }
+}
+
+private final class EventQueue: @unchecked Sendable { var events: [NSEvent] = [] }
+
+@MainActor
+private final class TranscriptTick: ObservableObject { @Published var value = 0 }
+
+/// Minimal transcript: outer vertical ScrollView whose body re-renders on
+/// every tick, mirroring `conversationContent`'s layout constraints.
+private struct TickingTranscript: View {
+    @ObservedObject var tick: TranscriptTick
+    let inner: AnyView
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 18) {
+                Text("revision \(tick.value)")
+                inner
+                Color.clear.frame(height: 600)
+            }
+            .padding(.horizontal, 32)
+            .frame(maxWidth: 820, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .center)
+        }
     }
 }
