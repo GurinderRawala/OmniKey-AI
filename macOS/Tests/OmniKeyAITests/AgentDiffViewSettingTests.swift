@@ -130,9 +130,9 @@ final class AgentDiffViewSettingTests: XCTestCase {
 
     func testCapabilitiesFollowSettingForAllThreeFlags() {
         XCTAssertEqual(AgentDiffViewSetting.capabilities(enabled: false),
-                       .init(gitDiff: false, gitTurnDiff: false, diffRecovery: false))
+                       .init(gitDiff: false, gitTurnDiff: false, agentPatches: false))
         XCTAssertEqual(AgentDiffViewSetting.capabilities(enabled: true),
-                       .init(gitDiff: true, gitTurnDiff: true, diffRecovery: true))
+                       .init(gitDiff: true, gitTurnDiff: true, agentPatches: true))
     }
 
     // MARK: Runner
@@ -179,7 +179,7 @@ final class AgentDiffViewSettingTests: XCTestCase {
         let flags = LockedBox<[Bool?]>([])
         let socket = GitDiffTestSocket { message in
             if message.content == "Start" {
-                flags.set([message.supportsGitDiff, message.supportsGitTurnDiff, message.supportsDiffRecovery])
+                flags.set([message.supportsGitDiff, message.supportsGitTurnDiff, message.supportsAgentPatches])
                 sent.fulfill()
             }
         }
@@ -200,10 +200,10 @@ final class AgentDiffViewSettingTests: XCTestCase {
         }
     }
 
-    /// Off: a shell that writes and commits in a repo yields neither commit
-    /// provenance nor recovery evidence (no native hooks ran).
+    /// Off: a shell that writes and commits in a repo yields no commit
+    /// provenance (no native hooks ran).
     @MainActor
-    func testOffSkipsProvenanceAndRecoveryHooks() async throws {
+    func testOffSkipsProvenanceHooks() async throws {
         let repo = try GitTestRepo()
         try repo.write("a.txt", "a\n")
         _ = try repo.commitAll()
@@ -215,12 +215,11 @@ final class AgentDiffViewSettingTests: XCTestCase {
         }
         start(socket, diffViewEnabled: false)
         let content = String(decoding: try JSONEncoder().encode("<shell_script>\(script)</shell_script>"), as: UTF8.self)
-        socket.deliver(#"{"session_id":"session","sender":"agent","content":\#(content),"git_diff_context":{"candidate_paths":["\#(repo.root)"],"turn_id":"run-1","tool_call_id":"tool-1"}}"#)
+        socket.deliver(#"{"session_id":"session","sender":"agent","content":\#(content),"git_diff_context":{"candidate_paths":["\#(repo.root)"]}}"#)
         await fulfillment(of: [terminal], timeout: 15)
         let message = try XCTUnwrap(reply.get())
         XCTAssertEqual(message.isError, false, "the script itself still runs")
         XCTAssertNil(message.gitCommitObservations)
-        XCTAssertNil(message.diffRecoveryEvidence)
     }
 
     /// Off: a stale server's control frame is answered at once without Git

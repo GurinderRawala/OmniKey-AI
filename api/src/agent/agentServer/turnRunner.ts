@@ -64,7 +64,8 @@ import {
 } from '../gitDiff/coordinator';
 import type { SessionDiffSummary } from '../gitDiff/contracts';
 import { withWorkingDirectoryParameter } from '../gitDiff/shellContext';
-import { captureFinalSessionDiff, setDiffRecoveryInput } from '../gitDiff/recovery';
+import { captureFinalSessionDiff } from '../gitDiff/finalDiff';
+import { parseAgentFinal, type AgentPatchReport } from '../gitDiff/agentPatch';
 
 type InternalAgentTurnOptions = AgentTurnOptions & {
   progressGuard?: ToolProgressGuard;
@@ -181,8 +182,6 @@ async function runAgentTurnInternal(
       userInputDirectories(clientMessage.content || ''),
       'user_input',
     );
-    // Contract v4: the recovery manifest call sees only this run's own input.
-    setDiffRecoveryInput(session.gitRun, clientMessage.content || '');
   }
 
   // Prepend the <project_context> block whenever the client has a group
@@ -396,25 +395,18 @@ async function runAgentTurnInternal(
   };
 
   // Snapshot immediately before a final answer is persisted and delivered.
-  // One helper for success and failure finals: the normal capture (bounded by
-  // the coordinator timeout), then at most one agent-assisted recovery per
-  // outer run (contract v4, 20 s budget). Never throws; undefined = no button.
-  const captureSessionDiff = (): Promise<SessionDiffSummary | undefined> =>
+  // One helper for success and failure finals: the normal Git capture
+  // (bounded by the coordinator timeout), plus the agent's own patches of the
+  // accepted candidate final for files Git did not cover. No model call.
+  // Never throws; undefined = no button.
+  const captureSessionDiff = (
+    agentReport?: AgentPatchReport,
+  ): Promise<SessionDiffSummary | undefined> =>
     captureFinalSessionDiff(session.gitRun, session.history, {
-      model: agentModel,
+      // Only the explicit candidate final being finalized; error finals never.
+      ...(agentReport ? { agentReport } : {}),
       signal: session.signal,
       log,
-      // Same accounting as every model call, but the small manifest request
-      // must not replace the run's prompt-size hint used for context budget.
-      onUsage: async (result) => {
-        const promptTokens = session.lastModelPromptTokens;
-        try {
-          await recordUsage(result);
-        } finally {
-          session.lastModelPromptTokens = promptTokens;
-        }
-      },
-      send,
     });
 
   const persistAndSendFailure = async (message: string): Promise<void> => {
@@ -774,7 +766,13 @@ async function runAgentTurnInternal(
         hasFinalAnswerTag,
       });
 
-      const sessionDiff = await captureSessionDiff();
+      // Agent-patch runs were asked to append `[files_changed]` +
+      // `<file_patches>`; both are stripped before the answer is stored or
+      // shown and are used only for this candidate (a superseding steering
+      // restart parses its own new final).
+      const agentReport = session.gitRun?.agentPatches ? parseAgentFinal(content) : undefined;
+      if (agentReport) content = agentReport.display;
+      const sessionDiff = await captureSessionDiff(agentReport?.report);
       // Capture is asynchronous; steering received while it ran supersedes
       // this candidate final BEFORE it is written to durable history.
       if (await restartAfterPendingSteering()) return;
@@ -988,9 +986,10 @@ export async function runAgentTurn(
   );
   // The persisted diff-view setting is authoritative over client flags. It is
   // read once per outer run, before any Git state exists; disabled (or an
-  // unreadable setting) means no capture, recovery, native checkpoints, shell
-  // Git context or recovery model calls for this whole run. Clients without
-  // the flags never reach this read and behave exactly as before.
+  // unreadable setting) means no capture, shell Git context, agent-patch
+  // instruction or parsing for this whole run. Clients without the flags
+  // never reach this read and behave exactly as before. Agent patches need
+  // their own literal-true flag; the legacy recovery flag is ignored.
   const gitRun =
     gitCapable && options && (await diffViewEnabledForRun(log))
       ? createGitRunState({
@@ -999,7 +998,7 @@ export async function runAgentTurn(
           connection: options.signal,
           send,
           turnDiff: options.supportsGitTurnDiff === true,
-          diffRecovery: options.supportsDiffRecovery === true,
+          agentPatches: options.supportsAgentPatches === true,
         })
       : undefined;
   const provenanceRun =

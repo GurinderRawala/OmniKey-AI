@@ -163,7 +163,7 @@ describe('WebSocket turn ownership', () => {
     },
   );
 
-  it('forwards raw terminal content separately from the formatted tool result', async () => {
+  it('ignores legacy diff recovery evidence on a terminal reply', async () => {
     const checkpoint = deferred();
     mocks.run.mockImplementationOnce(async () => checkpoint.promise);
     const server = attachAgentWebSocketServer({} as any);
@@ -172,22 +172,44 @@ describe('WebSocket turn ownership', () => {
     await vi.waitFor(() => expect(mocks.run).toHaveBeenCalledTimes(1));
     const resolve = vi.fn();
     pendingShellScripts.set('session', { resolve, filterKeywords: ['nomatch'] });
-    const evidence = { turn_id: 'grun_x', records: [] };
     owner.message('/tmp/tmp.Ab12Cd\n', {
       is_terminal_output: true,
       is_error: false,
-      diff_recovery_evidence: evidence,
+      diff_recovery_evidence: { turn_id: 'grun_x', records: [] },
     });
     await vi.waitFor(() => expect(resolve).toHaveBeenCalledTimes(1));
-    const [formatted, isError, observations, forwardedEvidence, raw] = resolve.mock.calls[0];
+    expect(resolve.mock.calls[0]).toHaveLength(3);
+    const [formatted, isError, observations] = resolve.mock.calls[0];
     expect(formatted).toMatch(/^TERMINAL OUTPUT:\n/);
     expect(isError).toBe(false);
     expect(observations).toBeUndefined();
-    expect(forwardedEvidence).toEqual(evidence);
-    // Exactly what the client sent: no prefix, no keyword filtering.
-    expect(raw).toBe('/tmp/tmp.Ab12Cd\n');
     checkpoint.resolve();
     await vi.waitFor(() => expect(activeSessions.has('session')).toBe(false));
+    owner.close();
+  });
+
+  it('accepts literal-true agent patch or legacy fallback opt-in without checkpoint recovery', async () => {
+    const server = attachAgentWebSocketServer({} as any);
+    const owner = connect(server);
+    owner.message('patched', {
+      supports_git_diff: true,
+      supports_git_turn_diff: true,
+      supports_diff_recovery: false,
+      supports_agent_patches: true,
+    });
+    await vi.waitFor(() => expect(mocks.run).toHaveBeenCalledTimes(1));
+    expect(mocks.run.mock.calls[0][5]).toMatchObject({
+      supportsGitDiff: true,
+      supportsGitTurnDiff: true,
+      supportsAgentPatches: true,
+    });
+    expect(mocks.run.mock.calls[0][5]).not.toHaveProperty('supportsDiffRecovery');
+    await vi.waitFor(() => expect(activeSessions.has('session')).toBe(false));
+    owner.message('legacy', { supports_git_diff: true, supports_diff_recovery: true });
+    owner.message('string', { supports_git_diff: true, supports_agent_patches: 'true' });
+    await vi.waitFor(() => expect(mocks.run).toHaveBeenCalledTimes(3));
+    expect(mocks.run.mock.calls[1][5].supportsAgentPatches).toBe(true);
+    expect(mocks.run.mock.calls[2][5].supportsAgentPatches).toBe(false);
     owner.close();
   });
 
