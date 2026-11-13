@@ -1,8 +1,10 @@
 # Changelog
 
-## macOS 1.9.20 (build 81) — 2026-11-13
+## macOS 1.9.20 (build 82) · CLI/API 1.8.20 — 2026-11-13
 
 ### Fixed
+- Final review hardening: Git relocation and ignored-file coverage, hidden-home credential exclusions, identity-scoped diff settings, and scrollbar geometry updates.
+- Complete session-turn diff recovery and the persistent token-cost opt-out, with a 300-file display cap, are included in this coordinated release.
 - Fixed the confirmed code-first send crash: a queued MarkdownEngine code-selection callback reused stale token ranges after the composer was cleared. Stale snapshots and invalid UTF-16 ranges are rejected before TextKit or substring access; unused overlay work is skipped.
 - Added engine regressions for queued callbacks after clear, same-length draft replacement, invalid ranges, and absent overlay subscribers. No app/E2E launch performed.
 
