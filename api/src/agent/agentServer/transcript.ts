@@ -3,7 +3,11 @@ import { MCP_TOOL_PREFIX } from '../mcpRuntime';
 import { isInjectedUserPrompt } from '../injectedUserPrompts';
 import type { SessionState } from '../types';
 import { extractProgressSummary, isProgressOnlyResponse } from './progressSummary';
-import { cleanSessionDiffSummary, type SessionDiffSummary } from '../gitDiff/contracts';
+import {
+  cleanSessionDiffSummary,
+  isKnownPartialSummary,
+  type SessionDiffSummary,
+} from '../gitDiff/contracts';
 
 export type HistoryBlockKind =
   | 'agentReasoning'
@@ -304,6 +308,21 @@ export function hasLegacyDeferredContentIds(messages: TranscriptMessage[]): bool
   );
 }
 
+/**
+ * Normalized rows written before the known-partial filter can still carry a
+ * partial session diff card that `buildTranscript` now omits. Such rows are
+ * treated like legacy rows: the caller rebuilds and rewrites them.
+ */
+export function hasKnownPartialSessionDiff(messages: TranscriptMessage[]): boolean {
+  return messages.some((message) =>
+    (message.blocks ?? []).some(
+      (block) =>
+        block.sessionDiff !== undefined &&
+        isKnownPartialSummary(cleanSessionDiffSummary(block.sessionDiff)),
+    ),
+  );
+}
+
 export function markdownBoundaryPreview(text: string, maximumCharacters: number): string {
   if (text.length <= maximumCharacters) return text;
   const lines = text.split(/(?<=\n)/);
@@ -578,7 +597,9 @@ export function buildTranscript(raw: RawHistoryMessage[]): TranscriptMessage[] {
       return;
     }
 
-    const sessionDiff = cleanSessionDiffSummary(entry.session_diff);
+    // Known-partial historical snapshots are not offered (the route refuses them too).
+    const cleanedDiff = cleanSessionDiffSummary(entry.session_diff);
+    const sessionDiff = isKnownPartialSummary(cleanedDiff) ? undefined : cleanedDiff;
     const finalAnswer = extractTaggedBlock(content, 'final_answer');
     if (finalAnswer) {
       appendAssistantBlock('finalAnswer', finalAnswer, undefined, undefined, sessionDiff);

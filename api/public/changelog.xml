@@ -13,6 +13,13 @@
       <description>Five example workflows using OmniAgent with terminal access, authenticated browser sessions, and MCP integrations, plus permission and safety guidance.</description>
     </item>
     <item>
+      <title>OmniKey v1.8.20</title>
+      <link>https://omnikeyai.ca/changelog#v1.8.20</link>
+      <guid isPermaLink="false">omnikey-v1.8.20</guid>
+      <pubDate>Thu, 12 Nov 2026 00:00:00 +0000</pubDate>
+      <description><![CDATA[<ul><li>Ship reviewed universal macOS 1.9.20 build 82</li><li>Prepare latest reviewed macOS 1.9.20 build 82</li><li>Address remaining diff coverage and native lifecycle review findings</li><li>Package notarized macOS 1.9.20 crash fix</li><li>Reject stale fenced-code ranges after sending a draft</li><li>Package notarized macOS 1.9.19 build 80</li><li>Preserve fenced prompts and expose code scroll controls</li><li>Refresh notarized macOS 1.9.18 build 79</li><li>Canonicalize home paths before excluding private credentials</li><li>Package notarized macOS 1.9.18 build 78</li><li>Add persistent diff controls and address PR review findings</li><li>Exclude literal printf labels from task variable rebinding checks</li><li>Reconcile task bookkeeping and Python writes in diff coverage</li><li>Escalate incomplete turn diffs and withhold partial snapshots</li><li>Attempt AI diff reconstruction after writes without Git snapshots</li><li>Recover missing turn diffs from verified native checkpoints</li><li>Revert &quot;fix(macOS): clarify management controls with hover hints&quot;</li></ul>]]></description>
+    </item>
+    <item>
       <title>OmniKey v1.8.19</title>
       <link>https://omnikeyai.ca/changelog#v1.8.19</link>
       <guid isPermaLink="false">omnikey-v1.8.19</guid>
@@ -144,13 +151,6 @@
       <guid isPermaLink="false">omnikey-v1.8.0</guid>
       <pubDate>Sat, 19 Sep 2026 00:00:00 +0000</pubDate>
       <description><![CDATA[<ul><li>Ship CLI 1.8.0 and macOS 1.9.0</li><li>Publish 1.8.0 build 59</li></ul>]]></description>
-    </item>
-    <item>
-      <title>OmniKey v1.7.0</title>
-      <link>https://omnikeyai.ca/changelog#v1.7.0</link>
-      <guid isPermaLink="false">omnikey-v1.7.0</guid>
-      <pubDate>Wed, 16 Sep 2026 00:00:00 +0000</pubDate>
-      <description><![CDATA[<ul><li>Add thread rename pinning and pagination</li><li>Release universal Markdown chat v1.7.0</li></ul>]]></description>
     </item>
   </channel>
 </rss>

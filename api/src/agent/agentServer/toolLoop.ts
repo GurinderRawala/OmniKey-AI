@@ -33,6 +33,8 @@ import {
   recordShellGitResult,
 } from '../gitDiff/shellContext';
 import { captureTurnBaselines } from '../gitDiff/coordinator';
+import { recordDiffRecoveryEvidence, shellRecoveryContext } from '../gitDiff/recovery';
+import { recordShellWriteEvidence } from '../gitDiff/writeEvidence';
 
 export { extractProgressSummary } from './progressSummary';
 
@@ -199,6 +201,15 @@ export async function runToolLoop(
     const executeOneToolCall = async (
       tc: NonNullable<AICompletionResult['tool_calls']>[number],
     ): Promise<{ id: string; name: string; result: string }> => {
+      if (
+        session.gitRun?.recovery &&
+        tc.name !== 'shell_script' &&
+        tc.name !== 'web_fetch' &&
+        tc.name !== 'web_search'
+      ) {
+        session.gitRun.recovery.priorNonShellTool = true;
+      }
+
       if (session.signal?.aborted) {
         return {
           id: tc.id,
@@ -424,19 +435,51 @@ export async function runToolLoop(
             log,
           );
         }
+        // Contract v4: correlate this shell with the outer run and tool call
+        // so native change records can be attributed (and nothing else).
+        const recoveryContext = shellRecoveryContext(session.gitRun, tc.id);
+        const gitContext = recoveryContext
+          ? { candidate_paths: gitPlan.context?.candidate_paths ?? [], ...recoveryContext }
+          : gitPlan.context;
         const terminalOutput = await new Promise<string>((resolve) => {
-          const finish = (output: string, _isError?: boolean, gitCommitObservations?: unknown) => {
+          let settled = false;
+          let cancelled = false;
+          const finish = (
+            output: string,
+            isError?: boolean,
+            gitCommitObservations?: unknown,
+            diffRecoveryEvidence?: unknown,
+            rawOutput?: string,
+          ) => {
+            if (settled) return;
+            settled = true;
             session.signal?.removeEventListener('abort', cancel);
             if (pendingShellScripts.get(sessionId)?.resolve === finish) {
               pendingShellScripts.delete(sessionId);
             }
             recordShellGitResult(session.gitRun, gitPlan, script, output, gitCommitObservations);
+            if (recoveryContext && diffRecoveryEvidence !== undefined && !session.signal?.aborted) {
+              recordDiffRecoveryEvidence(session.gitRun, tc.id, diffRecoveryEvidence, log);
+            }
+            // Write-like evidence only after the client's actual reply.
+            if (recoveryContext && !cancelled && !session.signal?.aborted) {
+              recordShellWriteEvidence(session.gitRun, tc.id, {
+                script,
+                cwd: gitPlan.workingDirectory,
+                // Unformatted client output when available (WebSocket path);
+                // the formatted result carries a prefix and keyword filtering.
+                output: rawOutput ?? output,
+                isError,
+              });
+            }
             resolve(output);
           };
-          const cancel = () =>
+          const cancel = () => {
+            cancelled = true;
             finish(
               'COMMAND ERROR: Connection closed before script output was received; execution outcome is unknown. Inspect the current state before retrying.',
             );
+          };
           // Register before sending: a fast client can return output immediately.
           pendingShellScripts.set(sessionId, { resolve: finish, filterKeywords });
           session.signal?.addEventListener('abort', cancel, { once: true });
@@ -453,7 +496,7 @@ export async function runToolLoop(
             activity_id: tc.id,
             activity_phase: 'started',
             ...(gitPlan.workingDirectory ? { working_directory: gitPlan.workingDirectory } : {}),
-            ...(gitPlan.context ? { git_diff_context: gitPlan.context } : {}),
+            ...(gitContext ? { git_diff_context: gitContext } : {}),
           });
         });
         return {

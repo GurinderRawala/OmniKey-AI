@@ -120,7 +120,6 @@ struct MCPServersView: View {
                     .buttonStyle(.bordered)
                     .tint(NordTheme.accentBlue(colorScheme))
                     .disabled(isLoading)
-                    .help("Reload configured MCP servers from the backend")
 
                     Button(action: startAdding) {
                         Label("Install MCP Server", systemImage: "plus")

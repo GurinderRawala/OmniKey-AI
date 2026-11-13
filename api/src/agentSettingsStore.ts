@@ -30,6 +30,12 @@ export type AgentSettingsSnapshot = {
   nemotronModel: string;
   grammarEnhancementModel: string | null;
   grammarEnhancementProvider: AIProvider | null;
+  /**
+   * Session diff view: Git snapshots, commit provenance and AI recovery of
+   * missing file changes. Defaults to true; the turn runner gates on
+   * `getAgentSettings().diffViewEnabled !== false`.
+   */
+  diffViewEnabled: boolean;
 };
 
 export type AgentSettingsPatch = Partial<{
@@ -49,6 +55,7 @@ export type AgentSettingsPatch = Partial<{
   nemotronModel: string;
   grammarEnhancementModel: string | null;
   grammarEnhancementProvider: AIProvider | null;
+  diffViewEnabled: boolean;
 }>;
 
 export type AgentModelField = 'openaiModel' | 'anthropicModel' | 'geminiModel' | 'nemotronModel';
@@ -137,6 +144,20 @@ function readBoolean(value: unknown, defaultValue: boolean): boolean {
   return normalized === 'true' || normalized === '1';
 }
 
+/**
+ * Only an explicit false-like stored value disables the diff view. Missing,
+ * null or unknown values (rows from before the column existed) keep the
+ * historical default of on.
+ */
+export function readDiffViewEnabled(value: unknown): boolean {
+  if (value === false || value === 0) return false;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'false' || normalized === '0') return false;
+  }
+  return true;
+}
+
 function readTerminalAccess(value: unknown): TerminalAccessMode {
   return value === 'limited' ? 'limited' : 'full';
 }
@@ -185,6 +206,7 @@ function legacyDefaults(): Omit<AgentSettingsSnapshot, 'id'> {
     grammarEnhancementProvider: firstString(cfg.GRAMMAR_ENHANCEMENT_MODEL)
       ? config.aiProvider
       : null,
+    diffViewEnabled: true,
   };
 }
 
@@ -230,6 +252,7 @@ function rowToSnapshot(row: AgentSettings): AgentSettingsSnapshot {
       row.grammarEnhancementProvider === 'nemotron'
         ? row.grammarEnhancementProvider
         : null,
+    diffViewEnabled: readDiffViewEnabled(row.diffViewEnabled),
   };
 }
 
@@ -255,6 +278,7 @@ export async function getAgentSettings(): Promise<AgentSettingsSnapshot> {
       nemotronModel: defaults.nemotronModel,
       grammarEnhancementModel: defaults.grammarEnhancementModel,
       grammarEnhancementProvider: defaults.grammarEnhancementProvider,
+      diffViewEnabled: defaults.diffViewEnabled,
     },
   });
   if (created) {

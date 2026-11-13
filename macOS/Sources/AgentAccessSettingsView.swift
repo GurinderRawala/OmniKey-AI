@@ -19,6 +19,7 @@ struct AgentAccessSettingsView: View {
     @State private var webSearchEnabled: Bool = true
     @State private var usageRecordingEnabled: Bool = !APIClient.isSelfHosted
     @State private var browserAccessEnabled: Bool = false
+    @State private var diffViewEnabled: Bool = AgentDiffViewSetting.isEnabled(for: SubscriptionManager.shared.currentIdentity)
     @State private var browserDebugBrowserName: String? = nil
     @State private var browserDebugPort: Int? = nil
     @State private var browserAccessMethod: String? = nil
@@ -63,6 +64,7 @@ struct AgentAccessSettingsView: View {
                         terminalAccessCard
                         webSearchCard
                         usageRecordingCard
+                        diffViewCard
                         writingModelCard
                         browserAccessCard
                     }
@@ -298,6 +300,42 @@ struct AgentAccessSettingsView: View {
         }
     }
 
+    private var diffViewCard: some View {
+        settingCard(
+            icon: "plus.forwardslash.minus",
+            title: "Diff view",
+            subtitle: "Show the files an agent turn changed, with a reviewable snapshot."
+        ) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Toggle(isOn: Binding(
+                        get: { diffViewEnabled },
+                        set: { newValue in
+                            if newValue != diffViewEnabled { applyDiffView(newValue) }
+                        }
+                    )) {
+                        Text(diffViewEnabled ? "Enabled" : "Disabled")
+                    }
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+                    .disabled(isLoading)
+                    .accessibilityLabel("Diff view")
+                    Text(diffViewEnabled ? "Enabled" : "Disabled")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(NordTheme.primaryText(colorScheme))
+                    Spacer()
+                }
+
+                Text(AgentDiffViewSetting.explanation)
+                    .font(.system(size: 11))
+                    .foregroundColor(NordTheme.secondaryText(colorScheme))
+                Text("Applies to new agent turns; a turn already running keeps its setting.")
+                    .font(.system(size: 11))
+                    .foregroundColor(NordTheme.secondaryText(colorScheme).opacity(0.8))
+            }
+        }
+    }
+
     private var browserAccessCard: some View {
         settingCard(
             icon: "safari.fill",
@@ -495,11 +533,31 @@ struct AgentAccessSettingsView: View {
 
     // MARK: - Actions
 
+    /// A reply belongs to the identity whose snapshot sent the request; it
+    /// is not applied once the subscription or backend has changed since.
+    private static func isCurrent(_ auth: SubscriptionAuthSnapshot) -> Bool {
+        auth.identity == SubscriptionManager.shared.currentIdentity
+    }
+
     private func loadSettings() {
         isLoading = true
         statusMessage = ""
-        apiClient.fetchAppSettings { result in
+        let auth = SubscriptionManager.shared.authSnapshot()
+        apiClient.fetchAppSettings(auth: auth) { result in
             DispatchQueue.main.async {
+                if case let .success(response) = result {
+                    // Authoritative for the identity it was fetched for,
+                    // even if another one is current now.
+                    AgentDiffViewSetting.store(
+                        AgentDiffViewSetting.resolve(serverValue: response.diffViewEnabled),
+                        for: auth.identity, current: SubscriptionManager.shared.currentIdentity
+                    )
+                }
+                guard Self.isCurrent(auth) else {
+                    // Stale reply: show nothing from it; read the new identity.
+                    loadSettings()
+                    return
+                }
                 isLoading = false
                 switch result {
                 case .success(let response):
@@ -513,6 +571,7 @@ struct AgentAccessSettingsView: View {
                     browserJavascriptEventBrowsers = response.browserJavascriptEventBrowsers ?? []
                     grammarEnhancementModel = response.grammarEnhancementModel ?? ""
                     savedGrammarEnhancementModel = response.grammarEnhancementModel ?? ""
+                    diffViewEnabled = AgentDiffViewSetting.resolve(serverValue: response.diffViewEnabled)
                 case .failure(let error):
                     statusMessage = "Failed to load settings: \(error.localizedDescription)"
                 }
@@ -523,8 +582,10 @@ struct AgentAccessSettingsView: View {
     private func applyTerminalAccess(_ mode: APIClient.TerminalAccessMode) {
         isLoading = true
         statusMessage = "Applying terminal access = \(mode.rawValue)…"
-        apiClient.updateAppSettings(terminalAccess: mode, webSearchEnabled: nil) { result in
+        let auth = SubscriptionManager.shared.authSnapshot()
+        apiClient.updateAppSettings(terminalAccess: mode, webSearchEnabled: nil, auth: auth) { result in
             DispatchQueue.main.async {
+                guard Self.isCurrent(auth) else { loadSettings(); return }
                 switch result {
                 case .success(let resp):
                     terminalAccess = resp.terminalAccess
@@ -541,8 +602,10 @@ struct AgentAccessSettingsView: View {
     private func applyWebSearch(_ enabled: Bool) {
         isLoading = true
         statusMessage = "Updating web search…"
-        apiClient.updateAppSettings(terminalAccess: nil, webSearchEnabled: enabled) { result in
+        let auth = SubscriptionManager.shared.authSnapshot()
+        apiClient.updateAppSettings(terminalAccess: nil, webSearchEnabled: enabled, auth: auth) { result in
             DispatchQueue.main.async {
+                guard Self.isCurrent(auth) else { loadSettings(); return }
                 switch result {
                 case .success(let resp):
                     webSearchEnabled = resp.webSearchEnabled
@@ -559,12 +622,44 @@ struct AgentAccessSettingsView: View {
     private func applyUsageRecording(_ enabled: Bool) {
         isLoading = true
         statusMessage = "Updating usage recording…"
-        apiClient.updateAppSettings(terminalAccess: nil, webSearchEnabled: nil, usageRecordingEnabled: enabled) { result in
+        let auth = SubscriptionManager.shared.authSnapshot()
+        apiClient.updateAppSettings(terminalAccess: nil, webSearchEnabled: nil, usageRecordingEnabled: enabled, auth: auth) { result in
             DispatchQueue.main.async {
+                guard Self.isCurrent(auth) else { loadSettings(); return }
                 switch result {
                 case .success(let resp):
                     usageRecordingEnabled = resp.usageRecordingEnabled ?? enabled
                     statusMessage = "Usage recording \(usageRecordingEnabled ? "enabled" : "disabled")."
+                    loadSettings()
+                case .failure(let error):
+                    isLoading = false
+                    statusMessage = "Failed to apply: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    private func applyDiffView(_ enabled: Bool) {
+        isLoading = true
+        statusMessage = "Updating diff view…"
+        let auth = SubscriptionManager.shared.authSnapshot()
+        apiClient.updateAppSettings(terminalAccess: nil, webSearchEnabled: nil, diffViewEnabled: enabled, auth: auth) { result in
+            DispatchQueue.main.async {
+                if case let .success(resp) = result {
+                    // Recorded for the identity it was saved for only.
+                    AgentDiffViewSetting.store(
+                        resp.diffViewEnabled ?? enabled,
+                        for: auth.identity, current: SubscriptionManager.shared.currentIdentity
+                    )
+                }
+                guard Self.isCurrent(auth) else { loadSettings(); return }
+                switch result {
+                case .success(let resp):
+                    // Mirror the acknowledged value, then refresh all settings.
+                    // Older backends omitting this field resolve to the legacy
+                    // enabled state on reload (they have no server-side gate).
+                    diffViewEnabled = resp.diffViewEnabled ?? enabled
+                    statusMessage = "Diff view \(diffViewEnabled ? "enabled" : "disabled") for new agent turns."
                     loadSettings()
                 case .failure(let error):
                     isLoading = false

@@ -155,12 +155,41 @@ describe('WebSocket turn ownership', () => {
         is_terminal_output: true,
         ...(isError === undefined ? {} : { is_error: isError }),
       });
-      await vi.waitFor(() => expect(resolve).toHaveBeenCalledWith(expect.any(String), isError));
+      await vi.waitFor(() => expect(resolve).toHaveBeenCalledTimes(1));
+      expect(resolve.mock.calls[0].slice(0, 2)).toEqual([expect.any(String), isError]);
       checkpoint.resolve();
       await vi.waitFor(() => expect(activeSessions.has('session')).toBe(false));
       owner.close();
     },
   );
+
+  it('forwards raw terminal content separately from the formatted tool result', async () => {
+    const checkpoint = deferred();
+    mocks.run.mockImplementationOnce(async () => checkpoint.promise);
+    const server = attachAgentWebSocketServer({} as any);
+    const owner = connect(server);
+    owner.message('new task');
+    await vi.waitFor(() => expect(mocks.run).toHaveBeenCalledTimes(1));
+    const resolve = vi.fn();
+    pendingShellScripts.set('session', { resolve, filterKeywords: ['nomatch'] });
+    const evidence = { turn_id: 'grun_x', records: [] };
+    owner.message('/tmp/tmp.Ab12Cd\n', {
+      is_terminal_output: true,
+      is_error: false,
+      diff_recovery_evidence: evidence,
+    });
+    await vi.waitFor(() => expect(resolve).toHaveBeenCalledTimes(1));
+    const [formatted, isError, observations, forwardedEvidence, raw] = resolve.mock.calls[0];
+    expect(formatted).toMatch(/^TERMINAL OUTPUT:\n/);
+    expect(isError).toBe(false);
+    expect(observations).toBeUndefined();
+    expect(forwardedEvidence).toEqual(evidence);
+    // Exactly what the client sent: no prefix, no keyword filtering.
+    expect(raw).toBe('/tmp/tmp.Ab12Cd\n');
+    checkpoint.resolve();
+    await vi.waitFor(() => expect(activeSessions.has('session')).toBe(false));
+    owner.close();
+  });
 
   it('drops disconnected queued messages and late authentication', async () => {
     const auth = deferred();

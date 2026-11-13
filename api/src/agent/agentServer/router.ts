@@ -25,6 +25,7 @@ import {
   readOrBackfillNormalizedTranscript,
 } from './transcriptStore';
 import { loadSessionDiffPayload } from '../gitDiff/coordinator';
+import { isKnownPartialPayload } from '../gitDiff/contracts';
 import {
   DiffRenderTimeoutError,
   renderSessionDiffHtml,
@@ -576,6 +577,14 @@ export function createAgentRouter(): express.Router {
       const stored = await loadSessionDiffPayload(sessionId, subscription.id, diffId);
       if (!stored) {
         res.status(404).json({ error: 'Diff not found' });
+        return;
+      }
+      // Never re-serve a snapshot already known to be partial (older
+      // incomplete recoveries / baseline-less turn snapshots). Explicit and
+      // safe: no payload content, no rendering.
+      if (isKnownPartialPayload(stored.payload)) {
+        res.setHeader('Cache-Control', 'private, no-store');
+        res.status(409).json({ error: 'Diff incomplete', code: 'diff_incomplete' });
         return;
       }
       const html = await renderSessionDiffHtml(

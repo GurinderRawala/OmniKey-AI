@@ -32,6 +32,7 @@ const updateSchema = zod
     terminalAccess: zod.enum(['full', 'limited']).optional(),
     webSearchEnabled: zod.boolean().optional(),
     usageRecordingEnabled: zod.boolean().optional(),
+    diffViewEnabled: zod.boolean().optional(),
     grammarEnhancementModel: zod.string().max(255).nullable().optional(),
   })
   .strict();
@@ -96,12 +97,14 @@ export function appSettingsRouter(): express.Router {
         browserDebugUserDataDir: settings.browserDebugUserDataDir,
         browserJavascriptEventBrowsers: settings.browserJavascriptEventBrowsers,
         grammarEnhancementModel,
+        diffViewEnabled: settings.diffViewEnabled,
         runtime: {
           terminalAccess: settings.terminalAccess,
           webSearchEnabled: settings.webSearchEnabled,
           usageRecordingEnabled: settings.usageRecordingEnabled,
           browserAccessEnabled: settings.browserAccessEnabled,
           browserAccessMethod: settings.browserAccessMethod,
+          diffViewEnabled: settings.diffViewEnabled,
         },
         source: 'database',
       });
@@ -113,7 +116,7 @@ export function appSettingsRouter(): express.Router {
 
   /**
    * PATCH /api/app-settings — partial update of terminalAccess, webSearchEnabled,
-   * or usageRecordingEnabled. Values are persisted in DB and are read by the
+   * usageRecordingEnabled, or diffViewEnabled. Values are persisted in DB and are read by the
    * agent hot path on each turn, so no daemon restart is required.
    */
   router.patch('/', authMiddleware, async (req, res) => {
@@ -124,6 +127,7 @@ export function appSettingsRouter(): express.Router {
         parsed.terminalAccess === undefined &&
         parsed.webSearchEnabled === undefined &&
         parsed.usageRecordingEnabled === undefined &&
+        parsed.diffViewEnabled === undefined &&
         parsed.grammarEnhancementModel === undefined
       ) {
         return res.status(400).json({ error: 'No supported fields supplied.' });
@@ -133,6 +137,7 @@ export function appSettingsRouter(): express.Router {
         terminalAccess?: TerminalAccessMode;
         webSearchEnabled?: boolean;
         usageRecordingEnabled?: boolean;
+        diffViewEnabled?: boolean;
         grammarEnhancementModel?: string | null;
         grammarEnhancementProvider?: typeof config.aiProvider | null;
       } = {};
@@ -144,6 +149,9 @@ export function appSettingsRouter(): express.Router {
       }
       if (parsed.usageRecordingEnabled !== undefined) {
         patch.usageRecordingEnabled = parsed.usageRecordingEnabled;
+      }
+      if (parsed.diffViewEnabled !== undefined) {
+        patch.diffViewEnabled = parsed.diffViewEnabled;
       }
       if (parsed.grammarEnhancementModel !== undefined) {
         patch.grammarEnhancementModel = parsed.grammarEnhancementModel?.trim() || null;
@@ -160,6 +168,7 @@ export function appSettingsRouter(): express.Router {
         browserAccessEnabled: settings.browserAccessEnabled,
         usageRecordingEnabled: settings.usageRecordingEnabled,
         grammarEnhancementModel,
+        diffViewEnabled: settings.diffViewEnabled,
         restartScheduled: false,
         message: 'Settings updated.',
       });

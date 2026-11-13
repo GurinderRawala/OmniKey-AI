@@ -78,6 +78,12 @@ const COLUMN_MIGRATIONS: ColumnMigration[] = [
   { table: 'agent_settings', column: 'browser_debug_executable', definition: 'VARCHAR(2000)' },
   { table: 'agent_settings', column: 'browser_debug_user_data_dir', definition: 'VARCHAR(2000)' },
   { table: 'agent_settings', column: 'browser_javascript_event_browsers', definition: 'JSON' },
+  // Session diff view toggle. Existing rows keep the historical behavior (on).
+  {
+    table: 'agent_settings',
+    column: 'diff_view_enabled',
+    definition: 'TINYINT(1) NOT NULL DEFAULT 1',
+  },
   // Added: context-window tracking (prompt token count of last API call)
   {
     table: 'agent_sessions',

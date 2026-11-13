@@ -7,6 +7,7 @@ import { pushToSessionHistory, createUserContent } from '../utils';
 import type { AgentMessage, AgentSendFn, SessionState } from '../types';
 import type { PendingSteeringMessage } from './serverTypes';
 import { sessionSteeringIds, sessionSteeringMessages } from './runtimeState';
+import { addDiffRecoverySteering } from '../gitDiff/recovery';
 import {
   assertSkillRequestFits,
   SkillContextBudgetError,
@@ -347,6 +348,12 @@ export async function drainSteeringMessagesForRun(
   }
   const applied = drainSteeringMessagesIntoHistory(sessionId, session, hasStoredPrompt, log);
   commitSteeringSkills(session, applied);
+  // Only steering applied to this run's history informs diff recovery.
+  if (applied.length)
+    addDiffRecoverySteering(
+      session.gitRun,
+      applied.map((m) => m.content),
+    );
   return applied;
 }
 
