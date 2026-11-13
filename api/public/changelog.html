@@ -115,7 +115,7 @@
           <a href="/changelog.xml">Subscribe via RSS</a> or
           <a href="https://github.com/GurinderRawala/OmniKey-AI/releases" target="_blank" rel="noopener noreferrer">watch releases on GitHub</a>.
         </p>
-        <p class="chg-latest">Latest release <strong>v1.8.21</strong> &nbsp;&middot;&nbsp; November 13, 2026</p>
+        <p class="chg-latest">Latest release <strong>v1.8.22</strong> &nbsp;&middot;&nbsp; November 13, 2026</p>
       </section>
 
       <section class="docs-section" id="website-updates"><h2>Website updates</h2>        <article class="chg-release" id="omniagent-blog">
@@ -124,6 +124,23 @@
         </article></section>
 
       <section class="docs-section" id="releases">
+        <article class="chg-release" id="v1.8.22">
+          <div class="chg-meta">
+            <a class="chg-version" href="#v1.8.22">v1.8.22</a>
+            <time datetime="2026-11-13">November 13, 2026</time>
+            <a class="chg-compare" href="https://github.com/GurinderRawala/OmniKey-AI/compare/v1.8.21...v1.8.22" target="_blank" rel="noopener noreferrer">Compare on GitHub</a>
+          </div>
+          <div class="chg-body">
+          <ul class="chg-list">
+            <li><span class="chg-tag chg-fix">Fixed</span><span class="chg-text">Serialize transcript writes and retry busy transactions from a fresh snapshot</span></li>
+            <li><span class="chg-tag chg-imp">Changed</span><span class="chg-text">Retain worker reply listener across readiness notifications</span></li>
+            <li><span class="chg-tag chg-fix">Fixed</span><span class="chg-text">Initialize SQLite busy timeout asynchronously once per connection</span></li>
+            <li><span class="chg-tag chg-imp">Changed</span><span class="chg-text">Bump CLI and bundled API to 1.8.22</span></li>
+            <li><span class="chg-tag chg-fix">Fixed</span><span class="chg-text">Recover daemon safely from SQLite failures and worker crashes</span></li>
+            <li><span class="chg-tag chg-doc">Docs</span><span class="chg-text">Publish 1.8.21 and macOS 1.9.21 changelog</span></li>
+          </ul>
+          </div>
+        </article>
         <article class="chg-release" id="v1.8.21">
           <div class="chg-meta">
             <a class="chg-version" href="#v1.8.21">v1.8.21</a>
@@ -512,24 +529,6 @@
           <div class="chg-body">
           <ul class="chg-list">
             <li><span class="chg-tag chg-fix">Fixed</span><span class="chg-text">Support Astra and future Responses models</span></li>
-          </ul>
-          </div>
-        </article>
-        <article class="chg-release" id="v1.6.26">
-          <div class="chg-meta">
-            <a class="chg-version" href="#v1.6.26">v1.6.26</a>
-            <time datetime="2026-09-10">September 10, 2026</time>
-            <a class="chg-compare" href="https://github.com/GurinderRawala/OmniKey-AI/compare/v1.6.25...v1.6.26" target="_blank" rel="noopener noreferrer">Compare on GitHub</a>
-          </div>
-          <div class="chg-body">
-          <ul class="chg-list">
-            <li><span class="chg-tag chg-imp">Changed</span><span class="chg-text">Rebuild desktop bundles</span></li>
-            <li><span class="chg-tag chg-fix">Fixed</span><span class="chg-text">Harden settings migration and browser access</span></li>
-            <li><span class="chg-tag chg-add">Added</span><span class="chg-text">Persist agent and browser access settings</span></li>
-            <li><span class="chg-tag chg-imp">Changed</span><span class="chg-text">Macos app markdown fix</span></li>
-            <li><span class="chg-tag chg-imp">Changed</span><span class="chg-text">Selected text fix macos app</span></li>
-            <li><span class="chg-tag chg-imp">Changed</span><span class="chg-text">Windows app fixes</span></li>
-            <li><span class="chg-tag chg-imp">Changed</span><span class="chg-text">Onboarding page added</span></li>
           </ul>
           </div>
         </article>
