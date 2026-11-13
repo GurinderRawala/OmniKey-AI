@@ -18,11 +18,10 @@ import { compressString, decompressString } from '../../compression';
 import { AgentSessionDiff, AgentSessionGitRun } from '../../models/agentSessionDiff';
 import type { AgentMessage, AgentSendFn } from '../types';
 import { CandidateSet, projectContextDirectory } from './candidates';
-import type { ShellWriteEvidence } from './writeEvidence';
-import type { ShellExcerpt } from './agentReport';
 import {
   comparablePath,
   isServableUncertainOrReported,
+  isServableAgentPatchRecovery,
   pathIsWithin,
   countPatchFiles,
   GIT_DIFF_DISPLAY_LIMIT,
@@ -45,7 +44,6 @@ import {
   type GitDiffResponse,
   type GitTurnBaseline,
   type GitTurnBaselineSource,
-  type DiffRecoveryRecord,
   type SessionDiffCandidate,
   type SessionDiffCaptureOutcome,
   type SessionDiffPayload,
@@ -79,46 +77,12 @@ export interface GitRunState {
   /** Count of baseline requests that failed (timeout/invalid/unavailable). */
   baselineFailures: number;
   /**
-   * Contract v4 (`supports_diff_recovery: true`): run-local verified change
-   * metadata. Absent for clients without the capability. Never persisted.
+   * `supports_agent_patches: true` with the diff view enabled: the editing
+   * agent is asked (request copy only) to append unified patches of the
+   * files it changed to its final answer; valid ones fill files Git did not
+   * cover. False = normal Git capture only, no instruction, no parsing.
    */
-  recovery?: DiffRecoveryRunState;
-}
-
-/** Runtime-only v4 recovery evidence of one outer run (turn_id = runId). */
-export interface DiffRecoveryRunState {
-  /** Latest verified metadata per opaque native id, in first-seen order. */
-  records: Map<string, DiffRecoveryRecord>;
-  /** Provider tool call ids issued to the client with this run's turn id. */
-  issuedToolCalls: Set<string>;
-  /** New records dropped because the per-run backend budget was full. */
-  omitted: number;
-  /** Largest `omitted` count the native store reported with shell evidence. */
-  nativeOmitted?: number;
-  /** Selected records the native `recover` replay could not reproduce. */
-  replayOmitted?: number;
-  /** Fallback runs at most once per outer run. */
-  attempted: boolean;
-  /** Trimmed text of this run's own user input (never prior history). */
-  input?: string;
-  /** Bounded steering text applied to this run (never queued/rejected/older). */
-  steering?: string[];
-  /** Write-like shells of this run, recorded only after the client replied. */
-  writes: ShellWriteEvidence[];
-  priorNonShellTool?: boolean;
-  /** Write-like shells dropped because the per-run evidence budget was full. */
-  writesOmitted?: number;
-  /** Roots the normal capture authoritatively reported net-empty. */
-  revertedRoots: string[];
-  /**
-   * Comparable absolute paths named by native `git` records of this run in
-   * a root later reported net-empty: Git observed them, so the net-empty
-   * capture proves them reverted. Writes to other paths in such a root
-   * (e.g. ignored files) are never exempted by the root alone.
-   */
-  revertedPaths?: string[];
-  /** Bounded, redacted excerpts of every executed shell of this run (agentReport.ts). */
-  shells?: ShellExcerpt[];
+  agentPatches: boolean;
 }
 
 export function createGitRunState(input: {
@@ -127,7 +91,7 @@ export function createGitRunState(input: {
   connection?: AbortSignal;
   send: AgentSendFn;
   turnDiff?: boolean;
-  diffRecovery?: boolean;
+  agentPatches?: boolean;
 }): GitRunState {
   return {
     runId: `grun_${cuid()}`,
@@ -143,18 +107,7 @@ export function createGitRunState(input: {
     baselines: [],
     baselineAttempted: new Set(),
     baselineFailures: 0,
-    ...(input.diffRecovery === true
-      ? {
-          recovery: {
-            records: new Map(),
-            issuedToolCalls: new Set(),
-            omitted: 0,
-            attempted: false,
-            writes: [],
-            revertedRoots: [],
-          },
-        }
-      : {}),
+    agentPatches: input.agentPatches === true,
   };
 }
 
@@ -262,20 +215,6 @@ function awaitCapture(
       git_diff_request: request,
     });
   });
-}
-
-/**
- * Send one validated control request on the run's own connection and await
- * its bounded reply (null on timeout/abort/disconnect/invalid). Never throws.
- */
-export function requestGitControl(
-  run: GitRunState,
-  request: GitDiffRequest,
-  signal: AbortSignal | undefined,
-  timeoutMs: number,
-  validate: (raw: unknown) => GitDiffResponse,
-): Promise<GitDiffResponse | null> {
-  return awaitCapture(run, request, signal, timeoutMs, validate);
 }
 
 function parseCommits(json: string | null | undefined): GitCommitObservation[] {
@@ -437,6 +376,9 @@ export async function saveSessionDiff(
   const commit =
     scope === 'commit' && repositories.length === 1 ? repositories[0].commit : undefined;
   const fileCount = repositories.reduce((sum, r) => sum + countPatchFiles(r.patch), 0);
+  // Git and agent-patch entries of one root are separate (labelled) entries.
+  const repositoryCount = new Set(repositories.map((r) => comparablePath(r.root))).size;
+  const agentPatch = isServableAgentPatchRecovery(recovery, repositories);
   const row = await AgentSessionDiff.create({
     id: `sdiff_${cuid()}`,
     sessionId: run.sessionId,
@@ -445,13 +387,13 @@ export async function saveSessionDiff(
     scope,
     commitOid: commit ?? null,
     fileCount,
-    repositoryCount: repositories.length,
+    repositoryCount,
     payload: compressString(JSON.stringify(payload)),
   });
   return {
     id: row.id,
     fileCount,
-    repositoryCount: repositories.length,
+    repositoryCount,
     createdAt: (row.createdAt ?? new Date()).toISOString(),
     scope,
     ...(commit ? { commit } : {}),
@@ -472,10 +414,16 @@ export async function saveSessionDiff(
           displayLimit: GIT_DIFF_DISPLAY_LIMIT,
           recovered: true,
           // Uncertain coverage is shown (labelled), never as a known partial.
-          recoveryIncomplete: !recovery.complete && !isServableUncertainOrReported(recovery),
-          ...(isServableUncertainOrReported(recovery) ? { recoveryUncertain: true } : {}),
+          // Agent-patch and uncertain snapshots are shown labelled, never as
+          // a known partial. Agent patches reuse the existing AI method value
+          // so current clients need no new enum.
+          recoveryIncomplete:
+            !agentPatch && !recovery.complete && !isServableUncertainOrReported(recovery),
+          ...(agentPatch || isServableUncertainOrReported(recovery)
+            ? { recoveryUncertain: true }
+            : {}),
           recoveryMethod:
-            recovery.kind === 'ai_reconstructed'
+            agentPatch || recovery.kind === 'ai_reconstructed'
               ? ('ai_reconstructed' as const)
               : ('checkpoint' as const),
         }
@@ -803,7 +751,7 @@ export async function saveSessionDiffCandidate(
  * Structured outcome of the normal (automatic) capture for the final answer
  * about to be delivered, persisted immediately (no coverage check). Never
  * throws; provenance is persisted either way. Final answers use
- * `captureSessionDiffCandidate` + coverage instead (see recovery.ts).
+ * `captureSessionDiffCandidate` via finalDiff.ts instead.
  */
 export async function captureSessionDiffOutcome(
   run: GitRunState | undefined,

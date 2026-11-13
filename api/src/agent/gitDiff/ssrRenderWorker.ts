@@ -200,6 +200,12 @@ export async function renderSnapshotDocument(
   // v4 provenance: an agent-assisted recovery is labelled as such, never as a
   // normal snapshot, with an explicit partial warning and its limitations.
   // An AI reconstruction is additionally labelled unverified (never complete).
+  // Agent patches: entries marked `reconstructed` were written by the agent
+  // in its final answer (unverified); every other entry is the Git capture.
+  const agentPatch = payload.recovery?.kind === 'agent_patch';
+  const isAgentPatchEntry = (repo: (typeof payload.repositories)[number]) =>
+    agentPatch && repo.reconstructed === true;
+  const gitEntries = agentPatch && payload.repositories.some((r) => !isAgentPatchEntry(r));
   const recovery =
     payload.recovery &&
     (payload.recovery.kind === 'agent_assisted' || payload.recovery.kind === 'ai_reconstructed')
@@ -230,6 +236,15 @@ export async function renderSnapshotDocument(
     : uncertainCoverage
       ? `<p class="limit"><strong>Unverified — coverage uncertain:</strong> this turn ran write commands whose targets or evidence the backend could not fully determine, so changes may be missing. ${aiFiles ? 'Files marked AI-reconstructed were inferred by the AI model from shell commands, not read from disk, and may be inaccurate.' : 'Every file shown was read from verified captures of this turn.'}</p>`
       : '';
+  const agentPatchNotes = agentPatch
+    ? '<p class="limit"><strong>Agent reported — not verified, may be incomplete:</strong> files marked AI-generated patch were written by the agent in its final answer; they were not read from disk and may be inaccurate. Changes the agent did not report may be missing.</p>' +
+      (Array.isArray(payload.recovery?.limitations)
+        ? payload.recovery.limitations
+            .slice(0, 8)
+            .map((l) => `<p>${escapeHtml(String(l).slice(0, 500))}</p>`)
+            .join('')
+        : '')
+    : '';
   const recoveryNotes = recovery
     ? uncertainNote +
       (uncertainCoverage
@@ -250,46 +265,52 @@ export async function renderSnapshotDocument(
             .join('')
         : '')
     : '';
-  const scopeLabel = agentReported
-    ? 'Turn changes · agent reported, not verified, not complete'
-    : uncertainCoverage
-      ? 'Turn changes · unverified — coverage uncertain'
-      : aiConfirmedOnly
-        ? checkpointBase
-          ? 'Recovered turn changes'
-          : isTurn
-            ? 'Turn changes'
-            : 'Working tree changes'
-        : aiReconstructed
-          ? mergedBase
-            ? 'Turn changes with AI-reconstructed files'
-            : 'AI-reconstructed turn changes'
-          : recovery
+  const scopeLabel = agentPatch
+    ? 'Turn changes with AI-generated patches'
+    : agentReported
+      ? 'Turn changes · agent reported, not verified, not complete'
+      : uncertainCoverage
+        ? 'Turn changes · unverified — coverage uncertain'
+        : aiConfirmedOnly
+          ? checkpointBase
             ? 'Recovered turn changes'
             : isTurn
               ? 'Turn changes'
-              : scopes.size > 1
-                ? 'Working tree and commit changes'
-                : scopes.has('commit')
-                  ? 'Commit changes'
-                  : 'Working tree changes';
-  const disclaimer = agentReported
-    ? "Based on the agent's own report of changed files (unverified); some changes of this turn may not be shown."
-    : uncertainCoverage
-      ? `${aiFiles ? 'Includes files reconstructed by the AI model from write-like shell commands of this turn (unverified)' : 'Verified captures of this turn; the AI model reported the remaining known written files unchanged (unverified)'}. Some changes of this turn may not be shown.`
-      : aiConfirmedOnly
-        ? checkpointBase
-          ? 'Recovered from native per-command checkpoints of this turn (not a full repository snapshot); it may include changes not made by the agent.'
-          : 'Verified capture of this turn from disk; it may include changes not made by the agent.'
-        : aiReconstructed
-          ? mergedBase
-            ? 'Verified captures of this turn merged with files reconstructed by the AI model from write-like shell commands (unverified).'
-            : 'Reconstructed by the AI model from write-like shell commands of this turn only (not a repository snapshot); unverified.'
-          : recovery
-            ? 'Recovered with agent assistance from native per-command checkpoints of this turn (not a full repository snapshot); it may include changes not made by the agent.'
-            : isTurn
-              ? 'Net committed and uncommitted changes from the turn baseline to the working tree when the answer was produced; it may include changes not made by the agent.'
-              : 'Snapshot taken when the answer was produced; it may include changes not made by the agent.';
+              : 'Working tree changes'
+          : aiReconstructed
+            ? mergedBase
+              ? 'Turn changes with AI-reconstructed files'
+              : 'AI-reconstructed turn changes'
+            : recovery
+              ? 'Recovered turn changes'
+              : isTurn
+                ? 'Turn changes'
+                : scopes.size > 1
+                  ? 'Working tree and commit changes'
+                  : scopes.has('commit')
+                    ? 'Commit changes'
+                    : 'Working tree changes';
+  const disclaimer = agentPatch
+    ? gitEntries
+      ? 'Git capture of this turn merged with patches the agent reported for files Git did not cover (unverified).'
+      : 'Patches the agent reported for files it changed in this turn (not a repository snapshot); unverified.'
+    : agentReported
+      ? "Based on the agent's own report of changed files (unverified); some changes of this turn may not be shown."
+      : uncertainCoverage
+        ? `${aiFiles ? 'Includes files reconstructed by the AI model from write-like shell commands of this turn (unverified)' : 'Verified captures of this turn; the AI model reported the remaining known written files unchanged (unverified)'}. Some changes of this turn may not be shown.`
+        : aiConfirmedOnly
+          ? checkpointBase
+            ? 'Recovered from native per-command checkpoints of this turn (not a full repository snapshot); it may include changes not made by the agent.'
+            : 'Verified capture of this turn from disk; it may include changes not made by the agent.'
+          : aiReconstructed
+            ? mergedBase
+              ? 'Verified captures of this turn merged with files reconstructed by the AI model from write-like shell commands (unverified).'
+              : 'Reconstructed by the AI model from write-like shell commands of this turn only (not a repository snapshot); unverified.'
+            : recovery
+              ? 'Recovered with agent assistance from native per-command checkpoints of this turn (not a full repository snapshot); it may include changes not made by the agent.'
+              : isTurn
+                ? 'Net committed and uncommitted changes from the turn baseline to the working tree when the answer was produced; it may include changes not made by the agent.'
+                : 'Snapshot taken when the answer was produced; it may include changes not made by the agent.';
   const repoCount = payload.repositories.length;
   const head = [
     '<!doctype html>',
@@ -300,6 +321,7 @@ export async function renderSnapshotDocument(
     `<header class="snapshot"><h1>${scopeLabel}</h1>`,
     `<p>${repoCount} repositor${repoCount === 1 ? 'y' : 'ies'} · ${totalFiles} file${totalFiles === 1 ? '' : 's'}. ${disclaimer}</p>`,
     payload.notice && !recovery ? `<p>${escapeHtml(payload.notice)}</p>` : '',
+    agentPatchNotes,
     recoveryNotes,
   ].join('');
   const tail = '</main></body></html>';
@@ -340,13 +362,15 @@ export async function renderSnapshotDocument(
         ? `${escapeHtml(repo.root)} · ${oid(repo.baselineHead)} → ${oid(repo.head)} + working tree · baseline ${repo.baselineSource === 'before_tool' ? 'before first tool use' : 'at turn start'}${repo.baselineCapturedAt ? ` (${escapeHtml(repo.baselineCapturedAt)})` : ''}`
         : repo.scope === 'commit' && repo.commit
           ? `${escapeHtml(repo.root)} · commit <code class="oid">${escapeHtml(repo.commit.slice(0, 12))}</code>`
-          : isAiEntry(repo)
-            ? `${escapeHtml(repo.root)} · AI-reconstructed (unverified)`
-            : checkpointBase
-              ? `${escapeHtml(repo.root)} · recovered from turn checkpoints`
-              : isTurn
-                ? `${escapeHtml(repo.root)} · working tree vs HEAD (turn baseline unavailable)`
-                : `${escapeHtml(repo.root)} · working tree vs HEAD`;
+          : isAgentPatchEntry(repo)
+            ? `${escapeHtml(repo.root)} · AI-generated patch (agent reported, unverified)`
+            : isAiEntry(repo)
+              ? `${escapeHtml(repo.root)} · AI-reconstructed (unverified)`
+              : checkpointBase
+                ? `${escapeHtml(repo.root)} · recovered from turn checkpoints`
+                : isTurn
+                  ? `${escapeHtml(repo.root)} · working tree vs HEAD (turn baseline unavailable)`
+                  : `${escapeHtml(repo.root)} · working tree vs HEAD`;
     // Always keep room to close the section we open.
     const sectionOpen = `<section class="repo"><h2>${title}</h2>`;
     if (bytes(sectionOpen) + bytes(sectionClose) > remaining || !tryPush(sectionOpen)) {

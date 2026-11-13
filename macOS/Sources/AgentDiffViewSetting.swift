@@ -6,8 +6,8 @@ import Foundation
 /// The backend row is authoritative and its turn runner refuses diff work
 /// when the setting is off, even for a stale client. This UserDefaults copy
 /// lets the Mac (a) advertise no diff capabilities on the initial frame and
-/// (b) skip all native Git snapshot, provenance and recovery-checkpoint work
-/// without a network round trip.
+/// (b) skip all native Git snapshot and commit-provenance work without a
+/// network round trip. (No per-shell recovery checkpoints exist at all.)
 ///
 /// The mirror is scoped to the `SubscriptionIdentity` (backend + opaque key
 /// fingerprint) the value was read or saved for, so a value saved for one
@@ -99,14 +99,17 @@ enum AgentDiffViewSetting {
     /// keep the feature on; only an explicit `false` disables it.
     static func resolve(serverValue: Bool?) -> Bool { serverValue ?? true }
 
-    /// Capability flags advertised on the initial agent frame.
+    /// Capability flags advertised on the initial agent frame. The legacy
+    /// `supports_diff_recovery` checkpoint protocol is never advertised.
     struct Capabilities: Equatable, Sendable {
         let gitDiff: Bool
         let gitTurnDiff: Bool
-        let diffRecovery: Bool
+        /// `supports_agent_patches`: the server may ask the agent for a
+        /// unified patch when native Git capture cannot cover the turn.
+        let agentPatches: Bool
     }
 
     static func capabilities(enabled: Bool) -> Capabilities {
-        Capabilities(gitDiff: enabled, gitTurnDiff: enabled, diffRecovery: enabled)
+        Capabilities(gitDiff: enabled, gitTurnDiff: enabled, agentPatches: enabled)
     }
 }

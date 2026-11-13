@@ -33,9 +33,6 @@ import {
   recordShellGitResult,
 } from '../gitDiff/shellContext';
 import { captureTurnBaselines } from '../gitDiff/coordinator';
-import { recordDiffRecoveryEvidence, shellRecoveryContext } from '../gitDiff/recovery';
-import { recordShellWriteEvidence } from '../gitDiff/writeEvidence';
-import { recordShellExcerpt } from '../gitDiff/agentReport';
 
 export { extractProgressSummary } from './progressSummary';
 
@@ -202,15 +199,6 @@ export async function runToolLoop(
     const executeOneToolCall = async (
       tc: NonNullable<AICompletionResult['tool_calls']>[number],
     ): Promise<{ id: string; name: string; result: string }> => {
-      if (
-        session.gitRun?.recovery &&
-        tc.name !== 'shell_script' &&
-        tc.name !== 'web_fetch' &&
-        tc.name !== 'web_search'
-      ) {
-        session.gitRun.recovery.priorNonShellTool = true;
-      }
-
       if (session.signal?.aborted) {
         return {
           id: tc.id,
@@ -436,22 +424,10 @@ export async function runToolLoop(
             log,
           );
         }
-        // Contract v4: correlate this shell with the outer run and tool call
-        // so native change records can be attributed (and nothing else).
-        const recoveryContext = shellRecoveryContext(session.gitRun, tc.id);
-        const gitContext = recoveryContext
-          ? { candidate_paths: gitPlan.context?.candidate_paths ?? [], ...recoveryContext }
-          : gitPlan.context;
+        const gitContext = gitPlan.context;
         const terminalOutput = await new Promise<string>((resolve) => {
           let settled = false;
-          let cancelled = false;
-          const finish = (
-            output: string,
-            isError?: boolean,
-            gitCommitObservations?: unknown,
-            diffRecoveryEvidence?: unknown,
-            rawOutput?: string,
-          ) => {
+          const finish = (output: string, _isError?: boolean, gitCommitObservations?: unknown) => {
             if (settled) return;
             settled = true;
             session.signal?.removeEventListener('abort', cancel);
@@ -459,26 +435,9 @@ export async function runToolLoop(
               pendingShellScripts.delete(sessionId);
             }
             recordShellGitResult(session.gitRun, gitPlan, script, output, gitCommitObservations);
-            if (recoveryContext && diffRecoveryEvidence !== undefined && !session.signal?.aborted) {
-              recordDiffRecoveryEvidence(session.gitRun, tc.id, diffRecoveryEvidence, log);
-            }
-            // Write-like evidence only after the client's actual reply.
-            if (recoveryContext && !cancelled && !session.signal?.aborted) {
-              recordShellWriteEvidence(session.gitRun, tc.id, {
-                script,
-                cwd: gitPlan.workingDirectory,
-                // Unformatted client output when available (WebSocket path);
-                // the formatted result carries a prefix and keyword filtering.
-                output: rawOutput ?? output,
-                isError,
-              });
-              // Bounded, redacted context for an agent-reported fallback.
-              recordShellExcerpt(session.gitRun, tc.id, { script, output: rawOutput ?? output });
-            }
             resolve(output);
           };
           const cancel = () => {
-            cancelled = true;
             finish(
               'COMMAND ERROR: Connection closed before script output was received; execution outcome is unknown. Inspect the current state before retrying.',
             );

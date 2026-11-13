@@ -3,7 +3,7 @@ import { config } from '../../config';
 import { logger } from '../../logger';
 import { aiClient, AITool, AICompletionResult, CompletionOptions } from '../../ai-client';
 import { stripProviderMetadata } from '../gitDiff/providerMetadata';
-import { withChangedFilesInstruction } from '../gitDiff/agentReport';
+import { withAgentPatchInstruction } from '../gitDiff/agentPatch';
 import { pushToSessionHistory } from '../utils';
 import { isInjectedUserPrompt } from '../injectedUserPrompts';
 import type { SessionState } from '../types';
@@ -121,8 +121,8 @@ export async function completeWithContextRecovery(
       throwIfTurnCancelled(session.signal);
       const result = await aiClient.complete(
         model,
-        // Ephemeral request-copy instruction (diff-enabled v4 runs only).
-        withChangedFilesInstruction(stripProviderMetadata(requestHistory), session.gitRun),
+        // Ephemeral request-copy instruction (agent-patch runs only).
+        withAgentPatchInstruction(stripProviderMetadata(requestHistory), session.gitRun),
         requestOptions,
       );
       throwIfTurnCancelled(session.signal);
