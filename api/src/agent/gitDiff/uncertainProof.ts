@@ -46,6 +46,13 @@ export interface UncertainCoverageGate {
 
 const isGitLikeKind = (kind: string) => kind.startsWith('git ') || kind === 'patch';
 
+/** An uncertain write whose evidence was redacted/withheld: a policy limit, never uncertainty. */
+export function hasRedactedUncertainWrite(state: DiffRecoveryRunState): boolean {
+  return state.writes.some(
+    (w) => w.redacted && (w.truncated || w.unresolved || w.kinds.some(isGitLikeKind)),
+  );
+}
+
 /**
  * Undefined = keep withholding. Never called for complete coverage. `missing`
  * is the strict known allowlist the model will be asked about.
@@ -62,12 +69,7 @@ export function uncertainCoverageGate(input: {
     return undefined;
   // An uncertain write whose excerpt was redacted or withheld (sensitive
   // target) is a policy limit: never shown as mere uncertainty.
-  if (
-    state.writes.some(
-      (w) => w.redacted && (w.truncated || w.unresolved || w.kinds.some(isGitLikeKind)),
-    )
-  )
-    return undefined;
+  if (hasRedactedUncertainWrite(state)) return undefined;
   // No known path: nothing the model could validly reconstruct.
   if (!missing.size) return undefined;
   const proof = new Set<ChangeProofSource>();

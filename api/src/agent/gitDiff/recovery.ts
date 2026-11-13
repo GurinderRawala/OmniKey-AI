@@ -50,6 +50,10 @@ import {
   validateGitRecoveryResponse,
   GIT_DIFF_MAX_PATCH_BYTES,
   GIT_DIFF_MAX_REPOSITORIES,
+  AGENT_REPORTED_GAPS,
+  COVERAGE_UNCERTAINTIES,
+  type AgentReportedGap,
+  type CoverageUncertainty,
   type DiffRecoveryRecord,
   type GitDiffRepository,
   type GitDiffRequest,
@@ -82,8 +86,19 @@ import {
   withoutCoveredSections,
   type VerifiedRepository,
 } from './coverage';
-import { proofShown, uncertainCoverageGate, uncertaintyLimitation } from './uncertainProof';
+import {
+  hasRedactedUncertainWrite,
+  proofShown,
+  uncertainCoverageGate,
+  uncertaintyLimitation,
+} from './uncertainProof';
 import type { WriteTarget } from './writeEvidence';
+import {
+  agentReportLimitations,
+  agentReportTargets,
+  buildAgentReportMessages,
+  type AgentChangeReport,
+} from './agentReport';
 
 /** Fixed, literal system prompt of the manifest call. */
 export const DIFF_RECOVERY_SYSTEM_PROMPT = [
@@ -225,13 +240,15 @@ export function recordDiffRecoveryEvidence(
 export function shouldAttemptDiffRecovery(
   run: GitRunState | undefined,
   outcome: SessionDiffCaptureOutcome,
+  /** The accepted final's `[files_changed]` self-report (agentReport.ts). */
+  agentReport?: AgentChangeReport,
 ): boolean {
   const state = run?.recovery;
   return Boolean(
     state &&
     !state.attempted &&
     outcome.status !== 'captured' &&
-    (state.records.size > 0 || state.writes.length > 0),
+    (state.records.size > 0 || state.writes.length > 0 || agentReport),
   );
 }
 
@@ -332,6 +349,11 @@ export interface DiffRecoveryOptions {
   log: Logger;
   onUsage?: (result: AICompletionResult) => Promise<void>;
   send?: AgentSendFn;
+  /**
+   * Self-report parsed from THIS candidate final (never stored on the run, so
+   * a superseded candidate's flag can never be reused). Never proof.
+   */
+  agentReport?: AgentChangeReport;
 }
 
 /** Context of the final-answer capture handed to the recovery phase. */
@@ -340,6 +362,7 @@ export interface DiffRecoveryContext {
   base?: SessionDiffCandidate;
   /** Roots the automatic capture authoritatively reported net-empty. */
   unchangedRoots?: string[];
+  agentReport?: AgentChangeReport;
 }
 
 /** Repositories of an automatic candidate the backend treats as verified. */
@@ -393,7 +416,8 @@ export async function recoverSessionDiff(
 ): Promise<SessionDiffSummary | undefined> {
   const state = run.recovery;
   if (!state || state.attempted) return undefined;
-  if (!context.base && !state.records.size && !state.writes.length) return undefined;
+  if (!context.base && !state.records.size && !state.writes.length && !context.agentReport)
+    return undefined;
   state.attempted = true;
   const { log } = options;
   const unchangedRoots = context.unchangedRoots ?? [];
@@ -507,7 +531,10 @@ export async function recoverSessionDiff(
       }
     }
     const checkpointUsed = verified.some((v) => v.source === 'checkpoint');
-    if (!coverage.missing.size && !coverage.blocking.length) {
+    const plan = context.agentReport
+      ? agentReportPlan(state, context.agentReport, verified, coverage, unchangedRoots, records)
+      : undefined;
+    if (!coverage.missing.size && !coverage.blocking.length && !plan?.extra) {
       if (!verified.length) {
         logResult(log, run, 'nothing_to_show');
         return undefined;
@@ -565,6 +592,95 @@ export async function recoverSessionDiff(
           blocking: coverage.blocking,
         })
       : undefined;
+    // Agent self-report: it takes over when the agent named changes beyond
+    // the known evidence, or when the only obstacles are gaps it may bypass
+    // and no independent proof exists. Always labelled agent-reported,
+    // unverified, not complete; it never replaces the proof path above.
+    if (plan && (plan.extra > 0 || (coverage.blocking.length > 0 && !uncertain))) {
+      const report = context.agentReport!;
+      const agentResult = await callModel(
+        buildAgentReportMessages(state, plan.allow, plan.required, report),
+        DIFF_RECONSTRUCTION_MAX_OUTPUT_TOKENS,
+      );
+      if (budget.signal.aborted) return undefined;
+      const agentReply = parseReplyObject(agentResult?.content ?? '');
+      const agentParsed =
+        agentReply && 'files' in agentReply
+          ? parseReconstructionFiles(agentReply, plan.allow, { required: plan.required })
+          : null;
+      // Unavailable, invalid, disclosed gaps, or nothing changed: no viewer.
+      if (!agentParsed || agentParsed.limitations.length || !agentParsed.files.length) {
+        logResult(log, run, 'agent_report_unavailable', { allowed: plan.allow.size });
+        return undefined;
+      }
+      const agentBuilt = reconstructionRepositories(
+        agentParsed.files,
+        [...new Set(state.writes.map((w) => w.cwd).filter((c): c is string => !!c))],
+        plan.base.map((v) => v.repository.root),
+      );
+      if (agentBuilt.dropped || agentBuilt.redactedDropped) {
+        logResult(log, run, 'dropped', {
+          dropped: agentBuilt.dropped,
+          redacted: agentBuilt.redactedDropped,
+        });
+        return undefined;
+      }
+      const agentMerged = [...plan.base.map((v) => v.repository), ...agentBuilt.repositories];
+      if (!renderable(agentMerged)) {
+        logResult(log, run, 'nothing_renderable');
+        return undefined;
+      }
+      const agentBase = plan.base.some((v) => v.source === 'checkpoint')
+        ? 'checkpoint'
+        : plan.base.length
+          ? 'automatic'
+          : undefined;
+      const toolCallIds = [
+        ...new Set([
+          ...state.writes.map((w) => w.toolCallId),
+          ...(state.shells ?? []).map((s) => s.toolCallId),
+        ]),
+      ];
+      if (budget.signal.aborted) return undefined;
+      const summary = await save(
+        agentMerged,
+        "AI-reconstructed from the agent's own report of changed files; not verified and not complete.",
+        plan.base.some((v) => v.repository.scope === 'turn') ? context.base?.turn : undefined,
+        {
+          kind: 'ai_reconstructed',
+          turnId: run.runId,
+          evidenceIds,
+          toolCallIds,
+          complete: false,
+          limitations: [
+            ...agentReportLimitations({
+              files: agentParsed.files,
+              base: agentBase,
+              redacted:
+                state.writes.some((w) => w.redacted) ||
+                (state.shells ?? []).some((s) => s.redacted),
+              gaps: plan.gaps,
+            }),
+            ...checkpointLimitations,
+          ].slice(0, DIFF_RECOVERY_MAX_LIMITATIONS),
+          ...(agentBase ? { base: agentBase } : {}),
+          coverage: 'uncertain',
+          reportSource: 'agent_final',
+          uncertainty: plan.gaps,
+          // Only independent backend evidence, never the self-report.
+          ...(uncertain ? { changeProof: uncertain.proof } : {}),
+        },
+      );
+      if (budget.signal.aborted) return undefined;
+      logResult(log, run, 'saved_ai_agent_reported', {
+        diffId: summary.id,
+        fileCount: summary.fileCount,
+        reconstructed: agentParsed.files.length,
+        manifest: Boolean(report.paths),
+        gaps: plan.gaps,
+      });
+      return summary;
+    }
     // The bounded attempt is always made (existing contract); a known gap,
     // policy limit or missing change proof then withholds its result.
     const result = await callModel(
@@ -612,13 +728,7 @@ export async function recoverSessionDiff(
       return undefined;
     }
     const merged = [...verified.map((v) => v.repository), ...built.repositories];
-    const distinctRoots = new Set(merged.map((r) => comparablePath(r.root))).size;
-    const totalBytes = merged.reduce((n, r) => n + Buffer.byteLength(r.patch, 'utf8'), 0);
-    if (
-      !merged.some((r) => r.patch.trim()) ||
-      distinctRoots > GIT_DIFF_MAX_REPOSITORIES ||
-      totalBytes > GIT_DIFF_MAX_PATCH_BYTES * 2
-    ) {
+    if (!renderable(merged)) {
       logResult(log, run, 'nothing_renderable');
       return undefined;
     }
@@ -680,6 +790,72 @@ export async function recoverSessionDiff(
     clearTimeout(timer);
     for (const s of signals) s.removeEventListener('abort', abort);
   }
+}
+
+/** Non-empty and within the stored-snapshot bounds. */
+function renderable(merged: readonly GitDiffRepository[]): boolean {
+  const distinctRoots = new Set(merged.map((r) => comparablePath(r.root))).size;
+  const totalBytes = merged.reduce((n, r) => n + Buffer.byteLength(r.patch, 'utf8'), 0);
+  return (
+    merged.some((r) => r.patch.trim()) &&
+    distinctRoots <= GIT_DIFF_MAX_REPOSITORIES &&
+    totalBytes <= GIT_DIFF_MAX_PATCH_BYTES * 2
+  );
+}
+
+interface AgentReportPlan {
+  allow: Map<string, WriteTarget>;
+  /** Known missing paths and manifest paths: must be addressed. */
+  required: Set<string>;
+  /** Verified repositories the AI files are merged into (never a stale checkpoint). */
+  base: VerifiedRepository[];
+  /** Bypassed known gaps / uncertainties (provenance `uncertainty`). */
+  gaps: Array<CoverageUncertainty | AgentReportedGap>;
+  /** Allowlisted paths beyond the known evidence. */
+  extra: number;
+}
+
+/**
+ * Whether (and over which paths) an agent self-report may drive one AI
+ * reconstruction. Undefined = policy limit or hard bound: keep withholding.
+ * Exclusions, sensitive manifest paths, redacted uncertain writes and the
+ * path cap always block. A stale/partial checkpoint is never reused as base;
+ * its paths are reconstructed instead. Missing-baseline patches are never
+ * reused (they are not in `verified`).
+ */
+function agentReportPlan(
+  state: NonNullable<GitRunState['recovery']>,
+  report: AgentChangeReport,
+  verified: readonly VerifiedRepository[],
+  coverage: { missing: Map<string, WriteTarget>; blocking: string[] },
+  unchangedRoots: readonly string[],
+  records: readonly DiffRecoveryRecord[],
+): AgentReportPlan | undefined {
+  if (report.sensitive || hasRedactedUncertainWrite(state)) return undefined;
+  const gaps = [...new Set(coverage.blocking)];
+  if (!gaps.every((g) => COVERAGE_UNCERTAINTIES.has(g) || AGENT_REPORTED_GAPS.has(g)))
+    return undefined;
+  const stale =
+    gaps.includes('checkpoint_not_final') || gaps.includes('checkpoint_replay_incomplete');
+  const base = stale ? verified.filter((v) => v.source !== 'checkpoint') : [...verified];
+  const known = stale
+    ? coverageAssessment({ state, verified: base, unchangedRoots, records }).missing
+    : coverage.missing;
+  const covered = new Set<string>();
+  for (const v of base) {
+    for (const p of patchCoveredPaths(v.repository.root, v.repository.patch)) covered.add(p);
+  }
+  const { extra, required } = agentReportTargets(state, report, covered, known, unchangedRoots);
+  const allow = new Map([...known, ...extra]);
+  if (!allow.size || allow.size > DIFF_RECONSTRUCTION_MAX_FILES) return undefined;
+  for (const key of known.keys()) required.add(key);
+  return {
+    allow,
+    required,
+    base,
+    gaps: gaps as Array<CoverageUncertainty | AgentReportedGap>,
+    extra: extra.size,
+  };
 }
 
 function logResult(
@@ -829,11 +1005,15 @@ export async function captureFinalSessionDiff(
       });
       // Without the v4 capability there is no evidence to complete it with.
       if (!run.recovery || run.recovery.attempted) return undefined;
-    } else if (!shouldAttemptDiffRecovery(run, outcome)) {
+    } else if (!shouldAttemptDiffRecovery(run, outcome, options.agentReport)) {
       return undefined;
     }
     if (options.signal?.aborted || run.connection?.aborted) return undefined;
-    return await recoverSessionDiff(run, options, { base: candidate, unchangedRoots });
+    return await recoverSessionDiff(run, options, {
+      base: candidate,
+      unchangedRoots,
+      ...(run.recovery && options.agentReport ? { agentReport: options.agentReport } : {}),
+    });
   } catch {
     return undefined;
   }

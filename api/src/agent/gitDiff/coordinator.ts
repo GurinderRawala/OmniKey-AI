@@ -19,9 +19,10 @@ import { AgentSessionDiff, AgentSessionGitRun } from '../../models/agentSessionD
 import type { AgentMessage, AgentSendFn } from '../types';
 import { CandidateSet, projectContextDirectory } from './candidates';
 import type { ShellWriteEvidence } from './writeEvidence';
+import type { ShellExcerpt } from './agentReport';
 import {
   comparablePath,
-  isServableUncertainRecovery,
+  isServableUncertainOrReported,
   pathIsWithin,
   countPatchFiles,
   GIT_DIFF_DISPLAY_LIMIT,
@@ -116,6 +117,8 @@ export interface DiffRecoveryRunState {
    * (e.g. ignored files) are never exempted by the root alone.
    */
   revertedPaths?: string[];
+  /** Bounded, redacted excerpts of every executed shell of this run (agentReport.ts). */
+  shells?: ShellExcerpt[];
 }
 
 export function createGitRunState(input: {
@@ -469,8 +472,8 @@ export async function saveSessionDiff(
           displayLimit: GIT_DIFF_DISPLAY_LIMIT,
           recovered: true,
           // Uncertain coverage is shown (labelled), never as a known partial.
-          recoveryIncomplete: !recovery.complete && !isServableUncertainRecovery(recovery),
-          ...(isServableUncertainRecovery(recovery) ? { recoveryUncertain: true } : {}),
+          recoveryIncomplete: !recovery.complete && !isServableUncertainOrReported(recovery),
+          ...(isServableUncertainOrReported(recovery) ? { recoveryUncertain: true } : {}),
           recoveryMethod:
             recovery.kind === 'ai_reconstructed'
               ? ('ai_reconstructed' as const)

@@ -120,7 +120,11 @@ const utf8 = (s: string) => Buffer.byteLength(s, 'utf8');
 export function parseReconstructionFiles(
   value: Record<string, unknown>,
   allow: Map<string, WriteTarget>,
-  options: { requireAll?: boolean } = {},
+  /**
+   * `requireAll`: every allowlisted path must be addressed. `required`: only
+   * these comparable keys must be (the rest are optional candidates).
+   */
+  options: { requireAll?: boolean; required?: ReadonlySet<string> } = {},
 ): { files: ReconstructedFile[]; limitations: string[] } | null {
   const keys = Object.keys(value).sort().join(',');
   if (keys !== 'files,limitations' && keys !== 'files') return null;
@@ -154,7 +158,10 @@ export function parseReconstructionFiles(
   }
   // Coverage mode: a subset of the required paths is a known omission.
   if (options.requireAll && seen.size !== allow.size) return null;
-  if (!out.length && !options.requireAll) return null;
+  if (options.required) {
+    const addressed = new Set([...seen].map(comparablePath));
+    if (![...options.required].every((k) => addressed.has(k))) return null;
+  } else if (!out.length && !options.requireAll) return null;
   return {
     files: out,
     limitations: (limitations as string[])

@@ -65,6 +65,7 @@ import {
 import type { SessionDiffSummary } from '../gitDiff/contracts';
 import { withWorkingDirectoryParameter } from '../gitDiff/shellContext';
 import { captureFinalSessionDiff, setDiffRecoveryInput } from '../gitDiff/recovery';
+import { parseAgentReport, type AgentChangeReport } from '../gitDiff/agentReport';
 
 type InternalAgentTurnOptions = AgentTurnOptions & {
   progressGuard?: ToolProgressGuard;
@@ -399,9 +400,13 @@ async function runAgentTurnInternal(
   // One helper for success and failure finals: the normal capture (bounded by
   // the coordinator timeout), then at most one agent-assisted recovery per
   // outer run (contract v4, 20 s budget). Never throws; undefined = no button.
-  const captureSessionDiff = (): Promise<SessionDiffSummary | undefined> =>
+  const captureSessionDiff = (
+    agentReport?: AgentChangeReport,
+  ): Promise<SessionDiffSummary | undefined> =>
     captureFinalSessionDiff(session.gitRun, session.history, {
       model: agentModel,
+      // Only the explicit candidate final being finalized; error finals never.
+      ...(agentReport ? { agentReport } : {}),
       signal: session.signal,
       log,
       // Same accounting as every model call, but the small manifest request
@@ -774,7 +779,13 @@ async function runAgentTurnInternal(
         hasFinalAnswerTag,
       });
 
-      const sessionDiff = await captureSessionDiff();
+      // Diff-enabled v4 runs were asked to self-report `[files_changed]`;
+      // the marker/manifest is stripped before it is stored or shown and is
+      // used only for this candidate (a superseding steering restart parses
+      // its own new final).
+      const agentReport = session.gitRun?.recovery ? parseAgentReport(content) : undefined;
+      if (agentReport) content = agentReport.display;
+      const sessionDiff = await captureSessionDiff(agentReport?.report);
       // Capture is asynchronous; steering received while it ran supersedes
       // this candidate final BEFORE it is written to durable history.
       if (await restartAfterPendingSteering()) return;

@@ -223,9 +223,13 @@ export async function renderSnapshotDocument(
     : false;
   // Served only with backend change proof (route gate); always explicit.
   const uncertainCoverage = aiReconstructed && recovery?.coverage === 'uncertain';
-  const uncertainNote = uncertainCoverage
-    ? `<p class="limit"><strong>Unverified — coverage uncertain:</strong> this turn ran write commands whose targets or evidence the backend could not fully determine, so changes may be missing. ${aiFiles ? 'Files marked AI-reconstructed were inferred by the AI model from shell commands, not read from disk, and may be inaccurate.' : 'Every file shown was read from verified captures of this turn.'}</p>`
-    : '';
+  // Agent self-report (never proof): its own, explicit wording.
+  const agentReported = uncertainCoverage && recovery?.reportSource === 'agent_final';
+  const uncertainNote = agentReported
+    ? `<p class="limit"><strong>Agent reported — not verified, not complete:</strong> shown because the agent said it changed files in this turn. The backend could not verify that report or confirm every change is shown. ${aiFiles ? 'Files marked AI-reconstructed were inferred by the AI model, not read from disk, and may be inaccurate.' : ''}</p>`
+    : uncertainCoverage
+      ? `<p class="limit"><strong>Unverified — coverage uncertain:</strong> this turn ran write commands whose targets or evidence the backend could not fully determine, so changes may be missing. ${aiFiles ? 'Files marked AI-reconstructed were inferred by the AI model from shell commands, not read from disk, and may be inaccurate.' : 'Every file shown was read from verified captures of this turn.'}</p>`
+      : '';
   const recoveryNotes = recovery
     ? uncertainNote +
       (uncertainCoverage
@@ -246,42 +250,46 @@ export async function renderSnapshotDocument(
             .join('')
         : '')
     : '';
-  const scopeLabel = uncertainCoverage
-    ? 'Turn changes · unverified — coverage uncertain'
-    : aiConfirmedOnly
-      ? checkpointBase
-        ? 'Recovered turn changes'
-        : isTurn
-          ? 'Turn changes'
-          : 'Working tree changes'
-      : aiReconstructed
-        ? mergedBase
-          ? 'Turn changes with AI-reconstructed files'
-          : 'AI-reconstructed turn changes'
-        : recovery
+  const scopeLabel = agentReported
+    ? 'Turn changes · agent reported, not verified, not complete'
+    : uncertainCoverage
+      ? 'Turn changes · unverified — coverage uncertain'
+      : aiConfirmedOnly
+        ? checkpointBase
           ? 'Recovered turn changes'
           : isTurn
             ? 'Turn changes'
-            : scopes.size > 1
-              ? 'Working tree and commit changes'
-              : scopes.has('commit')
-                ? 'Commit changes'
-                : 'Working tree changes';
-  const disclaimer = uncertainCoverage
-    ? `${aiFiles ? 'Includes files reconstructed by the AI model from write-like shell commands of this turn (unverified)' : 'Verified captures of this turn; the AI model reported the remaining known written files unchanged (unverified)'}. Some changes of this turn may not be shown.`
-    : aiConfirmedOnly
-      ? checkpointBase
-        ? 'Recovered from native per-command checkpoints of this turn (not a full repository snapshot); it may include changes not made by the agent.'
-        : 'Verified capture of this turn from disk; it may include changes not made by the agent.'
-      : aiReconstructed
-        ? mergedBase
-          ? 'Verified captures of this turn merged with files reconstructed by the AI model from write-like shell commands (unverified).'
-          : 'Reconstructed by the AI model from write-like shell commands of this turn only (not a repository snapshot); unverified.'
-        : recovery
-          ? 'Recovered with agent assistance from native per-command checkpoints of this turn (not a full repository snapshot); it may include changes not made by the agent.'
-          : isTurn
-            ? 'Net committed and uncommitted changes from the turn baseline to the working tree when the answer was produced; it may include changes not made by the agent.'
-            : 'Snapshot taken when the answer was produced; it may include changes not made by the agent.';
+            : 'Working tree changes'
+        : aiReconstructed
+          ? mergedBase
+            ? 'Turn changes with AI-reconstructed files'
+            : 'AI-reconstructed turn changes'
+          : recovery
+            ? 'Recovered turn changes'
+            : isTurn
+              ? 'Turn changes'
+              : scopes.size > 1
+                ? 'Working tree and commit changes'
+                : scopes.has('commit')
+                  ? 'Commit changes'
+                  : 'Working tree changes';
+  const disclaimer = agentReported
+    ? "Based on the agent's own report of changed files (unverified); some changes of this turn may not be shown."
+    : uncertainCoverage
+      ? `${aiFiles ? 'Includes files reconstructed by the AI model from write-like shell commands of this turn (unverified)' : 'Verified captures of this turn; the AI model reported the remaining known written files unchanged (unverified)'}. Some changes of this turn may not be shown.`
+      : aiConfirmedOnly
+        ? checkpointBase
+          ? 'Recovered from native per-command checkpoints of this turn (not a full repository snapshot); it may include changes not made by the agent.'
+          : 'Verified capture of this turn from disk; it may include changes not made by the agent.'
+        : aiReconstructed
+          ? mergedBase
+            ? 'Verified captures of this turn merged with files reconstructed by the AI model from write-like shell commands (unverified).'
+            : 'Reconstructed by the AI model from write-like shell commands of this turn only (not a repository snapshot); unverified.'
+          : recovery
+            ? 'Recovered with agent assistance from native per-command checkpoints of this turn (not a full repository snapshot); it may include changes not made by the agent.'
+            : isTurn
+              ? 'Net committed and uncommitted changes from the turn baseline to the working tree when the answer was produced; it may include changes not made by the agent.'
+              : 'Snapshot taken when the answer was produced; it may include changes not made by the agent.';
   const repoCount = payload.repositories.length;
   const head = [
     '<!doctype html>',

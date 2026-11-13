@@ -115,8 +115,15 @@ export interface SessionDiffRecoveryProvenance {
   coverage?: 'uncertain';
   /** Independent current-turn evidence that something changed (never the model). */
   changeProof?: ChangeProofSource[];
-  /** Why coverage is uncertain. */
-  uncertainty?: CoverageUncertainty[];
+  /** Why coverage is uncertain (agent-reported snapshots: the gaps it bypassed). */
+  uncertainty?: Array<CoverageUncertainty | AgentReportedGap>;
+  /**
+   * The fallback ran only because the agent's own final answer reported
+   * `[files_changed]` (see agentReport.ts). A self-report, NEVER proof:
+   * always `coverage: 'uncertain'`, `complete: false`, and `changeProof`
+   * lists only independent backend evidence (often none).
+   */
+  reportSource?: 'agent_final';
 }
 
 export type ChangeProofSource = 'verified_patch' | 'native_record' | 'exclusive_create';
@@ -147,6 +154,53 @@ export function isServableUncertainRecovery(
     recovery.uncertainty.length > 0 &&
     recovery.uncertainty.every((u) => COVERAGE_UNCERTAINTIES.has(u))
   );
+}
+
+/**
+ * Known gaps an agent-reported fallback may proceed despite (always labelled
+ * uncertain). Policy limits (exclusions, sensitive/redacted evidence) and
+ * hard bounds are deliberately absent: they always withhold.
+ */
+export type AgentReportedGap =
+  | 'baseline_unavailable'
+  | 'checkpoint_not_final'
+  | 'checkpoint_replay_incomplete'
+  | 'native_record_truncated'
+  | 'native_omitted'
+  | 'records_over_budget'
+  | 'writes_over_budget';
+export const AGENT_REPORTED_GAPS: ReadonlySet<string> = new Set<AgentReportedGap>([
+  'baseline_unavailable',
+  'checkpoint_not_final',
+  'checkpoint_replay_incomplete',
+  'native_record_truncated',
+  'native_omitted',
+  'records_over_budget',
+  'writes_over_budget',
+]);
+
+/** A stored agent-reported (self-report, unverified) AI provenance that may be served. */
+export function isServableAgentReportedRecovery(
+  recovery: SessionDiffRecoveryProvenance | undefined,
+): boolean {
+  return (
+    recovery?.reportSource === 'agent_final' &&
+    recovery.coverage === 'uncertain' &&
+    recovery.kind === 'ai_reconstructed' &&
+    recovery.complete === false &&
+    (recovery.changeProof === undefined ||
+      (Array.isArray(recovery.changeProof) &&
+        recovery.changeProof.every((p) => CHANGE_PROOF_SOURCES.has(p)))) &&
+    Array.isArray(recovery.uncertainty) &&
+    recovery.uncertainty.every((u) => COVERAGE_UNCERTAINTIES.has(u) || AGENT_REPORTED_GAPS.has(u))
+  );
+}
+
+/** Either servable uncertain-coverage form (independent proof, or agent self-report). */
+export function isServableUncertainOrReported(
+  recovery: SessionDiffRecoveryProvenance | undefined,
+): boolean {
+  return isServableUncertainRecovery(recovery) || isServableAgentReportedRecovery(recovery);
 }
 
 export type SessionDiffRecoveryMethod = 'checkpoint' | 'ai_reconstructed';
@@ -707,7 +761,7 @@ export function isKnownPartialPayload(payload: SessionDiffPayload): boolean {
   // checkpoint/AI entries are working-tree scoped by design).
   if (payload.recovery) {
     if (payload.recovery.coverage !== undefined)
-      return !isServableUncertainRecovery(payload.recovery);
+      return !isServableUncertainOrReported(payload.recovery);
     return payload.recovery.complete !== true;
   }
   if (Array.isArray(payload.baselines)) return payload.repositories.some((r) => r.scope !== 'turn');

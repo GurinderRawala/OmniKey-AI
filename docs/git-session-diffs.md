@@ -923,4 +923,83 @@ rule.
 
 This gate does not recover writes it cannot see. Contents changed by unrecognised or
 computed non-Git writes are still not shown, and a turn with only an unknown write and no
-proof still shows no card.
+proof still shows no card, unless the agent itself reports changes (next section).
+
+### Agent-reported changes (`[files_changed]`, "Agent reported — not verified, not complete")
+
+Some turns change files in ways the backend cannot see at all: a Python or Node script
+that computes its paths, or a tool that writes as a side effect. No static allowlist can
+cover every such script, so the agent is asked to report its own changes. This is a
+**self-report, never proof**. It only decides that one AI reconstruction may be attempted,
+and the result always says so. Implemented in `gitDiff/agentReport.ts`.
+
+**Instruction (ephemeral).** Only when the run has `run.recovery` (v4 client, diff view
+enabled, interactive), `completeWithContextRecovery` appends a fixed
+`<omnikey_diff_report_instruction>` block to the **request copy** of the latest
+`<user_input>` message. `session.history` is never modified, so the instruction is never
+persisted, never accumulates, and never reaches a run with the setting off or without the
+capability. The agent is asked to end its final answer with the following lines, outside any
+code block, and only if it changed files during **this** request:
+
+```text
+[files_changed]
+<changed_files>["/absolute/path", ...]</changed_files>
+```
+
+**Parsing (`parseAgentReport`).** Only the explicit candidate final of the success path is
+parsed. Error/failure finals never are. A marker counts only as a standalone line (≤ 3
+leading spaces) outside fenced code inside the `<final_answer>` body. Inline, quoted,
+escaped, indented-code or fenced markers are ignored and left as written. Markers in user
+input, tool output or earlier turns are never read. The manifest is strict: a JSON array of
+1–300 unique safe absolute paths (≤ 1024 bytes each, ≤ 64 KiB total). Anything else
+degrades to "marker only". A manifest without the marker is ignored. Both the marker and
+the manifest are stripped before the final is stored in history or sent live. The report is
+passed to the capture as a parameter of **this** candidate and is never stored on the run, so
+a candidate superseded by steering cannot leave a stale flag behind. Recovery still runs at
+most once per outer run.
+
+**When it applies.** The normal capture is still attempted first and is unchanged. A complete
+automatic snapshot is saved with no extra model call, and the independent-proof gate above
+is still preferred. The agent report takes over only when (a) it names paths beyond the
+known evidence, or (b) the only blockers are gaps it may bypass and no independent proof
+exists. Bypassable gaps: `write_target_unknown`, `write_evidence_truncated`,
+`baseline_unavailable`, `checkpoint_not_final`, `checkpoint_replay_incomplete`,
+`native_record_truncated`, `native_omitted`, `records_over_budget` and `writes_over_budget`.
+These **always withhold**: `native_exclusion`, a sensitive reported path, any redacted or
+withheld uncertain write, and more than 300 paths. A missing-baseline working-tree patch is
+never reused. A stale or partial checkpoint is dropped from the base and its paths are
+reconstructed instead. Only verified turn captures and complete checkpoints stay as base.
+
+**Paths the model may address.** With a manifest, the reported paths are required. With
+the marker only, the candidates are optional and limited to absolute path literals found in
+this turn's own evidence: write targets, native record paths, bounded excerpts of every
+executed shell (`recordShellExcerpt`, ≤ 16 entries, script ≤ 4 000 / output ≤ 2 000
+chars, secrets redacted, withheld when a sensitive path is named) and the final answer. The
+model cannot invent other paths: the strict reply parser rejects the whole reply. Known
+missing paths stay required. Excluded: paths already covered by a verified patch,
+sensitive paths, and Git-observed paths of a net-empty root (`revertedPaths`). A
+net-empty root alone never excludes a reported path, so an ignored file is still asked
+about. With no candidate path, no call is made.
+
+**Call.** The reconstruction uses a dedicated fixed system prompt (`AGENT_REPORT_SYSTEM_PROMPT`)
+and no tools. Its context is limited to this run: the redacted user input, applied steering,
+command excerpts and the final answer (≤ 4 000 chars). It shares the existing 20 s budget
+and replaces the normal reconstruction call, so a run still makes at most two calls
+(manifest + one reconstruction). The reply parser, size limits, redaction drop and
+deterministic patch builder are the same as before. Unavailable, invalid or partial replies,
+model-noted gaps, all-unchanged replies, redacted content, cancel and deadline all save
+nothing. An empty viewer is never saved.
+
+**Stored and shown.** `recovery.kind: "ai_reconstructed"`, `complete: false`,
+`coverage: "uncertain"`, `reportSource: "agent_final"`, `uncertainty` = the bypassed gaps
+(possibly empty), and `changeProof` only when independent proof also held. The self-report
+is never written into `changeProof`. The first limitation line states that the report is not
+verified and that the view may be incomplete. Summary: `recoveryUncertain: true` (legacy
+clients keep their existing "AI reconstruction · unverified" button). Viewer heading:
+**Turn changes · agent reported, not verified, not complete**. The route serves it only when
+`isServableAgentReportedRecovery` holds.
+
+**Tradeoff.** This trades the "proof only" guarantee for visibility of changes the backend
+cannot detect. The snapshot is the model's account of what a self-reporting agent did. An
+agent that changes files without reporting them, or reports only some of them, still gets
+no card or an incomplete one. The label never claims otherwise.

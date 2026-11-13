@@ -845,7 +845,8 @@ export function classifyShellWrites(
   };
 }
 
-function excerpt(
+/** Control-stripped, secret-redacted prefix of `text` (at most `max` chars). */
+export function boundedExcerpt(
   text: string,
   max: number,
 ): { text: string; truncated: boolean; redacted: boolean } {
@@ -878,10 +879,10 @@ export function recordShellWriteEvidence(
   }
   const script = found.sensitive
     ? { text: '[script withheld: it targets a sensitive path]', truncated: true, redacted: true }
-    : excerpt(input.script, MAX_SCRIPT_EXCERPT);
+    : boundedExcerpt(input.script, MAX_SCRIPT_EXCERPT);
   const output = found.sensitive
     ? { text: '', truncated: false, redacted: true }
-    : excerpt(input.output, MAX_OUTPUT_EXCERPT);
+    : boundedExcerpt(input.output, MAX_OUTPUT_EXCERPT);
   state.writes.push({
     toolCallId,
     status,

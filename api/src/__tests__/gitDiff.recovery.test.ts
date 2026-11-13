@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => {
     nextResult: vi.fn(),
     recoveryResult: vi.fn(),
     reconstructionResult: vi.fn(),
+    agentReportResult: vi.fn(),
     recordTokenUsage: vi.fn(async () => undefined),
   };
 });
@@ -150,6 +151,13 @@ import { sessionSteeringMessages } from '../agent/agentServer/runtimeState';
 import { addDiffRecoverySteering } from '../agent/gitDiff/recovery';
 import { buildReconstructionMessages } from '../agent/gitDiff/aiReconstruction';
 import { validateGitRecoveryResponse as validateRecoverReply } from '../agent/gitDiff/contracts';
+import {
+  AGENT_REPORT_INSTRUCTION,
+  AGENT_REPORT_SYSTEM_PROMPT,
+  parseAgentReport,
+  withChangedFilesInstruction,
+} from '../agent/gitDiff/agentReport';
+import { isServableAgentReportedRecovery } from '../agent/gitDiff/contracts';
 
 const log = mocks.log as any;
 const ROOT = '/Users/dev/projects/app';
@@ -340,6 +348,10 @@ async function turn(
     if (messages[0]?.content === DIFF_RECONSTRUCTION_SYSTEM_PROMPT) {
       client.events.push('reconstruction-model');
       return mocks.reconstructionResult(...args);
+    }
+    if (messages[0]?.content === AGENT_REPORT_SYSTEM_PROMPT) {
+      client.events.push('agent-report-model');
+      return mocks.agentReportResult(...args);
     }
     client.events.push('model');
     return mocks.nextResult(...args);
@@ -3881,5 +3893,493 @@ describe('uncertain coverage with independent change proof', () => {
     ]) {
       expect(isKnownPartialPayload(payload(bad))).toBe(true);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Agent-reported `[files_changed]` fallback (self-report, never proof)
+// ---------------------------------------------------------------------------
+
+describe('agent-reported [files_changed] parsing', () => {
+  const TV_FILE = '/Users/dev/tv/shows.md';
+  it('strips a standalone marker and manifest from the final body only', () => {
+    const content = `<final_answer>\nDone.\n[files_changed]\n<changed_files>["${TV_FILE}"]</changed_files>\n</final_answer>`;
+    const { display, report } = parseAgentReport(content);
+    expect(display).toBe('<final_answer>\nDone.\n</final_answer>');
+    expect(report).toEqual({ paths: [TV_FILE], sensitive: false, finalText: 'Done.' });
+  });
+
+  it.each([
+    [
+      'fenced',
+      `Example:\n\`\`\`\n[files_changed]\n<changed_files>["${TV_FILE}"]</changed_files>\n\`\`\``,
+    ],
+    ['inline', 'Add [files_changed] at the end.'],
+    ['escaped', '\\[files_changed\\]'],
+    ['quoted', '> [files_changed]'],
+    ['indented code', '    [files_changed]'],
+  ])('%s marker is ignored and the text kept', (_label, body) => {
+    const content = `<final_answer>\n${body}\n</final_answer>`;
+    expect(parseAgentReport(content)).toEqual({ display: content });
+  });
+
+  it('a marker outside the final body is ignored', () => {
+    const content = `[files_changed]\n<final_answer>\nDone.\n</final_answer>`;
+    expect(parseAgentReport(content).report).toBeUndefined();
+  });
+
+  it('a manifest without the marker is stripped but never a report', () => {
+    const r = parseAgentReport(
+      `<final_answer>\nDone.\n<changed_files>["${TV_FILE}"]</changed_files>\n</final_answer>`,
+    );
+    expect(r.display).toBe('<final_answer>\nDone.\n</final_answer>');
+    expect(r.report).toBeUndefined();
+  });
+
+  it.each([
+    ['relative path', '["shows.md"]'],
+    ['traversal', '["/Users/dev/../etc/passwd"]'],
+    ['not an array', `{"paths":["${TV_FILE}"]}`],
+    ['empty', '[]'],
+    ['duplicate', `["${TV_FILE}","${TV_FILE}/"]`],
+    ['non-JSON', 'shows.md'],
+    ['too many', JSON.stringify(Array.from({ length: 301 }, (_, i) => `/Users/dev/f${i}`))],
+  ])('an invalid manifest (%s) degrades to marker-only', (_label, inner) => {
+    const r = parseAgentReport(
+      `<final_answer>\nDone.\n[files_changed]\n<changed_files>${inner}</changed_files>\n</final_answer>`,
+    );
+    expect(r.display).toBe('<final_answer>\nDone.\n</final_answer>');
+    expect(r.report).toEqual({ sensitive: false, finalText: 'Done.' });
+  });
+
+  it('flags a sensitive manifest path', () => {
+    const r = parseAgentReport(
+      '<final_answer>\nok\n[files_changed]\n<changed_files>["/Users/dev/.ssh/config"]</changed_files>\n</final_answer>',
+    );
+    expect(r.report?.sensitive).toBe(true);
+  });
+
+  it('the instruction is only added to a request copy of a recovery-capable run', () => {
+    const history = [
+      { role: 'system' as const, content: 's' },
+      { role: 'user' as const, content: '<user_input>\nhi\n</user_input>' },
+      { role: 'assistant' as const, content: '' },
+      { role: 'tool' as const, content: 'out', tool_call_id: 'c1' },
+    ];
+    const snapshot = JSON.stringify(history);
+    const off = createGitRunState({ sessionId: 's', subscriptionId: 'x', send: () => undefined });
+    expect(withChangedFilesInstruction(history, off)).toBe(history);
+    expect(withChangedFilesInstruction(history, undefined)).toBe(history);
+    const on = createGitRunState({
+      sessionId: 's',
+      subscriptionId: 'x',
+      send: () => undefined,
+      diffRecovery: true,
+    });
+    const out = withChangedFilesInstruction(history, on);
+    expect(out[1].content).toBe(`<user_input>\nhi\n</user_input>\n\n${AGENT_REPORT_INSTRUCTION}`);
+    expect(withChangedFilesInstruction(out, on)).toBe(out); // never accumulates
+    expect(JSON.stringify(history)).toBe(snapshot); // history untouched
+  });
+
+  it('serves an agent-reported provenance only in its exact uncertain form', () => {
+    const ok = {
+      kind: 'ai_reconstructed' as const,
+      turnId: 't',
+      evidenceIds: [],
+      complete: false,
+      limitations: [],
+      coverage: 'uncertain' as const,
+      reportSource: 'agent_final' as const,
+      uncertainty: ['baseline_unavailable' as const],
+    };
+    expect(isServableAgentReportedRecovery(ok)).toBe(true);
+    expect(isServableAgentReportedRecovery({ ...ok, complete: true })).toBe(false);
+    expect(isServableAgentReportedRecovery({ ...ok, kind: 'agent_assisted' })).toBe(false);
+    expect(isServableAgentReportedRecovery({ ...ok, coverage: undefined })).toBe(false);
+    expect(
+      isServableAgentReportedRecovery({ ...ok, uncertainty: ['native_exclusion' as any] }),
+    ).toBe(false);
+    expect(isServableAgentReportedRecovery({ ...ok, changeProof: ['agent_report' as any] })).toBe(
+      false,
+    );
+  });
+});
+
+describe('agent-reported [files_changed] fallback in a real agent turn', () => {
+  const app = express();
+  app.use('/api/agent', createAgentRouter());
+  const TV = '/Users/dev/tv';
+  const TV_FILE = `${TV}/shows.md`;
+  const unknownPython = (id = 'c1', script = 'python3 -c "import tv; tv.export_all()"') =>
+    toolCalls([{ id, name: 'shell_script', arguments: { script, working_directory: TV } }]);
+  const reportedFinal = (text: string, paths?: string[]) =>
+    finalAnswer(
+      [
+        text,
+        '[files_changed]',
+        ...(paths ? [`<changed_files>${JSON.stringify(paths)}</changed_files>`] : []),
+      ].join('\n'),
+    );
+  const agentPayload = (n = 0) =>
+    JSON.parse((mocks.agentReportResult.mock.calls[n][1] as Array<{ content: string }>)[1].content);
+  const mainRequests = () =>
+    mocks.nextResult.mock.calls.map((c) => c[1] as Array<{ role: string; content: string }>);
+  const settings = vi.mocked(getAgentSettings);
+
+  it('no Git + unknown Python + manifest: one AI call, stripped final, labelled unverified viewer', async () => {
+    queueResults(unknownPython(), reportedFinal('Exported your shows.', [TV_FILE]));
+    mocks.agentReportResult.mockResolvedValue(
+      manifest({ files: [{ path: TV_FILE, before: null, after: 'Show A\n' }] }),
+    );
+    const t = await turn('ar-ok', 'export my tv shows', {
+      rawOutput: 'API_TOKEN=supersecret123\nok',
+    });
+    expect(t.events.filter((e) => e.endsWith('-model') && e !== 'model')).toEqual([
+      'agent-report-model',
+    ]);
+    // Every main request of the run carries exactly one ephemeral instruction.
+    for (const req of mainRequests()) {
+      expect(req.filter((m) => m.content.includes(AGENT_REPORT_INSTRUCTION))).toHaveLength(1);
+    }
+    const [, messages, options] = mocks.agentReportResult.mock.calls[0] as [
+      string,
+      Array<{ content: string }>,
+      any,
+    ];
+    expect(messages).toHaveLength(2);
+    expect(options.tools).toBeUndefined();
+    const payload = agentPayload();
+    expect(payload.userInput).toBe('export my tv shows');
+    expect(payload.finalAnswer).toBe('Exported your shows.');
+    expect(payload.allowedPaths).toEqual([
+      { path: TV_FILE, required: true, creationAllowed: true, deletionAllowed: true },
+    ]);
+    expect(payload.commands.map((c: any) => c.toolCallId)).toEqual(['c1']);
+    expect(JSON.stringify(payload)).not.toContain('supersecret123');
+    expect(JSON.stringify(payload)).not.toContain('system prompt');
+
+    expect(t.final!.content).toBe('<final_answer>\nExported your shows.\n</final_answer>');
+    expect(t.final!.session_diff).toMatchObject({
+      recovered: true,
+      recoveryIncomplete: false,
+      recoveryUncertain: true,
+      recoveryMethod: 'ai_reconstructed',
+      fileCount: 1,
+    });
+    const session = await AgentSession.findOne({ where: { id: 'ar-ok' } });
+    expect(session!.historyJson).not.toContain('[files_changed]');
+    expect(session!.historyJson).not.toContain('changed_files');
+    expect(session!.historyJson).not.toContain('omnikey_diff_report_instruction');
+
+    const stored = await loadSessionDiffPayload('ar-ok', 'sub-a', t.final!.session_diff!.id);
+    expect(stored!.payload.recovery).toMatchObject({
+      kind: 'ai_reconstructed',
+      complete: false,
+      coverage: 'uncertain',
+      reportSource: 'agent_final',
+      uncertainty: [],
+      toolCallIds: ['c1'],
+    });
+    // A self-report is never recorded as proof.
+    expect(stored!.payload.recovery!.changeProof).toBeUndefined();
+    expect(stored!.payload.recovery!.limitations[0]).toMatch(/not verified/);
+    expect(isKnownPartialPayload(stored!.payload)).toBe(false);
+
+    const res = await request(app)
+      .get(`/api/agent/sessions/ar-ok/diffs/${t.final!.session_diff!.id}`)
+      .set('x-test-subscription', 'sub-a');
+    expect(res.status).toBe(200);
+    expect(res.body.html).toContain('agent reported, not verified, not complete');
+    expect(res.body.html).toContain('Agent reported — not verified, not complete');
+    expect(res.body.html).not.toContain('known coverage complete');
+  }, 60_000);
+
+  it('marker only: candidates are current-turn literal paths; an invented path is rejected', async () => {
+    queueResults(unknownPython(), reportedFinal('Done.'));
+    mocks.agentReportResult.mockResolvedValue(
+      manifest({ files: [{ path: '/Users/dev/elsewhere/x.md', before: null, after: 'x\n' }] }),
+    );
+    const bad = await turn('ar-invent', 'export', { rawOutput: `wrote ${TV_FILE}` });
+    expect(agentPayload().allowedPaths).toEqual([
+      { path: TV_FILE, required: false, creationAllowed: true, deletionAllowed: true },
+    ]);
+    expect(bad.final!.content).toBe('<final_answer>\nDone.\n</final_answer>');
+    expect(bad.final!.session_diff).toBeUndefined();
+    expect(await diffCount('ar-invent')).toBe(0);
+
+    mocks.complete.mockClear();
+    mocks.agentReportResult.mockReset();
+    queueResults(unknownPython(), reportedFinal('Done.'));
+    mocks.agentReportResult.mockResolvedValue(
+      manifest({ files: [{ path: TV_FILE, before: null, after: 'A\n' }] }),
+    );
+    const ok = await turn('ar-marker-only', 'export', { rawOutput: `wrote ${TV_FILE}` });
+    expect(ok.final!.session_diff).toMatchObject({ recoveryUncertain: true, fileCount: 1 });
+  }, 60_000);
+
+  it('marker only without any evidence path: no AI call, nothing saved', async () => {
+    queueResults(unknownPython(), reportedFinal('Done.'));
+    const t = await turn('ar-no-evidence', 'export', { rawOutput: 'ok' });
+    expect(mocks.agentReportResult).not.toHaveBeenCalled();
+    expect(t.final!.content).toBe('<final_answer>\nDone.\n</final_answer>');
+    expect(t.final!.session_diff).toBeUndefined();
+  });
+
+  it('a complete normal capture wins: no extra AI call even with the flag', async () => {
+    queueResults(
+      toolCalls([
+        {
+          id: 'c1',
+          name: 'shell_script',
+          arguments: { script: 'echo x > a.ts', working_directory: ROOT },
+        },
+      ]),
+      reportedFinal('Fixed.', [`${ROOT}/a.ts`]),
+    );
+    const t = await turn('ar-captured', `Fix ${ROOT}`, {
+      heads: { [ROOT]: OID_1 },
+      final: (req) => ({
+        status: 'ok',
+        repositories: (req.baselines ?? []).map((b) => ({
+          root: b.root,
+          patch: filePatch('a.ts'),
+          scope: 'turn',
+          baselineHead: b.head,
+          head: OID_1,
+          baselineCapturedAt: b.capturedAt,
+          baselineSource: b.source,
+        })),
+      }),
+    });
+    expect(t.events.filter((e) => e.endsWith('-model') && e !== 'model')).toEqual([]);
+    expect(t.final!.content).toBe('<final_answer>\nFixed.\n</final_answer>');
+    expect(t.final!.session_diff).toMatchObject({ scope: 'turn', fileCount: 1 });
+    expect(t.final!.session_diff!.recovered).toBeUndefined();
+  });
+
+  it('a reported path Git observed and found reverted (net-empty) is a false positive: no AI', async () => {
+    queueResults(
+      toolCalls([
+        {
+          id: 'c1',
+          name: 'shell_script',
+          arguments: { script: 'echo x > a.ts', working_directory: ROOT },
+        },
+      ]),
+      reportedFinal('Done.', [`${ROOT}/a.ts`]),
+    );
+    const t = await turn('ar-reverted', `Fix ${ROOT}`, {
+      heads: { [ROOT]: OID_1 },
+      final: emptyTurnFinal,
+      evidence: (ctx) => ({ turn_id: ctx!.turn_id, records: [rec('r-a', 'c1', ROOT, ['a.ts'])] }),
+    });
+    expect(t.events.filter((e) => e.endsWith('-model') && e !== 'model')).toEqual([]);
+    expect(t.final!.session_diff).toBeUndefined();
+    expect(await diffCount('ar-reverted')).toBe(0);
+  });
+
+  it('a net-empty root alone does not ignore an unobserved reported path', async () => {
+    queueResults(unknownPython('c1'), reportedFinal('Done.', [`${ROOT}/ignored.log`]));
+    mocks.agentReportResult.mockResolvedValue(manifest({ unavailable: true }));
+    await turn('ar-empty-root', `Fix ${ROOT}`, { heads: { [ROOT]: OID_1 }, final: emptyTurnFinal });
+    expect(agentPayload().allowedPaths.map((p: any) => p.path)).toEqual([`${ROOT}/ignored.log`]);
+  });
+
+  it.each([
+    [
+      'fenced',
+      `Example:\n\`\`\`\n[files_changed]\n<changed_files>["${TV_FILE}"]</changed_files>\n\`\`\``,
+    ],
+    ['inline', 'Remember to print [files_changed] next time.'],
+    ['escaped', '\\[files_changed\\]'],
+  ])('a %s marker in the final never triggers', async (label, body) => {
+    queueResults(unknownPython(), finalAnswer(body));
+    const id = `ar-ignored-${label}`;
+    const t = await turn(id, 'export', { rawOutput: `wrote ${TV_FILE}` });
+    expect(mocks.agentReportResult).not.toHaveBeenCalled();
+    expect(t.final!.content).toBe(`<final_answer>\n${body}\n</final_answer>`);
+    expect(t.final!.session_diff).toBeUndefined();
+  });
+
+  it('markers in user input or tool output never trigger', async () => {
+    queueResults(unknownPython(), finalAnswer('done'));
+    const t = await turn(
+      'ar-user-tool',
+      `[files_changed]\n<changed_files>["${TV_FILE}"]</changed_files>`,
+      {
+        rawOutput: `[files_changed]\n<changed_files>["${TV_FILE}"]</changed_files>`,
+      },
+    );
+    expect(mocks.agentReportResult).not.toHaveBeenCalled();
+    expect(t.final!.session_diff).toBeUndefined();
+  });
+
+  it('a previous turn flag never reactivates; the instruction never accumulates', async () => {
+    queueResults(unknownPython('c-old'), reportedFinal('First.', [TV_FILE]));
+    mocks.agentReportResult.mockResolvedValue(manifest({ unavailable: true }));
+    const first = await turn('ar-turns', 'first', {});
+    expect(first.final!.content).toBe('<final_answer>\nFirst.\n</final_answer>');
+    expect(mocks.agentReportResult).toHaveBeenCalledTimes(1);
+
+    mocks.complete.mockClear();
+    mocks.agentReportResult.mockClear();
+    mocks.nextResult.mockClear();
+    queueResults(unknownPython('c-new'), finalAnswer('Second.'));
+    const second = await turn('ar-turns', 'second', { rawOutput: `wrote ${TV_FILE}` });
+    expect(mocks.agentReportResult).not.toHaveBeenCalled();
+    expect(second.final!.session_diff).toBeUndefined();
+    const req = mainRequests()[0];
+    // The previous final reached history (and the provider) stripped.
+    expect(
+      req.some(
+        (m) => m.role === 'assistant' && m.content === '<final_answer>\nFirst.\n</final_answer>',
+      ),
+    ).toBe(true);
+    expect(req.filter((m) => m.content.includes(TV_FILE))).toHaveLength(0);
+    expect(req.filter((m) => m.content.includes(AGENT_REPORT_INSTRUCTION))).toHaveLength(1);
+    // The instruction is on the CURRENT input, never the previous one.
+    const withInstruction = req.find((m) => m.content.includes(AGENT_REPORT_INSTRUCTION))!;
+    expect(withInstruction.content).toContain('second');
+  }, 60_000);
+
+  it('without the recovery capability: no instruction, no parsing, no extra AI call', async () => {
+    queueResults(unknownPython(), reportedFinal('Done.', [TV_FILE]));
+    const t = await turn('ar-no-cap', 'export', {}, { recovery: false, turn: true });
+    expect(JSON.stringify(mainRequests())).not.toContain('omnikey_diff_report_instruction');
+    expect(mocks.agentReportResult).not.toHaveBeenCalled();
+    expect(t.final!.session_diff).toBeUndefined();
+  });
+
+  it('diff view setting off: no instruction and no extra AI call', async () => {
+    const original = settings.getMockImplementation()!;
+    settings.mockImplementation(async () => ({ ...(await original()), diffViewEnabled: false }));
+    try {
+      queueResults(unknownPython(), reportedFinal('Done.', [TV_FILE]));
+      const t = await turn('ar-setting-off', 'export', {});
+      expect(JSON.stringify(mainRequests())).not.toContain('omnikey_diff_report_instruction');
+      expect(mocks.agentReportResult).not.toHaveBeenCalled();
+      expect(t.final!.session_diff).toBeUndefined();
+    } finally {
+      settings.mockImplementation(original);
+    }
+  });
+
+  it('a sensitive reported path withholds the fallback entirely', async () => {
+    queueResults(unknownPython(), reportedFinal('Done.', ['/Users/dev/.ssh/config']));
+    const t = await turn('ar-sensitive', 'export', {});
+    expect(mocks.agentReportResult).not.toHaveBeenCalled();
+    expect(t.final!.content).toBe('<final_answer>\nDone.\n</final_answer>');
+    expect(t.final!.session_diff).toBeUndefined();
+  });
+
+  it('a redacted uncertain write stays a hard block (no agent-reported AI call)', async () => {
+    queueResults(
+      unknownPython('c1', 'API_TOKEN=supersecret123 python3 -c "make().write_text(v)"'),
+      reportedFinal('Done.', [TV_FILE]),
+    );
+    mocks.reconstructionResult.mockResolvedValue(manifest({ unavailable: true }));
+    const t = await turn('ar-redacted', 'export', {});
+    expect(mocks.agentReportResult).not.toHaveBeenCalled();
+    expect(t.final!.session_diff).toBeUndefined();
+    expect(await diffCount('ar-redacted')).toBe(0);
+  });
+
+  it.each([
+    ['unavailable', { unavailable: true }],
+    ['unchanged only', { files: [{ path: TV_FILE, before: 'same\n', after: 'same\n' }] }],
+    ['missing required path', { files: [] }],
+    [
+      'model-noted gap',
+      { files: [{ path: TV_FILE, before: null, after: 'a\n' }], limitations: ['guess'] },
+    ],
+    ['redacted content', { files: [{ path: TV_FILE, before: null, after: 'k=[REDACTED]\n' }] }],
+  ])('%s reply saves no viewer and keeps the stripped final', async (label, body) => {
+    queueResults(unknownPython(), reportedFinal('Done.', [TV_FILE]));
+    mocks.agentReportResult.mockResolvedValue(manifest(body));
+    const id = `ar-none-${label.replace(/\W/g, '')}`;
+    const t = await turn(id, 'export', {});
+    expect(mocks.agentReportResult).toHaveBeenCalledTimes(1);
+    expect(t.final!.content).toBe('<final_answer>\nDone.\n</final_answer>');
+    expect(t.final!.session_diff).toBeUndefined();
+    expect(await diffCount(id)).toBe(0);
+  });
+
+  it('shares the two-call budget with the manifest: checkpoint base + agent-reported file, never a third call', async () => {
+    queueResults(
+      toolCalls([
+        { id: 'c1', name: 'shell_script', arguments: { script: 'make', working_directory: ROOT } },
+      ]),
+      reportedFinal('Built.', [TV_FILE]),
+    );
+    mocks.recoveryResult.mockResolvedValue(manifest({ evidenceIds: ['r1'] }));
+    mocks.agentReportResult.mockResolvedValue(
+      manifest({ files: [{ path: TV_FILE, before: null, after: 'A\n' }] }),
+    );
+    const t = await turn('ar-budget', `Fix ${ROOT}`, {
+      heads: { [ROOT]: OID_1 },
+      evidence: evidenceFor((tc) => [rec('r1', tc, ROOT, ['a.ts'])]),
+    });
+    expect(t.events.filter((e) => e.endsWith('-model') && e !== 'model')).toEqual([
+      'recovery-model',
+      'agent-report-model',
+    ]);
+    // The checkpoint path is covered by the verified replay, not re-asked.
+    expect(agentPayload().allowedPaths.map((p: any) => p.path)).toEqual([TV_FILE]);
+    expect(t.final!.session_diff).toMatchObject({ recoveryUncertain: true, fileCount: 2 });
+    const stored = await loadSessionDiffPayload('ar-budget', 'sub-a', t.final!.session_diff!.id);
+    expect(stored!.payload.recovery).toMatchObject({
+      base: 'checkpoint',
+      evidenceIds: ['r1'],
+      reportSource: 'agent_final',
+      complete: false,
+    });
+    expect(
+      stored!.payload.repositories.find((r) => r.root === ROOT)!.reconstructed,
+    ).toBeUndefined();
+  }, 60_000);
+
+  it('cancel during the agent-reported call stores and attaches nothing late', async () => {
+    queueResults(unknownPython(), reportedFinal('Done.', [TV_FILE]));
+    const holder: { client?: ReturnType<typeof fakeClient> } = {};
+    mocks.agentReportResult.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          holder.client!.connection.abort();
+          setTimeout(
+            () => resolve(manifest({ files: [{ path: TV_FILE, before: null, after: 'A\n' }] })),
+            5,
+          );
+        }),
+    );
+    const t = await turn(
+      'ar-cancel',
+      'export',
+      {},
+      { recovery: true, turn: true },
+      {
+        client: (c) => (holder.client = c),
+      },
+    );
+    await new Promise((r) => setTimeout(r, 30));
+    expect(t.frames.some((f) => f.session_diff)).toBe(false);
+    expect(await diffCount('ar-cancel')).toBe(0);
+  });
+
+  it('the shared deadline aborts the agent-reported call and keeps the stripped final', async () => {
+    restoreDeps = setDiffRecoveryDepsForTesting({ totalTimeoutMs: 120 });
+    queueResults(unknownPython(), reportedFinal('Done.', [TV_FILE]));
+    let providerSignal: AbortSignal | undefined;
+    mocks.agentReportResult.mockImplementation(
+      (_m: unknown, _msgs: unknown, o: { signal: AbortSignal }) => {
+        providerSignal = o.signal;
+        return new Promise(() => undefined);
+      },
+    );
+    const t = await turn('ar-timeout', 'export', {});
+    expect(providerSignal?.aborted).toBe(true);
+    expect(t.final!.content).toBe('<final_answer>\nDone.\n</final_answer>');
+    expect(t.final!.session_diff).toBeUndefined();
+    expect(await diffCount('ar-timeout')).toBe(0);
   });
 });

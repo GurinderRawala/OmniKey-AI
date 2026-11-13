@@ -35,6 +35,7 @@ import {
 import { captureTurnBaselines } from '../gitDiff/coordinator';
 import { recordDiffRecoveryEvidence, shellRecoveryContext } from '../gitDiff/recovery';
 import { recordShellWriteEvidence } from '../gitDiff/writeEvidence';
+import { recordShellExcerpt } from '../gitDiff/agentReport';
 
 export { extractProgressSummary } from './progressSummary';
 
@@ -471,6 +472,8 @@ export async function runToolLoop(
                 output: rawOutput ?? output,
                 isError,
               });
+              // Bounded, redacted context for an agent-reported fallback.
+              recordShellExcerpt(session.gitRun, tc.id, { script, output: rawOutput ?? output });
             }
             resolve(output);
           };
