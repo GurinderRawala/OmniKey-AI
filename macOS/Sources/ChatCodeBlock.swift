@@ -298,6 +298,132 @@ enum ChatCodeBlockPalette {
 /// Code block style for Textual's `StructuredText`, used by the
 /// assistant's final answer.
 ///
+/// Keep a discoverable horizontal scrollbar for code independently of the
+/// system's auto-hidden scroll indicator preference. This targets only the
+/// enclosing horizontal code scroll view, never the transcript's viewport.
+///
+/// Overflow can change without any SwiftUI update (window resize, document
+/// growth), so the probe also observes the enclosing scroll view's document
+/// and clip view frames. When the code fits again, the scroller policy it
+/// replaced is restored.
+struct ChatCodeScrollAffordance: NSViewRepresentable {
+    final class Probe: NSView {
+        /// Scroller policy before the probe changed it.
+        struct Policy: Equatable {
+            let autohidesScrollers: Bool
+            let scrollerStyle: NSScroller.Style
+        }
+
+        /// Removes its observers when released, so the probe's (nonisolated)
+        /// deinit needs no access to main-actor state.
+        private final class Observers {
+            var tokens: [NSObjectProtocol] = []
+            func removeAll() {
+                tokens.forEach(NotificationCenter.default.removeObserver)
+                tokens = []
+            }
+            deinit { removeAll() }
+        }
+
+        private let observers = Observers()
+        private weak var observedScroll: NSScrollView?
+        private weak var observedDocument: NSView?
+        private var savedPolicy: Policy?
+        private var configurePending = false
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+        override func viewWillMove(toSuperview newSuperview: NSView?) {
+            // Reparenting may change the enclosing scroll view.
+            detach()
+            super.viewWillMove(toSuperview: newSuperview)
+        }
+        override func viewDidMoveToSuperview() { super.viewDidMoveToSuperview(); configureSoon() }
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if window == nil { detach() } else { configureSoon() }
+        }
+
+        /// Coalesced: at most one pending pass, after the current layout.
+        func configureSoon() {
+            guard !configurePending else { return }
+            configurePending = true
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.configurePending = false
+                self.configure()
+            }
+        }
+
+        /// The first ancestor scroll view only (never an outer transcript).
+        private var enclosingScroll: NSScrollView? {
+            var ancestor = superview
+            while let view = ancestor {
+                if let scroll = view as? NSScrollView { return scroll }
+                ancestor = view.superview
+            }
+            return nil
+        }
+
+        private func configure() {
+            guard window != nil, let scroll = enclosingScroll,
+                  scroll.hasHorizontalScroller, !scroll.hasVerticalScroller,
+                  let document = scroll.documentView
+            else { detach(); return }
+            if scroll !== observedScroll || document !== observedDocument {
+                detach()
+                observe(scroll: scroll, document: document)
+            }
+            apply(to: scroll, document: document)
+        }
+
+        private func observe(scroll: NSScrollView, document: NSView) {
+            observedScroll = scroll
+            observedDocument = document
+            let center = NotificationCenter.default
+            for view in [document, scroll.contentView] {
+                // Delivered synchronously on the main thread, where AppKit
+                // changes frames; the pass itself is coalesced.
+                observers.tokens.append(center.addObserver(
+                    forName: NSView.frameDidChangeNotification, object: view, queue: nil
+                ) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.configureSoon() }
+                })
+            }
+        }
+
+        /// Stops observing and restores the policy of the scroll view it left.
+        private func detach() {
+            observers.removeAll()
+            if let scroll = observedScroll, let saved = savedPolicy { restore(saved, on: scroll) }
+            savedPolicy = nil
+            observedScroll = nil
+            observedDocument = nil
+        }
+
+        private func apply(to scroll: NSScrollView, document: NSView) {
+            let overflows = document.frame.width > scroll.contentView.bounds.width + 1
+            if overflows {
+                if savedPolicy == nil {
+                    savedPolicy = Policy(autohidesScrollers: scroll.autohidesScrollers, scrollerStyle: scroll.scrollerStyle)
+                }
+                // Equality guards: no redundant writes, so no relayout loop.
+                if scroll.autohidesScrollers { scroll.autohidesScrollers = false }
+                if scroll.scrollerStyle != .legacy { scroll.scrollerStyle = .legacy }
+            } else if let saved = savedPolicy {
+                restore(saved, on: scroll)
+                savedPolicy = nil
+            }
+        }
+
+        private func restore(_ policy: Policy, on scroll: NSScrollView) {
+            if scroll.autohidesScrollers != policy.autohidesScrollers { scroll.autohidesScrollers = policy.autohidesScrollers }
+            if scroll.scrollerStyle != policy.scrollerStyle { scroll.scrollerStyle = policy.scrollerStyle }
+        }
+    }
+    func makeNSView(context: Context) -> Probe { Probe() }
+    func updateNSView(_ view: Probe, context: Context) { view.configureSoon() }
+}
+
 /// Textual's bundled `.gitHub` style renders a bare scrollable slab with
 /// no language label and no copy affordance. This style keeps Textual's
 /// syntax highlighting and — critically — its `Overflow` container
@@ -342,7 +468,9 @@ struct ChatStructuredCodeBlockStyle: StructuredText.CodeBlockStyle {
                     .monospaced()
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
+                    .background(ChatCodeScrollAffordance())
             }
+            .scrollIndicators(.visible, axes: .horizontal)
         }
         .modifier(ChatCodeBlockSurface())
         .textual.blockSpacing(.init(top: 4, bottom: 14))

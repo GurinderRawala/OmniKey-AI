@@ -1,5 +1,41 @@
 # Changelog
 
+## macOS 1.9.20 (build 82) · CLI/API 1.8.20 — 2026-11-13
+
+### Fixed
+- Final review hardening: Git relocation and ignored-file coverage, hidden-home credential exclusions, identity-scoped diff settings, and scrollbar geometry updates.
+- Complete session-turn diff recovery and the persistent token-cost opt-out, with a 300-file display cap, are included in this coordinated release.
+- Fixed the confirmed code-first send crash: a queued MarkdownEngine code-selection callback reused stale token ranges after the composer was cleared. Stale snapshots and invalid UTF-16 ranges are rejected before TextKit or substring access; unused overlay work is skipped.
+- Added engine regressions for queued callbacks after clear, same-length draft replacement, invalid ranges, and absent overlay subscribers. No app/E2E launch performed.
+
+## macOS 1.9.19 (build 80) — 2026-11-13
+
+### Fixed
+- Code blocks expose a persistent horizontal scrollbar while retaining code selection, fixed copy controls and vertical transcript scrolling.
+- The chat Markdown editor no longer auto-inserts an extra closing fence, preserving typed code-fenced prompts exactly across send/reset.
+- Same-line backtick spans are no longer misparsed as an empty fenced block with the rest of the message swallowed as its language hint.
+
+### Validation
+- Isolated native component tests cover code-first prompts, narrow/normal widths, wheel routing, copy controls, literal composer reset and malformed/unfinished fences. No app/E2E launch performed.
+- No process crash was reproduced for the reported code-first session; that session reached the backend and was cancelled. Real trackpad phased-gesture acceptance still requires user testing.
+
+## macOS 1.9.18 (build 79) · CLI/API 1.8.20 — 2026-11-13
+
+### Added
+- Agent chat settings gear beside the context controls opens Agent Access settings directly.
+- Persistent Diff view toggle explains that recovery may consume extra AI tokens. Disabling it stops new-turn Git capture, native checkpoints and AI recovery—not just the display. Running turns retain their start-time setting.
+- Missing-diff recovery uses current-turn checkpoints and bounded AI reconstruction, clearly distinguishing unverified content. Known partial snapshots are withheld and checked against all known turn evidence.
+- Raised the viewer and recovery file cap to 300 while preserving byte and time limits.
+
+### Fixed
+- Python literal Path bindings and narrowly recognized task bookkeeping no longer hide complete repository-plus-temporary-file snapshots.
+- Protected non-Git credential/configuration paths, sensitive unresolved write targets, raw terminal evidence, applied steering, normalized history filtering, and mixed changed/unchanged repository coverage.
+- Corrected temporary-directory aliases, rename paths, stale replay handling, and macOS CI physical-path assertions.
+
+### Validation and scope
+- Non-E2E regression coverage includes persistent settings, actual diff-cost opt-out, narrow composer layout and CodeRabbit findings. No app/E2E launch performed.
+- Signed, notarized universal macOS package; Windows unchanged. The separate per-shell fingerprint cache proposal is deferred until cache invalidation covers Git configuration, attributes and concurrent writers safely.
+
 ## macOS 1.9.17 (build 77) · CLI/API 1.8.19 — 2026-11-12
 
 ### Fixed

@@ -27,8 +27,14 @@ final class SettingsWindow: NSWindow {
 }
 
 final class SettingsWindowController: NSWindowController {
+    let navigation: SettingsNavigation
+
     convenience init() {
-        let rootView = SettingsView()
+        self.init(navigation: SettingsNavigation())
+    }
+
+    convenience init(navigation: SettingsNavigation) {
+        let rootView = SettingsView(navigation: navigation)
         let hostingController = NSHostingController(rootView: rootView)
 
         let window = SettingsWindow(
@@ -43,7 +49,21 @@ final class SettingsWindowController: NSWindowController {
         window.isReleasedWhenClosed = false
         window.contentViewController = hostingController
 
-        self.init(window: window)
+        self.init(window: window, navigation: navigation)
+    }
+
+    private init(window: NSWindow, navigation: SettingsNavigation) {
+        self.navigation = navigation
+        super.init(window: window)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    /// Switches the visible pane; safe whether or not the window is open.
+    func select(_ tab: SettingsTab) {
+        navigation.selection = tab
     }
 
     override func showWindow(_ sender: Any?) {

@@ -10,7 +10,7 @@
 export const GIT_DIFF_MAX_CANDIDATES = 8;
 export const GIT_DIFF_MAX_REPOSITORIES = 8;
 export const GIT_DIFF_MAX_PATCH_BYTES = 2 * 1024 * 1024; // combined UTF-8
-export const GIT_DIFF_MAX_UNTRACKED_FILES = 200;
+export const GIT_DIFF_MAX_UNTRACKED_FILES = 300;
 export const GIT_DIFF_NATIVE_TIMEOUT_MS = 10_000;
 /** Backend wait for the native reply: native budget plus transport slack. */
 export const GIT_DIFF_RESPONSE_TIMEOUT_MS = 12_000;
@@ -20,7 +20,7 @@ export const GIT_MAX_REASON_LENGTH = 500;
 export const GIT_MAX_REQUEST_ID_LENGTH = 64;
 
 /** Viewer cap: rendered file panels across all repositories of one snapshot. */
-export const GIT_DIFF_DISPLAY_LIMIT = 50;
+export const GIT_DIFF_DISPLAY_LIMIT = 300;
 /** Backend wait for a baseline (HEAD-only) reply; it delays the model/shell. */
 export const GIT_TURN_BASELINE_TIMEOUT_MS = 6_000;
 /** Accepted clock skew for client baseline timestamps. */
@@ -30,7 +30,114 @@ const GIT_MAX_TIMESTAMP_LENGTH = 40;
 export type SessionDiffScope = 'working_tree' | 'commit' | 'turn';
 export type SessionDiffSummaryScope = SessionDiffScope | 'mixed';
 export type GitTurnBaselineSource = 'turn_start' | 'before_tool';
-export type GitDiffPhase = 'baseline' | 'final';
+export type GitDiffPhase = 'baseline' | 'final' | 'recover';
+
+// ---------------------------------------------------------------------------
+// Contract v4: diff recovery (`supports_diff_recovery: true`).
+// ---------------------------------------------------------------------------
+
+/** Records accepted per shell reply and retained per outer run. */
+export const DIFF_RECOVERY_MAX_RECORDS = 32;
+export const DIFF_RECOVERY_MAX_PATHS = 300;
+/** Records one recovery control request may select (first version). */
+export const DIFF_RECOVERY_MAX_SELECTED = 6;
+/** Whole fallback budget: AI manifest call + native recover request. */
+export const DIFF_RECOVERY_TOTAL_TIMEOUT_MS = 20_000;
+export const DIFF_RECOVERY_MAX_OUTPUT_TOKENS = 1_000;
+export const DIFF_RECOVERY_MAX_LIMITATIONS = 8;
+const DIFF_RECOVERY_MAX_ID_LENGTH = 64;
+const DIFF_RECOVERY_MAX_TOOL_CALL_ID_LENGTH = 256;
+const DIFF_RECOVERY_ID_RE = /^[A-Za-z0-9_.:-]{1,64}$/;
+const SHA256_RE = /^[0-9a-f]{64}$/;
+
+export type DiffRecoveryKind = 'git' | 'file';
+
+/** One native-verified change record (metadata only; no patch or content). */
+export interface DiffRecoveryRecord {
+  id: string;
+  toolCallId: string;
+  root: string;
+  paths: string[];
+  kind: DiffRecoveryKind;
+  before: string | null;
+  after: string | null;
+  complete: boolean;
+}
+
+/** Optional on the terminal reply of an outstanding shell_script. */
+export interface DiffRecoveryEvidence {
+  turn_id: string;
+  records: DiffRecoveryRecord[];
+  omitted?: number;
+}
+
+/** Server -> client `git_diff_request.recovery` (phase "recover"). */
+export interface GitDiffRecoveryControl {
+  turn_id: string;
+  evidence_ids: string[];
+}
+
+/** Client -> server `git_diff_response.recovery` echo. */
+export interface GitDiffRecoveryReply {
+  turn_id: string;
+  evidence_ids: string[];
+  omitted: number;
+}
+
+/**
+ * Provenance stored on a recovered snapshot payload. `agent_assisted` replays
+ * verified native checkpoints; `ai_reconstructed` contains at least one file
+ * reconstructed by the model from this turn's write-like shell scripts
+ * (always unverified), optionally merged with a verified base.
+ *
+ * `complete` is KNOWN COVERAGE only: every change the backend knew about for
+ * this turn is represented. It never means the content was verified, and it
+ * never claims that changes made by unrecognised scripts are included. New
+ * snapshots are only ever saved with `complete: true`; `false` exists solely
+ * on older stored payloads (which the viewer route now refuses to serve).
+ */
+export interface SessionDiffRecoveryProvenance {
+  kind: 'agent_assisted' | 'ai_reconstructed';
+  turnId: string;
+  evidenceIds: string[];
+  complete: boolean;
+  limitations: string[];
+  /** ai_reconstructed only: the write-like tool calls offered as evidence. */
+  toolCallIds?: string[];
+  /** ai_reconstructed only: the verified evidence the AI files were merged into. */
+  base?: 'automatic' | 'checkpoint';
+}
+
+export type SessionDiffRecoveryMethod = 'checkpoint' | 'ai_reconstructed';
+
+/** Outcome of the normal (automatic) capture before a final answer. */
+export type SessionDiffCaptureStatus =
+  | 'captured'
+  | 'no_changes'
+  | 'no_repository'
+  | 'missing_baseline'
+  | 'workspace_unavailable'
+  | 'capture_failed';
+
+/** A validated automatic capture that has NOT been persisted yet. */
+export interface SessionDiffCandidate {
+  repositories: GitDiffRepository[];
+  notice?: string;
+  /** Native disclosure text (e.g. sensitive exclusion counts). */
+  reason?: string;
+  /** Present for v3 turn captures. */
+  turn?: { baselines: GitTurnBaseline[]; displayLimit: number };
+}
+
+export interface SessionDiffCaptureOutcome {
+  status: SessionDiffCaptureStatus;
+  summary?: SessionDiffSummary;
+  /** Deferred capture only: the unsaved snapshot behind status "captured". */
+  candidate?: SessionDiffCandidate;
+  /** Roots authoritatively checked and reported net-empty by normal capture. */
+  unchangedRoots?: string[];
+  reason?: string;
+}
 
 /**
  * HEAD of one canonical repository root, recorded once per outer run (contract
@@ -57,6 +164,12 @@ export interface SessionDiffSummary {
   displayLimit?: number;
   baselineSource?: GitTurnBaselineSource;
   baselineUnavailable?: boolean;
+  /** v4: snapshot was reconstructed by agent-assisted recovery. */
+  recovered?: boolean;
+  /** v4: the recovered snapshot is known to be partial. */
+  recoveryIncomplete?: boolean;
+  /** v4: how a recovered snapshot was produced. */
+  recoveryMethod?: SessionDiffRecoveryMethod;
 }
 
 export interface EligibleCommit {
@@ -77,6 +190,8 @@ export interface GitDiffRequest {
   baselines?: GitTurnBaseline[];
   /** v3 final phase: viewer file-panel cap (the patch itself stays complete). */
   display_limit?: number;
+  /** v4 recover phase: the run-scoped evidence the native store must replay. */
+  recovery?: GitDiffRecoveryControl;
 }
 
 export interface GitDiffRepository {
@@ -89,6 +204,8 @@ export interface GitDiffRepository {
   head?: string | null;
   baselineCapturedAt?: string;
   baselineSource?: GitTurnBaselineSource;
+  /** Stored payloads only: files of this entry were reconstructed by the AI (unverified). */
+  reconstructed?: true;
 }
 
 export type GitDiffResponseStatus = 'ok' | 'not_repository' | 'unavailable';
@@ -101,11 +218,17 @@ export interface GitDiffResponse {
   reason?: string;
   /** v3 baseline phase only. */
   baselines?: GitTurnBaseline[];
+  /** v4 recover phase only. */
+  recovery?: GitDiffRecoveryReply;
 }
 
 /** Optional on a shell_script request (server -> client). */
 export interface GitDiffShellContext {
   candidate_paths: string[];
+  /** v4 (`supports_diff_recovery`): the outer run id evidence must echo. */
+  turn_id?: string;
+  /** v4: the provider tool call id of this shell request. */
+  tool_call_id?: string;
 }
 
 /** Optional on the terminal reply of an outstanding shell_script. */
@@ -123,6 +246,8 @@ export interface SessionDiffPayload {
   /** v3 turn snapshots: every baseline recorded for the run, and the cap. */
   baselines?: GitTurnBaseline[];
   displayLimit?: number;
+  /** v4: present only on an agent-assisted recovered snapshot. */
+  recovery?: SessionDiffRecoveryProvenance;
 }
 
 const OID_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
@@ -502,6 +627,243 @@ export function cleanSessionDiffSummary(value: unknown): SessionDiffSummary | un
     ...(typeof value.baselineUnavailable === 'boolean'
       ? { baselineUnavailable: value.baselineUnavailable }
       : {}),
+    ...(value.recovered === true ? { recovered: true } : {}),
+    ...(value.recovered === true && typeof value.recoveryIncomplete === 'boolean'
+      ? { recoveryIncomplete: value.recoveryIncomplete }
+      : {}),
+    ...(value.recovered === true &&
+    (value.recoveryMethod === 'checkpoint' || value.recoveryMethod === 'ai_reconstructed')
+      ? { recoveryMethod: value.recoveryMethod }
+      : {}),
+  };
+}
+
+/**
+ * A summary the backend knows is partial: an incomplete recovery, or a turn
+ * snapshot in which some root had no baseline (uncommitted changes only).
+ * Such summaries are never attached or re-served.
+ */
+export function isKnownPartialSummary(summary: SessionDiffSummary | undefined): boolean {
+  return summary?.recoveryIncomplete === true || summary?.baselineUnavailable === true;
+}
+
+/**
+ * Stored payload counterpart of `isKnownPartialSummary`. Legacy working-tree
+ * payloads (no baselines, no recovery provenance) carry no such claim.
+ */
+export function isKnownPartialPayload(payload: SessionDiffPayload): boolean {
+  // Recovered payloads are judged by their own coverage verdict (their
+  // checkpoint/AI entries are working-tree scoped by design).
+  if (payload.recovery) return payload.recovery.complete !== true;
+  if (Array.isArray(payload.baselines)) return payload.repositories.some((r) => r.scope !== 'turn');
+  return false;
+}
+
+// ---------------------------------------------------------------------------
+// Contract v4 validators.
+// ---------------------------------------------------------------------------
+
+export function isDiffRecoveryId(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length <= DIFF_RECOVERY_MAX_ID_LENGTH &&
+    DIFF_RECOVERY_ID_RE.test(value)
+  );
+}
+
+/** Provider tool call ids are opaque; bound them and forbid control chars. */
+export function isSafeToolCallId(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= DIFF_RECOVERY_MAX_TOOL_CALL_ID_LENGTH &&
+    !CONTROL_RE.test(value)
+  );
+}
+
+/** Repository-relative path: no leading slash, no relative segments. */
+export function isSafeRelativePath(value: unknown): value is string {
+  if (typeof value !== 'string' || !value.length || value.length > GIT_MAX_PATH_LENGTH) {
+    return false;
+  }
+  if (value.startsWith('/') || CONTROL_RE.test(value) || value.includes('\\')) return false;
+  return !value.split('/').some((s) => s === '' || s === '.' || s === '..');
+}
+
+function isRecordStateHash(kind: DiffRecoveryKind, value: unknown): boolean {
+  if (value === null) return true;
+  return kind === 'git' ? isGitOid(value) : typeof value === 'string' && SHA256_RE.test(value);
+}
+
+/**
+ * Validate optional `diff_recovery_evidence` on the terminal reply of the
+ * outstanding shell. Fail closed: any malformed record, a foreign turn id, a
+ * record not attributed to exactly the issued tool call, or an over-budget
+ * list rejects the whole reply (returns null). Never carries patch/content.
+ */
+export function validateDiffRecoveryEvidence(
+  raw: unknown,
+  expected: { turnId: string; toolCallId: string },
+): DiffRecoveryEvidence | null {
+  if (raw === undefined || raw === null || !isPlainObject(raw)) return null;
+  if (raw.turn_id !== expected.turnId) return null;
+  const rawRecords = raw.records;
+  if (!Array.isArray(rawRecords) || rawRecords.length > DIFF_RECOVERY_MAX_RECORDS) return null;
+  let omitted = 0;
+  if (raw.omitted !== undefined) {
+    if (!Number.isInteger(raw.omitted) || (raw.omitted as number) < 0) return null;
+    omitted = Math.min(raw.omitted as number, 10_000);
+  }
+  const seen = new Set<string>();
+  const records: DiffRecoveryRecord[] = [];
+  for (const entry of rawRecords) {
+    if (!isPlainObject(entry)) return null;
+    const { id, toolCallId, root, paths, kind, before, after, complete } = entry;
+    if (!isDiffRecoveryId(id) || seen.has(id)) return null;
+    seen.add(id);
+    if (toolCallId !== expected.toolCallId) return null;
+    if (!isSafeAbsolutePath(root)) return null;
+    if (kind !== 'git' && kind !== 'file') return null;
+    if (!Array.isArray(paths) || paths.length > DIFF_RECOVERY_MAX_PATHS) return null;
+    if (!paths.every(isSafeRelativePath)) return null;
+    if (new Set(paths).size !== paths.length) return null;
+    if (!isRecordStateHash(kind, before) || !isRecordStateHash(kind, after)) return null;
+    if (before === undefined || after === undefined) return null;
+    if (typeof complete !== 'boolean') return null;
+    records.push({
+      id,
+      toolCallId,
+      root: normalizeAbsolutePath(root),
+      paths: [...(paths as string[])],
+      kind,
+      before: before as string | null,
+      after: after as string | null,
+      complete,
+    });
+  }
+  return { turn_id: expected.turnId, records, ...(omitted ? { omitted } : {}) };
+}
+
+/**
+ * Validate a v4 `phase: "recover"` reply. The echo must match the exact turn
+ * id and the exact selected evidence id set; every repository must be a
+ * bounded `working_tree` patch for a root of a selected record (no commit,
+ * no baseline claims, no duplicates, combined patch cap).
+ */
+export function validateGitRecoveryResponse(
+  raw: unknown,
+  request: Pick<GitDiffRequest, 'request_id' | 'recovery'>,
+  selected: readonly Pick<DiffRecoveryRecord, 'id' | 'root' | 'paths'>[],
+): GitDiffResponse {
+  if (!request.recovery) throw new GitDiffValidationError('not a recovery request');
+  if (!isPlainObject(raw)) throw new GitDiffValidationError('not an object');
+  if (raw.request_id !== request.request_id) throw new GitDiffValidationError('request id');
+  const status = raw.status;
+  if (status !== 'ok' && status !== 'not_repository' && status !== 'unavailable') {
+    throw new GitDiffValidationError('status');
+  }
+  const rawRepositories = raw.repositories ?? [];
+  if (!Array.isArray(rawRepositories)) throw new GitDiffValidationError('repositories');
+  if (status !== 'ok') {
+    if (rawRepositories.length > 0) throw new GitDiffValidationError('patch on failure');
+    return { request_id: request.request_id, status, repositories: [] };
+  }
+  const echo = raw.recovery;
+  if (!isPlainObject(echo) || echo.turn_id !== request.recovery.turn_id) {
+    throw new GitDiffValidationError('recovery turn');
+  }
+  const ids = echo.evidence_ids;
+  const wanted = request.recovery.evidence_ids;
+  if (
+    !Array.isArray(ids) ||
+    ids.length !== wanted.length ||
+    new Set(ids).size !== ids.length ||
+    !ids.every((id) => typeof id === 'string' && wanted.includes(id))
+  ) {
+    throw new GitDiffValidationError('recovery evidence ids');
+  }
+  if (!Number.isInteger(echo.omitted) || (echo.omitted as number) < 0) {
+    throw new GitDiffValidationError('recovery omitted');
+  }
+  if (rawRepositories.length > GIT_DIFF_MAX_REPOSITORIES) {
+    throw new GitDiffValidationError('too many repositories');
+  }
+  const roots = new Set(selected.map((r) => comparablePath(r.root)));
+  const seen = new Set<string>();
+  let totalBytes = 0;
+  const repositories: GitDiffRepository[] = [];
+  for (const entry of rawRepositories) {
+    if (!isPlainObject(entry)) throw new GitDiffValidationError('repository');
+    const allowed = new Set(['root', 'patch', 'scope']);
+    if (Object.keys(entry).some((key) => !allowed.has(key))) {
+      throw new GitDiffValidationError('recovery repository fields');
+    }
+    const { root, patch } = entry;
+    if (!isSafeAbsolutePath(root)) throw new GitDiffValidationError('root');
+    const key = comparablePath(root);
+    if (!roots.has(key)) throw new GitDiffValidationError('root not selected');
+    if (seen.has(key)) throw new GitDiffValidationError('duplicate root');
+    seen.add(key);
+    if (entry.scope !== 'working_tree') throw new GitDiffValidationError('scope');
+    if (typeof patch !== 'string') throw new GitDiffValidationError('patch');
+    totalBytes += Buffer.byteLength(patch, 'utf8');
+    if (totalBytes > GIT_DIFF_MAX_PATCH_BYTES) throw new GitDiffValidationError('patch too large');
+    const allowedPaths = new Set(
+      selected.filter((r) => comparablePath(r.root) === key).flatMap((r) => r.paths),
+    );
+    const headers = patch.match(/^diff --git .+$/gm) ?? [];
+    if (patch.trim() && !headers.length) throw new GitDiffValidationError('recovery patch format');
+    for (const header of headers) {
+      // Match only a header that can be composed from the selected paths.
+      // Git C-quoted unusual paths fail closed rather than expand the scope.
+      let matched = false;
+      for (const oldPath of allowedPaths) {
+        const prefix = `diff --git a/${oldPath} b/`;
+        if (header.startsWith(prefix) && allowedPaths.has(header.slice(prefix.length))) {
+          matched = true;
+          break;
+        }
+      }
+      if (!matched) throw new GitDiffValidationError('recovery patch path not selected');
+    }
+    // Check file metadata before each hunk, not +/- code lines in a hunk.
+    let inHunk = false;
+    for (const line of patch.split('\n')) {
+      if (line.startsWith('diff --git ')) {
+        inHunk = false;
+        continue;
+      }
+      if (line.startsWith('@@')) {
+        inHunk = true;
+        continue;
+      }
+      if (inHunk) continue;
+      if (line.startsWith('--- ') || line.startsWith('+++ ')) {
+        const value = line.slice(4).replace(/\t$/, '');
+        if (
+          value !== '/dev/null' &&
+          ![...allowedPaths].some((p) => value === `a/${p}` || value === `b/${p}`)
+        ) {
+          throw new GitDiffValidationError('recovery file path not selected');
+        }
+      }
+      if (line.startsWith('rename from ') || line.startsWith('rename to ')) {
+        const value = line.slice(line.startsWith('rename from ') ? 12 : 10);
+        if (!allowedPaths.has(value))
+          throw new GitDiffValidationError('recovery rename path not selected');
+      }
+    }
+    repositories.push({ root: normalizeAbsolutePath(root), patch, scope: 'working_tree' });
+  }
+  return {
+    request_id: request.request_id,
+    status,
+    repositories,
+    recovery: {
+      turn_id: request.recovery.turn_id,
+      evidence_ids: [...wanted],
+      omitted: Math.min(echo.omitted as number, 10_000),
+    },
   };
 }
 

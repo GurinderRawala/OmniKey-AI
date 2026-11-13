@@ -67,6 +67,50 @@ final class MarkdownTextEditorTests: XCTestCase {
         XCTAssertEqual(first.text, "# First\n\n**Task instructions**")
     }
 
+    /// Repro attempt for "a message starting with a code fence breaks the
+    /// app": type a leading fence + long instruction paragraph + closing fence
+    /// keystroke-by-keystroke into the real MarkdownEngine editor, then clear
+    /// the binding exactly as sending does.
+    func testTypingLeadingFenceThenClearingAfterSendResetsComposer() throws {
+        let fence = String(repeating: "\u{0060}", count: 3)
+        let document = Document("")
+        func editor() -> MarkdownTextEditor {
+            MarkdownTextEditor(
+                text: Binding(get: { document.text }, set: { document.text = $0 }),
+                sessionKey: "chat", isFocused: .constant(true), colorScheme: .dark, onSend: {})
+        }
+        let host = NSHostingView(rootView: editor())
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 280),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = host
+        host.layoutSubtreeIfNeeded()
+        settle()
+        let textView = try XCTUnwrap(findTextView(in: host))
+        window.makeFirstResponder(textView)
+        let paragraph = "Please review the following instructions and " + String(repeating: "follow them carefully ", count: 10)
+        let typed = fence + "\n" + paragraph + "\n\nSecond paragraph.\n" + fence
+        for character in typed {
+            textView.insertText(String(character), replacementRange: textView.selectedRange())
+        }
+        settle()
+        // Chat prompts must retain exactly what was typed, with no extra
+        // auto-generated closing fence after sending.
+        XCTAssertEqual(document.text, typed)
+        XCTAssertEqual(textView.string, document.text)
+
+        document.text = ""
+        host.rootView = editor()
+        host.layoutSubtreeIfNeeded()
+        settle()
+        XCTAssertEqual(textView.string, "")
+        XCTAssertEqual(document.text, "")
+        textView.insertText("next", replacementRange: textView.selectedRange())
+        settle()
+        XCTAssertEqual(document.text, "next")
+    }
+
     func testEditorLookupSkipsNeighboringTextFieldEditor() {
         let container = NSView()
         let fieldEditor = NSTextView()

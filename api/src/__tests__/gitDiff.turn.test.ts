@@ -278,7 +278,7 @@ describe('turn baselines in a real agent turn', () => {
     });
     expect(finalReq).toMatchObject({
       phase: 'final',
-      display_limit: 50,
+      display_limit: 300,
       eligible_commits: [],
       candidate_paths: [ROOT],
     });
@@ -290,14 +290,14 @@ describe('turn baselines in a real agent turn', () => {
       scope: 'turn',
       fileCount: 3,
       repositoryCount: 1,
-      displayLimit: 50,
+      displayLimit: 300,
     });
     expect(live.commit).toBeUndefined();
     expect(cleanSessionDiffSummary(live)).toEqual(live);
     const stored = await loadSessionDiffPayload('t-start', 'sub-a', live.id);
     expect(stored!.payload).toMatchObject({
       version: 1,
-      displayLimit: 50,
+      displayLimit: 300,
       baselines: finalReq.baselines,
       repositories: [
         {
@@ -386,7 +386,7 @@ describe('turn baselines in a real agent turn', () => {
     expect(final.candidate_paths).toContain('/Users/dev/projects/late');
   });
 
-  it('fails closed when the turn-start baseline is unavailable: working tree only, with a notice', async () => {
+  it('withholds a known-partial snapshot when the turn-start baseline is unavailable', async () => {
     queueResults(finalAnswer('done'));
     const t = await turn('t-missing', `Work in ${ROOT}`, {
       heads: {},
@@ -399,11 +399,11 @@ describe('turn baselines in a real agent turn', () => {
         };
       },
     });
-    const live = t.frames.find((f) => f.session_diff)!.session_diff!;
-    expect(live).toMatchObject({ scope: 'working_tree', fileCount: 1 });
-    const stored = await loadSessionDiffPayload('t-missing', 'sub-a', live.id);
-    expect(stored!.payload.notice).toContain('Turn baseline unavailable');
-    expect(stored!.payload.baselines).toEqual([]);
+    // "Working tree vs HEAD" cannot prove what this turn changed: no card,
+    // nothing stored, the final answer is unchanged.
+    expect(t.frames.some((f) => f.session_diff)).toBe(false);
+    expect(t.frames.some((f) => f.content.includes('<final_answer>'))).toBe(true);
+    expect(await AgentSessionDiff.count({ where: { sessionId: 't-missing' } })).toBe(0);
   });
 
   it('rejects a turn-scope or commit claim for a root without a recorded baseline', async () => {
@@ -652,9 +652,9 @@ describe('turn snapshot viewer', () => {
   const app = express();
   app.use('/api/agent', createAgentRouter());
 
-  it('renders at most 50 real file panels for 100 files with one summary notice', async () => {
+  it('renders at most 300 real file panels for 350 files with one summary notice', async () => {
     await AgentSession.create({ id: 'v-100', subscriptionId: 'sub-a' } as any);
-    const patch = Array.from({ length: 100 }, (_, i) =>
+    const patch = Array.from({ length: 350 }, (_, i) =>
       filePatch(`src/f${String(i).padStart(3, '0')}.ts`),
     ).join('');
     const connection = new AbortController();
@@ -687,18 +687,18 @@ describe('turn snapshot viewer', () => {
       { root: ROOT, head: null, capturedAt: new Date().toISOString(), source: 'turn_start' },
     ]);
     const summary = (await captureSessionDiffBeforeFinal(r, [], undefined, log))!;
-    expect(summary).toMatchObject({ scope: 'turn', fileCount: 100, displayLimit: 50 });
+    expect(summary).toMatchObject({ scope: 'turn', fileCount: 350, displayLimit: 300 });
     const res = await request(app)
       .get(`/api/agent/sessions/v-100/diffs/${summary.id}`)
       .set('x-test-subscription', 'sub-a');
     expect(res.status).toBe(200);
     const html: string = res.body.html;
-    expect((html.match(/<details class="file"/g) ?? []).length).toBe(50);
-    expect((html.match(/Showing 50 of 100 files/g) ?? []).length).toBe(1);
+    expect((html.match(/<details class="file"/g) ?? []).length).toBe(300);
+    expect((html.match(/Showing 300 of 350 files/g) ?? []).length).toBe(1);
     expect(html).toContain('Turn changes');
     expect(html).toContain('unborn');
-    expect(html).toContain('src/f049.ts');
-    expect(html).not.toContain('src/f050.ts');
+    expect(html).toContain('src/f299.ts');
+    expect(html).not.toContain('src/f300.ts');
     expect(html).not.toMatch(/latest commit/i);
     // Foreign owner still 404.
     expect(

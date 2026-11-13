@@ -31,6 +31,8 @@ export interface AgentTurnOptions {
   supportsGitDiff?: boolean;
   // Literal-true per-turn baseline capability (contract v3) of that connection.
   supportsGitTurnDiff?: boolean;
+  // Literal-true diff recovery capability (contract v4) of that connection.
+  supportsDiffRecovery?: boolean;
 }
 
 export interface QueuedMessage {
@@ -60,8 +62,18 @@ export interface PendingSteeringMessage {
 }
 
 export type PendingShellScript = {
-  // `gitCommitObservations` is the raw, unvalidated reply field; the tool
-  // loop validates it against the shell request it issued.
-  resolve: (output: string, isError: boolean | undefined, gitCommitObservations?: unknown) => void;
+  // `gitCommitObservations` and `diffRecoveryEvidence` are raw, unvalidated
+  // reply fields; the tool loop validates them against the shell request it
+  // issued (turn id + tool call id).
+  resolve: (
+    output: string,
+    isError: boolean | undefined,
+    gitCommitObservations?: unknown,
+    diffRecoveryEvidence?: unknown,
+    // The client's unformatted terminal content (no prefix, no keyword
+    // filtering). Only write-evidence classification reads it; tool history
+    // keeps the formatted `output`.
+    rawOutput?: string,
+  ) => void;
   filterKeywords: string[];
 };

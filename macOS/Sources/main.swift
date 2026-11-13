@@ -493,13 +493,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         showSettingsWindow()
     }
 
-    func showSettingsWindow() {
+    /// Opens Settings; with `tab`, switches to that pane (also when the
+    /// window is already open on another pane).
+    func showSettingsWindow(tab: SettingsTab? = nil) {
         guard requireTermsAccepted() else { return }
         if settingsWindowController == nil {
             settingsWindowController = SettingsWindowController()
         }
+        if let tab { settingsWindowController?.select(tab) }
         NSApp.activate(ignoringOtherApps: true)
         settingsWindowController?.showWindow(nil)
+    }
+
+    /// Chat composer gear: Agent Access holds the diff view toggle.
+    func showAgentAccessSettings() {
+        showSettingsWindow(tab: .agentAccess)
     }
 
     @objc private func showAgentThinkingWindowFromMenu() {
