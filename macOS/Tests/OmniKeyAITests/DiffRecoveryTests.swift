@@ -480,7 +480,9 @@ final class DiffRecoveryTests: XCTestCase {
         XCTAssertEqual(GitSnapshotCollector.reportedRoot(root, candidates: [link]), root)
         let rootLink = links.root + "/repo"
         try FileManager.default.createSymbolicLink(atPath: rootLink, withDestinationPath: repo.root)
-        XCTAssertEqual(GitSnapshotCollector.reportedRoot(root, candidates: [rootLink + "/a"]), rootLink)
+        let reported = GitSnapshotCollector.reportedRoot(root, candidates: [rootLink + "/a"])
+        XCTAssertEqual(physicalPath(reported), physicalPath(rootLink))
+        XCTAssertTrue(reported.hasSuffix("/repo"), "preserve the repository symlink spelling")
         XCTAssertEqual(GitSnapshotCollector.reportedRoot(root, candidates: ["/"]), root)
     }
 

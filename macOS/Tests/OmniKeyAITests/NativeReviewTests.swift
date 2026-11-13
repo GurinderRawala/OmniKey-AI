@@ -94,6 +94,15 @@ final class NativeReviewTests: XCTestCase {
         XCTAssertFalse(DiffRecoveryStore.isHiddenHomePath(home.root + "/work/a.txt", home: home.root))
     }
 
+    func testHomeAndFileUsePhysicalPathsEvenThroughTmpAlias() throws {
+        let alias = "/tmp/omnikey-home-alias-" + UUID().uuidString
+        try FileManager.default.createDirectory(atPath: alias, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: alias) }
+        let store = DiffRecoveryStore(homeDirectory: alias)
+        XCTAssertTrue(store.homeDirectory.hasPrefix("/private/tmp/"))
+        XCTAssertTrue(DiffRecoveryStore.isHiddenHomePath(store.homeDirectory + "/.config/gh/hosts.yml", home: store.homeDirectory))
+    }
+
     func testHiddenHomePathPredicate() {
         let h = "/Users/u"
         XCTAssertTrue(DiffRecoveryStore.isHiddenHomePath("/Users/u/.config/gh/hosts.yml", home: h))

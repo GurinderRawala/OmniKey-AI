@@ -1,6 +1,6 @@
 # Changelog
 
-## macOS 1.9.18 (build 78) · CLI/API 1.8.20 — 2026-11-13
+## macOS 1.9.18 (build 79) · CLI/API 1.8.20 — 2026-11-13
 
 ### Added
 - Agent chat settings gear beside the context controls opens Agent Access settings directly.

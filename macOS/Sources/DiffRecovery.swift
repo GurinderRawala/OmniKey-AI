@@ -435,7 +435,12 @@ final class DiffRecoveryStore: @unchecked Sendable {
     init(runner: GitCommandRunner? = GitCommandRunner(), limits: Limits = Limits(), homeDirectory: String = NSHomeDirectory()) {
         self.runner = runner
         self.limits = limits
-        self.homeDirectory = URL(fileURLWithPath: homeDirectory).resolvingSymlinksInPath().path
+        if let physical = realpath(homeDirectory, nil) {
+            self.homeDirectory = String(cString: physical)
+            free(physical)
+        } else {
+            self.homeDirectory = URL(fileURLWithPath: homeDirectory).standardizedFileURL.path
+        }
     }
 
     private struct RootState {
