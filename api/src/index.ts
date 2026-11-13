@@ -18,6 +18,7 @@ import { spawnWorker, type ManagedWorker } from './workers/spawn';
 import { setScheduledJobWorker } from './workers/scheduledJobWorkerClient';
 import { config } from './config';
 import { attachAgentWebSocketServer, createAgentRouter } from './agent/agentServer';
+import { waitForAgentCheckpoints } from './agent/agentServer/shutdown';
 import './models/appDownload';
 // Importing models ensures they are registered with Sequelize before initDatabase().
 import './models/agentSession';
@@ -313,6 +314,7 @@ app.get('*', (req, res) => {
 });
 
 let server: import('http').Server | null = null;
+let agentSockets: import('ws').WebSocketServer | null = null;
 const backgroundWorkers: ManagedWorker[] = [];
 
 async function start() {
@@ -330,17 +332,17 @@ async function start() {
     // server at /ws/omni-agent. This bi-directional stream is used
     // by clients when running @omniAgent sessions.
     if (server) {
-      attachAgentWebSocketServer(server as import('http').Server);
+      agentSockets = attachAgentWebSocketServer(server as import('http').Server);
     }
 
     if (config.isSelfHosted) {
-      // Run the schedulers in dedicated worker threads so their DB
+      // Run the schedulers in dedicated child processes so their DB
       // polling / cron ticks never block the HTTP event loop.
       const scheduledJobWorker = spawnWorker('scheduledJobWorker');
       backgroundWorkers.push(scheduledJobWorker);
       backgroundWorkers.push(spawnWorker('groupingWorker'));
       // Expose the worker handle so HTTP routes (e.g. POST /:id/run-now)
-      // can dispatch immediate executions into the worker thread instead
+      // can dispatch immediate executions into the worker process instead
       // of running them in-process and blocking the event loop.
       setScheduledJobWorker(scheduledJobWorker);
     }
@@ -359,11 +361,31 @@ async function stopBackgroundWorkers(): Promise<void> {
   await Promise.allSettled(backgroundWorkers.map((w) => w.stop()));
 }
 
+let shuttingDown = false;
 function gracefulShutdown(signal: NodeJS.Signals) {
+  if (shuttingDown) return;
+  shuttingDown = true;
   logger.info(`Received ${signal}. Starting graceful shutdown...`);
 
+  // HTTP close waits for active sockets, including long-lived chat clients.
+  // Bound shutdown so a restart cannot leave the old daemon holding its port.
+  const deadline = setTimeout(() => {
+    logger.error('Daemon shutdown deadline exceeded; exiting.');
+    process.exit(1);
+  }, 10_000);
+  const workersStopped = stopBackgroundWorkers();
+  for (const client of agentSockets?.clients ?? []) client.close(1001, 'Daemon restarting');
+  const socketDeadline = setTimeout(() => {
+    for (const client of agentSockets?.clients ?? []) client.terminate();
+  }, 1_000);
+  agentSockets?.close();
+
   const finish = (code: number) => {
-    void stopBackgroundWorkers().finally(() => process.exit(code));
+    void Promise.all([workersStopped, waitForAgentCheckpoints()]).finally(() => {
+      clearTimeout(deadline);
+      clearTimeout(socketDeadline);
+      process.exit(code);
+    });
   };
 
   if (!server) {
