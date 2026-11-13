@@ -21,6 +21,7 @@ import { CandidateSet, projectContextDirectory } from './candidates';
 import type { ShellWriteEvidence } from './writeEvidence';
 import {
   comparablePath,
+  isServableUncertainRecovery,
   pathIsWithin,
   countPatchFiles,
   GIT_DIFF_DISPLAY_LIMIT,
@@ -467,7 +468,9 @@ export async function saveSessionDiff(
       ? {
           displayLimit: GIT_DIFF_DISPLAY_LIMIT,
           recovered: true,
-          recoveryIncomplete: !recovery.complete,
+          // Uncertain coverage is shown (labelled), never as a known partial.
+          recoveryIncomplete: !recovery.complete && !isServableUncertainRecovery(recovery),
+          ...(isServableUncertainRecovery(recovery) ? { recoveryUncertain: true } : {}),
           recoveryMethod:
             recovery.kind === 'ai_reconstructed'
               ? ('ai_reconstructed' as const)

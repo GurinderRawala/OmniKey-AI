@@ -7,6 +7,7 @@
  */
 import { isSafeAbsolutePath, isSafeToolCallId, normalizeAbsolutePath } from './contracts';
 import type { GitRunState } from './coordinator';
+import { PythonPathResolver } from './pythonPaths';
 
 export const WRITE_EVIDENCE_MAX_SCRIPTS = 16;
 export const WRITE_EVIDENCE_MAX_TARGETS = 300;
@@ -645,47 +646,7 @@ const NODE_WRITE =
   /\b(?:writeFileSync|appendFileSync|writeFile|appendFile)\(\s*(['"])([^'"\n]+)\1/g;
 
 const PY_VAR_WRITE = /(?<![\w.])([A-Za-z_]\w*)\s*\.\s*write_(?:text|bytes)\(/g;
-/** Python constructs that can rebind names or change cwd invisibly: no variable resolution. */
-const PY_OPAQUE =
-  /\b(?:match|case)\b|\bdef\s+\w+\s*\(|\blambda\b[^:\n]*:|\bclass\s+\w+\s*[(:]|\b(?:exec|eval|globals|locals|vars|setattr|getattr|chdir|__import__)\s*\(|\bimportlib\b/;
-
-/**
- * Literal path of `NAME.write_text(…)`/`write_bytes(…)` when NAME has exactly
- * one binding in the whole script, and that binding is a top-level, unconditional
- * `NAME = Path('<literal>')` statement. Any other binding form (reassignment,
- * augmented/tuple/walrus/for/with/import/del/global, attribute mutation, use
- * as a call keyword), indentation, a single-line compound (`:` before it), or
- * a non-literal value leaves the write unknown. Python is never evaluated.
- */
-function pythonVariablePath(text: string, name: string): string | undefined {
-  if (name === 'Path' || PY_OPAQUE.test(text)) return undefined;
-  const token = new RegExp(`(?<![\\w.])${name}(?!\\w)`, 'g');
-  let binding: { index: number; literal: string } | undefined;
-  for (const m of text.matchAll(token)) {
-    const index = m.index ?? 0;
-    const before = text.slice(Math.max(0, index - 40), index);
-    const after = text.slice(index + name.length, index + name.length + 400);
-    const rebinds =
-      /(?:\bas|\bfor|\bdel|\bglobal|\bnonlocal|\bimport|,|\*)\s*$/.test(before) ||
-      /^\s*[)\]]*\s*(?:,|(?:\/\/|\*\*|>>|<<|[-+*/%&|^@])?=(?!=)|:=|\.\s*\w+\s*=(?!=)|\[)/.test(
-        after,
-      );
-    if (!rebinds) continue;
-    if (binding) return undefined; // more than one binding
-    const value =
-      /^\s*=\s*(?:pathlib\s*\.\s*)?Path\(\s*(['"])([^'"\n\\$`{}]+)\1\s*\)\s*(?=[;\n#"']|$)/.exec(
-        after,
-      );
-    if (!value) return undefined;
-    const lineStart = text.lastIndexOf('\n', index - 1) + 1;
-    const prefix = text.slice(lineStart, index);
-    // Top level: no indentation, no single-line compound header, statement start.
-    if (/^\s/.test(prefix) || prefix.includes(':')) return undefined;
-    if (prefix && !/(?:;|-c\s+["'])\s*$/.test(prefix)) return undefined;
-    binding = { index, literal: value[2] };
-  }
-  return binding?.literal;
-}
+const PY_OPEN_VAR = /\bopen\(\s*([A-Za-z_]\w*)\s*,\s*(?:mode\s*=\s*)?(['"])([rwaxbt+]+)\2/g;
 
 /** Classify one script; `undefined` when nothing write-like was recognised. */
 export function classifyShellWrites(
@@ -808,15 +769,21 @@ export function classifyShellWrites(
       addTarget(s, p, {}, m[2]);
     }
   }
-  // `p = Path('<literal>')` … `p.write_text(…)`: one provable binding only.
-  // Relative literals need the starting cwd to still hold (no cd/chdir later).
+  // `p = Path.home() / 'x'` … `p.write_text(…)` / `open(p, 'w')`: static,
+  // sequential resolution (see pythonPaths.ts). Relative literals need the
+  // starting cwd to still hold (no cd/chdir later).
   const cds = text.match(/(?:^|[;&|(\n]|\bthen|\bdo)\s*(?:cd|pushd|popd)\b/g)?.length ?? 0;
   const lead = leadingDirectory(text);
   const varCwd = cds === 0 ? input.cwd : cds === 1 && lead ? lead : undefined;
-  const bindings = new Map<string, string | undefined>();
-  for (const m of text.matchAll(PY_VAR_WRITE)) {
-    if (!bindings.has(m[1])) bindings.set(m[1], pythonVariablePath(text, m[1]));
-    const literal = bindings.get(m[1]);
+  const python = new PythonPathResolver(text, homeOf(input.cwd ?? lead));
+  const variableWrites = [
+    ...[...text.matchAll(PY_VAR_WRITE)].map((m) => ({ name: m[1], at: m.index ?? 0 })),
+    ...[...text.matchAll(PY_OPEN_VAR)]
+      .filter((m) => /[wax+]/.test(m[3]))
+      .map((m) => ({ name: m[1], at: m.index ?? 0 })),
+  ];
+  for (const { name, at } of variableWrites) {
+    const literal = python.pathAt(name, at);
     if (!literal) continue;
     const p = resolve({ value: literal, tilde: false }, { cwd: varCwd, vars: new Map() });
     if (!p) continue;

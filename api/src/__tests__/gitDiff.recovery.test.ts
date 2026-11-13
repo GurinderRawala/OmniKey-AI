@@ -110,6 +110,7 @@ import {
 } from '../agent/gitDiff/coordinator';
 import {
   cleanSessionDiffSummary,
+  isKnownPartialPayload,
   validateDiffRecoveryEvidence,
   validateGitRecoveryResponse,
   type DiffRecoveryRecord,
@@ -133,7 +134,9 @@ import {
   classifyShellWrites,
   isSensitiveWritePath,
   redactSecrets,
+  type ShellWriteEvidence,
 } from '../agent/gitDiff/writeEvidence';
+import { uncertainCoverageGate } from '../agent/gitDiff/uncertainProof';
 import {
   coverageAssessment,
   patchCoveredPaths,
@@ -2685,9 +2688,106 @@ describe('task bookkeeping and Python Path variable classification', () => {
   });
 
   it.each([
-    ['reassignment', `p=Path('/a/x');p=Path('/a/y');p.write_text('z')`],
+    [
+      'reassignment (latest binding before the use)',
+      `p=Path('/a/x');p=Path('/a/y');p.write_text('z')`,
+      ['/a/y'],
+    ],
+    [
+      'sequential reuse',
+      `p=Path('/a/x');p.write_text('1');p=Path('/a/y');p.write_text('2')`,
+      ['/a/x', '/a/y'],
+    ],
+    ['aliasing an immutable Path', `p=Path('/a/x');q=p;q.write_text('z')`, ['/a/x']],
+    ['a joined path', `p=Path('/a') / 'x';p.write_text('z')`, ['/a/x']],
+    [
+      'a computed home path with reassigned variables',
+      `from pathlib import Path\nbase = Path.home() / 'hobby'\napp = base / 'flickpad'\ntarget = app / 'main.py'\ntarget.write_text('x')\ntarget = app.joinpath('ui', 'view.py')\nwith open(target, 'w') as f:\n    f.write('y')`,
+      ['/Users/dev/hobby/flickpad/main.py', '/Users/dev/hobby/flickpad/ui/view.py'],
+    ],
+    [
+      'os.path helpers',
+      `import os\nd = os.path.join(os.path.expanduser('~'), 'hobby', 'x')\nopen(d, 'a').write('z')`,
+      ['/Users/dev/hobby/x'],
+    ],
+    [
+      'Path() with literal parts',
+      `p = Path(Path.home(), 'hobby', 'y.py')\np.write_bytes(b'z')`,
+      ['/Users/dev/hobby/y.py'],
+    ],
+  ])('python %s resolves statically', (_label, body, paths) => {
+    const found = classify(`python3 - <<'PY'\n${body}\nPY`);
+    expect(found.unresolved).toBe(false);
+    expect(found.targets.map((t) => t.path)).toEqual(paths);
+  });
+
+  it.each([
+    [
+      'annotated rebinding',
+      `python3 - <<'PY'
+p=Path('/a/x')
+p: Path = Path('/b/y')
+p.write_text('z')
+PY`,
+    ],
+    [
+      'star import rebinding',
+      `python3 - <<'PY'
+p=Path('/a/x')
+from other import *
+p.write_text('z')
+PY`,
+    ],
+    [
+      'multiline string binding text',
+      `python3 - <<'PY'
+p=Path('/a/x')
+s = """
+p=Path('/b/y')
+"""
+p.write_text('z')
+PY`,
+    ],
+    [
+      'one-line annotated rebinding',
+      `python3 -c "from pathlib import Path; p = Path('/a/x'); p: Path = Path('/b/y'); p.write_text('z')"`,
+    ],
+    ['a HOME override', `HOME=/x python3 -c "p = Path.home() / 'a'; p.write_text('z')"`],
+    ['sudo', `sudo python3 -c "p = Path.home() / 'a'; p.write_text('z')"`],
+    [
+      'os.environ',
+      `python3 -c "import os; os.environ['HOME']='/x'; p = Path.home() / 'a'; p.write_text('z')"`,
+    ],
+    [
+      'an unknown home',
+      `python3 -c "p = Path.home() / 'a'; p.write_text('z')"`,
+      { status: 'succeeded' as const },
+    ],
+    [
+      'a later block binding',
+      `python3 - <<'PY'\np = Path('/a/x')\nif c:\n    p = Path('/a/y')\np.write_text('z')\nPY`,
+    ],
+    [
+      'a join with a variable part',
+      `python3 - <<'PY'\nn = 'x'\np = Path('/a') / n\np.write_text('z')\nPY`,
+    ],
+    ['a traversal part', `python3 - <<'PY'\np = Path('/a') / '..' / 'etc'\np.write_text('z')\nPY`],
+    [
+      'a parent attribute',
+      `python3 - <<'PY'\np = Path('/a/x').parent / 'y'\np.write_text('z')\nPY`,
+    ],
+    ['a use before any binding', `python3 - <<'PY'\np.write_text('z')\np = Path('/a/x')\nPY`],
+  ])(
+    'python path with %s stays unknown',
+    (_label, script, input?: Parameters<typeof classifyShellWrites>[1]) => {
+      const found = classifyShellWrites(script, input ?? ok)!;
+      expect(found.unresolved).toBe(true);
+      expect(found.targets).toEqual([]);
+    },
+  );
+
+  it.each([
     ['augmented assignment', `p=Path('/a');p/='x';p.write_text('z')`],
-    ['aliasing', `p=Path('/a/x');q=p;q.write_text('z')`],
     ['tuple binding', `p=Path('/a/x');a, p = 1, Path('/b');p.write_text('z')`],
     ['for loop', `p=Path('/a/x')\nfor p in []: pass\np.write_text('z')`],
     ['with-as', `p=Path('/a/x')\nwith open('/a/y') as p: pass\np.write_text('z')`],
@@ -2696,7 +2796,6 @@ describe('task bookkeeping and Python Path variable classification', () => {
     ['indented (block) binding', `if c:\n    p=Path('/a/x')\np.write_text('z')`],
     ['a ternary value', `p=Path('/a/x') if c else Path('/b');p.write_text('z')`],
     ['a dynamic path', `p=Path(base)/'x';p.write_text('z')`],
-    ['a joined path', `p=Path('/a') / 'x';p.write_text('z')`],
     ['a function parameter', `p=Path('/a/x')\ndef f(p):\n    p.write_text('z')`],
     ['exec', `p=Path('/a/x');exec('p=1');p.write_text('z')`],
     ['an unbound variable', `p.write_text('z')`],
@@ -3450,5 +3549,337 @@ describe('write evidence: literal dollars, sensitive unresolved operands, read-o
       `python3 -c "from pathlib import Path; p='/tmp/out.txt'; open('in.txt','r').close(); Path(p).write_text('x')"`,
     )!;
     expect(found.unresolved).toBe(true);
+  });
+});
+
+describe('uncertain coverage with independent change proof', () => {
+  const app = express();
+  app.use('/api/agent', createAgentRouter());
+  const reconstructionCalls = () =>
+    mocks.complete.mock.calls.filter(
+      (call) =>
+        (call[1] as Array<{ content: string }>)[0]?.content === DIFF_RECONSTRUCTION_SYSTEM_PROMPT,
+    );
+  const shell = (script: string, id = 'c1', workingDirectory = NOTES) =>
+    toolCalls([
+      { id, name: 'shell_script', arguments: { script, working_directory: workingDirectory } },
+    ]);
+  /** A write the backend cannot resolve (variable target). */
+  const UNKNOWN = 'printf x > "$OUT_FILE"';
+  const CREATE = `set -eC\nprintf 'hi\\n' > todo.md\n${UNKNOWN}`;
+  const view = (sessionId: string, id: string) =>
+    request(app)
+      .get(`/api/agent/sessions/${sessionId}/diffs/${id}`)
+      .set('x-test-subscription', 'sub-a');
+  const turnFinal = (patch: string) => (req: GitDiffRequest) => ({
+    status: 'ok',
+    repositories: (req.baselines ?? []).map((b) => ({
+      root: b.root,
+      patch,
+      scope: 'turn',
+      baselineHead: b.head,
+      head: OID_1,
+      baselineCapturedAt: b.capturedAt,
+      baselineSource: b.source,
+    })),
+  });
+
+  it('exclusive creation + truncated evidence: labelled "unverified — coverage uncertain", never complete', async () => {
+    queueResults(
+      shell(`set -eC\nprintf 'hi\\n' > todo.md\n# ${'x'.repeat(4500)}`),
+      finalAnswer('done'),
+    );
+    mocks.reconstructionResult.mockResolvedValue(
+      manifest({ files: [{ path: `${NOTES}/todo.md`, before: null, after: 'hi\n' }] }),
+    );
+    const t = await turn('unc-create', 'create my todo', {});
+    expect(reconstructionCalls()).toHaveLength(1);
+    const prompt = JSON.parse((reconstructionCalls()[0][1] as any)[1].content);
+    // The allowlist stays the strict known set; the unknown write adds nothing.
+    expect(prompt.allowedPaths).toEqual([
+      { path: `${NOTES}/todo.md`, creationVerified: true, deletionAllowed: false },
+    ]);
+    expect(t.final!.content).toBe('<final_answer>\ndone\n</final_answer>');
+    expect(t.final!.session_diff).toMatchObject({
+      recovered: true,
+      recoveryIncomplete: false,
+      recoveryUncertain: true,
+      recoveryMethod: 'ai_reconstructed',
+      fileCount: 1,
+    });
+    expect(cleanSessionDiffSummary(t.final!.session_diff)?.recoveryUncertain).toBe(true);
+    const stored = await loadSessionDiffPayload('unc-create', 'sub-a', t.final!.session_diff!.id);
+    expect(stored!.payload.recovery).toMatchObject({
+      kind: 'ai_reconstructed',
+      complete: false,
+      coverage: 'uncertain',
+      changeProof: ['exclusive_create'],
+      uncertainty: ['write_evidence_truncated'],
+    });
+    expect(stored!.payload.recovery!.limitations[0]).toMatch(/^Coverage uncertain: /);
+    expect(isKnownPartialPayload(stored!.payload)).toBe(false);
+    const res = await view('unc-create', t.final!.session_diff!.id);
+    expect(res.status).toBe(200);
+    expect(res.body.html).toContain('unverified — coverage uncertain');
+    expect(res.body.html).toContain('Unverified — coverage uncertain:');
+    expect(res.body.html).toContain('AI-reconstructed (unverified)');
+    expect(res.body.html).not.toContain('Every change the backend knew about is shown');
+  }, 60_000);
+
+  it('verified automatic patch + unknown write: AI fills the known missing path, verified base kept', async () => {
+    queueResults(
+      shell(`echo x > a.ts`, 'c1', ROOT),
+      shell(`echo more >> n.md\n${UNKNOWN}`, 'c2', NOTES),
+      finalAnswer('done'),
+    );
+    mocks.reconstructionResult.mockResolvedValue(
+      manifest({ files: [{ path: `${NOTES}/n.md`, before: 'n\n', after: 'n\nmore\n' }] }),
+    );
+    const t = await turn('unc-auto', `Fix ${ROOT}`, {
+      heads: { [ROOT]: OID_1 },
+      final: turnFinal(filePatch('a.ts')),
+    });
+    expect(t.final!.session_diff).toMatchObject({
+      fileCount: 2,
+      recoveryIncomplete: false,
+      recoveryUncertain: true,
+    });
+    const stored = await loadSessionDiffPayload('unc-auto', 'sub-a', t.final!.session_diff!.id);
+    expect(stored!.payload.recovery).toMatchObject({
+      base: 'automatic',
+      coverage: 'uncertain',
+      changeProof: ['verified_patch'],
+    });
+    expect(stored!.payload.repositories.map((r) => [r.root, r.scope, r.reconstructed])).toEqual([
+      [ROOT, 'turn', undefined],
+      [NOTES, 'working_tree', true],
+    ]);
+    expect(stored!.payload.repositories[0].patch).toBe(filePatch('a.ts'));
+    const res = await view('unc-auto', t.final!.session_diff!.id);
+    expect(res.status).toBe(200);
+    expect(res.body.html).toContain('unverified — coverage uncertain');
+  }, 60_000);
+
+  it('a native file record with changed hashes is proof; its path must be shown changed', async () => {
+    const records = (id: string) => [{ ...rec('f1', id, NOTES, ['data.json'], 'file') }];
+    const opts = { evidence: evidenceFor(records) };
+    queueResults(shell(`python3 -c "make().write_text(v)"`), finalAnswer('done'));
+    mocks.recoveryResult.mockResolvedValue(manifest({ unavailable: true }));
+    mocks.reconstructionResult.mockResolvedValue(
+      manifest({ files: [{ path: `${NOTES}/data.json`, before: null, after: '{}\n' }] }),
+    );
+    const t = await turn('unc-record', 'write data', opts);
+    // At most the two bounded recovery calls: manifest + reconstruction.
+    expect(recoveryCalls()).toHaveLength(1);
+    expect(reconstructionCalls()).toHaveLength(1);
+    const stored = await loadSessionDiffPayload('unc-record', 'sub-a', t.final!.session_diff!.id);
+    expect(stored!.payload.recovery).toMatchObject({
+      coverage: 'uncertain',
+      changeProof: ['native_record'],
+    });
+
+    // Same evidence, the model claims the proven file unchanged: withheld.
+    mocks.complete.mockClear();
+    queueResults(shell(`python3 -c "make().write_text(v)"`), finalAnswer('done'));
+    mocks.reconstructionResult.mockResolvedValue(
+      manifest({ files: [{ path: `${NOTES}/data.json`, before: '{}\n', after: '{}\n' }] }),
+    );
+    const none = await turn('unc-record-unchanged', 'write data', opts);
+    expect(none.final!.session_diff).toBeUndefined();
+    expect(await diffCount('unc-record-unchanged')).toBe(0);
+  }, 60_000);
+
+  it.each([
+    [
+      'an unknown write alone (append is not proof)',
+      `echo more >> n.md\n${UNKNOWN}`,
+      [{ path: `${NOTES}/n.md`, before: 'n\n', after: 'n\nmore\n' }],
+      false,
+    ],
+    [
+      'touch/cp/mkdir only (a successful write-like exit is not proof)',
+      `touch a.md\ncp b.md c.md\nmkdir -p d\n${UNKNOWN}`,
+      [
+        { path: `${NOTES}/a.md`, before: '', after: 'x' },
+        { path: `${NOTES}/c.md`, before: '', after: 'y' },
+      ],
+      false,
+    ],
+    [
+      'a failed creating shell',
+      CREATE,
+      [{ path: `${NOTES}/todo.md`, before: 'old\n', after: 'hi\n' }],
+      true,
+    ],
+    [
+      'redacted evidence on the uncertain write',
+      `set -eC\nAPI_TOKEN=supersecret123\nprintf 'hi\\n' > todo.md\n${UNKNOWN}`,
+      [{ path: `${NOTES}/todo.md`, before: null, after: 'hi\n' }],
+      false,
+    ],
+    [
+      'a sensitive target (withheld evidence)',
+      `set -eC\nprintf 'hi\\n' > todo.md\nprintf k > /Users/dev/.ssh/config`,
+      [{ path: `${NOTES}/todo.md`, before: null, after: 'hi\n' }],
+      false,
+    ],
+    [
+      'a model path outside the allowlist',
+      CREATE,
+      [
+        { path: `${NOTES}/todo.md`, before: null, after: 'hi\n' },
+        { path: '/Users/dev/.ssh/config', before: '', after: 'k' },
+      ],
+      false,
+    ],
+    [
+      'a model patch-like path traversal',
+      CREATE,
+      [{ path: `${NOTES}/../todo.md`, before: null, after: 'hi\n' }],
+      false,
+    ],
+    [
+      'the proven file reported unchanged',
+      CREATE,
+      [{ path: `${NOTES}/todo.md`, before: 'hi\n', after: 'hi\n' }],
+      false,
+    ],
+  ])('no viewer with %s', async (label, script, files, shellError) => {
+    const id = `unc-neg-${label.replace(/\W/g, '').slice(0, 40)}`;
+    queueResults(shell(script), finalAnswer('done'));
+    mocks.reconstructionResult.mockResolvedValue(manifest({ files }));
+    const t = await turn(id, 'write', { shellError });
+    expect(t.final!.content).toBe('<final_answer>\ndone\n</final_answer>');
+    expect(t.final!.session_diff).toBeUndefined();
+    expect(await diffCount(id)).toBe(0);
+  });
+
+  describe('gate', () => {
+    const write = (over: Partial<ShellWriteEvidence> = {}): ShellWriteEvidence => ({
+      toolCallId: 'c1',
+      status: 'succeeded',
+      cwd: NOTES,
+      script: 's',
+      output: '',
+      truncated: false,
+      redacted: false,
+      kinds: ['redirect'],
+      targets: [{ path: `${NOTES}/todo.md`, created: true, removed: false }],
+      unresolved: true,
+      ...over,
+    });
+    const state = (w: ShellWriteEvidence) =>
+      ({
+        records: new Map(),
+        issuedToolCalls: new Set(['c1']),
+        omitted: 0,
+        attempted: true,
+        writes: [w],
+        revertedRoots: [],
+      }) as any;
+    const missing = new Map([
+      [`${NOTES}/todo.md`, { path: `${NOTES}/todo.md`, created: true, removed: false }],
+    ]);
+    const gate = (blocking: string[], w = write(), m = missing) =>
+      uncertainCoverageGate({ state: state(w), verified: [], records: [], missing: m, blocking });
+
+    it('accepts only pure uncertainty with proof', () => {
+      expect(gate(['write_target_unknown'])).toBeUndefined();
+      expect(
+        gate(['write_evidence_truncated'], write({ truncated: true, unresolved: false })),
+      ).toBeDefined();
+      expect(gate([])).toBeUndefined();
+    });
+
+    it.each([
+      'native_exclusion',
+      'baseline_unavailable',
+      'records_over_budget',
+      'native_omitted',
+      'native_record_truncated',
+      'checkpoint_not_final',
+      'checkpoint_replay_incomplete',
+      'writes_over_budget',
+      'too_many_missing_paths',
+    ])('a known gap or policy limit (%s) always withholds', (reason) => {
+      expect(gate(['write_target_unknown', reason])).toBeUndefined();
+    });
+
+    it('needs current-turn proof, never a mere write-like exit', () => {
+      const noCreate = write({
+        targets: [{ path: `${NOTES}/todo.md`, created: false, removed: false }],
+      });
+      const m = new Map([
+        [`${NOTES}/todo.md`, { path: `${NOTES}/todo.md`, created: false, removed: false }],
+      ]);
+      expect(gate(['write_target_unknown'], noCreate, m)).toBeUndefined();
+      expect(gate(['write_target_unknown'], write({ status: 'unknown' }))).toBeUndefined();
+      expect(gate(['write_target_unknown'], write({ redacted: true }))).toBeUndefined();
+      // Removed later in the turn: creation is no longer proof.
+      const removed = new Map([
+        [`${NOTES}/todo.md`, { path: `${NOTES}/todo.md`, created: true, removed: true }],
+      ]);
+      expect(gate(['write_target_unknown'], write(), removed)).toBeUndefined();
+      // No known path: nothing could be reconstructed.
+      expect(gate(['write_target_unknown'], write(), new Map())).toBeUndefined();
+    });
+
+    it('a later unknown write invalidates point-in-time native proof', () => {
+      const record = rec('f-proof', 'c1', NOTES, ['todo.md'], 'file');
+      const st = state(write({ toolCallId: 'c2' }));
+      st.issuedToolCalls = new Set(['c1', 'c2']);
+      expect(
+        uncertainCoverageGate({
+          state: st,
+          verified: [],
+          records: [record],
+          missing,
+          blocking: ['write_target_unknown'],
+        }),
+      ).toBeUndefined();
+    });
+
+    it('a truncated (partial) native record is never proof', () => {
+      const r = { ...rec('f1', 'c1', NOTES, ['todo.md'], 'file', false) };
+      const noCreate = write({ targets: [] });
+      expect(
+        uncertainCoverageGate({
+          state: state(noCreate),
+          verified: [],
+          records: [r],
+          missing,
+          blocking: ['write_target_unknown'],
+        }),
+      ).toBeUndefined();
+    });
+  });
+
+  it('the route serves an uncertain payload only with valid AI provenance and proof', () => {
+    const base = {
+      kind: 'ai_reconstructed' as const,
+      turnId: 't',
+      evidenceIds: [],
+      complete: false,
+      limitations: [],
+      coverage: 'uncertain' as const,
+      changeProof: ['exclusive_create' as const],
+      uncertainty: ['write_target_unknown' as const],
+    };
+    const payload = (recovery: Record<string, unknown>) =>
+      ({ version: 1, repositories: [], recovery }) as any;
+    expect(isKnownPartialPayload(payload(base))).toBe(false);
+    for (const bad of [
+      { ...base, changeProof: [] },
+      { ...base, changeProof: ['model_said_so'] },
+      { ...base, changeProof: undefined },
+      { ...base, uncertainty: ['native_exclusion'] },
+      { ...base, uncertainty: [] },
+      { ...base, kind: 'agent_assisted' },
+      { ...base, complete: true },
+      { ...base, coverage: 'partial' },
+      { ...base, coverage: undefined, complete: false },
+    ]) {
+      expect(isKnownPartialPayload(payload(bad))).toBe(true);
+    }
   });
 });

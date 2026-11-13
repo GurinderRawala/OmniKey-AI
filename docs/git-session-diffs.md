@@ -617,21 +617,33 @@ directory (for example `…/worktrees/repo/.config/…`) stay sensitive. An unre
 with any hidden component (`../.config/x`) is sensitive too. Such targets are never offered
 to the reconstruction model, and their excerpts are withheld (which blocks the card).
 
-**Python `Path` variables.** `NAME.write_text(…)` or `NAME.write_bytes(…)` resolves only
-when `NAME` has exactly **one** binding in the whole script, and that binding is a
-top-level, unconditional `NAME = Path('<literal>')` statement. Top-level means no
+**Python path variables (static, sequential).** `NAME.write_text(…)`, `NAME.write_bytes(…)`
+and `open(NAME, 'w'|'a'|'x'|'+')` resolve through a bounded static resolver
+(`pythonPaths.ts`); Python is never evaluated. Every binding of `NAME` in the script must be
+a top-level, unconditional `NAME = <path expression>` statement. Top-level means no
 indentation, no single-line compound header (`if c: …`), and the statement is at the start
-of the line, after `;` or right after `-c "`. A relative literal also needs a known cwd that
-no later `cd` changes. The write stays unknown (and blocking) for any of these:
+of the line, after `;` or right after `-c "`. A use takes the **latest binding textually
+before it**, so reassignment (`p = …; p.write_text(); p = …; p.write_text()`) and aliasing
+an immutable path (`q = p`) are resolved in order. Path expressions are limited to:
 
-- a reassignment, augmented, tuple or walrus binding;
-- aliasing (`q = p`) or attribute mutation;
+- `Path('<lit>')`, `Path.home()`, `Path(<expr>, '<lit>', …)`, or another resolvable name;
+- `<expr> / '<lit>'` and `<expr>.joinpath('<lit>', …)`;
+- `os.path.expanduser('~' | '~/<lit>')` and `os.path.join(<expr>, '<lit>', …)`.
+
+`Path.home()` and `~` use the home directory of the known absolute shell cwd
+(`/Users/<u>` or `/home/<u>`); the backend never looks up a home of its own. A `HOME=`
+assignment, `sudo`/`su`/`doas` or `os.environ`/`os.putenv` anywhere in the script disables
+home resolution. A relative result also needs a known cwd that no later `cd` changes. The
+result must still pass the safe-path and sensitive-path policy (`..` segments are rejected).
+The write stays unknown (and blocking) for any of these:
+
+- an augmented, tuple or walrus binding, or any binding inside a block;
+- attribute access other than `joinpath` (`.parent`, `.with_suffix(…)`), a variable or
+  computed join part, a ternary, or a call result;
 - a `for`, `with … as`, `import`, `del` or `global` binding, or use as a keyword argument;
-- a ternary, joined or computed value;
+- a use before any binding;
 - `def`, `lambda`, `class`, `exec`/`eval`, `globals()`/`setattr()`/`chdir()` anywhere in the
   script.
-
-Python is never evaluated.
 
 **Agent task bookkeeping (`auxiliaryTargets`).** Agent bootstrap and cleanup scripts write
 metadata into their own task directory. These writes are recorded separately as
@@ -830,7 +842,8 @@ most once per outer run, and under the same single 20 s budget, abort signal and
    - the model adds any limitation note;
    - any file is dropped or redacted;
    - the repository count or byte bound is exceeded;
-   - a blocking uncertainty remains (the attempt is still made, then withheld).
+   - a blocking uncertainty remains (the attempt is still made, then withheld), unless the
+     uncertain-coverage proof gate below accepts it.
 4. AI files are merged into the verified base. A file inside a verified root is grouped under
    that root, and each AI entry is marked `reconstructed: true`. Verified files are never
    replaced.
@@ -863,3 +876,51 @@ entry markers are still treated as AI-only.
 - Transcript replay drops `session_diff` summaries with `recoveryIncomplete === true` or
   `baselineUnavailable === true`.
 - Legacy working-tree payloads without these flags are served as before.
+
+### Uncertain coverage with change proof ("Unverified — coverage uncertain")
+
+Some turns are not known partial but **uncertain**: a write-like command had a target the
+backend could not resolve (`write_target_unknown`) or its excerpt was cut
+(`write_evidence_truncated`). Withholding every such turn hides real, provable changes, so
+`uncertainProof.ts` admits a labelled AI viewer under a strict gate:
+
+1. Every blocking reason must be one of those two. Known gaps and policy limits still
+   withhold: `native_exclusion`, `baseline_unavailable`, `records_over_budget`,
+   `native_omitted`, `native_record_truncated`, `checkpoint_not_final`,
+   `checkpoint_replay_incomplete`, `writes_over_budget`, `too_many_missing_paths`.
+2. No uncertain write (truncated, unresolved or Git-like) may carry redacted or withheld
+   (sensitive) evidence.
+3. The strict known allowlist (`coverage.missing`) is non-empty and is **not widened**:
+   unknown writes contribute no path. With no known path nothing is saved.
+4. The backend holds independent **current-turn change proof**. A successful write-like
+   exit is not proof (`cp`, `mkdir`, `touch` or a no-op may change nothing), and nothing the
+   model says is proof. Accepted proof (`recovery.changeProof`):
+   - `verified_patch`: a non-empty turn-scoped automatic patch or a native checkpoint
+     replay of this turn (a legacy working-tree patch is not turn evidence);
+   - `native_record`: a complete native `file` record of exactly one path whose before and
+     after hashes differ;
+   - `exclusive_create`: a literal target of a succeeded first shell with verified creation
+     evidence (`WriteTarget.created`) that no write removes.
+5. The model must still address every known path (same strict reply, size and redaction
+   rules). If the only proof is `native_record`/`exclusive_create`, at least one proven
+   path must appear as a changed AI file; otherwise nothing is saved (`withheld_unproven`).
+
+The usual single AI attempt is made (no extra provider call; still at most two per run).
+Saved payload: `recovery.kind: "ai_reconstructed"`, `complete: false`,
+`coverage: "uncertain"`, `changeProof`, `uncertainty`, and a first limitation line
+starting `Coverage uncertain:`. Verified base files are kept and never replaced. Summary:
+`recovered: true`, `recoveryMethod: "ai_reconstructed"`, `recoveryIncomplete: false`,
+`recoveryUncertain: true` (kept by `cleanSessionDiffSummary`). The native button keeps its
+existing "AI reconstruction · unverified" label; no client change is required. The viewer
+heading reads **Turn changes · unverified — coverage uncertain** and shows an explicit
+**Unverified — coverage uncertain** notice.
+
+The route serves such a payload only when `isServableUncertainRecovery` holds:
+AI-reconstructed, `complete: false`, non-empty known `changeProof`, and non-empty
+`uncertainty` limited to the two reasons above. Any other payload carrying `coverage` is
+treated as known partial (409). Payloads without `coverage` keep the `complete !== true`
+rule.
+
+This gate does not recover writes it cannot see. Contents changed by unrecognised or
+computed non-Git writes are still not shown, and a turn with only an unknown write and no
+proof still shows no card.

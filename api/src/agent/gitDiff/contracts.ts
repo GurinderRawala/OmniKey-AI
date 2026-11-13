@@ -106,6 +106,47 @@ export interface SessionDiffRecoveryProvenance {
   toolCallIds?: string[];
   /** ai_reconstructed only: the verified evidence the AI files were merged into. */
   base?: 'automatic' | 'checkpoint';
+  /**
+   * ai_reconstructed only, with `complete: false`: the known required paths
+   * were all addressed, but some write of this turn had an unknown target or
+   * truncated evidence. Shown only as "Unverified — coverage uncertain" and
+   * only with backend `changeProof` (see uncertainProof.ts).
+   */
+  coverage?: 'uncertain';
+  /** Independent current-turn evidence that something changed (never the model). */
+  changeProof?: ChangeProofSource[];
+  /** Why coverage is uncertain. */
+  uncertainty?: CoverageUncertainty[];
+}
+
+export type ChangeProofSource = 'verified_patch' | 'native_record' | 'exclusive_create';
+export type CoverageUncertainty = 'write_target_unknown' | 'write_evidence_truncated';
+export const CHANGE_PROOF_SOURCES: ReadonlySet<string> = new Set<ChangeProofSource>([
+  'verified_patch',
+  'native_record',
+  'exclusive_create',
+]);
+/** Blocking coverage reasons that are uncertainty rather than a known gap. */
+export const COVERAGE_UNCERTAINTIES: ReadonlySet<string> = new Set<CoverageUncertainty>([
+  'write_target_unknown',
+  'write_evidence_truncated',
+]);
+
+/** A stored uncertain-coverage provenance that may be served (proof present, AI only). */
+export function isServableUncertainRecovery(
+  recovery: SessionDiffRecoveryProvenance | undefined,
+): boolean {
+  return (
+    recovery?.coverage === 'uncertain' &&
+    recovery.kind === 'ai_reconstructed' &&
+    recovery.complete === false &&
+    Array.isArray(recovery.changeProof) &&
+    recovery.changeProof.length > 0 &&
+    recovery.changeProof.every((p) => CHANGE_PROOF_SOURCES.has(p)) &&
+    Array.isArray(recovery.uncertainty) &&
+    recovery.uncertainty.length > 0 &&
+    recovery.uncertainty.every((u) => COVERAGE_UNCERTAINTIES.has(u))
+  );
 }
 
 export type SessionDiffRecoveryMethod = 'checkpoint' | 'ai_reconstructed';
@@ -170,6 +211,11 @@ export interface SessionDiffSummary {
   recoveryIncomplete?: boolean;
   /** v4: how a recovered snapshot was produced. */
   recoveryMethod?: SessionDiffRecoveryMethod;
+  /**
+   * v4: AI reconstruction whose coverage is uncertain (not known partial):
+   * always unverified, never complete. `recoveryIncomplete` stays false.
+   */
+  recoveryUncertain?: boolean;
 }
 
 export interface EligibleCommit {
@@ -635,6 +681,11 @@ export function cleanSessionDiffSummary(value: unknown): SessionDiffSummary | un
     (value.recoveryMethod === 'checkpoint' || value.recoveryMethod === 'ai_reconstructed')
       ? { recoveryMethod: value.recoveryMethod }
       : {}),
+    ...(value.recovered === true &&
+    value.recoveryMethod === 'ai_reconstructed' &&
+    value.recoveryUncertain === true
+      ? { recoveryUncertain: true }
+      : {}),
   };
 }
 
@@ -654,7 +705,11 @@ export function isKnownPartialSummary(summary: SessionDiffSummary | undefined): 
 export function isKnownPartialPayload(payload: SessionDiffPayload): boolean {
   // Recovered payloads are judged by their own coverage verdict (their
   // checkpoint/AI entries are working-tree scoped by design).
-  if (payload.recovery) return payload.recovery.complete !== true;
+  if (payload.recovery) {
+    if (payload.recovery.coverage !== undefined)
+      return !isServableUncertainRecovery(payload.recovery);
+    return payload.recovery.complete !== true;
+  }
   if (Array.isArray(payload.baselines)) return payload.repositories.some((r) => r.scope !== 'turn');
   return false;
 }

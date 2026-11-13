@@ -82,6 +82,7 @@ import {
   withoutCoveredSections,
   type VerifiedRepository,
 } from './coverage';
+import { proofShown, uncertainCoverageGate, uncertaintyLimitation } from './uncertainProof';
 import type { WriteTarget } from './writeEvidence';
 
 /** Fixed, literal system prompt of the manifest call. */
@@ -545,19 +546,33 @@ export async function recoverSessionDiff(
       return summary;
     }
 
-    // Phase 3: known partial => always one AI attempt for the missing paths.
+    // Phase 3: one AI attempt for the known missing paths. A blocking reason
+    // withholds, unless it is mere uncertainty (unknown/truncated write
+    // evidence) AND the backend holds independent proof of a change; then the
+    // result is saved labelled "coverage uncertain" (see uncertainProof.ts).
     if (coverage.missing.size > DIFF_RECONSTRUCTION_MAX_FILES) {
       coverage.blocking.push('too_many_missing_paths');
     }
     const allow = new Map<string, WriteTarget>(
       [...coverage.missing].slice(0, DIFF_RECONSTRUCTION_MAX_FILES),
     );
+    const uncertain = coverage.blocking.length
+      ? uncertainCoverageGate({
+          state,
+          verified,
+          records,
+          missing: allow,
+          blocking: coverage.blocking,
+        })
+      : undefined;
+    // The bounded attempt is always made (existing contract); a known gap,
+    // policy limit or missing change proof then withholds its result.
     const result = await callModel(
       buildReconstructionMessages(state, allow),
       DIFF_RECONSTRUCTION_MAX_OUTPUT_TOKENS,
     );
     if (budget.signal.aborted) return undefined;
-    if (coverage.blocking.length) {
+    if (coverage.blocking.length && !uncertain) {
       logResult(log, run, 'withheld_uncertain', {
         blocking: coverage.blocking,
         missing: coverage.missing.size,
@@ -579,6 +594,11 @@ export async function recoverSessionDiff(
     if (parsed.limitations.length) {
       // The model disclosed something it could not reconstruct.
       logResult(log, run, 'model_reported_gaps', { missing: allow.size });
+      return undefined;
+    }
+    if (uncertain && !proofShown(uncertain, parsed.files)) {
+      // The model did not show any change the backend can prove.
+      logResult(log, run, 'withheld_unproven', { missing: allow.size });
       return undefined;
     }
     const cwds = [...new Set(state.writes.map((w) => w.cwd).filter((c): c is string => !!c))];
@@ -603,28 +623,42 @@ export async function recoverSessionDiff(
       return undefined;
     }
     const baseKind = checkpointUsed ? 'checkpoint' : verified.length ? 'automatic' : undefined;
-    const limitations = reconstructionLimitations(state, parsed.files, {
-      base: baseKind,
-      unchanged: allow.size - parsed.files.length,
-      checkpointLimitations,
-    });
+    const limitations = [
+      ...(uncertain ? [uncertaintyLimitation(uncertain)] : []),
+      ...reconstructionLimitations(state, parsed.files, {
+        base: baseKind,
+        unchanged: allow.size - parsed.files.length,
+        checkpointLimitations,
+      }),
+    ].slice(0, DIFF_RECOVERY_MAX_LIMITATIONS);
     if (budget.signal.aborted) return undefined;
     const summary = await save(
       merged,
-      'AI-reconstructed turn changes; known coverage complete but unverified.',
+      uncertain
+        ? 'AI-reconstructed turn changes; unverified — coverage uncertain.'
+        : 'AI-reconstructed turn changes; known coverage complete but unverified.',
       verified.some((v) => v.repository.scope === 'turn') ? context.base?.turn : undefined,
       {
         kind: 'ai_reconstructed',
         turnId: run.runId,
         evidenceIds,
         toolCallIds: state.writes.map((w) => w.toolCallId),
-        complete: true,
+        // Uncertain coverage is never "complete"; it is its own servable state.
+        complete: !uncertain,
         limitations,
         ...(baseKind ? { base: baseKind } : {}),
+        ...(uncertain
+          ? {
+              coverage: 'uncertain' as const,
+              changeProof: uncertain.proof,
+              uncertainty: uncertain.uncertainty,
+            }
+          : {}),
       },
     );
     if (budget.signal.aborted) return undefined;
-    logResult(log, run, 'saved_ai', {
+    logResult(log, run, uncertain ? 'saved_ai_uncertain' : 'saved_ai', {
+      ...(uncertain ? { proof: uncertain.proof, uncertainty: uncertain.uncertainty } : {}),
       diffId: summary.id,
       fileCount: summary.fileCount,
       reconstructed: parsed.files.length,

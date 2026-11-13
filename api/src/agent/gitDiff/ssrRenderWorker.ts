@@ -221,16 +221,24 @@ export async function renderSnapshotDocument(
   const checkpointBase = recovery
     ? recovery.kind === 'agent_assisted' || verifiedBase === 'checkpoint'
     : false;
+  // Served only with backend change proof (route gate); always explicit.
+  const uncertainCoverage = aiReconstructed && recovery?.coverage === 'uncertain';
+  const uncertainNote = uncertainCoverage
+    ? `<p class="limit"><strong>Unverified — coverage uncertain:</strong> this turn ran write commands whose targets or evidence the backend could not fully determine, so changes may be missing. ${aiFiles ? 'Files marked AI-reconstructed were inferred by the AI model from shell commands, not read from disk, and may be inaccurate.' : 'Every file shown was read from verified captures of this turn.'}</p>`
+    : '';
   const recoveryNotes = recovery
-    ? (aiConfirmedOnly
-        ? `<p class="limit"><strong>Unverified:</strong> the AI model reported the remaining known write targets of this turn unchanged; that claim was not read from disk. Every file shown was ${checkpointBase ? 'recovered from verified turn checkpoints' : 'captured from disk'}.</p>`
-        : aiReconstructed
-          ? recovery.complete
-            ? `<p class="limit"><strong>Unverified:</strong> ${mergedBase ? 'files marked AI-reconstructed' : 'these changes'} were reconstructed by the AI model from this turn's shell commands and were not read from disk. They may be inaccurate. Every change the backend knew about is shown, but changes made by unrecognised commands cannot be detected.</p>`
-            : '<p class="limit"><strong>Unverified:</strong> these changes were reconstructed by the AI model from this turn\'s shell commands and were not read from disk. They may be partial or inaccurate.</p>'
-          : recovery.complete
-            ? ''
-            : '<p class="limit"><strong>Partial recovery:</strong> some changes from this turn may be missing.</p>') +
+    ? uncertainNote +
+      (uncertainCoverage
+        ? ''
+        : aiConfirmedOnly
+          ? `<p class="limit"><strong>Unverified:</strong> the AI model reported the remaining known write targets of this turn unchanged; that claim was not read from disk. Every file shown was ${checkpointBase ? 'recovered from verified turn checkpoints' : 'captured from disk'}.</p>`
+          : aiReconstructed
+            ? recovery.complete
+              ? `<p class="limit"><strong>Unverified:</strong> ${mergedBase ? 'files marked AI-reconstructed' : 'these changes'} were reconstructed by the AI model from this turn's shell commands and were not read from disk. They may be inaccurate. Every change the backend knew about is shown, but changes made by unrecognised commands cannot be detected.</p>`
+              : '<p class="limit"><strong>Unverified:</strong> these changes were reconstructed by the AI model from this turn\'s shell commands and were not read from disk. They may be partial or inaccurate.</p>'
+            : recovery.complete
+              ? ''
+              : '<p class="limit"><strong>Partial recovery:</strong> some changes from this turn may be missing.</p>') +
       (Array.isArray(recovery.limitations)
         ? recovery.limitations
             .slice(0, 8)
@@ -238,38 +246,42 @@ export async function renderSnapshotDocument(
             .join('')
         : '')
     : '';
-  const scopeLabel = aiConfirmedOnly
-    ? checkpointBase
-      ? 'Recovered turn changes'
-      : isTurn
-        ? 'Turn changes'
-        : 'Working tree changes'
-    : aiReconstructed
-      ? mergedBase
-        ? 'Turn changes with AI-reconstructed files'
-        : 'AI-reconstructed turn changes'
-      : recovery
+  const scopeLabel = uncertainCoverage
+    ? 'Turn changes · unverified — coverage uncertain'
+    : aiConfirmedOnly
+      ? checkpointBase
         ? 'Recovered turn changes'
         : isTurn
           ? 'Turn changes'
-          : scopes.size > 1
-            ? 'Working tree and commit changes'
-            : scopes.has('commit')
-              ? 'Commit changes'
-              : 'Working tree changes';
-  const disclaimer = aiConfirmedOnly
-    ? checkpointBase
-      ? 'Recovered from native per-command checkpoints of this turn (not a full repository snapshot); it may include changes not made by the agent.'
-      : 'Verified capture of this turn from disk; it may include changes not made by the agent.'
-    : aiReconstructed
-      ? mergedBase
-        ? 'Verified captures of this turn merged with files reconstructed by the AI model from write-like shell commands (unverified).'
-        : 'Reconstructed by the AI model from write-like shell commands of this turn only (not a repository snapshot); unverified.'
-      : recovery
-        ? 'Recovered with agent assistance from native per-command checkpoints of this turn (not a full repository snapshot); it may include changes not made by the agent.'
-        : isTurn
-          ? 'Net committed and uncommitted changes from the turn baseline to the working tree when the answer was produced; it may include changes not made by the agent.'
-          : 'Snapshot taken when the answer was produced; it may include changes not made by the agent.';
+          : 'Working tree changes'
+      : aiReconstructed
+        ? mergedBase
+          ? 'Turn changes with AI-reconstructed files'
+          : 'AI-reconstructed turn changes'
+        : recovery
+          ? 'Recovered turn changes'
+          : isTurn
+            ? 'Turn changes'
+            : scopes.size > 1
+              ? 'Working tree and commit changes'
+              : scopes.has('commit')
+                ? 'Commit changes'
+                : 'Working tree changes';
+  const disclaimer = uncertainCoverage
+    ? `${aiFiles ? 'Includes files reconstructed by the AI model from write-like shell commands of this turn (unverified)' : 'Verified captures of this turn; the AI model reported the remaining known written files unchanged (unverified)'}. Some changes of this turn may not be shown.`
+    : aiConfirmedOnly
+      ? checkpointBase
+        ? 'Recovered from native per-command checkpoints of this turn (not a full repository snapshot); it may include changes not made by the agent.'
+        : 'Verified capture of this turn from disk; it may include changes not made by the agent.'
+      : aiReconstructed
+        ? mergedBase
+          ? 'Verified captures of this turn merged with files reconstructed by the AI model from write-like shell commands (unverified).'
+          : 'Reconstructed by the AI model from write-like shell commands of this turn only (not a repository snapshot); unverified.'
+        : recovery
+          ? 'Recovered with agent assistance from native per-command checkpoints of this turn (not a full repository snapshot); it may include changes not made by the agent.'
+          : isTurn
+            ? 'Net committed and uncommitted changes from the turn baseline to the working tree when the answer was produced; it may include changes not made by the agent.'
+            : 'Snapshot taken when the answer was produced; it may include changes not made by the agent.';
   const repoCount = payload.repositories.length;
   const head = [
     '<!doctype html>',
