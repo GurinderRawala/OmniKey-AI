@@ -240,8 +240,8 @@ struct GitSnapshotCollector: Sendable {
         case .baseline: return collectBaseline(request, store: turnStore)
         case .final: return collectTurn(request, store: turnStore)
         case .recover:
-            // Served only from the run's `DiffRecoveryStore`, never by
-            // collecting from request-provided paths.
+            // Legacy checkpoint recovery is unsupported (the runner answers
+            // it first); never collect from request-provided paths.
             return GitDiffResponsePayload(requestID: request.requestID, status: .unavailable, reason: "Recovery evidence is unavailable.")
         }
     }

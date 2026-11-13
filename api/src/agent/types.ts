@@ -72,9 +72,14 @@ export interface AgentMessage {
   // Client -> server (initial input, contract v3): the client can capture
   // per-turn HEAD baselines (`git_diff_request.phase`). Literal true only.
   supports_git_turn_diff?: boolean;
-  // Client -> server (initial input, contract v4): the client keeps a run-local
-  // DiffRecoveryStore and answers `phase: "recover"`. Literal true only.
+  // Legacy (contract v4) recovery capability. Ignored: no checkpoint replay or
+  // AI reconstruction runs any more.
   supports_diff_recovery?: boolean;
+  // Client -> server (initial input): the client renders agent-patch snapshots
+  // (`recovered` + `recoveryMethod: "ai_reconstructed"`). With the diff view
+  // enabled, the editing agent is asked to append unified patches of the
+  // files it changed to its final answer. Literal true only.
+  supports_agent_patches?: boolean;
   // Server -> client control frame sent before a final answer.
   git_diff_request?: GitDiffRequest;
   // Client -> server reply to git_diff_request (validated; never a turn input).
@@ -86,8 +91,7 @@ export interface AgentMessage {
   working_directory?: string;
   // Client -> server on the terminal reply of an outstanding shell_script.
   git_commit_observations?: unknown;
-  // Client -> server on the terminal reply of an outstanding shell_script
-  // (contract v4): raw, unvalidated change-record metadata for this run/tool.
+  // Legacy (contract v4) shell reply field. Ignored.
   diff_recovery_evidence?: unknown;
   // Server -> client on a final answer: immutable snapshot summary.
   session_diff?: SessionDiffSummary;

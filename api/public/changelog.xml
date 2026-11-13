@@ -13,6 +13,13 @@
       <description>Five example workflows using OmniAgent with terminal access, authenticated browser sessions, and MCP integrations, plus permission and safety guidance.</description>
     </item>
     <item>
+      <title>OmniKey v1.8.21</title>
+      <link>https://omnikeyai.ca/changelog#v1.8.21</link>
+      <guid isPermaLink="false">omnikey-v1.8.21</guid>
+      <pubDate>Fri, 13 Nov 2026 00:00:00 +0000</pubDate>
+      <description><![CDATA[<ul><li>Package notarized macOS 1.9.21 build 83</li><li>Bump CLI/API 1.8.21 and macOS 1.9.21 build 83</li><li>Replace diff recovery inference with Git and agent-authored patches</li><li>Recover missing turn diffs from explicit agent change reports</li><li>Allow uncertain AI diff recovery only with independent change proof</li><li>Publish coordinated 1.8.20 and macOS 1.9.20 changelog</li></ul>]]></description>
+    </item>
+    <item>
       <title>OmniKey v1.8.20</title>
       <link>https://omnikeyai.ca/changelog#v1.8.20</link>
       <guid isPermaLink="false">omnikey-v1.8.20</guid>
@@ -144,13 +151,6 @@
       <guid isPermaLink="false">omnikey-v1.8.1</guid>
       <pubDate>Sat, 19 Sep 2026 00:00:00 +0000</pubDate>
       <description><![CDATA[<ul><li>Include compression in daemon package</li></ul>]]></description>
-    </item>
-    <item>
-      <title>OmniKey v1.8.0</title>
-      <link>https://omnikeyai.ca/changelog#v1.8.0</link>
-      <guid isPermaLink="false">omnikey-v1.8.0</guid>
-      <pubDate>Sat, 19 Sep 2026 00:00:00 +0000</pubDate>
-      <description><![CDATA[<ul><li>Ship CLI 1.8.0 and macOS 1.9.0</li><li>Publish 1.8.0 build 59</li></ul>]]></description>
     </item>
   </channel>
 </rss>

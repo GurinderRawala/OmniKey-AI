@@ -1,5 +1,16 @@
 # Changelog
 
+## macOS 1.9.21 (build 83) · CLI/API 1.8.21 — 2026-11-13
+
+### Changed
+- Simplified turn diffs: Git baseline-to-working-tree capture remains authoritative, while validated unified patches from the editing agent cover non-Git or otherwise uncovered files.
+- Removed shell/Python write inference, secondary AI reconstruction calls and per-command native before/after checkpoints. Agent patches are labelled unverified and may be incomplete.
+- Preserved compressed per-turn snapshots, system-themed diff rendering, the 300-file cap, sensitive-path filtering and the persistent Diff view setting.
+- Existing macOS clients can opt into the new backend flow through the compatibility bridge; new clients advertise the dedicated agent-patch capability.
+
+### Release scope
+- Patch release for macOS, CLI and API. Windows unchanged. No app/E2E launch or local daemon restart performed.
+
 ## macOS 1.9.20 (build 82) · CLI/API 1.8.20 — 2026-11-13
 
 ### Fixed

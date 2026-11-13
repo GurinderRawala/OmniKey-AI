@@ -402,12 +402,13 @@ Git run state is created, and only for an input that would otherwise get Git sup
 
 When it is `false`, or the setting cannot be read (fail closed), the run behaves exactly like
 a client without the Git flags, even if `supports_git_diff`, `supports_git_turn_diff` and
-`supports_diff_recovery` are all `true`:
+`supports_agent_patches` are all `true`:
 
-- no baseline/final/recover `git_diff_request`, no `git_diff_context` on shells and no
-  structured `working_directory` parameter, so the native client records no checkpoints;
-- reply observations and `diff_recovery_evidence` are ignored, and no write evidence is kept;
-- no manifest or reconstruction model call, so no extra AI token cost;
+- no baseline/final `git_diff_request`, no `git_diff_context` on shells and no structured
+  `working_directory` parameter;
+- reply observations are ignored;
+- no agent-patch instruction is added to provider requests and finals are not parsed or
+  stripped;
 - no Git context is added from user input or the project, and the run's provenance row is the
   same empty row a client without the flags leaves (it only keeps "the immediately previous
   run" exact, so a later enabled run never reuses an older run's commits).
@@ -415,451 +416,128 @@ a client without the Git flags, even if `supports_git_diff`, `supports_git_turn_
 Clients without the flags are unchanged and trigger no extra settings read. A change takes
 effect for the next outer run; recursions and steering of a running turn keep its decision.
 
-## Diff recovery (contract v4, `supports_diff_recovery`)
+## Agent patches (`supports_agent_patches`)
 
-Additive and opt-in. A client that does not send `supports_diff_recovery: true` on its
-initial `AgentMessage` (alongside the existing Git flags) sees no change. The capability
-only matters for a run that already has Git snapshot support.
+Additive and opt-in. It replaces the earlier contract v4 recovery (native checkpoints,
+`phase: "recover"`, the manifest and AI reconstruction model calls, write-evidence script
+classification and coverage/proof orchestration), which no longer runs. The final diff is
+**Git first, with the editing agent's own unified patches as a per-file fallback**.
 
-**Shell correlation.** For a capable run, every `shell_script` request carries
-`git_diff_context: { candidate_paths, turn_id, tool_call_id }` (`candidate_paths` may be
-empty). `turn_id` is the outer run id (`grun_…`), and `tool_call_id` is the provider tool call
-id of that exact shell. The native client keeps a `DiffRecoveryStore` per run. It may add
-optional `diff_recovery_evidence` to the terminal reply of that shell:
+**Capability.** A client sends `supports_agent_patches: true` (literal true) on its initial
+`AgentMessage`, alongside `supports_git_diff` / `supports_git_turn_diff`. The backend maps it
+to `AgentTurnOptions.supportsAgentPatches` and the run's `GitRunState.agentPatches`. It is
+independent of `supports_diff_recovery`, which is now ignored (a client may advertise
+`supports_diff_recovery: false` and still get agent patches). Without the flag, or with
+`diffViewEnabled: false` (no `GitRunState` at all), there is no instruction, no parsing and
+no stripping: normal Git capture only, exactly as before. Legacy `diff_recovery_evidence` on
+shell replies is ignored, and shell requests carry only `candidate_paths` in
+`git_diff_context` (no `turn_id` / `tool_call_id`).
 
-```json
-{ "turn_id": "grun_…", "omitted": 0,
-  "records": [{ "id": "opaque", "toolCallId": "call_1", "root": "/abs/root",
-                "paths": ["src/a.ts"], "kind": "git", "before": "<oid>|null",
-                "after": "<oid>|null", "complete": true }] }
+**Instruction.** Every provider request of an agent-patch run carries one fixed instruction
+appended to the request copy of the latest `<user_input>` message (never to
+`session.history`, so it is never persisted, never accumulates and never describes an older
+request). It asks the agent, only if it changed files while handling **this** request, to end
+its final answer, inside `<final_answer>` and outside any code block, with:
+
+```text
+[files_changed]
+<file_patches>{"files":[{"path":"/absolute/file","patch":"diff --git a/file b/file\n--- a/file\n+++ b/file\n@@ -1,2 +1,2 @@\n context\n-old\n+new\n"}]}</file_patches>
 ```
 
-The backend accepts this field only through the outstanding shell's own resolve path, after
-the WebSocket layer has proved session, subscription and owning connection. If any of the
-following holds, the whole reply is rejected and no records from it are kept:
-
-- `turn_id` is not this run's id.
-- A record's `toolCallId` is not the issued tool call.
-- The reply has more than 32 records, or a record has more than 50 paths.
-- A path is absolute, contains `..`, or has control characters.
-- An id repeats.
-- `before`/`after` is not a Git OID (`git`) or a 64-hex content hash (`file`), or `null`.
-
-A later record with the same id replaces the earlier metadata. Once the run holds 32 records,
-new ids are dropped and counted as omitted. Records hold metadata only: no patch, no file
-content, and no script output. The store is runtime-only and is never persisted, so a new
-run starts empty. An older run's records can never be selected.
-
-**Structured automatic outcome.** The normal capture now returns
-`{ status: captured | no_changes | no_repository | missing_baseline | workspace_unavailable |
-capture_failed, summary?, reason? }` (`captureSessionDiffOutcome`).
-`captureSessionDiffBeforeFinal` is unchanged for existing callers. A `captured` result is
-used exactly as before.
-
-**Fallback trigger.** It runs at most once per outer run, and only when all of these hold:
-the run has the v4 capability, the normal outcome is not `captured`, and the run holds at
-least one verified record or current-turn write evidence (see the AI-reconstructed fallback
-below). With neither, no model call is made. Both the success final and the
-failure final go through the same helper (`captureFinalSessionDiff`). The existing steering
-recheck still runs after the capture and before history is persisted.
-
-**Restricted manifest call.** This is one `aiClient.complete` call on the run's current model.
-It has no tools, a fixed literal system prompt (`DIFF_RECOVERY_SYSTEM_PROMPT`), and
-`maxTokens: 1000`. Its input is limited to:
-
-- this run's own user input, trimmed to 2,000 characters;
-- `steeringUpdates` (only when present): steering text that was actually applied to this
-  run's history, at most 8 entries and 2,000 characters in total. Queued, rejected or
-  earlier runs' steering is never included;
-- the records' id, toolCallId, kind, root, up to 20 paths, path count and `complete` flag.
-
-It receives no history, script text, terminal output or hashes. The reply must be exactly
-`{"evidenceIds":[…]}` (1–6 unique ids from the offered allowlist) or `{"unavailable":true}`.
-A single fenced JSON block is tolerated. Anything else is rejected and no snapshot is made.
-The model chooses which evidence to use. It never writes a patch, path, OID or command.
-Usage is recorded through the existing recorder. That accounting is bounded (≤2 s), a
-failure in it is swallowed, and it does not overwrite the run's prompt-size hint.
-
-**Recover control.** `git_diff_request { phase: "recover", candidate_paths: [],
-eligible_commits: [], recovery: { turn_id, evidence_ids } }` goes over the run's own
-connection. Baseline fields are not used. The native client must answer from its run-local
-store with `repositories: [{ root, patch, scope: "working_tree" }]` and
-`recovery: { turn_id, evidence_ids, omitted }`. When several records share a root, the client
-combines them into one patch without duplicate paths, preferring the latest checkpoint.
-
-The backend checks the reply strictly:
-
-- It requires the exact turn id and the exact selected id set.
-- Each root must belong to a selected record, and no root may repeat.
-- Repositories may only carry `root`, `patch` and `scope: "working_tree"`. A commit,
-  baseline or turn claim is rejected.
-- Patches are limited to 2 MiB combined.
-
-**Budget and cancellation.** One 20 s budget covers the AI call and the native request
-together. The provider call receives a real `AbortSignal` that is aborted on deadline, cancel
-or disconnect, and the backend never waits past that point. After a cancel or deadline,
-nothing is attached. A database insert that was already in flight cannot be cancelled and
-may still finish, leaving an unattached snapshot row (see below); it is never attached to
-the final answer late. The original final answer is never changed, delayed past the
-bound, or lost.
-
-**Storage and viewer.** The existing compressed payload is reused and gains
-`recovery: { kind: "agent_assisted", turnId, evidenceIds, complete, limitations[] }` and
-`displayLimit: 50`. The summary adds `recovered: true` and `recoveryIncomplete`, both of which
-survive `cleanSessionDiffSummary` and transcript hydration. `stripProviderMetadata` still
-keeps them out of provider requests.
-
-The viewer header reads **Recovered turn changes** and states that the diff was recovered
-with agent assistance from per-command checkpoints. Each repository is labelled "recovered
-from turn checkpoints". A partial recovery shows an explicit **Partial recovery** warning plus
-fixed limitation lines, such as:
-
-- records that were not selected;
-- records the native store omitted (reported with shell evidence);
-- records over the backend budget;
-- records truncated by native limits;
-- selected roots that returned no patch.
-
-**Native obligations (summary).** These are owned by the macOS client:
-
-- Inspect candidates deterministically, without `eval`.
-- Resolve Git roots and worktrees, and discover new worktrees through a bounded
-  `git worktree list` of an already-known repository. Never scan the whole machine.
-- Checkpoint known roots before each shell, so a deleted worktree keeps its last verified
-  patch.
-- Capture the net change with the existing read-only collector flags.
-- For non-Git files, only handle explicit quoted absolute paths, with a verified before-image
-  and limits of 256 KiB per file and 2 MiB in total.
-- Apply `GitSensitivePathPolicy`.
-- Keep each hook within 2 s.
-
-### Recovery verification and boundaries
-
-Recovery runs only with current-turn native evidence. A successful empty automatic
-capture supersedes older Git checkpoints for the roots it checked. Non-Git files
-are hash-checked again before replay; changed/deleted checkpoints are omitted.
-Native records keep at most300allowlisted paths (both rename sides included), and
-oversized records are explicitly partial. Unsupported C-quoted/ambiguous filenames
-fail closed; this is not a general filesystem audit or an exhaustive write tracker.
-Read-only shell checkpoints can add up to2seconds before and2seconds after each
-command. Supported non-Git files require a reliable before-image or verified absence.
-The20second fallback budget covers model selection, native replay and waiting for
-persistence. An uninterruptible database insert may finish after timeout and leave
-an unattached snapshot row; its result is never attached to the final answer late.
-
-### AI-reconstructed fallback (write evidence, no native records)
-
-Some turns produce no normal snapshot and no native records, even though the agent ran
-scripts that wrote files. Examples: a write outside any repository, or a client that has no
-checkpoint for that path. For these turns the backend makes one bounded AI reconstruction
-attempt. Verified native records always take precedence: if the run holds any records, the
-checkpoint path above runs unchanged and the model is never asked to reconstruct files.
-
-**Write evidence.** It is recorded only for a capable run, only for a shell tool call that
-was actually issued, and only after the client's real terminal reply. A cancel or disconnect
-records nothing. A script is classified by a conservative heuristic
-(`writeEvidence.ts`). This is not a shell parser: nothing is executed, expanded or looked
-up on any filesystem. Write-like means one of the following:
-
-- `>` or `>>` redirection, except to `/dev/*` or to an fd;
-- `tee`, `touch`, `truncate`, `mkdir`, `cp`, `mv`, `install`, `ln`, `rsync`, `rm`,
-  `unlink`, `rmdir`, `dd of=`, `curl -o` or `wget -O`;
-- `sed -i` or `perl -i`;
-- Python `write_text`, `write_bytes` or `open(…, 'w'|'a'|'x'|'+')`, or Node `writeFile*`;
-- `patch`, or a writing `git` subcommand (`apply`, `checkout`, `restore`, `reset`, and so
-  on).
-
-Read-only scripts never trigger the fallback. Heredoc bodies are skipped. Failed scripts
-still count, because they may have written part of their output. A run keeps at most 16
-evidence entries. Each holds:
-
-- the tool call id;
-- the status (`succeeded`, `failed` or `unknown`);
-- the cwd hint;
-- the write kinds;
-- a redacted excerpt of the script (≤4,000 chars) and of the output (≤1,000 chars);
-- literal targets.
-
-Obvious secrets are redacted: private keys, provider tokens, `Authorization`/bearer values,
-`*TOKEN|SECRET|PASSWORD|API_KEY*=` assignments, and URL credentials. If a script targets a
-sensitive path, its excerpt is withheld entirely. This uses the same policy as the native
-`GitSensitivePathPolicy`, plus `.git/` internals.
-
-**Allowlist.** Targets must be literal absolute paths. The heuristic resolves `~`, `$HOME`,
-`$PWD`, single literal assignments and relative paths, but only against a known cwd: the
-structured `working_directory` or a literal `cd`. `$HOME` is inferred from a
-`/Users/<name>` or `/home/<name>` cwd. Paths with dynamic, glob or unusual characters are
-dropped. Words whose `$` comes from single quotes are literal text, so they are never
-resolved. At most 300 paths are kept. Paths inside roots that the normal capture
-authoritatively reported net-empty are removed, so a reverted change can never be brought
-back. An empty allowlist does not skip the model call: the one bounded attempt is still
-made and must answer `{"unavailable":true}` (see below).
-
-Escaped (`\$PWD`, `"\$PWD"`) and single-quoted `$` references are literal text and are never
-expanded; such a target stays unresolved (blocking). A `$` inside an interpreter string
-literal (`open('$HOME/x','w')`) is never resolved either, because whether the shell
-expanded it first is unknown. Classification reads the client's **raw** terminal output
-(the WebSocket layer forwards it separately from the formatted `TERMINAL OUTPUT:` tool
-result), so a bare `mktemp` path is recognised in the real flow; tool history still gets the
-formatted result. Only interpreter **write** calls count as resolved; a read-only
-`open(…, 'r')` never offsets a computed-path write.
-
-**Sensitive operands.** An operand that cannot be resolved (for example `../.env`,
-`"$DIR/.ssh/config"` or `~/.config/…` without a known home) is still checked by its literal
-components; a sensitive one withholds the script and output excerpts exactly like a resolved
-sensitive target. Any dot-prefixed component anywhere below a home directory
-(`~/.config/gh/…`, `~/work/.config/gh/hosts.yml`, `~/.zshrc`, repository dot directories such
-as `~/project/.github/…`, also of another user's home) is sensitive, matching the native
-non-Git policy. The only exceptions are the agent's own top-level `~/.omniAgent` /
-`~/.omnikey` component and the exact task metadata entry
-`~/.omniAgent|.omnikey/garbage/<id>/.omniagent-owned`; hidden components deeper inside a task
-directory (for example `…/worktrees/repo/.config/…`) stay sensitive. An unresolved operand
-with any hidden component (`../.config/x`) is sensitive too. Such targets are never offered
-to the reconstruction model, and their excerpts are withheld (which blocks the card).
-
-**Python `Path` variables.** `NAME.write_text(…)` or `NAME.write_bytes(…)` resolves only
-when `NAME` has exactly **one** binding in the whole script, and that binding is a
-top-level, unconditional `NAME = Path('<literal>')` statement. Top-level means no
-indentation, no single-line compound header (`if c: …`), and the statement is at the start
-of the line, after `;` or right after `-c "`. A relative literal also needs a known cwd that
-no later `cd` changes. The write stays unknown (and blocking) for any of these:
-
-- a reassignment, augmented, tuple or walrus binding;
-- aliasing (`q = p`) or attribute mutation;
-- a `for`, `with … as`, `import`, `del` or `global` binding, or use as a keyword argument;
-- a ternary, joined or computed value;
-- `def`, `lambda`, `class`, `exec`/`eval`, `globals()`/`setattr()`/`chdir()` anywhere in the
-  script.
-
-Python is never evaluated.
-
-**Agent task bookkeeping (`auxiliaryTargets`).** Agent bootstrap and cleanup scripts write
-metadata into their own task directory. These writes are recorded separately as
-`ShellWriteEvidence.auxiliaryTargets` (`{name, path?, removed}`), not as targets. They need no
-diff coverage, so they never make a turn's coverage unknown, and they are never offered to
-the reconstruction model. The recognised entries are deliberately narrow. Each must be a
-direct child of one task directory `~/.omniAgent/garbage/<id>` or `~/.omnikey/garbage/<id>`:
-
-- the metadata files `summary.md`, `status`, `ledger.tsv` and `.omniagent-owned` (any
-  write);
-- the scratch directories `prompts`, `logs`, `handoffs` and `tmp` (removal only).
-
-Anything else under a task directory stays a normal target and must be covered. This
-includes worktrees, deliverables, `integration*`, arbitrary `.md` files, nested paths, a
-scratch name written as a file, and removal of the task directory itself. An explicit user
-file that happens to be named `summary.md` directly in a task directory is treated as
-bookkeeping by policy.
-
-The task directory is proven either literally from the path shape, or through a shell
-variable. A variable proves it only when all of these hold:
-
-- it is assigned exactly once in the script (with no `read`, `for`, `unset`, `local` or
-  `${V:=…}` binding);
-- the assignment is a whole top-level line before any compound construct (`if`/`for`/`{`/
-  `&&` continuation), and it runs before the variable is used;
-- its value is either `$HOME/.omniAgent|.omnikey/garbage/<child>` (or a literal
-  `/Users/<name>` home), or the bounded current-task lookup
-  `$(ls -td "$HOME/.omniAgent/garbage"/<glob> 2>/dev/null | head -1)`.
-
-`<child>` is built only from safe literal characters, `$(date +FMT)` with slash-free
-directives, `$RANDOM`, `$$`, `uuidgen`, `openssl rand -hex N`, or another task-id variable
-proven the same way. It never starts with `.`. Nothing is executed or looked up. When the
-directory is only proven by pattern, `path` is absent.
-
-These rules are bounds, not proof of the filesystem. An empty lookup result names `/status`
-etc. at the filesystem root, which a normal user cannot write. The lookup may also pick
-another task's directory, but it is still bookkeeping. At most 32 entries are kept; any
-overflow is unknown.
-
-A script that mixes bookkeeping with any unknown write is still `unresolved` and blocks.
-Bookkeeping is never a blanket exemption for the command. Coverage still treats an
-auxiliary entry as a write that may touch what it names: a later `rm -rf "$TASK_DIR/tmp"`
-invalidates a checkpoint of a file inside any task's `tmp/`. More generally, a removal
-target now invalidates every checkpointed path below it, not only an exact match.
-
-**Creation and deletion.**
-
-- `creationVerified` requires explicit evidence on a script that succeeded and either uses
-  `set -e` or is a single command. The accepted evidence is `mkdir` without `-p` around the
-  path, a noclobber `>`, or a temp-dir path printed by `mktemp`. Python exclusive open
-  (`open(…, 'x')`) is not creation proof.
-- `deletionAllowed` requires an `rm`/`unlink` target or an `mv` source.
-
-**Model call.** One `aiClient.complete` call under the same 20 s budget, abort signal and
-usage accounting as above, with no tools, the fixed `DIFF_RECONSTRUCTION_SYSTEM_PROMPT` and
-`maxTokens: 4096`. Its input is limited to this run's input, the same bounded applied
-`steeringUpdates` as the manifest call, the allowlist and this run's write evidence. It gets no history and no earlier turn. The reply must be exactly
-`{"files":[{path,before,after}],"limitations":[…]}` or `{"unavailable":true}`; any other
-shape yields no snapshot. The backend rejects the whole reply in any of these cases:
-
-- a key is not allowed, or a path is outside the allowlist or repeated;
-- `before: null` is given without verified creation (an unknown earlier state is never
-  turned into a fake new file);
-- `after: null` is given without allowed deletion;
-- a NUL byte appears;
-- a file exceeds 256 KiB, or all files together exceed 2 MiB or 300 files.
-
-**Diff.** The backend builds the unified diff itself (`buildFilePatch`). It emits one hunk
-around the changed region with 3 context lines, correct `\ No newline at end of file`
-markers, and new/deleted file headers. A model patch is never accepted or executed. Roots
-are deterministic: the longest known shell cwd that contains the path, otherwise the parent
-directory, with at most 8 roots. A file whose new content contains a redaction marker is
-dropped.
-
-**Storage and viewer.**
-
-- Payload: `recovery.kind: "ai_reconstructed"`, with `evidenceIds: []`, `toolCallIds`,
-  `complete: false` (always), and fixed limitation lines. The first line is always "not
-  verified against the filesystem". Model notes (≤3) are prefixed `Model note:`.
-- Summary: `recovered: true`, `recoveryIncomplete: true`,
-  `recoveryMethod: "ai_reconstructed"`. Native checkpoint recoveries now report
-  `recoveryMethod: "checkpoint"`. `cleanSessionDiffSummary` keeps only these two values.
-- Viewer: the header reads **AI-reconstructed turn changes** and shows an **Unverified**
-  notice. Each repository is labelled "AI-reconstructed (unverified)". The verified native
-  rendering is unchanged.
-
-An unavailable, invalid, timed-out or cancelled attempt leaves no snapshot and the final
-answer is unchanged. Each attempt is logged with counts only (never paths or content).
-This fallback does not observe every write: dynamic paths, writes from other processes and
-unrecognised commands are not included.
-
-Write-like turns always make the bounded AI attempt when normal capture has no
-snapshot, even when no native record or safely resolvable path exists. An empty
-path allowlist requires the model to return unavailable; no invented paths or
-original content are accepted. The /tmp native checkpoint uses POSIX realpath
-for physical parent resolution before component-wise O_NOFOLLOW reads.
-
-AI creation claims are deliberately narrower than write detection: Python exclusive
-open is not proof, conditional/pipeline/substitution/function scripts cannot prove
-absence, and a later shell cannot claim a file was absent at turn start. These
-limits do not suppress the AI attempt; uncertain originals must be reported
-unavailable instead of fabricated. The model response is capped at4096tokens, so
-large before/after reconstructions may be omitted within the20second deadline.
-
-### Coverage orchestration: no known-partial snapshot is ever attached
-
-This section supersedes earlier statements above that a partial recovery is saved with a
-warning, that AI reconstructions are always `complete: false`, and that a turn root without a
-baseline is shown as "working tree only".
-
-**No snapshot is saved before its known coverage is checked.** The final-answer capture
-(`captureFinalSessionDiff`) now runs the normal capture through
-`captureSessionDiffCandidate`. That call validates the reply but does not persist it. The
-candidate is then assessed by `coverage.ts` (`coverageAssessment`). Only a candidate with
-complete known coverage is saved and attached as before, with no extra model call.
-`captureSessionDiffOutcome` keeps its old save-immediately behaviour for other callers.
-
-**Known evidence of a turn:**
-
-- literal write targets of this run's write-like shells (see the allowlist above);
-- the root plus relative paths of every verified native record.
-
-A path is **covered** when an actual patch section of a verified repository names it. A
-net-empty root is **not** a blanket exemption: Git does not report ignored or otherwise
-unobserved files, so a write to `report.txt` ignored by repo A leaves repo A net-empty while
-the file changed. A path is **exempt** only with per-path proof: it is named by a native
-`git` record of this run (Git observed it) and lies inside a root the automatic capture
-reported net-empty. Such records are dropped (never resurrected) and their paths kept as
-`revertedPaths`, so a later write target naming the same path stays exempt. Every other
-known write target inside a net-empty root is still required and goes to the bounded AI
-reconstruction; if that is unavailable, nothing is attached. Net-empty roots are returned with both `no_changes` and `captured`
-outcomes: a recorded baseline root (the native collector captures every baselined root of an
-`ok` turn final and omits empty patches) or a validated `turn` entry without a non-empty
-patch. A working-tree entry never qualifies, and neither does a root that contains, or lies
-inside, a changed repository. Git's single trailing TAB on `---`/`+++` names that contain a
-space is stripped before comparison (recovery reply validation and coverage).
-
-Paths are compared in normalised absolute form, with the macOS `/private` aliases folded.
-Header paths come from `--- a/`, `+++ b/`, `rename from/to` and `copy to`, or from the
-unambiguous `diff --git a/P b/P` form. Quoted (C-escaped) headers never count as coverage.
-Coverage is never basename-only. Hunk bodies are never parsed as headers.
-
-Verified repositories are:
-
-- `turn`-scoped repositories of the automatic capture;
-- legacy working-tree repositories (non-turn mode);
-- native checkpoint replays.
-
-In turn mode, a non-`turn` entry (baseline unavailable, "working tree vs HEAD") is **not**
-verified evidence.
-
-**Blocking uncertainties.** Each of these means a snapshot is never claimed complete:
-
-- a write target that could not be resolved to a literal path (variables, globs, a relative
-  path without a cwd, over-cap targets, or dynamic interpreter writes; see
-  `ShellWriteEvidence.unresolved`);
-- `git`/`patch` writes whose directory is not inside an authoritative turn root or a
-  net-empty root. The directory is the shell cwd at that command after every literal
-  `git -C` (a chained relative `-C` resolves against the previous one; nothing is looked up
-  on the filesystem), recorded as `ShellWriteEvidence.gitDirs`. A non-literal `-C`
-  (`-C "$REPO"`), a relative `-C` without a known cwd, `--git-dir`/`--work-tree`/
-  `--namespace` or `patch -d` make the write `unresolved`. A literal `-C` into another
-  repository is not covered by a capture of the cwd repository;
-- truncated or withheld command evidence. This includes scripts that target sensitive
-  paths: sensitive exclusions are policy limits, so the card is withheld rather than asking
-  the model about secrets;
-- per-run write or record budget overflow, `omitted` counts from the native store, and
-  native records with `complete: false`;
-- `omitted` in a `recover` reply: selected records the native replay could not reproduce
-  (`checkpoint_replay_incomplete`). These are tracked separately from store omissions
-  (`native_omitted`) and are never reported as such;
-- any native `reason` other than the "Turn baseline unavailable" sentence, for example
-  "Excluded N sensitive files";
-- a baseline-less root whose uncommitted diff contains files that neither a verified
-  checkpoint replay of this turn covers nor this turn's known writes explain. Its
-  working-tree patch itself is never saved.
-
-The 300-file viewer cap (`displayLimit`) is a display limit, not a coverage gap. A complete
-raw patch of 100 files is attached normally.
-
-**Bounded recovery when coverage is incomplete.** This applies only to v4-capable runs, at
-most once per outer run, and under the same single 20 s budget, abort signal and connection.
-
-1. If verified native records are not already covered, the manifest call and one native
-   `recover` replay run as before. Replayed file sections already covered by the automatic
-   base are removed, so a verified file is never duplicated. Unselected or unreplayed record
-   paths simply stay missing.
-2. If anything is still missing or blocking, **one** AI reconstruction call is always made
-   for the known missing paths only, so there are at most two model calls in total. A
-   record path counts as creation or deletion only when it is a `file` record with a `null`
-   before or after hash.
-3. The reply must address **every** required path exactly once. An entry with identical
-   before and after content counts as unchanged. The reply is discarded in any of these
-   cases:
-   - a subset of the required paths is returned;
-   - the model adds any limitation note;
-   - any file is dropped or redacted;
-   - the repository count or byte bound is exceeded;
-   - a blocking uncertainty remains (the attempt is still made, then withheld).
-4. AI files are merged into the verified base. A file inside a verified root is grouped under
-   that root, and each AI entry is marked `reconstructed: true`. Verified files are never
-   replaced.
-
-Unavailable, invalid, timed-out, cancelled or late results leave no card. The final answer
-is unchanged.
-
-**Truthfulness: unverified is not the same as incomplete.** A saved AI reconstruction has
-`recovery.complete: true`, `recoveryIncomplete: false` and
-`recoveryMethod: "ai_reconstructed"`. `complete` means the known coverage check passed. It
-does not mean the content was verified, and it does not mean every change on disk is shown:
-writes by unrecognised scripts cannot be detected, and the limitation lines say so. The
-viewer always shows the **Unverified** notice. A merged snapshot is headed **Turn changes
-with AI-reconstructed files**, labels only the marked entries "AI-reconstructed
-(unverified)", and stores `recovery.base: "automatic" | "checkpoint"`. When every
-reconstructed path was reported unchanged, the saved payload has a `base` but no
-`reconstructed` entry; the viewer then keeps the verified labels (**Turn changes** /
-**Recovered turn changes**, per-repository baseline or checkpoint titles) and only notes that
-the model's "unchanged" claim is unverified. Legacy AI payloads without `base` and without
-entry markers are still treated as AI-only.
-
-**Older partial snapshots.**
-
-- `GET /api/agent/sessions/:id/diffs/:diffId` answers
-  `409 {"error":"Diff incomplete","code":"diff_incomplete"}`, without rendering, for any
-  stored payload whose recovery metadata has `complete !== true`. Recovery metadata takes
-  precedence: a complete recovery may legitimately mix `turn` entries with checkpoint or
-  AI-reconstructed `working_tree` entries and is served. Only when recovery metadata is
-  absent is a turn payload (`baselines` present) with a non-`turn` repository rejected.
-- Transcript replay drops `session_diff` summaries with `recoveryIncomplete === true` or
-  `baselineUnavailable === true`.
-- Legacy working-tree payloads without these flags are served as before.
+Each entry is `{ "path": string, "oldPath"?: string, "patch": string }`. No other fields are
+accepted. No extra model call is ever made: a marker with no valid patches produces nothing.
+
+**Parsing (agentPatch.ts).** Only standalone lines outside fenced code inside the
+`<final_answer>` body count; quoted, inline, indented or fenced protocol text is left as is.
+For an agent-patch run, `[files_changed]`, `<file_patches>…</file_patches>` and the legacy
+`<changed_files>…</changed_files>` are always stripped from what is shown, stored and sent,
+including malformed blocks. An unclosed block strips the rest of the body, so a truncated
+patch never leaks into the answer. Patches are used only when the marker and exactly one
+well-formed block are present, and only for that candidate final (a steering restart parses
+its own new final). Error finals never parse a report.
+
+**Validation (fail closed, whole batch).** The block must be the JSON object `{"files":[…]}`
+with 1 to 300 entries (`AGENT_PATCH_MAX_FILES`), at most 256 KiB of patch text per file
+(`AGENT_PATCH_MAX_FILE_BYTES`) and 2 MiB in total (`GIT_DIFF_MAX_PATCH_BYTES`). Any invalid
+entry rejects every entry of the report:
+
+- `path` / `oldPath` are safe absolute paths (no `.`/`..`, control characters, `"` or `\`),
+  normalized, unique across the batch, and not sensitive (`pathPolicy.ts`: `.ssh`, `.aws`,
+  `.git`, `.env*`, keys/certificates, credential files, and any hidden component below a home
+  directory except the agent's own top-level `~/.omniAgent` / `~/.omnikey`).
+- `patch` is exactly one git-style file diff: the first line is
+  `diff --git a/<old> b/<new>`, where each name is a trailing path suffix of `oldPath ?? path`
+  / `path` (the basename is enough). Only these extended header lines are allowed:
+  `index`, `new file mode`, `deleted file mode`, `old mode`/`new mode`, `similarity index`,
+  `rename from`/`rename to` (names checked the same way), and a final
+  `Binary files … differ` summary. `GIT binary patch` literals and `copy` are rejected.
+- `---`/`+++` lines must name the same file (or `/dev/null`) and be followed by hunks; every
+  `@@ -a,b +c,d @@` hunk must have exactly `b` old and `d` new lines, hunks must not overlap,
+  and `\ No newline at end of file` may only follow a content line. A context line whose
+  single leading space was dropped is accepted as an empty context line.
+- A new file uses `--- /dev/null` (and/or `new file mode`) with one `-0,0` hunk or none (empty
+  file); a deletion uses `+++ /dev/null` with one `+0,0` hunk or none and no `oldPath`; a
+  rename requires `oldPath` and both `rename` lines, and vice versa. A section with no change
+  at all is rejected.
+
+The backend never applies or executes a patch, never reads the filesystem and never infers
+file names from scripts, shell output or earlier turns. A valid entry is re-emitted with
+backend-built headers relative to its display root (agent `index` lines are dropped).
+
+**Merge (finalDiff.ts).**
+
+1. The normal native capture runs first (no model call). Its valid repositories are
+   authoritative. In turn mode only `scope: "turn"` roots (verified baseline) are kept. A
+   baseline-less root's `working_tree` patch cannot be attributed to this turn, so it is
+   omitted and the omission is stated in the notice. This changes the earlier rule, which
+   hid the whole snapshot (`baselineUnavailable`). Native disclosure text such as sensitive
+   exclusion counts is kept in the notice instead of withholding the snapshot.
+2. An agent file whose `path` or `oldPath` is already covered by a Git file section
+   (including rename sides and C-quoted names) is ignored: Git is never replaced. Other agent
+   files are added, including ignored files inside a Git root and files in a root Git
+   reported as net-empty. A net-empty root never exempts a reported file.
+3. Agent files are grouped under the deepest Git root (captured or baselined) containing them,
+   else under their own directory. If that exceeds 8 distinct roots, loose files are grouped
+   under their common directory. If that is still too many (or the common directory is `/`),
+   the agent batch is ignored and Git alone is saved.
+
+**Storage and summary.** A Git-only result is saved exactly like a normal snapshot. With at
+least one agent file, the payload has the Git entries first, then one entry per agent root
+with `scope: "working_tree"` and `reconstructed: true`, `displayLimit: 300`, the turn
+`baselines` when any Git entry is turn-scoped, and:
+
+```json
+"recovery": { "kind": "agent_patch", "turnId": "grun_…", "evidenceIds": [],
+              "complete": false, "reportSource": "agent_final",
+              "base": "automatic", "limitations": ["…"] }
+```
+
+`base` is present only when Git entries exist. The summary has `recovered: true`,
+`recoveryMethod: "ai_reconstructed"` (the existing value, so current clients need no new
+enum), `recoveryUncertain: true` and `recoveryIncomplete: false`. `complete: false` never
+hides the card. `repositoryCount` counts distinct roots (a Git and an agent entry of the same
+root count once), and `fileCount` counts file sections.
+
+**Viewer.** `isKnownPartialPayload` serves `agent_patch` only in the exact form above (at
+least one `reconstructed` entry). The title is "Turn changes with AI-generated patches".
+Agent entries are labelled "AI-generated patch (agent reported, unverified)". A note states
+that they come from the agent's final answer, were not read from disk and may be incomplete,
+followed by the stored limitation lines. Git entries keep their normal turn labels.
+
+### Legacy recovered payloads
+
+Snapshots stored by earlier releases keep their old decode and serving rules unchanged:
+`agent_assisted` (checkpoint replay), `ai_reconstructed` (complete, uncertain-with-proof, and
+agent-reported `[files_changed]` forms) render with their original labels, and known-partial
+payloads (`complete: false` without a servable uncertain form, or a turn snapshot with a
+baseline-less root) still return 409 and are hidden from transcript replay. The legacy
+provenance types and `isServable*` helpers in `contracts.ts` exist only for this. No code path
+creates such payloads any more.
+
+### Removed (no active calls)
+
+`recovery.ts`, `aiReconstruction.ts`, `coverage.ts`, `uncertainProof.ts`, `writeEvidence.ts`,
+`pythonPaths.ts` and `agentReport.ts` were deleted. The v4 wire validators
+(`validateDiffRecoveryEvidence`, `validateGitRecoveryResponse`), `phase: "recover"`, the
+`git_diff_context.turn_id` / `tool_call_id` correlation and the recovery `onUsage` accounting
+path are gone. Normal provider usage accounting is unchanged.

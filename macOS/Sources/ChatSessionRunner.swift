@@ -448,9 +448,11 @@ final class ChatSessionRunner {
         /// Client -> server opt-in for v3 per-turn baseline diffs (initial
         /// message only). The server uses turn mode only when literally true.
         let supportsGitTurnDiff: Bool?
-        /// Client -> server opt-in for agent-assisted diff recovery
-        /// (initial message only).
-        let supportsDiffRecovery: Bool?
+        /// Client -> server opt-in for agent-authored unified patches when
+        /// native Git capture cannot cover a turn (initial message only).
+        /// The legacy `supports_diff_recovery` checkpoint protocol is never
+        /// advertised: this client keeps no per-shell checkpoints.
+        let supportsAgentPatches: Bool?
         let workingDirectory: String?
         /// Server -> client control frame; never a model/tool/transcript message.
         let gitDiffRequest: GitDiffRequestPayload?
@@ -460,9 +462,6 @@ final class ChatSessionRunner {
         let gitDiffContext: GitDiffContext?
         /// Client -> server on a terminal reply: commits observed during it.
         let gitCommitObservations: [GitCommitObservation]?
-        /// Client -> server on a terminal reply: metadata of recovery
-        /// evidence recorded around that shell (never patch content).
-        let diffRecoveryEvidence: DiffRecoveryEvidence?
         /// Server -> client on the final answer: the saved snapshot summary.
         let sessionDiff: SavedSessionDiff?
 
@@ -487,13 +486,12 @@ final class ChatSessionRunner {
             supportsSkillStatus: Bool? = nil,
             supportsGitDiff: Bool? = nil,
             supportsGitTurnDiff: Bool? = nil,
-            supportsDiffRecovery: Bool? = nil,
+            supportsAgentPatches: Bool? = nil,
             workingDirectory: String? = nil,
             gitDiffRequest: GitDiffRequestPayload? = nil,
             gitDiffResponse: GitDiffResponsePayload? = nil,
             gitDiffContext: GitDiffContext? = nil,
             gitCommitObservations: [GitCommitObservation]? = nil,
-            diffRecoveryEvidence: DiffRecoveryEvidence? = nil,
             sessionDiff: SavedSessionDiff? = nil
         ) {
             self.sessionID = sessionID
@@ -516,13 +514,12 @@ final class ChatSessionRunner {
             self.supportsSkillStatus = supportsSkillStatus
             self.supportsGitDiff = supportsGitDiff
             self.supportsGitTurnDiff = supportsGitTurnDiff
-            self.supportsDiffRecovery = supportsDiffRecovery
+            self.supportsAgentPatches = supportsAgentPatches
             self.workingDirectory = workingDirectory
             self.gitDiffRequest = gitDiffRequest
             self.gitDiffResponse = gitDiffResponse
             self.gitDiffContext = gitDiffContext
             self.gitCommitObservations = gitCommitObservations
-            self.diffRecoveryEvidence = diffRecoveryEvidence
             self.sessionDiff = sessionDiff
         }
 
@@ -547,13 +544,12 @@ final class ChatSessionRunner {
             case supportsSkillStatus = "supports_skill_status"
             case supportsGitDiff = "supports_git_diff"
             case supportsGitTurnDiff = "supports_git_turn_diff"
-            case supportsDiffRecovery = "supports_diff_recovery"
+            case supportsAgentPatches = "supports_agent_patches"
             case workingDirectory = "working_directory"
             case gitDiffRequest = "git_diff_request"
             case gitDiffResponse = "git_diff_response"
             case gitDiffContext = "git_diff_context"
             case gitCommitObservations = "git_commit_observations"
-            case diffRecoveryEvidence = "diff_recovery_evidence"
             case sessionDiff = "session_diff"
         }
 
@@ -581,13 +577,12 @@ final class ChatSessionRunner {
             supportsSkillStatus = try c.decodeIfPresent(Bool.self, forKey: .supportsSkillStatus)
             supportsGitDiff = try? c.decodeIfPresent(Bool.self, forKey: .supportsGitDiff)
             supportsGitTurnDiff = try? c.decodeIfPresent(Bool.self, forKey: .supportsGitTurnDiff)
-            supportsDiffRecovery = try? c.decodeIfPresent(Bool.self, forKey: .supportsDiffRecovery)
+            supportsAgentPatches = try? c.decodeIfPresent(Bool.self, forKey: .supportsAgentPatches)
             workingDirectory = try? c.decodeIfPresent(String.self, forKey: .workingDirectory)
             gitDiffRequest = try? c.decodeIfPresent(GitDiffRequestPayload.self, forKey: .gitDiffRequest)
             gitDiffResponse = try? c.decodeIfPresent(GitDiffResponsePayload.self, forKey: .gitDiffResponse)
             gitDiffContext = try? c.decodeIfPresent(GitDiffContext.self, forKey: .gitDiffContext)
             gitCommitObservations = try? c.decodeIfPresent([GitCommitObservation].self, forKey: .gitCommitObservations)
-            diffRecoveryEvidence = try? c.decodeIfPresent(DiffRecoveryEvidence.self, forKey: .diffRecoveryEvidence)
             sessionDiff = try? c.decodeIfPresent(SavedSessionDiff.self, forKey: .sessionDiff)
         }
     }
@@ -658,9 +653,6 @@ final class ChatSessionRunner {
             GitSnapshotCollector().collect($0, turnStore: $1)
         },
         gitProvenance: GitProvenanceTracker = GitProvenanceTracker(),
-        // Evaluated per call: one recovery store per outer run, so a later
-        // turn can never see or replay this run's evidence.
-        diffRecovery: DiffRecoveryStore = DiffRecoveryStore(),
         // Snapshotted once per run (evaluated per call). Toggling the
         // setting never changes the protocol of a run already in flight.
         diffViewEnabled: Bool = AgentDiffViewSetting.currentRunValue()
@@ -772,14 +764,18 @@ final class ChatSessionRunner {
                                 guard !completion.isFinished, !handle.isCancelledByUser else { return }
                                 // Diff view off: answer immediately without any
                                 // Git work so a stale server never waits on us.
-                                // Recovery replays only this run's stored evidence.
+                                // Legacy checkpoint recovery is unsupported: no
+                                // evidence is kept, so answer without file access.
                                 let payload = !diffViewEnabled
                                     ? GitDiffResponsePayload(
                                         requestID: gitRequest.requestID, status: .unavailable,
                                         reason: "diff_view_disabled"
                                     )
                                     : gitRequest.phase == .recover
-                                    ? diffRecovery.recover(gitRequest)
+                                    ? GitDiffResponsePayload(
+                                        requestID: gitRequest.requestID, status: .unavailable,
+                                        reason: ChatSessionRunner.unsupportedRecoveryReason
+                                    )
                                     : collectGitDiff(gitRequest, turnBaselines)
                                 let reply = AgentMessage(
                                     sessionID: sessionID, sender: "client", content: "",
@@ -905,16 +901,11 @@ final class ChatSessionRunner {
                             // Apply the structured directory as a quoted literal cd
                             // so production and injected executors share identical semantics.
                             let executionScript = Self.script(script, in: response.workingDirectory)
-                            // Diff view off: no provenance or recovery checkpoint work.
+                            // Diff view off: no provenance work. On, only HEADs of
+                            // repositories a literal `git commit` may touch are
+                            // read (commit provenance); no file contents or patches.
                             let gitBaseline = diffViewEnabled
                                 ? gitProvenance.baseline(script: executionScript, context: response.gitDiffContext)
-                                : nil
-                            // Bounded read-only before-checkpoint (no script execution).
-                            let recoveryCheckpoint = diffViewEnabled
-                                ? diffRecovery.before(
-                                    script: executionScript, context: response.gitDiffContext,
-                                    initialDirectory: GitProvenanceTracker.shellWorkingDirectory
-                                )
                                 : nil
                             guard !completion.isFinished, !handle.isCancelledByUser else { return }
                             let (output, status) = executeShell(
@@ -930,8 +921,6 @@ final class ChatSessionRunner {
 
                             completion.setShellRunning(false)
                             let commitObservations = gitBaseline.map(gitProvenance.observations(after:)) ?? []
-                            // Skipped on cancellation: nothing late is recorded.
-                            let recoveryEvidence = handle.isCancelledByUser ? nil : recoveryCheckpoint.flatMap(diffRecovery.after)
                             guard !completion.isFinished else { return }
 
                             // If the user cancelled this specific turn while the
@@ -958,8 +947,7 @@ final class ChatSessionRunner {
                                 isError: status != 0,
                                 platform: "macos",
                                 model: model,
-                                gitCommitObservations: commitObservations.isEmpty ? nil : commitObservations,
-                                diffRecoveryEvidence: recoveryEvidence
+                                gitCommitObservations: commitObservations.isEmpty ? nil : commitObservations
                             )
 
                             guard let jsonData = try? encoder.encode(reply),
@@ -1031,7 +1019,7 @@ final class ChatSessionRunner {
             supportsSkillStatus: true,
             supportsGitDiff: capabilities.gitDiff,
             supportsGitTurnDiff: capabilities.gitTurnDiff,
-            supportsDiffRecovery: capabilities.diffRecovery
+            supportsAgentPatches: capabilities.agentPatches
         )
 
         guard let data = try? encoder.encode(initial),
@@ -1054,6 +1042,10 @@ final class ChatSessionRunner {
             receiveNext()
         }
     }
+
+    /// Reply reason for a legacy `phase:"recover"` request. This client keeps
+    /// no per-shell checkpoints, so recovery is never served.
+    nonisolated static let unsupportedRecoveryReason = "unsupported_recovery"
 
     /// A dedicated live-only Skills row. Its own kind keeps it out of tool
     /// reclassification, the reasoning noise filter, and milestone grouping,

@@ -25,104 +25,10 @@ enum GitSnapshotScope: String, Codable, Equatable, Sendable {
 enum GitDiffPhase: String, Codable, Equatable, Sendable {
     case baseline
     case final
-    /// Agent-assisted recovery (`supports_diff_recovery`): replay locally
-    /// stored, previously emitted evidence patches for the current turn.
+    /// Legacy checkpoint recovery (`supports_diff_recovery`, no longer
+    /// advertised). Still decoded so a stale server gets a prompt
+    /// `unsupported_recovery` reply instead of a timeout; never served.
     case recover
-}
-
-/// `git_diff_request.recovery` for `phase:"recover"`.
-struct GitDiffRecoveryRequest: Codable, Equatable, Sendable {
-    let turnID: String
-    let evidenceIDs: [String]
-
-    enum CodingKeys: String, CodingKey {
-        case turnID = "turn_id"
-        case evidenceIDs = "evidence_ids"
-    }
-}
-
-/// `git_diff_response.recovery`: echoes the exact selection; `omitted`
-/// counts selected IDs that no longer have a patch (reverted to baseline).
-struct GitDiffRecoveryResponse: Codable, Equatable, Sendable {
-    let turnID: String
-    let evidenceIDs: [String]
-    let omitted: Int
-
-    enum CodingKeys: String, CodingKey {
-        case turnID = "turn_id"
-        case evidenceIDs = "evidence_ids"
-        case omitted
-    }
-}
-
-enum DiffRecoveryRecordKind: String, Codable, Equatable, Sendable {
-    case git
-    case file
-}
-
-/// Metadata only (never patch or file content). `before`/`after` are Git
-/// object names for `git` records and SHA-256 content hashes for `file`
-/// records; `null` means unborn/absent/deleted. Always encoded.
-struct DiffRecoveryRecord: Codable, Equatable, Sendable {
-    let id: String
-    let toolCallId: String
-    let root: String
-    let paths: [String]
-    let kind: DiffRecoveryRecordKind
-    let before: String?
-    let after: String?
-    let complete: Bool
-
-    enum CodingKeys: String, CodingKey { case id, toolCallId, root, paths, kind, before, after, complete }
-
-    init(id: String, toolCallId: String, root: String, paths: [String], kind: DiffRecoveryRecordKind,
-         before: String?, after: String?, complete: Bool) {
-        self.id = id
-        self.toolCallId = toolCallId
-        self.root = root
-        self.paths = paths
-        self.kind = kind
-        self.before = before
-        self.after = after
-        self.complete = complete
-    }
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        id = try c.decode(String.self, forKey: .id)
-        toolCallId = try c.decode(String.self, forKey: .toolCallId)
-        root = try c.decode(String.self, forKey: .root)
-        paths = try c.decode([String].self, forKey: .paths)
-        kind = try c.decode(DiffRecoveryRecordKind.self, forKey: .kind)
-        before = try c.decodeIfPresent(String.self, forKey: .before)
-        after = try c.decodeIfPresent(String.self, forKey: .after)
-        complete = try c.decode(Bool.self, forKey: .complete)
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(id, forKey: .id)
-        try c.encode(toolCallId, forKey: .toolCallId)
-        try c.encode(root, forKey: .root)
-        try c.encode(paths, forKey: .paths)
-        try c.encode(kind, forKey: .kind)
-        if let before { try c.encode(before, forKey: .before) } else { try c.encodeNil(forKey: .before) }
-        if let after { try c.encode(after, forKey: .after) } else { try c.encodeNil(forKey: .after) }
-        try c.encode(complete, forKey: .complete)
-    }
-}
-
-/// Terminal-reply `diff_recovery_evidence` for one shell tool call.
-struct DiffRecoveryEvidence: Codable, Equatable, Sendable {
-    let turnID: String
-    let records: [DiffRecoveryRecord]
-    let omitted: Int?
-
-    enum CodingKeys: String, CodingKey {
-        case turnID = "turn_id"
-        case records
-        case omitted
-    }
 }
 
 enum GitTurnBaselineSource: String, Codable, Equatable, Sendable {
@@ -195,8 +101,6 @@ struct GitDiffRequestPayload: Codable, Equatable, Sendable {
     /// Baseline phase: the source the server expects echoed.
     let baselineSource: GitTurnBaselineSource?
     let displayLimit: Int?
-    /// Recover phase only.
-    let recovery: GitDiffRecoveryRequest?
 
     init(
         requestID: String,
@@ -205,18 +109,16 @@ struct GitDiffRequestPayload: Codable, Equatable, Sendable {
         phase: GitDiffPhase? = nil,
         baselines: [GitTurnBaseline]? = nil,
         baselineSource: GitTurnBaselineSource? = nil,
-        displayLimit: Int? = nil,
-        recovery: GitDiffRecoveryRequest? = nil
+        displayLimit: Int? = nil
     ) {
         self.requestID = requestID
         self.candidatePaths = candidatePaths
         self.eligibleCommits = eligibleCommits
         self.phase = phase
-        self.hasUnsupportedPhase = phase == .recover && recovery == nil
+        self.hasUnsupportedPhase = false
         self.baselines = baselines
         self.baselineSource = baselineSource
         self.displayLimit = displayLimit
-        self.recovery = recovery
     }
 
     enum CodingKeys: String, CodingKey {
@@ -227,7 +129,6 @@ struct GitDiffRequestPayload: Codable, Equatable, Sendable {
         case baselines
         case baselineSource = "baseline_source"
         case displayLimit = "display_limit"
-        case recovery
     }
 
     init(from decoder: Decoder) throws {
@@ -248,13 +149,7 @@ struct GitDiffRequestPayload: Codable, Equatable, Sendable {
         baselineSource = rawSource.flatMap(GitTurnBaselineSource.init(rawValue:))
         let badSource = rawSource != nil && baselineSource == nil
         displayLimit = (try? c.decodeIfPresent(Int.self, forKey: .displayLimit)) ?? nil
-        let decodedRecovery = try? c.decodeIfPresent(GitDiffRecoveryRequest.self, forKey: .recovery)
-        recovery = decodedRecovery ?? nil
-        // A recover request must carry a well-formed selection; recovery
-        // metadata on any other phase is equally unexpected.
-        let badRecovery = (phase == .recover) != (recovery != nil)
-            || (c.contains(.recovery) && (try? c.decodeNil(forKey: .recovery)) != true && recovery == nil)
-        hasUnsupportedPhase = badPhase || badBaselines || badSource || badRecovery
+        hasUnsupportedPhase = badPhase || badBaselines || badSource
     }
 
     func encode(to encoder: Encoder) throws {
@@ -266,7 +161,6 @@ struct GitDiffRequestPayload: Codable, Equatable, Sendable {
         try c.encodeIfPresent(baselines, forKey: .baselines)
         try c.encodeIfPresent(baselineSource, forKey: .baselineSource)
         try c.encodeIfPresent(displayLimit, forKey: .displayLimit)
-        try c.encodeIfPresent(recovery, forKey: .recovery)
     }
 }
 
@@ -346,16 +240,13 @@ struct GitDiffResponsePayload: Codable, Equatable, Sendable {
     /// Baseline phase only (always `[]` with a failure status).
     let baselines: [GitTurnBaseline]?
     let reason: String?
-    /// Recover phase only, and only with `status == .ok`.
-    let recovery: GitDiffRecoveryResponse?
 
     init(
         requestID: String,
         status: GitDiffResponseStatus,
         repositories: [GitDiffRepositoryPatch] = [],
         baselines: [GitTurnBaseline]? = nil,
-        reason: String? = nil,
-        recovery: GitDiffRecoveryResponse? = nil
+        reason: String? = nil
     ) {
         self.requestID = requestID
         self.status = status
@@ -363,7 +254,6 @@ struct GitDiffResponsePayload: Codable, Equatable, Sendable {
         self.repositories = status == .ok ? repositories : []
         self.baselines = baselines.map { status == .ok ? $0 : [] }
         self.reason = reason
-        self.recovery = status == .ok ? recovery : nil
     }
 
     enum CodingKeys: String, CodingKey {
@@ -372,42 +262,18 @@ struct GitDiffResponsePayload: Codable, Equatable, Sendable {
         case repositories
         case baselines
         case reason
-        case recovery
     }
 }
 
 struct GitDiffContext: Codable, Equatable, Sendable {
     let candidatePaths: [String]
-    /// Diff recovery: the outer run ID and the issued shell tool call ID.
-    /// Both are opaque; malformed values are dropped (no evidence recorded).
-    let turnID: String?
-    let toolCallID: String?
 
-    init(candidatePaths: [String], turnID: String? = nil, toolCallID: String? = nil) {
+    init(candidatePaths: [String]) {
         self.candidatePaths = candidatePaths
-        self.turnID = turnID
-        self.toolCallID = toolCallID
     }
 
     enum CodingKeys: String, CodingKey {
         case candidatePaths = "candidate_paths"
-        case turnID = "turn_id"
-        case toolCallID = "tool_call_id"
-    }
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        candidatePaths = try c.decode([String].self, forKey: .candidatePaths)
-        turnID = ((try? c.decodeIfPresent(String.self, forKey: .turnID)) ?? nil).flatMap(Self.opaqueID)
-        toolCallID = ((try? c.decodeIfPresent(String.self, forKey: .toolCallID)) ?? nil).flatMap(Self.opaqueID)
-    }
-
-    /// Short printable ASCII without whitespace; anything else is ignored.
-    static func opaqueID(_ raw: String) -> String? {
-        guard !raw.isEmpty, raw.utf8.count <= 128,
-              raw.unicodeScalars.allSatisfy({ $0.isASCII && $0.value > 0x20 && $0.value < 0x7f })
-        else { return nil }
-        return raw
     }
 }
 
@@ -467,11 +333,13 @@ struct SavedSessionDiff: Codable, Equatable, Hashable, Sendable {
     /// all (shown as uncommitted changes only).
     let baselineSource: GitTurnBaselineSource?
     let baselineUnavailable: Bool?
-    /// Agent-assisted recovery from stored tool evidence (not a normal
-    /// turn capture); `recoveryIncomplete` marks an honest partial result.
+    /// Not a normal turn capture: legacy checkpoint recovery
+    /// (`recoveryMethod == "checkpoint"`, historical data only) or an
+    /// agent-authored patch (`"ai_reconstructed"`). `recoveryIncomplete`
+    /// marks an honest partial result.
     let recovered: Bool?
     let recoveryIncomplete: Bool?
-    /// AI reconstruction is not a verified native before/after checkpoint.
+    /// An AI-generated patch is never a verified filesystem diff.
     let recoveryMethod: String?
 
     init(
@@ -532,7 +400,7 @@ struct SavedSessionDiff: Codable, Equatable, Hashable, Sendable {
             && id.allSatisfy(\.isASCII)
     }
 
-    /// Coverage is distinct from accuracy: an AI reconstruction remains
+    /// Coverage is distinct from accuracy: an AI-generated patch remains
     /// unverified, but a known partial snapshot is never a viewer candidate.
     var isEligibleForViewer: Bool { hasSafeID && recoveryIncomplete != true && baselineUnavailable != true }
 
@@ -547,13 +415,13 @@ struct SavedSessionDiff: Codable, Equatable, Hashable, Sendable {
     var isAIReconstructed: Bool { isRecovered && recoveryMethod == "ai_reconstructed" }
 
     var recoveryWarning: String? {
-        if isAIReconstructed { return "AI reconstruction · unverified" }
+        if isAIReconstructed { return "AI-generated · unverified" }
         guard isRecovered, recoveryIncomplete == true else { return nil }
         return "partial: some changes could not be recovered"
     }
 
     var buttonTitle: String {
-        if isAIReconstructed { return "View AI-reconstructed changes" }
+        if isAIReconstructed { return "View AI-generated changes" }
         if isRecovered { return "View recovered turn changes" }
         if isTurnSnapshot { return "View turn changes" }
         switch scope {
@@ -564,7 +432,7 @@ struct SavedSessionDiff: Codable, Equatable, Hashable, Sendable {
     }
 
     var headerTitle: String {
-        if isAIReconstructed { return "AI-reconstructed turn changes" }
+        if isAIReconstructed { return "AI-generated turn changes" }
         if isRecovered { return "Recovered turn changes" }
         if isTurnSnapshot { return "Turn changes" }
         switch scope {
@@ -586,7 +454,7 @@ struct SavedSessionDiff: Codable, Equatable, Hashable, Sendable {
         let repos = repositoryCount > 1 ? " in \(repositoryCount) repositories" : ""
         let shown = displayLimitNotice.map { " · \($0)" } ?? ""
         if isRecovered {
-            var text = "\(isAIReconstructed ? "AI reconstruction of this turn" : "Recovered from this turn's tool evidence") · \(files)\(repos)\(shown)"
+            var text = "\(isAIReconstructed ? "AI-generated patch for this turn" : "Recovered from this turn's tool evidence") · \(files)\(repos)\(shown)"
             if let warning = recoveryWarning { text += " · \(warning)" }
             return text
         }
@@ -621,7 +489,7 @@ struct SavedSessionDiff: Codable, Equatable, Hashable, Sendable {
     }
 
     var helpText: String {
-        if isAIReconstructed { return "AI-generated reconstruction from write scripts in this turn, not a verified filesystem diff. May be incomplete; review against the actual files." }
+        if isAIReconstructed { return "AI-generated patch reported by the agent for this turn, not a verified filesystem diff. May be incomplete; review against the actual files." }
         if isRecovered {
             return "Changes the agent's tool calls were observed making on this Mac, reconstructed from locally recorded before/after checkpoints when the normal turn capture was unavailable. May include uncommitted edits that already existed in touched files. "
                 + (recoveryWarning.map { $0.prefix(1).uppercased() + $0.dropFirst() + "." } ?? "All selected evidence was recovered.")
