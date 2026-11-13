@@ -3,7 +3,7 @@ import os from 'os';
 import path from 'path';
 import { Sequelize, Transaction } from 'sequelize';
 import { Database } from 'sqlite3';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { configureSQLiteReliability, enableSQLiteWAL } from '../sqliteReliability';
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -81,4 +81,51 @@ describe('SQLite daemon reliability', () => {
       { value: 'new checkpoint' },
     ]);
   });
+});
+
+it('shares asynchronous timeout initialization and never configures a cached connection synchronously', async () => {
+  let complete!: (error?: Error) => void;
+  const connection = {
+    configure: vi.fn(() => {
+      throw new Error('must not block the event loop');
+    }),
+    run: vi.fn((_sql: string, callback: (error?: Error) => void) => {
+      complete = callback;
+    }),
+  };
+  const manager = { getConnection: vi.fn(async () => connection) };
+  configureSQLiteReliability({
+    getDialect: () => 'sqlite',
+    connectionManager: manager,
+  } as unknown as Sequelize);
+  let acquired = false;
+  const pending = Promise.all([manager.getConnection(), manager.getConnection()]).then((result) => {
+    acquired = true;
+    return result;
+  });
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(connection.run).toHaveBeenCalledTimes(1);
+  expect(acquired).toBe(false);
+  complete();
+  expect(await pending).toEqual([connection, connection]);
+  await manager.getConnection();
+  expect(connection.run).toHaveBeenCalledTimes(1);
+  expect(connection.configure).not.toHaveBeenCalled();
+});
+
+it('retries timeout initialization after an asynchronous failure', async () => {
+  const run = vi.fn((_sql: string, callback: (error: Error | null) => void) =>
+    callback(new Error('transient')),
+  );
+  const connection = { run };
+  const manager = { getConnection: vi.fn(async () => connection) };
+  configureSQLiteReliability({
+    getDialect: () => 'sqlite',
+    connectionManager: manager,
+  } as unknown as Sequelize);
+  await expect(manager.getConnection()).rejects.toThrow('transient');
+  run.mockImplementationOnce((_sql, callback) => callback(null));
+  await expect(manager.getConnection()).resolves.toBe(connection);
+  expect(run).toHaveBeenCalledTimes(2);
 });

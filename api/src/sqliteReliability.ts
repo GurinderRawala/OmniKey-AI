@@ -16,9 +16,25 @@ export function configureSQLiteReliability(sequelize: Sequelize): void {
   if (sequelize.getDialect() !== 'sqlite') return;
   const manager = sequelize.connectionManager as unknown as SQLiteManager;
   const getConnection = manager.getConnection.bind(manager);
+  const initialization = new WeakMap<SQLiteConnection, Promise<void>>();
   manager.getConnection = async (...args) => {
     const connection = await getConnection(...args);
-    connection.configure('busyTimeout', 5_000);
+    let ready = initialization.get(connection);
+    if (!ready) {
+      // configure() takes SQLite's mutex synchronously for open connections.
+      // Under contention that can block the HTTP event loop for seconds. Run
+      // the pragma off-thread, once, sharing initialization across callers.
+      ready = new Promise<void>((resolve, reject) => {
+        connection.run('PRAGMA busy_timeout = 5000', (error) =>
+          error ? reject(error) : resolve(),
+        );
+      }).catch((error) => {
+        initialization.delete(connection);
+        throw error;
+      });
+      initialization.set(connection, ready);
+    }
+    await ready;
     return connection;
   };
   manager.destroyConnection = async (connection) => {
