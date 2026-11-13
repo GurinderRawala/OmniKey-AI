@@ -1,4 +1,4 @@
-import type { Sequelize } from 'sequelize';
+import { Transaction, type Sequelize } from 'sequelize';
 import type { Database } from 'sqlite3';
 
 type SQLiteConnection = Database & { uuid?: string };
@@ -53,4 +53,42 @@ export async function enableSQLiteWAL(sequelize: Sequelize): Promise<void> {
     // transcript writer's COMMIT. This setting persists across connections.
     await sequelize.query('PRAGMA journal_mode = WAL');
   }
+}
+
+const transcriptWriters = new WeakMap<Sequelize, Promise<unknown>>();
+
+/** Only pass replayable database work: a busy failure retries the whole
+ * transaction after rollback/connection cleanup, never just a stale statement.
+ */
+export function withTranscriptTransaction<T>(
+  sequelize: Sequelize,
+  work: (transaction: Transaction) => Promise<T>,
+): Promise<T> {
+  if (sequelize.getDialect() !== 'sqlite') return sequelize.transaction(work);
+  const previous = transcriptWriters.get(sequelize) ?? Promise.resolve();
+  const current = previous
+    .catch(() => {})
+    .then(async () => {
+      for (let attempt = 0; ; attempt++) {
+        try {
+          // Acquire the write lock BEFORE the ownership read. A deferred WAL
+          // read transaction cannot upgrade after another writer commits.
+          const options = { type: Transaction.TYPES.IMMEDIATE, retry: { max: 0 } };
+          return await sequelize.transaction(options, work);
+        } catch (error) {
+          const code = (error as { original?: { code?: string } })?.original?.code;
+          if (attempt >= 2 || !code?.startsWith('SQLITE_BUSY')) throw error;
+          await new Promise<void>((resolve) => setTimeout(resolve, 50 * (attempt + 1)));
+        }
+      }
+    });
+  // Serializing publications prevents queued SQLite busy waits from consuming
+  // the native thread pool while its current writer still needs that pool.
+  transcriptWriters.set(sequelize, current);
+  void current
+    .finally(() => {
+      if (transcriptWriters.get(sequelize) === current) transcriptWriters.delete(sequelize);
+    })
+    .catch(() => {});
+  return current;
 }

@@ -8,7 +8,10 @@ const mocks = vi.hoisted(() => ({
   findAll: vi.fn(),
   sessionFindOne: vi.fn(),
   sessionUpdate: vi.fn(),
-  transaction: vi.fn(async (callback: (transaction: object) => Promise<void>) => callback({})),
+  transaction: vi.fn(async (...args: unknown[]) => {
+    const callback = args.at(-1) as (transaction: object) => Promise<void>;
+    return callback({});
+  }),
 }));
 
 vi.mock('../db', () => ({

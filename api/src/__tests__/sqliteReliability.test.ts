@@ -4,7 +4,11 @@ import path from 'path';
 import { Sequelize, Transaction } from 'sequelize';
 import { Database } from 'sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { configureSQLiteReliability, enableSQLiteWAL } from '../sqliteReliability';
+import {
+  configureSQLiteReliability,
+  enableSQLiteWAL,
+  withTranscriptTransaction,
+} from '../sqliteReliability';
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -128,4 +132,87 @@ it('retries timeout initialization after an asynchronous failure', async () => {
   run.mockImplementationOnce((_sql, callback) => callback(null));
   await expect(manager.getConnection()).resolves.toBe(connection);
   expect(run).toHaveBeenCalledTimes(2);
+});
+
+it('serializes concurrent transcript publications including their ownership reads', async () => {
+  const { sequelize } = await fixture();
+  await enableSQLiteWAL(sequelize);
+  await sequelize.query("UPDATE checkpoint SET value='0'");
+  let active = 0;
+  let peak = 0;
+  await Promise.all(
+    Array.from({ length: 8 }, () =>
+      withTranscriptTransaction(sequelize, async (transaction) => {
+        active++;
+        peak = Math.max(peak, active);
+        try {
+          await sequelize.query('SELECT * FROM checkpoint', { transaction });
+          await new Promise((resolve) => setTimeout(resolve, 2));
+          await sequelize.query('UPDATE checkpoint SET value=CAST(value AS INTEGER)+1', {
+            transaction,
+          });
+        } finally {
+          active--;
+        }
+      }),
+    ),
+  );
+  expect(peak).toBe(1);
+  const [saved] = await sequelize.query('SELECT value FROM checkpoint');
+  expect(saved).toEqual([{ value: '8' }]);
+});
+
+it('retries the entire rolled-back transaction on busy errors without retaining partial writes', async () => {
+  const { sequelize } = await fixture();
+  let attempts = 0;
+  await withTranscriptTransaction(sequelize, async (transaction) => {
+    attempts++;
+    const [before] = await sequelize.query('SELECT value FROM checkpoint', { transaction });
+    expect(before).toEqual([{ value: 'saved' }]);
+    await sequelize.query("UPDATE checkpoint SET value='complete'", { transaction });
+    if (attempts === 1)
+      throw Object.assign(new Error('writer contention'), { original: { code: 'SQLITE_BUSY' } });
+  });
+  expect(attempts).toBe(2);
+  const [saved] = await sequelize.query('SELECT value FROM checkpoint');
+  expect(saved).toEqual([{ value: 'complete' }]);
+});
+
+it('bounds busy retries and lets subsequent publications proceed after failure', async () => {
+  const { sequelize } = await fixture();
+  let attempts = 0;
+  await expect(
+    withTranscriptTransaction(sequelize, async () => {
+      attempts++;
+      throw Object.assign(new Error('still busy'), { original: { code: 'SQLITE_BUSY' } });
+    }),
+  ).rejects.toThrow('still busy');
+  expect(attempts).toBe(3);
+  const invalid = vi.fn(async () => {
+    throw new Error('invalid data');
+  });
+  await expect(withTranscriptTransaction(sequelize, invalid)).rejects.toThrow('invalid data');
+  expect(invalid).toHaveBeenCalledTimes(1);
+  await expect(withTranscriptTransaction(sequelize, async () => 'recovered')).resolves.toBe(
+    'recovered',
+  );
+});
+
+it('holds the WAL write reservation before reading ownership so another writer cannot invalidate the snapshot', async () => {
+  const { sequelize, reader } = await fixture();
+  await enableSQLiteWAL(sequelize);
+  reader.configure('busyTimeout', 1000);
+  let outsideWrite!: Promise<void>;
+  let outsideFinished = false;
+  await withTranscriptTransaction(sequelize, async (transaction) => {
+    await sequelize.query('SELECT * FROM checkpoint', { transaction });
+    outsideWrite = run(reader, "UPDATE checkpoint SET value='external'").then(() => {
+      outsideFinished = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(outsideFinished).toBe(false);
+    await sequelize.query("UPDATE checkpoint SET value='transcript'", { transaction });
+  });
+  await outsideWrite;
+  expect(await rows(reader, 'SELECT value FROM checkpoint')).toEqual([{ value: 'external' }]);
 });
