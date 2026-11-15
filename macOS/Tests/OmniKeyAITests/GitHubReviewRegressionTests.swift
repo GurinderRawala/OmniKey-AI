@@ -125,6 +125,20 @@ final class GitHubReviewRegressionTests: XCTestCase {
         XCTAssertTrue(SessionGitHubDiscovery.scoped(cached, linked: []).pullRequests.isEmpty)
     }
 
+    func testPRSourceBranchSurvivesDiscoveryAndCaching() throws {
+        let data = Data("""
+        {"number":84,"title":"Migration","url":"https://github.com/owner/repo/pull/84","state":"OPEN","isDraft":false,"headRefName":"chore/pnpm-turborepo-54"}
+        """.utf8)
+        let discovered = try JSONDecoder().decode(SessionGitHubDiscovery.BranchPullRequest.self, from: data).pullRequest
+        XCTAssertEqual(discovered.headRefName, "chore/pnpm-turborepo-54")
+        let restored = try JSONDecoder().decode(SessionPullRequest.self, from: JSONEncoder().encode(discovered))
+        XCTAssertEqual(restored.headRefName, discovered.headRefName)
+        let legacy = Data("""
+        {"number":84,"title":"Migration","url":"https://github.com/owner/repo/pull/84","state":"OPEN","isDraft":false}
+        """.utf8)
+        XCTAssertNil(try JSONDecoder().decode(SessionPullRequest.self, from: legacy).headRefName)
+    }
+
     func testLinkedPRsComeFirstAndCachedWorkRotates() {
         XCTAssertEqual(SessionGitHubDiscovery.lookupOrder(linked: [9], cached: [1, 2, 3], refreshIndex: 0), [9, 1])
         XCTAssertEqual(SessionGitHubDiscovery.lookupOrder(linked: [9], cached: [1, 2, 3], refreshIndex: 1), [9, 2])

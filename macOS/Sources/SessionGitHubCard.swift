@@ -8,6 +8,7 @@ struct SessionPullRequest: Codable, Equatable, Identifiable, Sendable {
     let url: String
     let state: String
     let isDraft: Bool
+    var headRefName: String? = nil
     var id: Int { number }
 }
 
@@ -80,6 +81,7 @@ enum SessionGitHubDiscovery {
         let url: String
         let state: String
         let isDraft: Bool
+        let headRefName: String?
         let headRepository: Repository?
         let headRepositoryOwner: Owner?
         func belongs(to repository: String) -> Bool { headRepositoryName?.lowercased() == repository.lowercased() }
@@ -88,7 +90,7 @@ enum SessionGitHubDiscovery {
             return headRepositoryOwner.login + "/" + headRepository.name
         }
         var pullRequest: SessionPullRequest {
-            SessionPullRequest(number: number, title: title, url: url, state: state, isDraft: isDraft)
+            SessionPullRequest(number: number, title: title, url: url, state: state, isDraft: isDraft, headRefName: headRefName)
         }
     }
 
@@ -128,7 +130,7 @@ enum SessionGitHubDiscovery {
         guard let ghPath = ["/opt/homebrew/bin/gh", "/usr/local/bin/gh"].first(where: { FileManager.default.isExecutableFile(atPath: $0) }),
               let gh = GitCommandRunner(gitPath: ghPath, prefixArguments: []) else { return info }
         let deadline = Date().addingTimeInterval(15)
-        let fields = "number,title,url,state,isDraft,headRepository,headRepositoryOwner"
+        let fields = "number,title,url,state,isDraft,headRefName,headRepository,headRepositoryOwner"
         func request(_ args: [String]) -> Data? {
             guard let result = try? gh.run(args, in: root, maxStdout: 512 * 1024, deadline: min(deadline, Date().addingTimeInterval(3))), result.status == 0 else { return nil }
             return result.stdout
@@ -237,7 +239,7 @@ struct SessionGitHubCard: View {
     }
     var body: some View {
         VStack(spacing: 0) {
-            if !session.isEmpty, card.selectedSession == session, let info = card.info, model.changesInspectorSource == nil {
+            if !session.isEmpty, card.selectedSession == session, let info = card.info {
                 let linked = SessionGitHubDiscovery.linkedPRs(in: texts, repository: info.repository)
                 let scoped = SessionGitHubDiscovery.scoped(info, linked: linked)
                 Button { showingDetails.toggle() } label: {
@@ -260,9 +262,6 @@ struct SessionGitHubCard: View {
             }
         }
         .fixedSize(horizontal: true, vertical: true)
-        .onChange(of: model.changesInspectorSource?.identity) { _, value in
-            if value != nil { showingDetails = false }
-        }
         .onChange(of: session) { _, value in showingDetails = false; card.load(session: value) }
         .task(id: refreshKey) {
             guard !session.isEmpty else { card.load(session: ""); return }
@@ -286,9 +285,6 @@ struct GitHubRepositoryCard: View {
                     Link(info.repository, destination: url).lineLimit(1).truncationMode(.middle)
                 }
                 Spacer(minLength: 0)
-                if !info.branch.isEmpty {
-                    Text(info.branch).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
-                }
             }.font(.system(size: 11, weight: .medium))
             if let changed = info.changedFiles {
                 Text(changed == 0 ? "Working tree clean" : "\(changed) working-tree changes")
@@ -300,18 +296,26 @@ struct GitHubRepositoryCard: View {
                         ForEach(info.pullRequests) { pr in
                             if let url = URL(string: pr.url) {
                                 Link(destination: url) {
-                                    HStack(spacing: 6) {
-                                        Image(systemName: pr.state == "MERGED" ? "arrow.triangle.merge" : "arrow.triangle.pull")
-                                            .foregroundStyle(pr.state == "MERGED" ? Color.purple : pr.state == "OPEN" ? Color.green : Color.secondary)
-                                        Text("#\(pr.number) \(pr.title)").lineLimit(1).truncationMode(.tail)
-                                        Spacer(minLength: 0)
-                                        Text(pr.isDraft ? "Draft" : pr.state.capitalized).foregroundStyle(.secondary)
-                                    }.font(.system(size: 11))
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        HStack(spacing: 6) {
+                                            Image(systemName: pr.state == "MERGED" ? "arrow.triangle.merge" : "arrow.triangle.pull")
+                                                .foregroundStyle(pr.state == "MERGED" ? Color.purple : pr.state == "OPEN" ? Color.green : Color.secondary)
+                                            Text("#\(pr.number) \(pr.title)").lineLimit(1).truncationMode(.tail)
+                                            Spacer(minLength: 0)
+                                            Text(pr.isDraft ? "Draft" : pr.state.capitalized).foregroundStyle(.secondary)
+                                        }.font(.system(size: 11))
+                                        if let branch = pr.headRefName, !branch.isEmpty {
+                                            Label(branch, systemImage: "arrow.triangle.branch")
+                                                .font(.system(size: 10)).foregroundStyle(.secondary)
+                                                .lineLimit(1).truncationMode(.middle)
+                                                .help("PR source branch: " + branch)
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
-                }.frame(height: CGFloat(min(info.pullRequests.count, 3)) * 22)
+                }.frame(height: CGFloat(min(info.pullRequests.count, 3)) * 42)
             } else {
                 Text(info.pullRequestsLoaded ? "No linked pull requests" : "Pull requests unavailable")
                     .font(.system(size: 11)).foregroundStyle(.secondary)
