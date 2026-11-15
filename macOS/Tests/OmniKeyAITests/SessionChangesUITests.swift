@@ -94,7 +94,10 @@ extension SessionChangesUITests {
         try repo.git("checkout", "-b", "next-task")
         let next = try XCTUnwrap(SessionGitHubDiscovery.refresh(path: repo.root, previous: info, texts: [], loadPullRequests: false))
         XCTAssertEqual(next.branch, "next-task")
-        XCTAssertEqual(next.pullRequests.map(\.number), [42])
+        XCTAssertTrue(next.pullRequests.isEmpty)
+        let linked = try XCTUnwrap(SessionGitHubDiscovery.refresh(path: repo.root, previous: info,
+            texts: ["https://github.com/owner/repo/pull/42"], loadPullRequests: false))
+        XCTAssertEqual(linked.pullRequests.map(\.number), [42])
         try repo.git("remote", "set-url", "upstream", "https://gitlab.com/owner/repo.git")
         XCTAssertNil(SessionGitHubDiscovery.refresh(path: repo.root, previous: info, texts: [], loadPullRequests: false))
     }
