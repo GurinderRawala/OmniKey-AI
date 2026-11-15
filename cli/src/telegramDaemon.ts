@@ -2,7 +2,7 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { execSync, execFileSync, spawnSync } from 'child_process';
-import inquirer from 'inquirer';
+import { loadInquirer } from './loadInquirer';
 import { isWindows, getHomeDir, getConfigDir, initLogFiles } from './utils';
 import { ensureTelegramConfig } from './telegramClient';
 
@@ -211,7 +211,9 @@ async function startWindows(): Promise<void> {
   let nssmPath = resolveNssm();
 
   if (!nssmPath) {
-    const { install } = await inquirer.prompt<{ install: boolean }>([
+    const { install } = await (
+      await loadInquirer()
+    ).prompt<{ install: boolean }>([
       {
         type: 'confirm',
         name: 'install',

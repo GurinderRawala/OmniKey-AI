@@ -364,7 +364,7 @@ Commands that query process state use `netstat` (instead of `lsof`) on Windows, 
 
 - Built with Node.js and TypeScript.
 - Uses `commander` for CLI parsing and `inquirer` for prompts.
-- Utilizes Yarn as the package manager.
+- Developed in a pnpm workspace with Turborepo; build from the repository root with `pnpm build:cli` so the bundled API and Telegram outputs are rebuilt first (see [DEVELOPMENT.md](../DEVELOPMENT.md)). Running the CLI requires Node.js 22 or newer.
 
 ## License
 

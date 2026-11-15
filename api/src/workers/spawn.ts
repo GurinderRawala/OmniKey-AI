@@ -3,8 +3,7 @@ import { fork, type ChildProcess } from 'child_process';
 import { logger } from '../logger';
 
 export type WorkerCommand =
-  | { type: 'runJob'; jobId: string; sessionId?: string }
-  | { type: 'shutdown' };
+  { type: 'runJob'; jobId: string; sessionId?: string } | { type: 'shutdown' };
 
 export interface ManagedWorker {
   name: string;

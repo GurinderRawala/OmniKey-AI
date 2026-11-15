@@ -1,5 +1,5 @@
 import dotenv from 'dotenv';
-dotenv.config();
+dotenv.config({ quiet: true });
 import express from 'express';
 import { randomUUID } from 'crypto';
 import winston from 'winston';

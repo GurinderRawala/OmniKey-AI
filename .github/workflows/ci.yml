@@ -10,6 +10,10 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Build tooling must not send anonymous usage telemetry.
+env:
+  TURBO_TELEMETRY_DISABLED: "1"
+
 jobs:
   test:
     name: Build and test (TypeScript)
@@ -39,29 +43,64 @@ jobs:
       - name: Test release PR automation
         run: python3 -B -m unittest discover -s scripts/tests -v
 
+      - name: Setup pnpm (version pinned in package.json)
+        uses: pnpm/action-setup@v4
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: 'yarn'
+          cache: 'pnpm'
 
       - name: Install dependencies
-        run: yarn install --frozen-lockfile
+        run: pnpm install --frozen-lockfile
 
       - name: Check formatting
-        run: npx prettier --check "api/src/**/*.ts" "cli/src/**/*.ts" "telegram/src/**/*.ts"
+        run: pnpm format:check
 
       - name: Lint
-        run: yarn lint
+        run: pnpm lint
 
       - name: Build all workspaces
-        run: yarn build
+        run: pnpm build
 
       - name: Typecheck CLI tests
-        run: yarn workspace omnikey-cli run test:types
+        run: pnpm test:types
+
+      - name: Verify workspace and packaging contracts
+        run: pnpm test:tooling
+
+      - name: Verify Turbo ordering, cache restoration and invalidation
+        run: pnpm test:cache
+
+      - name: Verify standalone CLI bundle
+        run: |
+          pnpm --filter omnikey-cli deploy --prod "$RUNNER_TEMP/omnikey-cli"
+          node scripts/verify-cli-bundle.mjs "$RUNNER_TEMP/omnikey-cli"
+
+      - name: Verify npm package outside the checkout
+        run: |
+          mkdir -p "$RUNNER_TEMP/omnikey-pack" "$RUNNER_TEMP/omnikey-consumer"
+          npm pack ./cli --pack-destination "$RUNNER_TEMP/omnikey-pack"
+          npm install --prefix "$RUNNER_TEMP/omnikey-consumer" --no-save --package-lock=false "$RUNNER_TEMP"/omnikey-pack/*.tgz
+          node scripts/verify-cli-bundle.mjs "$RUNNER_TEMP/omnikey-consumer/node_modules/omnikey-cli" "$RUNNER_TEMP/omnikey-consumer"
+
+      - name: Smoke-test production Docker image
+        run: |
+          docker build -t omnikey-ci .
+          trap 'docker rm -f omnikey-ci-smoke >/dev/null 2>&1 || true' EXIT
+          docker run -d --name omnikey-ci-smoke -e OPENAI_API_KEY=sk-test-dummy -e IS_SELF_HOSTED=true -e SQLITE_PATH=/tmp/omnikey-test.sqlite omnikey-ci
+          for attempt in $(seq 1 30); do
+            if docker exec omnikey-ci-smoke node -e 'require("./api/node_modules/sqlite3"); fetch("http://localhost:8080/health").then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))'; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs omnikey-ci-smoke
+          exit 1
 
       - name: Run tests
-        run: yarn test
+        run: pnpm test
 
   macos:
     name: Build and test (macOS app)

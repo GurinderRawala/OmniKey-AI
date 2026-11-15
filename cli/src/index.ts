@@ -23,7 +23,7 @@ import {
   uninstallTelegramDaemon,
 } from './telegramDaemon';
 
-const program = new Command();
+const program = new Command().allowExcessArguments();
 const { version: cliVersion } = require('../package.json') as { version: string };
 
 program
