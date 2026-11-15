@@ -1,3 +1,4 @@
+import { loadInquirer } from './loadInquirer';
 /**
  * `omnikey skills …` — manage backend-owned Skills over the daemon's HTTP API
  * (docs/skills-contract.md). The CLI never touches the database directly and
@@ -904,8 +905,7 @@ export function registerSkillsCommand(program: Command, deps: SkillsDeps): Comma
     <A extends unknown[]>(fn: (...args: A) => Promise<void>) =>
     async (...args: A): Promise<void> => {
       const opts = args.find((a) => a && typeof a === 'object' && !Array.isArray(a)) as
-        | { json?: boolean }
-        | undefined;
+        { json?: boolean } | undefined;
       try {
         await fn(...args);
         deps.setExitCode(EXIT_OK);
@@ -1008,10 +1008,13 @@ export async function runSkillsCli(argv: string[], deps: SkillsDeps): Promise<nu
       deps.setExitCode(c);
     },
   };
-  const program = new Command('omnikey').exitOverride(exitOverride).configureOutput({
-    writeOut: (s) => deps.io.stdout(s),
-    writeErr: (s) => deps.io.stderr(s),
-  });
+  const program = new Command('omnikey')
+    .allowExcessArguments()
+    .exitOverride(exitOverride)
+    .configureOutput({
+      writeOut: (s) => deps.io.stdout(s),
+      writeErr: (s) => deps.io.stderr(s),
+    });
   registerSkillsCommand(program, tracked);
   try {
     await program.parseAsync(argv, { from: 'user' });
@@ -1026,7 +1029,7 @@ export async function runSkillsCli(argv: string[], deps: SkillsDeps): Promise<nu
 
 function createInquirerPrompter(): Prompter {
   const load = async () => {
-    const inquirer = (await import('inquirer')).default;
+    const inquirer = await loadInquirer();
     // Prompts render on stderr so --json stdout stays clean.
     return inquirer.createPromptModule({ output: process.stderr });
   };

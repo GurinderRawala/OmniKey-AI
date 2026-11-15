@@ -2,7 +2,7 @@ import path from 'path';
 import fs from 'fs';
 import { spawn, type ChildProcess } from 'child_process';
 import { request as httpsRequest } from 'https';
-import inquirer from 'inquirer';
+import { loadInquirer } from './loadInquirer';
 import { getConfigDir, getConfigPath, readConfig, writeConfig, initLogFiles } from './utils';
 
 const REQUIRED_ENV_KEYS = ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID'] as const;
@@ -112,7 +112,9 @@ export async function ensureTelegramConfig(
   const toPersist: Record<string, string> = {};
 
   if (missing.includes('TELEGRAM_BOT_TOKEN')) {
-    const { token } = await inquirer.prompt<{ token: string }>([
+    const { token } = await (
+      await loadInquirer()
+    ).prompt<{ token: string }>([
       {
         type: 'password',
         name: 'token',
@@ -136,7 +138,9 @@ export async function ensureTelegramConfig(
   }
 
   if (missing.includes('TELEGRAM_CHAT_ID')) {
-    const { chatId } = await inquirer.prompt<{ chatId: string }>([
+    const { chatId } = await (
+      await loadInquirer()
+    ).prompt<{ chatId: string }>([
       {
         type: 'input',
         name: 'chatId',

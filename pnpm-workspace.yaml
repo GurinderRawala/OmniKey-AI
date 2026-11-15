@@ -13,3 +13,17 @@ ignoredBuiltDependencies:
 
 # pnpm's lockfile-based deploy creates a portable, isolated production graph.
 injectWorkspacePackages: true
+
+# The Cypress wrapper injects @cypress/request into request-promise-core;
+# core never imports its obsolete request peer. Remove only that unused edge.
+# Also require patched versions for vulnerable transitive ranges.
+overrides:
+  request-promise-core@1.1.3>request: '-'
+  vite: 8.3.8
+  minimatch@>=7.0.0 <11.0.1: ^11.0.1
+  qs@<6.16.1: ^6.17.1
+  # Sequelize only calls v1()/v4() without stateful options; UUID 11 retains
+  # those CommonJS APIs and fixes the vulnerable buffer validation in UUID 8.
+  sequelize@6>uuid: 11.1.1
+  # Cypress Request likewise uses only no-argument v4() for nonce/boundary IDs.
+  '@cypress/request@3>uuid': 11.1.1

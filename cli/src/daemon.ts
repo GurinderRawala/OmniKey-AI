@@ -1,7 +1,7 @@
 import path from 'path';
 import fs from 'fs';
 import { execSync, execFileSync } from 'child_process';
-import inquirer from 'inquirer';
+import { loadInquirer } from './loadInquirer';
 import { loadLaunchAgent } from './launchAgent';
 import {
   isWindows,
@@ -157,7 +157,9 @@ async function startDaemonWindows(opts: DaemonOptions) {
 
   let nssmPath = resolveNssm();
   if (!nssmPath) {
-    const { install } = await inquirer.prompt<{ install: boolean }>([
+    const { install } = await (
+      await loadInquirer()
+    ).prompt<{ install: boolean }>([
       {
         type: 'confirm',
         name: 'install',

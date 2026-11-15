@@ -1,4 +1,4 @@
-import inquirer from 'inquirer';
+import { loadInquirer } from './loadInquirer';
 import path from 'path';
 import { getConfigDir, getConfigPath, writeConfig } from './utils';
 
@@ -43,7 +43,9 @@ export async function onboard() {
   const sqlitePath = path.join(configDir, 'omnikey-selfhosted.sqlite');
 
   // Choose AI provider
-  const { aiProvider } = await inquirer.prompt([
+  const { aiProvider } = await (
+    await loadInquirer()
+  ).prompt([
     {
       type: 'list',
       name: 'aiProvider',
@@ -53,7 +55,9 @@ export async function onboard() {
     },
   ]);
 
-  const { apiKey } = await inquirer.prompt([
+  const { apiKey } = await (
+    await loadInquirer()
+  ).prompt([
     {
       type: 'input',
       name: 'apiKey',
@@ -70,7 +74,9 @@ export async function onboard() {
     // OpenAI-compatible endpoint. The default keeps the previous NVIDIA NIM
     // onboarding flow working for users who press Enter through the prompt.
     const DEFAULT_OPEN_MODEL_URL = 'https://integrate.api.nvidia.com/v1';
-    const { openModelBaseUrl, openModelResponsesApiEnabled } = await inquirer.prompt([
+    const { openModelBaseUrl, openModelResponsesApiEnabled } = await (
+      await loadInquirer()
+    ).prompt([
       {
         type: 'input',
         name: 'openModelBaseUrl',
@@ -100,7 +106,9 @@ export async function onboard() {
   }
 
   // Web search provider (optional)
-  const { provider } = await inquirer.prompt([
+  const { provider } = await (
+    await loadInquirer()
+  ).prompt([
     {
       type: 'list',
       name: 'provider',
@@ -114,7 +122,9 @@ export async function onboard() {
   const searchConfig: Record<string, string> = {};
 
   if (provider === 'serper') {
-    const { key } = await inquirer.prompt([
+    const { key } = await (
+      await loadInquirer()
+    ).prompt([
       {
         type: 'input',
         name: 'key',
@@ -124,7 +134,9 @@ export async function onboard() {
     ]);
     searchConfig['SERPER_API_KEY'] = key.trim();
   } else if (provider === 'brave') {
-    const { key } = await inquirer.prompt([
+    const { key } = await (
+      await loadInquirer()
+    ).prompt([
       {
         type: 'input',
         name: 'key',
@@ -134,7 +146,9 @@ export async function onboard() {
     ]);
     searchConfig['BRAVE_SEARCH_API_KEY'] = key.trim();
   } else if (provider === 'tavily') {
-    const { key } = await inquirer.prompt([
+    const { key } = await (
+      await loadInquirer()
+    ).prompt([
       {
         type: 'input',
         name: 'key',
@@ -144,7 +158,9 @@ export async function onboard() {
     ]);
     searchConfig['TAVILY_API_KEY'] = key.trim();
   } else if (provider === 'searxng') {
-    const { url } = await inquirer.prompt([
+    const { url } = await (
+      await loadInquirer()
+    ).prompt([
       {
         type: 'input',
         name: 'url',

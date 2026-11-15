@@ -105,7 +105,7 @@ Telegram needs `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `.env` — see [`t
 - The root `build*`, `test`, `lint`, and `dev:all` scripts run through Turbo, which replays unchanged cacheable tasks (such as builds) from its local cache. Tests and CLI test type-checking, persistent dev tasks, `pnpm format`, and `pnpm clean` are never cached. Development tasks use loose environment mode so existing shell-supplied provider/runtime settings keep working; build hashes include `NODE_ENV` and shared lint/TypeScript configuration. No secret or runtime-state directories are declared as cache outputs. To force a re-run while debugging, pass `--force`, e.g. `pnpm turbo run build --force`.
 - If a task gains a new input or output, update `turbo.json` in the same change so the cache cannot replay stale results; `pnpm test:cache` exercises the cache contract. Run it only in a disposable checkout: it deliberately deletes and restores compiled output. Never run it against the checkout serving a live daemon.
 
-The lint toolchain is pinned to ESLint 9.39.5, @eslint/js 9.39.5, and typescript-eslint 8.55.0, which support the Node 22 development baseline above. The published API/CLI runtime metadata declares Node ≥22; that does not mean every Node 22 release supports the full development toolchain.
+The lint toolchain is pinned to ESLint 9.39.5, @eslint/js 9.39.5, and typescript-eslint 8.72.2, which support the Node 22 development baseline above. The published API/CLI runtime metadata declares Node ≥22; that does not mean every Node 22 release supports the full development toolchain.
 
 After fixing the simple baseline findings, ESLint reports 257 warnings and no errors across the three TypeScript workspaces: API has 213 `no-explicit-any`, 8 `no-empty-object-type`, 6 `no-control-regex`, and 6 `no-useless-escape`; CLI has 18 `no-explicit-any`, 4 `preserve-caught-error`, and 1 `no-require-imports`; Telegram has 1 `no-control-regex`. These rules remain warnings while the existing findings are addressed. Type-aware checks such as `no-floating-promises` are deferred; ESLint currently uses the recommended non-type-aware rule sets.
 
@@ -195,3 +195,26 @@ Windows requires the .NET **10** SDK. The test project links platform-neutral pr
 PostgreSQL tests are opt-in: set `SKILLS_TEST_PG_URL` to a **disposable** PostgreSQL database (or `SKILLS_TEST_PG_SOCKET` for the private local test socket on port 55439), then run `pnpm --filter omnikey-ai-api test src/__tests__/skills.postgres.test.ts`. The test creates/drops a unique schema and never reads `DATABASE_URL`; absent explicit test settings, it skips. SQLite migration/restart tests always use isolated temporary files.
 
 Native manual checks remain required before release: shared-daemon CRUD with CLI, refresh after external edits, old backend, chat/hotkey/steering activation, blocked limits, stop/reconnect, keyboard/VoiceOver/Narrator. Live application feedback is not durable audit history. Backend-first rollout, backup DB, retain table data on code rollback. CLI/API patch versions must move together because merging `cli/**` to main publishes the CLI.
+
+## Dependency refresh policy (PR #84)
+
+Dependency updates are tested against the existing CommonJS output and Node baseline, not applied blindly across every major. The November 2026 refresh updates the AI SDKs, Google Cloud Storage, SQLite 6, cron-parser 5, Commander 14, MCP, browser tooling, network/database libraries, Prettier, typescript-eslint, and compatible type definitions. The unused Jest/ts-jest toolchain was removed; tests use Vitest. Development workers now declare their direct `ts-node` preload dependency. Commander retains the previous excess-argument behavior.
+
+Intentional compatibility constraints:
+
+- **Anthropic 0.137.0 / Google GenAI 1.52.0:** latest releases on the existing protocol/API lines. Anthropic 1 changes its wire API version; Gemini 3 needs provider streaming/tool/abort integration coverage before a major migration. No live provider calls are part of this refresh.
+
+- **ESLint/@eslint/js 9.39.5:** latest 9.x; ESLint 10 requires Node 22.13 rather than the current development floor of 22.12. ESLint 9 is deprecated upstream; move to 10 when deliberately raising that floor.
+- **TypeScript 5.9.3:** latest 5.x. TypeScript 7 exceeds typescript-eslint's supported `<6.1` peer range; a compiler/module-resolution migration is separate work. Keep `@types/node` on the latest 22.x to match the minimum runtime, rather than exposing Node 26-only APIs.
+- **Vitest 4.1.12:** latest 4.x; Vitest 5 narrows supported Node lines. Vite is explicitly updated to 8.3.8 for security fixes.
+- **Express 4.22.3 + matching 4.x types:** latest 4.x, preserving route syntax, query parsing and error behavior. Express 5 is a framework migration.
+- **Commander 14.0.3 / Inquirer 9.3.8:** a native dynamic-import adapter lets the CommonJS CLI load ESM-only Inquirer on Node 22.0–22.11; current majors require Node 22.12 and 22.22.2 respectively. Inquirer keeps its matching 9.x types.
+- **Telegram bot API 0.67.0:** latest compatible 0.x. Version 2 replaces the existing default-exported constructor/polling/event API; upgrading requires a Telegram-client rewrite. Matching community types are current.
+- **pnpm 10.34.9 / Turbo 2.11.11:** retain the tested migration/deploy versions. pnpm 12 is a separate package-manager migration, not a lockfile-only update.
+- **cuid 3:** already the latest release but deprecated. Replacing persisted identifier generation is outside this refresh. The diff renderer retains its exact version pin.
+
+`pnpm-workspace.yaml` documents narrowly scoped security overrides. The Telegram Cypress wrapper supplies its request implementation to `request-promise-core`; removing only core's unused `request` peer prevents auto-installing the obsolete vulnerable client. Regression tests exercise real loopback Telegram text/multipart requests and Sequelize UUID defaults/transactions. UUID overrides retain the CommonJS `v1()`/`v4()` APIs used by their parents. Patched Vite, minimatch and qs versions are also required.
+
+The committed workspace/release graph is audited with `pnpm audit`. These overrides govern pnpm installs and deployed release bundles; they **do not** propagate to consumers installing the npm package, which resolve dependencies from the published manifest. Do not claim the npm consumer graph is vulnerability-free solely from the workspace audit.
+
+SQLite 6's prebuilt native binding runs on the unchanged Node ≥22 runtime baseline. Its optional `node-gyp` 12 toolchain requires Node ≥22.9 when compiling from source; use the documented development Node baseline for source builds (including Docker's musl build). No additional dependency install scripts are globally enabled.

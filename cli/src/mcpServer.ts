@@ -1,5 +1,5 @@
 import axios from 'axios';
-import inquirer from 'inquirer';
+import { loadInquirer } from './loadInquirer';
 import { readConfig, getPort } from './utils';
 
 type Transport = 'stdio' | 'http' | 'sse';
@@ -78,7 +78,9 @@ async function promptTransportFields(
   headers?: Record<string, string>;
 }> {
   if (transport === 'stdio') {
-    const ans = await inquirer.prompt([
+    const ans = await (
+      await loadInquirer()
+    ).prompt([
       {
         type: 'input',
         name: 'command',
@@ -108,7 +110,9 @@ async function promptTransportFields(
     };
   }
 
-  const ans = await inquirer.prompt([
+  const ans = await (
+    await loadInquirer()
+  ).prompt([
     {
       type: 'input',
       name: 'url',
@@ -140,7 +144,9 @@ function formatKVForEditor(dict: Record<string, string> | undefined): string {
 }
 
 export async function mcpAdd(): Promise<void> {
-  const baseAnswers = await inquirer.prompt([
+  const baseAnswers = await (
+    await loadInquirer()
+  ).prompt([
     {
       type: 'input',
       name: 'name',
@@ -244,7 +250,9 @@ async function pickServer(action: string): Promise<MCPServerDto | null> {
     console.log(`No MCP servers to ${action}.`);
     return null;
   }
-  const { id } = await inquirer.prompt([
+  const { id } = await (
+    await loadInquirer()
+  ).prompt([
     {
       type: 'list',
       name: 'id',
@@ -263,7 +271,9 @@ export async function mcpRemove(): Promise<void> {
     const server = await pickServer('remove');
     if (!server) return;
 
-    const { confirm } = await inquirer.prompt([
+    const { confirm } = await (
+      await loadInquirer()
+    ).prompt([
       {
         type: 'confirm',
         name: 'confirm',
@@ -320,7 +330,9 @@ export async function mcpUpdate(id: string): Promise<void> {
       })
     ).data;
 
-    const baseAnswers = await inquirer.prompt([
+    const baseAnswers = await (
+      await loadInquirer()
+    ).prompt([
       {
         type: 'input',
         name: 'name',

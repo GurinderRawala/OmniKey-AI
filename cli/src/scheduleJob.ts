@@ -1,5 +1,5 @@
 import axios from 'axios';
-import inquirer from 'inquirer';
+import { loadInquirer } from './loadInquirer';
 import readline from 'node:readline';
 import { readConfig, getPort } from './utils';
 
@@ -75,7 +75,9 @@ async function readMultilinePrompt(): Promise<string> {
 }
 
 export async function scheduleAdd(): Promise<void> {
-  const answers = await inquirer.prompt([
+  const answers = await (
+    await loadInquirer()
+  ).prompt([
     {
       type: 'input',
       name: 'label',
@@ -111,7 +113,9 @@ export async function scheduleAdd(): Promise<void> {
       { name: 'Custom cron expression', value: '__custom__' },
     ];
 
-    const { preset } = await inquirer.prompt([
+    const { preset } = await (
+      await loadInquirer()
+    ).prompt([
       {
         type: 'list',
         name: 'preset',
@@ -121,7 +125,9 @@ export async function scheduleAdd(): Promise<void> {
     ]);
 
     if (preset === '__custom__') {
-      const { customCron } = await inquirer.prompt([
+      const { customCron } = await (
+        await loadInquirer()
+      ).prompt([
         {
           type: 'input',
           name: 'customCron',
@@ -135,7 +141,9 @@ export async function scheduleAdd(): Promise<void> {
       cronExpression = preset;
     }
   } else {
-    const { dateStr, timeStr } = await inquirer.prompt([
+    const { dateStr, timeStr } = await (
+      await loadInquirer()
+    ).prompt([
       {
         type: 'input',
         name: 'dateStr',
@@ -240,7 +248,9 @@ export async function scheduleRemove(): Promise<void> {
       return;
     }
 
-    const { jobId } = await inquirer.prompt([
+    const { jobId } = await (
+      await loadInquirer()
+    ).prompt([
       {
         type: 'list',
         name: 'jobId',
@@ -252,7 +262,9 @@ export async function scheduleRemove(): Promise<void> {
       },
     ]);
 
-    const { confirm } = await inquirer.prompt([
+    const { confirm } = await (
+      await loadInquirer()
+    ).prompt([
       {
         type: 'confirm',
         name: 'confirm',

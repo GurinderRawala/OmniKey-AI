@@ -4,6 +4,8 @@ import { createRequire, builtinModules } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
+import { createServer } from 'node:http';
+import { once } from 'node:events';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const read = (file) => readFileSync(path.join(root, file), 'utf8');
 const json = (file) => JSON.parse(read(file));
@@ -36,7 +38,11 @@ test('CLI build explicitly depends on both copied services and caches every outp
 test('published CLI declares every bundled service production dependency', () => {
   for (const name of ['api', 'telegram']) {
     for (const dependency of Object.keys(json(`${name}/package.json`).dependencies)) {
-      assert(cli.dependencies[dependency], `${name}: missing ${dependency} from CLI`);
+      assert.equal(
+        cli.dependencies[dependency],
+        json(`${name}/package.json`).dependencies[dependency],
+        `${name}: bundled ${dependency} range must match CLI`,
+      );
     }
   }
   for (const output of ['dist', 'backend-dist', 'telegram-client-dist'])
@@ -96,4 +102,69 @@ test('CI and release installs are frozen, portable staging is verified', () => {
   assert.match(read('.github/workflows/publish-cli.yaml'), /npm publish --access public/);
   assert.match(read('Dockerfile'), /pnpm install --frozen-lockfile/);
   assert.match(read('Dockerfile'), /CMD \["node", "api\/dist\/index.js"\]/);
+});
+
+test('Telegram uses the Cypress request client after removing the obsolete request peer', async () => {
+  const require = createRequire(path.join(root, 'telegram/package.json'));
+  const TelegramBot = require('node-telegram-bot-api');
+  const requests = [];
+  const server = createServer((request, response) => {
+    requests.push(new URL(request.url, 'http://localhost').pathname);
+    request.resume();
+    response.setHeader('content-type', 'application/json');
+    response.end(JSON.stringify({ ok: true, result: { message_id: 1, text: 'hello' } }));
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  try {
+    const bot = new TelegramBot('test-token', {
+      polling: false,
+      baseApiUrl: `http://127.0.0.1:${server.address().port}`,
+    });
+    assert.equal((await bot.sendMessage(123, 'hello')).message_id, 1);
+    assert.equal(
+      (
+        await bot.sendDocument(
+          123,
+          Buffer.from('test'),
+          {},
+          {
+            filename: 'test.txt',
+            contentType: 'text/plain',
+          },
+        )
+      ).message_id,
+      1,
+    );
+    assert.deepEqual(requests, ['/bottest-token/sendMessage', '/bottest-token/sendDocument']);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('Sequelize UUID defaults and transactions work with the patched CommonJS UUID dependency', async () => {
+  const require = createRequire(path.join(root, 'api/package.json'));
+  const { Sequelize, DataTypes } = require('sequelize');
+  const db = new Sequelize({ dialect: 'sqlite', storage: ':memory:', logging: false });
+  try {
+    const Model = db.define('Probe', {
+      id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+      legacyId: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV1 },
+    });
+    await db.sync();
+    await db.transaction(async (transaction) => {
+      const row = await Model.create({}, { transaction });
+      assert.match(row.id, /^[0-9a-f-]{36}$/i);
+      assert.match(row.legacyId, /^[0-9a-f-]{36}$/i);
+    });
+    assert.equal(await Model.count(), 1);
+  } finally {
+    await db.close();
+  }
+});
+
+test('development workers can resolve their explicit ts-node preload', () => {
+  const require = createRequire(path.join(root, 'api/package.json'));
+  assert(json('api/package.json').devDependencies['ts-node']);
+  assert(require.resolve('ts-node/register/transpile-only'));
 });
