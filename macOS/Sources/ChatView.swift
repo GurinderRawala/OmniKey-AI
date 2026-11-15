@@ -1631,9 +1631,6 @@ struct ChatConversationView: View {
                 .fill(NordTheme.border(colorScheme))
                 .frame(height: 1)
 
-            SessionGitHubCard(model: model)
-                .frame(maxWidth: .infinity, alignment: .trailing)
-
             if showLandingLayout {
                 ChatNewChatLandingView(model: model)
             } else {
@@ -1784,6 +1781,8 @@ struct ChatHeaderBar: View {
                 .layoutPriority(1)
 
             Spacer()
+
+            SessionGitHubCard(model: model)
 
             if let session = model.activeSession {
                 ChatSessionInfoCard(

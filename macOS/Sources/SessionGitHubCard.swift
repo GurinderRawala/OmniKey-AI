@@ -46,6 +46,15 @@ enum SessionGitHubDiscovery {
         return numbers
     }
 
+    /// Current checkout branches and legacy cache entries are not session evidence.
+    static func scoped(_ info: SessionGitHubInfo, linked: Set<Int>) -> SessionGitHubInfo {
+        var scoped = info
+        scoped.pullRequests = info.pullRequests.filter {
+            linked.contains($0.number) && $0.url.lowercased() == "https://github.com/\(info.repository)/pull/\($0.number)".lowercased()
+        }
+        return scoped
+    }
+
     static func startingPaths(in messages: [ChatMessage]) -> [String] {
         let blocks = messages.flatMap(\.blocks)
         let structured = blocks.compactMap { $0.kind == .shellCommand ? $0.workingDirectory : nil }
@@ -109,14 +118,12 @@ enum SessionGitHubDiscovery {
             if let remote = gitText(["remote", "get-url", name]), let repo = repository(from: remote), !found.contains(repo) { found.append(repo) }
         }
         guard let repository = previous.flatMap({ repositories.contains($0.repository) ? $0.repository : nil }) ?? repositories.first else { return nil }
-        // origin describes this clone's head repository; the branch may track
-        // upstream, which is the base repository queried above.
-        let headRepository = gitText(["remote", "get-url", "origin"]).flatMap { Self.repository(from: $0) } ?? repository
         let old = previous?.repository == repository ? previous : nil
+        let linked = linkedPRs(in: texts, repository: repository)
         let status = gitText(["status", "--porcelain=v1", "--untracked-files=normal"])
         var info = SessionGitHubInfo(root: root, repository: repository, branch: branch,
             changedFiles: status.map { $0.isEmpty ? 0 : $0.components(separatedBy: "\n").count },
-            pullRequests: old?.pullRequests ?? [], pullRequestsLoaded: false)
+            pullRequests: old?.pullRequests.filter { linked.contains($0.number) } ?? [], pullRequestsLoaded: linked.isEmpty)
         guard loadPullRequests else { return info }
         guard let ghPath = ["/opt/homebrew/bin/gh", "/usr/local/bin/gh"].first(where: { FileManager.default.isExecutableFile(atPath: $0) }),
               let gh = GitCommandRunner(gitPath: ghPath, prefixArguments: []) else { return info }
@@ -129,25 +136,15 @@ enum SessionGitHubDiscovery {
         var prs = Dictionary(uniqueKeysWithValues: info.pullRequests.map { ($0.number, $0) })
         // Newly linked PRs have priority over all refresh work. Rotate cached
         // lookups, with a per-command timeout, so one slow PR cannot starve others.
-        let linked = linkedPRs(in: texts, repository: repository)
         for number in lookupOrder(linked: linked, cached: Set(prs.keys), refreshIndex: refreshIndex) where Date() < deadline {
             if let data = request(["pr", "view", String(number), "--repo", repository, "--json", fields]),
                let item = try? JSONDecoder().decode(BranchPullRequest.self, from: data) {
-                if linked.contains(number) || item.belongs(to: headRepository) { prs[number] = item.pullRequest }
-                else { prs.removeValue(forKey: number) }
+                if linked.contains(number), item.number == number { prs[number] = item.pullRequest }
             }
         }
-        if !branch.isEmpty,
-           let data = request(["pr", "list", "--repo", repository, "--head", branch, "--state", "all", "--limit", "100", "--json", fields]),
-           let current = try? JSONDecoder().decode([BranchPullRequest].self, from: data) {
-            info.pullRequestsLoaded = true
-            for item in current where item.belongs(to: headRepository) {
-                let pr = item.pullRequest
-                prs[pr.number] = pr
-            }
-        }
+        info.pullRequestsLoaded = linked.allSatisfy { prs[$0] != nil }
         info.pullRequests = prs.values.filter {
-            $0.url.lowercased() == "https://github.com/\(repository)/pull/\($0.number)".lowercased()
+            linked.contains($0.number) && $0.url.lowercased() == "https://github.com/\(repository)/pull/\($0.number)".lowercased()
         }.sorted { $0.number > $1.number }
         return info
     }
@@ -231,6 +228,8 @@ struct SessionGitHubCard: View {
         self.model = model
         _card = StateObject(wrappedValue: card)
     }
+    @State private var showingDetails = false
+    private var texts: [String] { model.messages.flatMap { [$0.text] + $0.blocks.map(\.text) } }
     private var session: String { model.activeSessionId ?? "" }
     private var paths: [String] { SessionGitHubDiscovery.startingPaths(in: model.messages) }
     private var refreshKey: String {
@@ -238,12 +237,33 @@ struct SessionGitHubCard: View {
     }
     var body: some View {
         VStack(spacing: 0) {
-            if !session.isEmpty, card.selectedSession == session, let info = card.info {
-                GitHubRepositoryCard(info: info)
-                    .padding(.trailing, 22).padding(.top, 10).padding(.bottom, 2)
+            if !session.isEmpty, card.selectedSession == session, let info = card.info, model.changesInspectorSource == nil {
+                let linked = SessionGitHubDiscovery.linkedPRs(in: texts, repository: info.repository)
+                let scoped = SessionGitHubDiscovery.scoped(info, linked: linked)
+                Button { showingDetails.toggle() } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "arrow.triangle.pull")
+                        Text(scoped.pullRequests.count == 1 ? "#\(scoped.pullRequests[0].number)" : "GitHub")
+                        if scoped.pullRequests.count > 1 { Text("\(scoped.pullRequests.count)").foregroundStyle(.secondary) }
+                        Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary)
+                    }
+                    .font(.system(size: 11, weight: .medium))
+                    .padding(.horizontal, 10).padding(.vertical, 7)
+                    .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
+                }
+                .buttonStyle(.plain)
+                .help("GitHub repository and session pull requests")
+                .accessibilityLabel("GitHub, \(scoped.pullRequests.count) session pull requests")
+                .popover(isPresented: $showingDetails, arrowEdge: .bottom) {
+                    GitHubRepositoryCard(info: scoped).frame(width: 360).padding(4)
+                }
             }
         }
-        .onChange(of: session) { _, value in card.load(session: value) }
+        .fixedSize(horizontal: true, vertical: true)
+        .onChange(of: model.changesInspectorSource?.identity) { _, value in
+            if value != nil { showingDetails = false }
+        }
+        .onChange(of: session) { _, value in showingDetails = false; card.load(session: value) }
         .task(id: refreshKey) {
             guard !session.isEmpty else { card.load(session: ""); return }
             let texts = model.messages.flatMap { [$0.text] + $0.blocks.map(\.text) }

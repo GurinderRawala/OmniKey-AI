@@ -111,6 +111,20 @@ final class GitHubReviewRegressionTests: XCTestCase {
         XCTAssertEqual(SessionGitHubDiscovery.startingPath(in: messages), "/Projects/Repo")
     }
 
+    func testLegacyBranchPRIsRemovedFromSessionResults() throws {
+        let repo = try GitTestRepo()
+        try repo.git("remote", "add", "origin", "https://github.com/owner/repo.git")
+        let unrelated = SessionPullRequest(number: 83, title: "Other task", url: "https://github.com/owner/repo/pull/83", state: "OPEN", isDraft: false)
+        let related = SessionPullRequest(number: 84, title: "This task", url: "https://github.com/owner/repo/pull/84", state: "OPEN", isDraft: false)
+        let cached = SessionGitHubInfo(root: repo.root, repository: "owner/repo", branch: "other-task", changedFiles: 0, pullRequests: [unrelated, related], pullRequestsLoaded: true)
+        let texts = ["Created https://github.com/owner/repo/pull/84"]
+        let linked = SessionGitHubDiscovery.linkedPRs(in: texts, repository: cached.repository)
+        XCTAssertEqual(SessionGitHubDiscovery.scoped(cached, linked: linked).pullRequests.map(\.number), [84])
+        let refreshed = try XCTUnwrap(SessionGitHubDiscovery.refresh(path: repo.root, previous: cached, texts: texts, loadPullRequests: false))
+        XCTAssertEqual(refreshed.pullRequests.map(\.number), [84])
+        XCTAssertTrue(SessionGitHubDiscovery.scoped(cached, linked: []).pullRequests.isEmpty)
+    }
+
     func testLinkedPRsComeFirstAndCachedWorkRotates() {
         XCTAssertEqual(SessionGitHubDiscovery.lookupOrder(linked: [9], cached: [1, 2, 3], refreshIndex: 0), [9, 1])
         XCTAssertEqual(SessionGitHubDiscovery.lookupOrder(linked: [9], cached: [1, 2, 3], refreshIndex: 1), [9, 2])
