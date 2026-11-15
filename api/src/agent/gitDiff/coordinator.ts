@@ -24,12 +24,15 @@ import {
   isServableAgentPatchRecovery,
   pathIsWithin,
   countPatchFiles,
+  countPatchLines,
   GIT_DIFF_DISPLAY_LIMIT,
   GIT_DIFF_MAX_CANDIDATES,
   GIT_DIFF_MAX_REPOSITORIES,
   GIT_DIFF_RESPONSE_TIMEOUT_MS,
   GIT_MAX_REASON_LENGTH,
   GIT_TURN_BASELINE_TIMEOUT_MS,
+  FILESYSTEM_CAPTURE_TIMEOUT_MS,
+  FILESYSTEM_MAX_COVERAGE_ROOTS,
   GIT_MAX_COMMIT_OBSERVATIONS,
   GitDiffValidationError,
   isGitOid,
@@ -74,6 +77,8 @@ export interface GitRunState {
   baselines: GitTurnBaseline[];
   /** Candidate paths a baseline was already requested for (never retried). */
   baselineAttempted: Set<string>;
+  baselineRequests: GitDiffRequest[];
+  rootAliases: Map<string, string>;
   /** Count of baseline requests that failed (timeout/invalid/unavailable). */
   baselineFailures: number;
   /**
@@ -83,6 +88,7 @@ export interface GitRunState {
    * cover. False = normal Git capture only, no instruction, no parsing.
    */
   agentPatches: boolean;
+  filesystem: boolean;
 }
 
 export function createGitRunState(input: {
@@ -92,6 +98,7 @@ export function createGitRunState(input: {
   send: AgentSendFn;
   turnDiff?: boolean;
   agentPatches?: boolean;
+  filesystem?: boolean;
 }): GitRunState {
   return {
     runId: `grun_${cuid()}`,
@@ -106,8 +113,11 @@ export function createGitRunState(input: {
     turnStartRequested: false,
     baselines: [],
     baselineAttempted: new Set(),
+    baselineRequests: [],
+    rootAliases: new Map(),
     baselineFailures: 0,
     agentPatches: input.agentPatches === true,
+    filesystem: input.filesystem === true,
   };
 }
 
@@ -208,6 +218,7 @@ function awaitCapture(
     }
     for (const s of signals) s.addEventListener('abort', onAbort, { once: true });
     timing.timer = setTimeout(() => settle(null), Math.min(timeoutMs, maxTimeoutMs));
+    if (request.phase === 'baseline') run.baselineRequests.push(request);
     run.send({
       session_id: run.sessionId,
       sender: 'agent',
@@ -354,7 +365,7 @@ async function writeGitRunProvenance(run: GitRunState, expired: () => boolean): 
 
 function summaryScope(repositories: GitDiffRepository[]): SessionDiffSummaryScope {
   const scopes = new Set(repositories.map((r) => r.scope));
-  return scopes.size === 1 ? repositories[0].scope : 'mixed';
+  return scopes.size === 0 ? 'turn' : scopes.size === 1 ? repositories[0].scope : 'mixed';
 }
 
 /** Create the immutable snapshot row and return its summary. */
@@ -362,14 +373,20 @@ export async function saveSessionDiff(
   run: GitRunState,
   repositories: GitDiffRepository[],
   notice: string | undefined,
-  turn?: { baselines: GitTurnBaseline[]; displayLimit: number },
+  turn?: SessionDiffCandidate['turn'],
   recovery?: SessionDiffRecoveryProvenance,
 ): Promise<SessionDiffSummary> {
   const payload: SessionDiffPayload = {
     version: 1,
     repositories,
     ...(notice ? { notice } : {}),
-    ...(turn ? { baselines: turn.baselines, displayLimit: turn.displayLimit } : {}),
+    ...(turn
+      ? {
+          baselines: turn.baselines,
+          displayLimit: turn.displayLimit,
+          ...(turn.filesystem ? { filesystem: true, coverage: turn.coverage } : {}),
+        }
+      : {}),
     ...(recovery ? { displayLimit: GIT_DIFF_DISPLAY_LIMIT, recovery } : {}),
   };
   const scope = summaryScope(repositories);
@@ -377,7 +394,10 @@ export async function saveSessionDiff(
     scope === 'commit' && repositories.length === 1 ? repositories[0].commit : undefined;
   const fileCount = repositories.reduce((sum, r) => sum + countPatchFiles(r.patch), 0);
   // Git and agent-patch entries of one root are separate (labelled) entries.
-  const repositoryCount = new Set(repositories.map((r) => comparablePath(r.root))).size;
+  const repositoryCount = new Set([
+    ...repositories.map((r) => comparablePath(r.root)),
+    ...(turn?.coverage ?? []).map((r) => comparablePath(r.root)),
+  ]).size;
   const agentPatch = isServableAgentPatchRecovery(recovery, repositories);
   const row = await AgentSessionDiff.create({
     id: `sdiff_${cuid()}`,
@@ -392,10 +412,12 @@ export async function saveSessionDiff(
   });
   return {
     id: row.id,
+    ...countPatchLines(repositories),
     fileCount,
     repositoryCount,
     createdAt: (row.createdAt ?? new Date()).toISOString(),
     scope,
+    ...(turn?.filesystem ? { filesystem: true, coverage: turn.coverage } : {}),
     ...(commit ? { commit } : {}),
     ...(turn
       ? {
@@ -517,7 +539,7 @@ export async function captureTurnBaselines(
   source: GitTurnBaselineSource,
   signal: AbortSignal | undefined,
   log: Logger,
-  timeoutMs = GIT_TURN_BASELINE_TIMEOUT_MS,
+  timeoutMs = run?.filesystem ? FILESYSTEM_CAPTURE_TIMEOUT_MS : GIT_TURN_BASELINE_TIMEOUT_MS,
 ): Promise<void> {
   if (!run?.turnDiff) return;
   const fresh: string[] = [];
@@ -529,7 +551,7 @@ export async function captureTurnBaselines(
     fresh.push(path);
     if (fresh.length >= GIT_DIFF_MAX_CANDIDATES) break;
   }
-  if (!fresh.length) return;
+  if (!fresh.length && !(run.filesystem && source === 'turn_start')) return;
   for (const path of fresh) run.baselineAttempted.add(comparablePath(path));
   if (signal?.aborted || run.connection?.aborted) {
     run.baselineFailures += 1;
@@ -540,6 +562,7 @@ export async function captureTurnBaselines(
     candidate_paths: fresh,
     eligible_commits: [],
     phase: 'baseline',
+    ...(run.filesystem ? { filesystem: true } : {}),
     baseline_source: source,
     baselines: [],
   };
@@ -555,8 +578,9 @@ export async function captureTurnBaselines(
           request,
           { notBefore: run.startedAt, now: Date.now() },
           run.baselines,
+          run.baselineRequests,
         ),
-      GIT_TURN_BASELINE_TIMEOUT_MS,
+      run.filesystem ? FILESYSTEM_CAPTURE_TIMEOUT_MS : GIT_TURN_BASELINE_TIMEOUT_MS,
     );
     if (!response || response.status === 'unavailable') {
       run.baselineFailures += 1;
@@ -568,6 +592,11 @@ export async function captureTurnBaselines(
       return;
     }
     const added = recordTurnBaselines(run, response.baselines ?? []);
+    for (const alias of response.root_aliases ?? []) {
+      if (!run.rootAliases.has(comparablePath(alias.alias))) {
+        run.rootAliases.set(comparablePath(alias.alias), alias.root);
+      }
+    }
     log.info('Recorded git turn baselines', {
       sessionId: run.sessionId,
       source,
@@ -593,7 +622,7 @@ export async function captureTurnStartBaselines(
   history: ReadonlyArray<{ role: string; content: unknown }>,
   signal: AbortSignal | undefined,
   log: Logger,
-  timeoutMs = GIT_TURN_BASELINE_TIMEOUT_MS,
+  timeoutMs = run?.filesystem ? FILESYSTEM_CAPTURE_TIMEOUT_MS : GIT_TURN_BASELINE_TIMEOUT_MS,
 ): Promise<void> {
   if (!run?.turnDiff || run.turnStartRequested) return;
   run.turnStartRequested = true;
@@ -659,7 +688,8 @@ async function captureTurnSnapshot(
     if (!ordered.some((p) => comparablePath(p) === comparablePath(path))) ordered.push(path);
   }
   const candidatePaths = ordered.slice(0, GIT_DIFF_MAX_CANDIDATES);
-  if (!candidatePaths.length) return { status: 'no_repository', reason: 'no candidates' };
+  if (!candidatePaths.length && !run.filesystem)
+    return { status: 'no_repository', reason: 'no candidates' };
   const baselines = run.baselines.map((b) => ({ ...b }));
   const request: GitDiffRequest = {
     request_id: cuid(),
@@ -667,11 +697,17 @@ async function captureTurnSnapshot(
     // Never a latest-commit fallback in turn mode.
     eligible_commits: [],
     phase: 'final',
+    ...(run.filesystem ? { filesystem: true } : {}),
     baselines,
     display_limit: GIT_DIFF_DISPLAY_LIMIT,
   };
-  const response = await awaitCapture(run, request, signal, timeoutMs, (raw) =>
-    validateGitTurnFinalResponse(raw, request),
+  const response = await awaitCapture(
+    run,
+    request,
+    signal,
+    timeoutMs,
+    (raw) => validateGitTurnFinalResponse(raw, request),
+    run.filesystem ? FILESYSTEM_CAPTURE_TIMEOUT_MS : GIT_DIFF_RESPONSE_TIMEOUT_MS,
   );
   if (!response || response.status !== 'ok') {
     log.info('No git turn snapshot for final answer', {
@@ -701,20 +737,43 @@ async function captureTurnSnapshot(
         .map((root) => [comparablePath(root), root] as const),
     ).values(),
   ];
-  if (!repositories.length) {
+  if (!repositories.length && !run.filesystem) {
     return {
       status: !baselines.length && run.baselineFailures > 0 ? 'missing_baseline' : 'no_changes',
       unchangedRoots,
     };
+  }
+  const coverage = run.filesystem ? [...(response.coverage ?? [])] : undefined;
+  if (coverage) {
+    for (const root of run.candidates.list(GIT_DIFF_MAX_CANDIDATES * 4)) {
+      if (coverage.length >= FILESYSTEM_MAX_COVERAGE_ROOTS) break;
+      const canonical = run.rootAliases.get(comparablePath(root)) ?? root;
+      if (coverage.some((c) => pathIsWithin(canonical, c.root))) continue;
+      coverage.push({
+        root,
+        status: 'unavailable',
+        reason:
+          'No starting content snapshot was acknowledged for this root (capture is limited to eight roots).',
+        suggestedFix:
+          'Select this folder before the next turn and check the execution host connection.',
+      });
+    }
   }
   return {
     status: 'captured',
     ...(unchangedRoots.length ? { unchangedRoots } : {}),
     candidate: {
       repositories,
-      notice: turnNotice(repositories, response.reason),
+      notice:
+        run.filesystem && !coverage?.length
+          ? 'No filesystem roots were captured. Select a project folder before starting a turn; this snapshot cannot establish whether files changed.'
+          : turnNotice(repositories, response.reason),
       ...(response.reason ? { reason: response.reason } : {}),
-      turn: { baselines, displayLimit: GIT_DIFF_DISPLAY_LIMIT },
+      turn: {
+        baselines,
+        displayLimit: GIT_DIFF_DISPLAY_LIMIT,
+        ...(run.filesystem ? { filesystem: true, coverage: coverage ?? [] } : {}),
+      },
     },
   };
 }
@@ -758,7 +817,7 @@ export async function captureSessionDiffOutcome(
   history: ReadonlyArray<{ role: string; content: unknown }>,
   signal: AbortSignal | undefined,
   log: Logger,
-  timeoutMs = GIT_DIFF_RESPONSE_TIMEOUT_MS,
+  timeoutMs = run?.filesystem ? FILESYSTEM_CAPTURE_TIMEOUT_MS : GIT_DIFF_RESPONSE_TIMEOUT_MS,
 ): Promise<SessionDiffCaptureOutcome> {
   const outcome = await captureSessionDiffCandidate(run, history, signal, log, timeoutMs);
   if (!run || !outcome.candidate) return outcome;
@@ -784,7 +843,7 @@ export async function captureSessionDiffCandidate(
   history: ReadonlyArray<{ role: string; content: unknown }>,
   signal: AbortSignal | undefined,
   log: Logger,
-  timeoutMs = GIT_DIFF_RESPONSE_TIMEOUT_MS,
+  timeoutMs = run?.filesystem ? FILESYSTEM_CAPTURE_TIMEOUT_MS : GIT_DIFF_RESPONSE_TIMEOUT_MS,
 ): Promise<SessionDiffCaptureOutcome> {
   if (!run) return { status: 'workspace_unavailable', reason: 'no capability' };
   if (signal?.aborted || run.connection?.aborted) {
@@ -846,7 +905,7 @@ export async function captureSessionDiffBeforeFinal(
   history: ReadonlyArray<{ role: string; content: unknown }>,
   signal: AbortSignal | undefined,
   log: Logger,
-  timeoutMs = GIT_DIFF_RESPONSE_TIMEOUT_MS,
+  timeoutMs = run?.filesystem ? FILESYSTEM_CAPTURE_TIMEOUT_MS : GIT_DIFF_RESPONSE_TIMEOUT_MS,
 ): Promise<SessionDiffSummary | undefined> {
   if (!run || signal?.aborted || run.connection?.aborted) return undefined;
   return (await captureSessionDiffOutcome(run, history, signal, log, timeoutMs)).summary;

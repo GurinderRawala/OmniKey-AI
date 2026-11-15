@@ -2,34 +2,36 @@
   "name": "omnikey-ai-monorepo",
   "version": "1.6.0",
   "private": true,
-  "description": "OmniKey AI monorepo containing the API, CLI, and Telegram workspaces. Use Yarn for install/build/start.",
+  "description": "OmniKey AI monorepo containing the API, CLI, and Telegram workspaces. Use pnpm and Turborepo for install/build/start.",
   "license": "MIT",
-  "workspaces": [
-    "api",
-    "cli",
-    "telegram"
-  ],
   "engines": {
-    "node": ">=14.0.0",
-    "yarn": ">=1.22.0"
+    "node": "^22.12.0 || >=24.0.0",
+    "pnpm": "10.34.9"
   },
   "scripts": {
-    "build": "yarn workspace omnikey-ai-api run build && yarn workspace telegram run build && yarn workspace omnikey-cli run build",
-    "build:api": "yarn workspace omnikey-ai-api run build",
-    "build:telegram": "yarn workspace telegram run build",
-    "build:cli": "yarn workspace omnikey-cli run build",
-    "dev": "yarn workspace omnikey-ai-api run dev",
-    "start": "yarn workspace omnikey-ai-api run start",
-    "test": "yarn workspaces run test",
-    "lint": "yarn workspaces run lint",
-    "format": "yarn workspaces run format",
-    "clean": "yarn workspaces run clean"
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "lint": "turbo run lint",
+    "format": "turbo run format",
+    "format:check": "turbo run format:check",
+    "clean": "turbo run clean",
+    "build:api": "turbo run build --filter=omnikey-ai-api",
+    "build:telegram": "turbo run build --filter=telegram",
+    "build:cli": "turbo run build --filter=omnikey-cli",
+    "dev": "turbo run dev --filter=omnikey-ai-api --env-mode=loose",
+    "dev:all": "turbo run dev --env-mode=loose",
+    "start": "pnpm --filter omnikey-ai-api start",
+    "test:types": "turbo run test:types",
+    "test:tooling": "node --test scripts/tests/workspace.test.mjs",
+    "test:cache": "node scripts/test-turbo-cache.mjs"
   },
   "devDependencies": {
     "@eslint/js": "9.39.5",
     "eslint": "9.39.5",
-    "prettier": "^3.3.3",
-    "typescript": "^5.7.2",
-    "typescript-eslint": "8.55.0"
-  }
+    "prettier": "^3.10.1",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "8.72.2",
+    "turbo": "2.11.11"
+  },
+  "packageManager": "pnpm@10.34.9"
 }

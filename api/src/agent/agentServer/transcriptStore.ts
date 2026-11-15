@@ -1,5 +1,6 @@
 import { Transaction } from 'sequelize';
 import { sequelize } from '../../db';
+import { withTranscriptTransaction } from '../../sqliteReliability';
 import { AgentSession } from '../../models/agentSession';
 import { AgentTranscriptMessage } from '../../models/agentTranscriptMessage';
 import {
@@ -76,21 +77,24 @@ export async function replaceNormalizedTranscript(
     previewJson: JSON.stringify(previews[sequence]),
     sourceRevision: revision,
   }));
-  await sequelize.transaction(async (transaction: Transaction) => {
+  const sqlite = sequelize.getDialect() === 'sqlite';
+  const retry = sqlite ? { retry: { max: 0 } } : {};
+  await withTranscriptTransaction(sequelize, async (transaction: Transaction) => {
     const owned = await AgentSession.findOne({
       where: { id: sessionId, subscriptionId: ownerSubscriptionId },
       attributes: ['id'],
       transaction,
       lock: true,
+      ...retry,
     });
     if (!owned) return;
-    await AgentTranscriptMessage.destroy({ where: { sessionId }, transaction });
-    if (sequelize.getDialect() === 'sqlite') {
+    await AgentTranscriptMessage.destroy({ where: { sessionId }, transaction, ...retry });
+    if (sqlite) {
       // Sequelize's SQLite bulkCreate result parser can return undefined for
       // particular large text payloads, even for a one-row bulk insert. A
       // normal create uses the stable insert path and remains atomic here.
       for (const row of rows) {
-        await AgentTranscriptMessage.create(row, { transaction });
+        await AgentTranscriptMessage.create(row, { transaction, ...retry });
       }
     } else {
       for (const batch of normalizedTranscriptInsertBatches(rows)) {

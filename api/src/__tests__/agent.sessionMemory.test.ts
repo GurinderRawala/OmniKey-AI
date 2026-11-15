@@ -454,13 +454,10 @@ describe('agent session memory compaction', () => {
       { role: 'system', content: 'system' },
       { role: 'user', content: 'Fix the chart' },
       { role: 'assistant', content: 'archived evidence '.repeat(10_000) },
-      ...Array.from(
-        { length: 12 },
-        (_, i): AIMessage => ({
-          role: 'assistant',
-          content: `new inspection ${i}: ` + 'x'.repeat(900),
-        }),
-      ),
+      ...Array.from({ length: 12 }, (_, i): AIMessage => ({
+        role: 'assistant',
+        content: `new inspection ${i}: ` + 'x'.repeat(900),
+      })),
     ]);
     session.sessionMemory = 'Root cause established; edit the chart renderer.';
     session.sessionMemoryHistoryLength = 3;

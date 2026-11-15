@@ -79,6 +79,7 @@ async function processNextInQueue(sessionId: string): Promise<void> {
       // Capability of the connection that sent (and receives frames for) this input.
       supportsSkillStatus: next.message.supports_skill_status === true,
       supportsGitDiff: next.message.supports_git_diff === true,
+      supportsFilesystemDiff: next.message.supports_filesystem_diff === true,
       supportsGitTurnDiff: next.message.supports_git_turn_diff === true,
       // Build 82 already opts into a diff fallback using the legacy flag.
       // Accept that opt-in during migration, but never run its old recovery

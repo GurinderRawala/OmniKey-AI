@@ -1,5 +1,22 @@
 # Changelog
 
+## macOS 1.9.22 (build 84) · CLI/API 1.8.23 — 2026-11-15
+
+### Added
+- Live, turn-scoped filesystem diffs inside and outside Git repositories, with pre-existing edits included in the baseline.
+- Native changes drawer, running-turn change counts, and saved completed-turn change cards.
+- Compact GitHub session control showing associated pull requests and their source branches, including while the changes drawer is open.
+- A pulsing thinking indicator before tool activity begins, with Reduce Motion support.
+
+### Fixed
+- Preserve captured worktree edits through cleanup, filter ignored build output, and avoid comparing replaced roots as deleted files.
+- Keep incomplete snapshots accessible and capture around shell commands before subsequent cleanup can overtake them.
+- Exclude unrelated checkout-branch pull requests from session results.
+
+### Build and release
+- Integrate the pnpm/Turborepo migration and dependency refresh, including portable CLI packaging and stale-artifact cleanup.
+- Ship CLI/API 1.8.23 and the signed, notarized universal macOS 1.9.22 bundle. Windows unchanged.
+
 ## macOS 1.9.21 (build 83) · CLI/API 1.8.21 — 2026-11-13
 
 ### Changed

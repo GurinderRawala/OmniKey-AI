@@ -21,7 +21,7 @@ const SENSITIVE_EXT = new Set('pem key p12 pfx keystore jks p8 ppk asc gpg kdbx'
 const OWN_HIDDEN_HOME_DIRS = new Set(['.omniagent', '.omnikey']);
 
 function hasHiddenHomeComponent(path: string): boolean {
-  const home = /^\/(?:Users|home)\/[^/]+\//.exec(path);
+  const home = /^\/(?:(?:Users|home)\/[^/]+|root)\//.exec(path);
   if (!home) return false;
   return path
     .slice(home[0].length)

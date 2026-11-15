@@ -44,12 +44,8 @@ export function getPort(): number {
 }
 
 export function initLogFiles(logPath: string, errorLogPath: string): { out: number; err: number } {
-  try {
-    fs.writeFileSync(logPath, '');
-    fs.writeFileSync(errorLogPath, '');
-  } catch {
-    // Ignore if files don't exist yet
-  }
+  // Opening in append mode creates missing files without erasing the crash
+  // evidence that prompted a restart.
   return {
     out: fs.openSync(logPath, 'a'),
     err: fs.openSync(errorLogPath, 'a'),

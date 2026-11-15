@@ -1,4 +1,175 @@
-# Git session diffs
+# Live filesystem turn diffs (current macOS protocol)
+
+macOS now advertises `supports_filesystem_diff: true` and does **not** request
+agent-authored patches. The backend selects this mode once per outer run when
+Diff view is enabled. Older clients and historical snapshots retain the legacy
+protocol described below.
+
+## GitHub session discovery
+
+Shell blocks retain their structured working directory in live events and persisted
+transcripts, so GitHub discovery also works with diff capture disabled. Each card
+runs one discovery operation at a time and coalesces subsequent requests. Explicitly
+linked PRs are queried before cached PRs; cached lookups rotate with individual
+three-second deadlines. Branch matches must belong to the clone's `origin` repository
+(or the selected remote when origin is absent), even if the branch tracks upstream.
+Explicit links may identify PRs from other forks targeting the selected repository.
+
+## Interval and deterministic capture
+
+One socket run owns one `TurnChangeTracker`. Its first baseline captures actual
+file contents, existence, executable mode and symlink targets. Existing dirty
+and untracked content is part of that baseline. Each new user turn gets a new
+tracker, even if the previous turn left files uncommitted. **Steering keeps the
+same tracker and baseline**; it does not start a new interval. Newly discovered
+roots are captured before their first shell and permanently labelled late.
+
+The `filesystem: true` baseline/final control frames reuse authenticated request
+correlation. Baseline `head: null` is a compatibility field in this mode, not a
+claim that a repository is unborn. Final frames echo the acknowledged baselines.
+Filesystem capture respects selected folders without expanding them to Git roots,
+so selecting a smaller folder actually narrows coverage. Git is not required. Patches compare the
+captured bytes with current bytes through local `/usr/bin/diff`; neither Git
+history nor an LLM supplies the old contents. Commits, amendments and resets do
+not rebase capture. Renames are represented deterministically as deletion/addition.
+Binary contents are represented by a summary, and symlinks by their target text.
+The user's Git index, configuration and object database are never modified.
+
+A timed-out baseline request remains in the run's authorization ledger. A later
+cumulative reply may acknowledge that original capture, using its original source;
+it cannot introduce roots never requested by this run or replace an accepted baseline.
+Wide directories are enumerated incrementally, with time and entry limits checked
+before retaining entries or sorting the bounded collection.
+
+## Live view and final history
+
+Running previews and saved drawers carry bounded capture status. Incomplete empty
+comparisons say "Changes unavailable"; optional Capture details contain escaped,
+bounded root information. These details do not appear in the composer pill.
+
+FSEvents invalidate the current view while the agent is running, including while
+a shell is still executing. A serial native capture queue coalesces invalidations
+on a 750 ms timer, reconciles at least every five seconds in case events are lost,
+and reconciles again after a shell. If observation cannot start, bounded polling
+remains available. Scans are bounded; busy roots can take longer than the timer interval. Changed
+results publish a stable turn ID and increasing revision. The chat shows a compact
+pill directly above the composer only while the current turn is running and has
+changed files. It is labelled "Changes" and shows the file count, green added-line
+count and red removed-line count. Clicking it opens the right-hand drawer. Each
+completed turn instead keeps a full-width "Changes" card before its final answer,
+bound to its own immutable snapshot ID. No completed-turn pill remains over the
+composer. Steering preserves the same interval. Late/stale revisions are ignored.
+A new turn with no changes does not retain the previous turn's pill. Binary and
+mode-only changes still show a file count even with zero added/removed text lines.
+
+Final capture saves the bounded patches and coverage in the existing immutable
+snapshot store. An open live drawer transitions to that saved snapshot; its inspector
+uses the isolated Pierre renderer. Summary/history metadata includes additions and
+deletions; older snapshots obtain counts from the authenticated viewer response.
+Coverage diagnostics remain stored for investigation but are not shown as chat
+banners or viewer warnings. The transcript shows only the completed summary card;
+patch content stays in the drawer. Cancellation/disconnection stops observation and
+retains a local summary card for the last captured changes (not a durable snapshot).
+In-memory baselines are released with the run; they are not a crash-recovery journal.
+
+## Shared native drawer
+
+Running and saved changes use the same Pierre syntax-highlighted renderer, file
+sections, line numbers, and unified/side-by-side layout. The native toolbar uses
+system materials, semantic colors, an updating indicator, a file filter, and
+expand/collapse actions. Layout preference persists; Escape closes the drawer.
+Document revisions retain vertical/horizontal scroll and file disclosure state,
+including the transition from an updating preview to the final saved snapshot.
+Previous rendered content stays mounted during refresh; out-of-order replies are
+ignored. The reader can open earlier turn cards while another turn is running.
+
+The authenticated `POST /api/agent/sessions/:sessionId/diffs/preview` route renders
+bounded native patches without storing them or adding provider/transcript messages.
+It verifies session ownership, validates the existing eight-root / 2 MiB patch
+contract, and uses the same bounded renderer/cache as saved snapshots. Its vendor
+JSON media type (`application/vnd.omnikey.diff+json`) has a route-owned 14 MiB
+transport limit to accommodate JSON escaping; other routes keep their existing
+parser limits. Native requests render one revision at a time and coalesce pending edits to the
+newest revision, so continuous edits cannot starve the first useful frame.
+Requests are cancelled when the drawer closes.
+
+The web view still forbids page scripts and external navigation/resources. Only
+fixed application-owned scripts in WebKit's isolated client content world manage
+scroll, disclosure state and filtering; values are passed as arguments, never
+executed as code. This behavior is exercised by real WebKit regression tests.
+
+## Session GitHub card
+
+A compact card at the top right appears only when the session's detected starting
+folder resolves to a repository with a GitHub.com remote. It shows the repository,
+branch, working-tree change count, and related pull requests. Repository inspection
+uses bounded read-only Git commands. PR lookup uses the installed, authenticated
+GitHub CLI without shell interpolation or login prompts; when unavailable, local
+repository information still appears with a short PR availability label.
+
+Related PRs are those on observed session branches plus explicit PR URLs for that
+repository in loaded user/assistant messages and tool output. Discovered PRs are
+cached per session and retained across branch changes; their states refresh after
+tool results/final answers, on opening the chat, and every 30 seconds during a run.
+The card never lists unrelated repository-wide PRs. Long lists scroll inside the
+card. Switching sessions clears the visible repository state before loading the
+next session. GitHub PR actions are read-only links; no PRs or Git state are changed.
+
+## Coverage, limits and suggested fixes
+
+Each acknowledged root has `status`, `reason`, and `suggestedFix`. Status is
+`complete` for all eligible files, `late` for a later baseline, `partial` for
+read/size/enumeration gaps, or `unavailable` when an endpoint cannot be read.
+Policy exclusions are retained in metadata even when all eligible files were captured.
+Roots lacking an acknowledged baseline are explicitly unavailable. A failed root
+does not suppress successfully captured roots. Empty snapshots retain coverage
+and suggested fixes for diagnostics, without displaying a change pill. A missing baseline is never invented from current
+contents, Git HEAD, or an agent report.
+
+Default bounds: eight captured roots (up to 40 coverage entries disclose additional known scopes); 10,000 enumerated entries and 32 MiB of baseline
+content per root; 1 MiB per file; 2 MiB combined patches; a four-second scan budget
+and a separate four-second patch-generation budget (with bounded diff subprocesses).
+Scanning uses deterministic breadth-first traversal, so a large subtree cannot
+starve top-level files. Subsequent scans revisit captured baseline paths first,
+including explicit absence checks for deletions, before discovering other files.
+Scan exhaustion does not prevent patches for successfully captured changes.
+Partial coverage reports starting/compared file counts and specific limits; an
+empty partial snapshot is not evidence that no files changed. Filesystem control requests allow 20 seconds
+including queued reconciliation and transport. The local shell also waits for
+pending baseline work, so a server timeout cannot make it overtake the snapshot.
+If that local wait also exceeds 20 seconds, the shell returns an explicit error
+without executing the script. Reads that finish after the scan deadline are
+omitted rather than accepted as late starting contents. Sensitive files, Git internals, dependency and
+build directories (`node_modules`, `.build`, `DerivedData`, `.venv`, `__pycache__`)
+and special files are excluded. Contents live privately in memory; temporary
+comparison files are created in a private directory and removed after comparison.
+Reads resolve every path component through pinned directory descriptors with
+no-follow checks, then verify identity, size, mode and timestamps around collection.
+Replacing an ancestor or root with a symlink cannot redirect capture outside the root.
+Unknown/unreadable entries are never interpreted as deletions or new empty files.
+
+This is a net filesystem view of the captured roots: edit-then-undo disappears.
+It may include concurrent edits by other processes. Arbitrary writes outside
+captured roots cannot be reconstructed. Select the intended project folder before
+starting a turn; late discovery and capture gaps remain recorded rather than being
+filled with generated patches.
+
+## Verification
+
+Native regression tests cover consecutive dirty turns, non-Git folders, steering
+baseline stability, multiple commits, metadata removal, text patch application,
+symlinks, binary files, modes, missing newlines, partial roots, and live updates
+before a shell finishes. Backend tests cover capability negotiation, disabling
+agent patch instructions, coverage validation/storage/history, and real HTML
+rendering. Legacy tests continue exercising older clients and stored snapshots.
+
+---
+
+# Historical Git and agent-patch protocols
+
+The following describes legacy clients and historical data. It does not define
+the active filesystem-capture path above.
+
 
 After an agent run, the macOS app can show a **View changes** card right before each final
 answer. The card opens a right-hand inspector that renders a server-generated

@@ -103,6 +103,7 @@ struct ChatBlock: Identifiable, Equatable {
     var createdAt: Date = Date()
     /// Stable server-provided identity used to pair the start and result of
     /// concurrent tool calls without relying on arrival order.
+    var workingDirectory: String? = nil
     var activityId: String? = nil
     var activityPhase: ChatActivityPhase? = nil
     var contentLength: Int? = nil
@@ -110,24 +111,28 @@ struct ChatBlock: Identifiable, Equatable {
     var fullContentID: String? = nil
     var previewText: String? = nil
     var sessionDiff: SavedSessionDiff? = nil
+    var liveDiff: LiveTurnDiff? = nil
 
     init(
         id: String = "local:block:\(UUID().uuidString)",
         kind: ChatBlockKind,
         text: String,
         createdAt: Date = Date(),
+        workingDirectory: String? = nil,
         activityId: String? = nil,
         activityPhase: ChatActivityPhase? = nil,
         contentLength: Int? = nil,
         isContentTruncated: Bool = false,
         fullContentID: String? = nil,
         previewText: String? = nil,
-        sessionDiff: SavedSessionDiff? = nil
+        sessionDiff: SavedSessionDiff? = nil,
+        liveDiff: LiveTurnDiff? = nil
     ) {
         self.id = id
         self.kind = kind
         self.text = text
         self.createdAt = createdAt
+        self.workingDirectory = workingDirectory
         self.activityId = activityId
         self.activityPhase = activityPhase
         self.contentLength = contentLength
@@ -135,11 +140,13 @@ struct ChatBlock: Identifiable, Equatable {
         self.fullContentID = fullContentID
         self.previewText = previewText
         self.sessionDiff = sessionDiff
+        self.liveDiff = liveDiff
     }
 
     static func == (lhs: ChatBlock, rhs: ChatBlock) -> Bool {
         return lhs.id == rhs.id
             && lhs.text == rhs.text
+            && lhs.workingDirectory == rhs.workingDirectory
             && lhs.activityId == rhs.activityId
             && lhs.activityPhase == rhs.activityPhase
             && lhs.contentLength == rhs.contentLength
@@ -147,6 +154,7 @@ struct ChatBlock: Identifiable, Equatable {
             && lhs.fullContentID == rhs.fullContentID
             && lhs.previewText == rhs.previewText
             && lhs.sessionDiff == rhs.sessionDiff
+            && lhs.liveDiff == rhs.liveDiff
     }
 }
 
@@ -367,6 +375,8 @@ final class ChatModel: ObservableObject {
         didSet {
             guard oldValue != activeSessionId else { return }
             sentMessageID = nil
+            showsLiveChanges = false
+            inspectedCapturedDiff = nil
             // A snapshot belongs to one session; never show it over another.
             if inspectedSessionDiff?.sessionId != activeSessionId { inspectedSessionDiff = nil }
             let draft = readingStore.draft(for: activeSessionId ?? pendingNewChatKey)
@@ -378,8 +388,12 @@ final class ChatModel: ObservableObject {
     /// The saved snapshot shown in the right-hand inspector, if any. Each
     /// card selects its own immutable ID; switching sessions clears it.
     @Published private(set) var inspectedSessionDiff: SessionDiffSelection? = nil
+    @Published var showsLiveChanges = false
+    @Published private(set) var inspectedCapturedDiff: LiveTurnDiff?
 
     func toggleSessionDiff(_ diff: SavedSessionDiff, diffViewEnabled: Bool = AgentDiffViewSetting.currentRunValue()) {
+        showsLiveChanges = false
+        inspectedCapturedDiff = nil
         guard diffViewEnabled else { inspectedSessionDiff = nil; return }
         guard let sessionId = activeSessionId, diff.isEligibleForViewer else { return }
         if inspectedSessionDiff?.sessionId == sessionId, inspectedSessionDiff?.diff.id == diff.id {
@@ -389,7 +403,14 @@ final class ChatModel: ObservableObject {
         }
     }
 
+    func inspectCapturedChanges(_ diff: LiveTurnDiff) {
+        closeSessionDiff()
+        inspectedCapturedDiff = diff
+    }
+
     func closeSessionDiff() {
+        inspectedCapturedDiff = nil
+        showsLiveChanges = false
         inspectedSessionDiff = nil
     }
 
@@ -1334,6 +1355,7 @@ final class ChatModel: ObservableObject {
                         kind: kind,
                         text: block.text,
                         createdAt: hydratedAt,
+                        workingDirectory: block.workingDirectory,
                         activityId: block.activityId,
                         activityPhase: block.activityPhase,
                         contentLength: block.contentLength,
@@ -1551,6 +1573,7 @@ final class ChatModel: ObservableObject {
             sendSteeringInput(text, to: currentState)
             return
         }
+        closeSessionDiff()
         inputText = ""
         if activeSessionId == nil && messages.isEmpty {
             activeSessionTaskInstructionTitle = defaultTaskTemplate?.heading
@@ -1873,6 +1896,8 @@ final class ChatModel: ObservableObject {
     }
 
     private func recomputeSteeringRedirect(for redirectKey: String, in sessionSt: ChatSessionState) {
+        let previousTarget = sessionSt.assistantRedirects[redirectKey] ?? redirectKey
+        let live = sessionSt.messages.first(where: { $0.id == previousTarget })?.blocks.filter { $0.liveDiff != nil } ?? []
         if let target = SteeringRedirectResolver.target(
             for: redirectKey,
             records: sessionSt.steeringRedirectRecords
@@ -1882,6 +1907,15 @@ final class ChatModel: ObservableObject {
         } else {
             sessionSt.assistantRedirects.removeValue(forKey: redirectKey)
             sessionSt.streamingAssistantMessageID = redirectKey
+        }
+        let newTarget = sessionSt.assistantRedirects[redirectKey] ?? redirectKey
+        if newTarget != previousTarget, !live.isEmpty {
+            for index in sessionSt.messages.indices {
+                if sessionSt.messages[index].id == previousTarget {
+                    sessionSt.messages[index].blocks.removeAll { $0.liveDiff != nil }
+                }
+                if sessionSt.messages[index].id == newTarget { sessionSt.messages[index].blocks.append(contentsOf: live) }
+            }
         }
     }
 
@@ -1909,8 +1943,26 @@ final class ChatModel: ObservableObject {
         guard let targetIndex = sessionSt.messages.firstIndex(where: { $0.id == targetID }) else {
             return
         }
+        if let live = block.liveDiff {
+            // Steering may move the assistant bubble, but the run keeps one
+            // baseline and one live card. Reject stale deliveries across moves.
+            let existing = sessionSt.messages.flatMap(\.blocks).compactMap(\.liveDiff).first { $0.turnID == live.turnID }
+            if let existing, existing.revision >= live.revision { return }
+            for index in sessionSt.messages.indices {
+                sessionSt.messages[index].blocks.removeAll { $0.liveDiff?.turnID == live.turnID }
+            }
+        }
         var message = sessionSt.messages[targetIndex]
         guard message.role == .assistant else { return }
+        if let saved = block.sessionDiff {
+            message.blocks.removeAll { $0.liveDiff != nil }
+            if states[activeStateKey] === sessionSt, showsLiveChanges {
+                showsLiveChanges = false
+                if saved.fileCount > 0, let sessionID = activeSessionId {
+                    inspectedSessionDiff = SessionDiffSelection(sessionId: sessionID, diff: saved)
+                }
+            }
+        }
         message.blocks.append(block)
         sessionSt.messages[targetIndex] = message
 

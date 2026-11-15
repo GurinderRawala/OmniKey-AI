@@ -312,7 +312,7 @@ describe('command parsing and help', () => {
       expect(sh.out).toContain('Usage:');
     }
     expect((await cli(['skills', 'match', '--help'])).out).toMatch(
-      /Does not\s+send it to the agent/,
+      /Does\s+not\s+send\s+it\s+to\s+the\s+agent/,
     );
     expect(fake.requests).toHaveLength(0);
   });

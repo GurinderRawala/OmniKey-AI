@@ -1,7 +1,8 @@
 import path from 'path';
 import fs from 'fs';
 import { execSync, execFileSync } from 'child_process';
-import inquirer from 'inquirer';
+import { loadInquirer } from './loadInquirer';
+import { loadLaunchAgent } from './launchAgent';
 import {
   isWindows,
   getHomeDir,
@@ -47,7 +48,7 @@ export async function startDaemon(port: number = 7071) {
       errorLogPath,
     });
   } else {
-    startDaemonMacOS({
+    await startDaemonMacOS({
       configDir,
       runtimeEnv: buildDaemonRuntimeEnv({ configDir, configPath, port, platform: 'macos' }),
       nodePath,
@@ -156,7 +157,9 @@ async function startDaemonWindows(opts: DaemonOptions) {
 
   let nssmPath = resolveNssm();
   if (!nssmPath) {
-    const { install } = await inquirer.prompt<{ install: boolean }>([
+    const { install } = await (
+      await loadInquirer()
+    ).prompt<{ install: boolean }>([
       {
         type: 'confirm',
         name: 'install',
@@ -265,7 +268,7 @@ async function startDaemonWindows(opts: DaemonOptions) {
   }
 }
 
-function startDaemonMacOS(opts: DaemonOptions) {
+async function startDaemonMacOS(opts: DaemonOptions) {
   const { configDir, runtimeEnv, nodePath, backendPath, logPath, errorLogPath } = opts;
   const homeDir = getHomeDir();
 
@@ -290,7 +293,7 @@ function startDaemonMacOS(opts: DaemonOptions) {
     } catch {
       /* not loaded */
     }
-    execFileSync('/bin/launchctl', ['load', plistPath], { stdio: 'pipe' });
+    await loadLaunchAgent(plistPath);
     console.log(`Launch agent created and loaded: ${plistPath}`);
     console.log('Omnikey daemon will auto-restart and persist across reboots.');
     // launchd starts the process via RunAtLoad — no manual spawn needed here.
@@ -298,5 +301,6 @@ function startDaemonMacOS(opts: DaemonOptions) {
     // loser to crash and launchd's KeepAlive to restart it in a ~10s loop.
   } catch (e) {
     console.error('Failed to create or load launch agent:', e);
+    process.exitCode = 1;
   }
 }

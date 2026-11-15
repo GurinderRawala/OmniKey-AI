@@ -81,7 +81,17 @@ export async function authMiddleware(
   if (config.isSelfHosted || !config.jwtSecret) {
     requestLogger.info('Self-hosted mode: skipping auth middleware.');
     if (config.isSelfHosted) {
-      res.locals.subscription = await selfHostedSubscription();
+      try {
+        res.locals.subscription = await selfHostedSubscription();
+      } catch (error) {
+        // Express 4 does not catch rejected async middleware promises. A
+        // transient DB failure must fail this request, not kill every session.
+        requestLogger.error('Self-hosted authentication temporarily unavailable.', { error });
+        res.setHeader('Retry-After', '1');
+        return res
+          .status(503)
+          .json({ error: 'Local database temporarily unavailable. Please retry.' });
+      }
     }
     return next();
   }

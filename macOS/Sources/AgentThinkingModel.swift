@@ -52,6 +52,7 @@ struct SessionHistoryBlock: Decodable, Identifiable {
     let id: String
     let kind: String
     let text: String
+    let workingDirectory: String?
     let activityId: String?
     let activityPhase: ChatActivityPhase?
     let contentLength: Int?
@@ -61,7 +62,7 @@ struct SessionHistoryBlock: Decodable, Identifiable {
     let sessionDiff: SavedSessionDiff?
 
     enum CodingKeys: String, CodingKey {
-        case id, kind, text, activityId, activityPhase, contentLength, isContentTruncated, contentId, sessionDiff
+        case id, kind, text, workingDirectory, activityId, activityPhase, contentLength, isContentTruncated, contentId, sessionDiff
     }
 
     init(from decoder: Decoder) throws {
@@ -69,6 +70,7 @@ struct SessionHistoryBlock: Decodable, Identifiable {
         id = try c.decode(String.self, forKey: .id)
         kind = try c.decode(String.self, forKey: .kind)
         text = try c.decode(String.self, forKey: .text)
+        workingDirectory = try c.decodeIfPresent(String.self, forKey: .workingDirectory)
         activityId = try c.decodeIfPresent(String.self, forKey: .activityId)
         activityPhase = try c.decodeIfPresent(ChatActivityPhase.self, forKey: .activityPhase)
         contentLength = try c.decodeIfPresent(Int.self, forKey: .contentLength)

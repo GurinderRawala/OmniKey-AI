@@ -1,8 +1,9 @@
 import { Sequelize } from 'sequelize';
 import { config } from './config';
 import { Logger } from 'winston';
+import { configureSQLiteReliability, enableSQLiteWAL } from './sqliteReliability';
 
-let sequelize: Sequelize;
+let sequelize!: Sequelize;
 if (config.isSelfHosted) {
   // Use SQLite for self-hosted users
   const dbPath = config.sqlitePath || 'omnikey-selfhosted.sqlite';
@@ -25,6 +26,7 @@ if (config.isSelfHosted) {
   });
 }
 
+if (sequelize) configureSQLiteReliability(sequelize);
 export { sequelize };
 
 // ---------------------------------------------------------------------------
@@ -338,6 +340,7 @@ async function migrateMcpServersTableIfNeeded(logger: Logger): Promise<void> {
 export async function initDatabase(logger: Logger): Promise<void> {
   try {
     await sequelize.authenticate();
+    await enableSQLiteWAL(sequelize);
     // Use `alter: true` only for Postgres, not for SQLite.
     // On SQLite, sync() creates any missing tables from scratch (safe for new
     // installs) and then runSQLiteMigrations() adds any columns that were

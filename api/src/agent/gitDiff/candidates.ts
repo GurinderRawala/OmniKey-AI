@@ -25,12 +25,7 @@ import {
 } from './contracts';
 
 export type CandidateSource =
-  | 'working_directory'
-  | 'command'
-  | 'pwd'
-  | 'user_input'
-  | 'project'
-  | 'previous_run';
+  'working_directory' | 'command' | 'pwd' | 'user_input' | 'project' | 'previous_run';
 
 const SOURCE_PRIORITY: Record<CandidateSource, number> = {
   working_directory: 0,

@@ -214,7 +214,7 @@ async function turn(
   sessionId: string,
   content: string,
   opts: ClientOptions,
-  capability: { diff?: boolean; turn?: boolean } = { diff: true, turn: true },
+  capability: { diff?: boolean; turn?: boolean; filesystem?: boolean } = { diff: true, turn: true },
 ) {
   const client = fakeClient(sessionId, opts);
   mocks.complete.mockImplementation(async (...args: unknown[]) => {
@@ -233,6 +233,8 @@ async function turn(
       skipGrouping: true,
       supportsGitDiff: capability.diff === true,
       supportsGitTurnDiff: capability.turn === true,
+      supportsFilesystemDiff: capability.filesystem === true,
+      supportsAgentPatches: capability.filesystem === true,
     },
   );
   const requests = client.frames.filter((f) => f.git_diff_request).map((f) => f.git_diff_request!);
@@ -645,6 +647,46 @@ describe('coordinator and validation units', () => {
     // Same path later (e.g. a tool in it): never a late baseline.
     await captureTurnBaselines(r, [ROOT], 'before_tool', undefined, log, 20);
     expect(frames).toHaveLength(1);
+    // A disjoint later request recovers the original capture from a cumulative reply.
+    const other = ROOT + '-other';
+    const capturing = captureTurnBaselines(r, [other], 'before_tool', undefined, log, 1000);
+    const later = frames[1].git_diff_request!;
+    handleGitDiffResponseFrame(
+      {
+        session_id: 'u-late',
+        sender: 'client',
+        content: '',
+        git_diff_response: {
+          request_id: later.request_id,
+          status: 'ok',
+          repositories: [],
+          baselines: [good, { ...good, root: other, source: 'before_tool' }],
+        },
+      },
+      'sub-a',
+      connection.signal,
+      log,
+    );
+    await capturing;
+    expect(r.baselines).toEqual([good, { ...good, root: other, source: 'before_tool' }]);
+    const response = {
+      request_id: later.request_id,
+      status: 'ok',
+      repositories: [],
+      baselines: [good],
+    };
+    expect(() =>
+      validateGitBaselineResponse(response, later, { notBefore: r.startedAt, now: Date.now() }),
+    ).toThrow();
+    expect(() =>
+      validateGitBaselineResponse(
+        { ...response, baselines: [{ ...good, source: 'before_tool' }] },
+        later,
+        { notBefore: r.startedAt, now: Date.now() },
+        [],
+        r.baselineRequests,
+      ),
+    ).toThrow('baseline source');
   });
 });
 
@@ -709,4 +751,304 @@ describe('turn snapshot viewer', () => {
       ).status,
     ).toBe(404);
   }, 60_000);
+});
+
+describe('deterministic filesystem snapshots', () => {
+  const coverage = [
+    {
+      root: ROOT,
+      status: 'partial',
+      reason: 'An unreadable file was omitted.',
+      suggestedFix: 'Fix file permissions before the next run.',
+    },
+  ];
+  it('requests content capture, disables agent patches, saves root coverage and renders it', async () => {
+    queueResults(finalAnswer('done'));
+    const t = await turn(
+      'fs-complete',
+      `Fix ${ROOT}`,
+      {
+        heads: { [ROOT]: null },
+        final: (req) => ({ ...turnReply(filePatch('file.ts'), null)(req), coverage }),
+      },
+      { filesystem: true },
+    );
+    expect(t.requests.every((r) => r.filesystem === true)).toBe(true);
+    const summary = t.frames.find((f) => f.session_diff)!.session_diff!;
+    expect(summary.filesystem).toBe(true);
+    expect(summary.coverage).toEqual(coverage);
+    expect(cleanSessionDiffSummary(summary)).toEqual(summary);
+    const saved = await loadSessionDiffPayload('fs-complete', 'sub-a', summary.id);
+    expect(saved!.payload.coverage).toEqual(coverage);
+    expect(saved!.payload.recovery).toBeUndefined();
+    expect(JSON.stringify(mocks.complete.mock.calls)).not.toContain(
+      'omnikey_diff_report_instruction',
+    );
+    const app = express();
+    app.use('/api/agent', createAgentRouter());
+    const response = await request(app)
+      .get(`/api/agent/sessions/fs-complete/diffs/${summary.id}`)
+      .set('x-test-subscription', 'sub-a');
+    expect(response.status).toBe(200);
+    expect(response.body.html).not.toContain('Fix file permissions');
+    expect(response.body.html).not.toContain('Suggested fix:');
+    expect(response.body.html).not.toContain('Net filesystem changes since');
+    expect(response.body.additions).toBeGreaterThan(0);
+    expect(response.body.deletions).toBeGreaterThan(0);
+    expect(response.body.html).toContain('data-file-key');
+    expect(response.body.html).not.toContain('captured starting contents');
+    expect(response.body.html).not.toContain('unborn');
+  });
+
+  it('persists coverage even when no patch could be captured', async () => {
+    queueResults(finalAnswer('done'));
+    const t = await turn(
+      'fs-empty',
+      `Fix ${ROOT}`,
+      {
+        heads: { [ROOT]: null },
+        final: () => ({ status: 'ok', repositories: [], coverage }),
+      },
+      { filesystem: true },
+    );
+    expect(t.frames.find((f) => f.session_diff)?.session_diff).toMatchObject({
+      filesystem: true,
+      fileCount: 0,
+      repositoryCount: 1,
+      coverage,
+    });
+  });
+
+  it('rejects incomplete or foreign root coverage instead of claiming complete capture', () => {
+    const baseline = {
+      root: ROOT,
+      head: null,
+      capturedAt: new Date().toISOString(),
+      source: 'turn_start' as const,
+    };
+    const req = {
+      request_id: 'fs-request',
+      candidate_paths: [ROOT],
+      baselines: [baseline],
+      filesystem: true,
+    };
+    for (const bad of [[], [{ ...coverage[0], root: OTHER }], [coverage[0], coverage[0]]]) {
+      expect(() =>
+        validateGitTurnFinalResponse(
+          { request_id: req.request_id, status: 'ok', repositories: [], coverage: bad },
+          req,
+        ),
+      ).toThrow();
+    }
+  });
+});
+
+it('filesystem final failures remain visible as unavailable coverage', async () => {
+  queueResults(finalAnswer('done'));
+  const t = await turn(
+    'fs-failed',
+    `Fix ${ROOT}`,
+    {
+      heads: { [ROOT]: null },
+      final: () => ({ status: 'unavailable', repositories: [] }),
+    },
+    { filesystem: true },
+  );
+  const diff = t.frames.find((f) => f.session_diff)!.session_diff!;
+  expect(diff.fileCount).toBe(0);
+  expect(diff.coverage?.[0]).toMatchObject({ root: ROOT, status: 'unavailable' });
+  const stored = await loadSessionDiffPayload('fs-failed', 'sub-a', diff.id);
+  expect(stored!.payload.notice).toContain('not a claim that no files changed');
+});
+
+it('filesystem roots without an acknowledged baseline remain explicitly unavailable', async () => {
+  queueResults(finalAnswer('done'));
+  const t = await turn(
+    'fs-no-baseline',
+    `Fix ${ROOT}`,
+    {
+      heads: {},
+      baseline: () => ({ status: 'unavailable', baselines: [], repositories: [] }),
+      final: () => ({ status: 'ok', repositories: [], coverage: [] }),
+    },
+    { filesystem: true },
+  );
+  expect(t.frames.find((f) => f.session_diff)?.session_diff?.coverage).toEqual([
+    expect.objectContaining({ root: ROOT, status: 'unavailable' }),
+  ]);
+});
+
+it('filesystem steering keeps the original baseline across superseded finals', async () => {
+  queueResults(finalAnswer('superseded'), finalAnswer('accepted'));
+  const { enqueueSteeringMessage } = await import('../agent/agentServer/steering');
+  let captures = 0;
+  const t = await turn(
+    'fs-steering',
+    `Fix ${ROOT}`,
+    {
+      heads: { [ROOT]: null },
+      final: (req) => {
+        if (captures++ === 0) {
+          enqueueSteeringMessage(
+            'fs-steering',
+            {
+              session_id: 'fs-steering',
+              sender: 'client',
+              content: 'Also update the tests',
+              is_steering: true,
+              steering_id: 'fs-update',
+            },
+            log,
+          );
+        }
+        return {
+          ...turnReply(
+            filePatch('before-steering.ts') +
+              filePatch(captures === 1 ? 'superseded.ts' : 'accepted.ts'),
+            null,
+          )(req),
+          coverage: [
+            { root: ROOT, status: 'complete', reason: 'Captured contents', suggestedFix: '' },
+          ],
+        };
+      },
+    },
+    { filesystem: true },
+  );
+  expect(t.requests.filter((r) => r.phase === 'baseline')).toHaveLength(1);
+  const finals = t.requests.filter((r) => r.phase === 'final');
+  expect(finals).toHaveLength(2);
+  expect(finals[1].baselines).toEqual(finals[0].baselines);
+  const delivered = t.frames.find((f) => f.session_diff)!;
+  expect(delivered.content).toContain('accepted');
+  expect(delivered.session_diff?.fileCount).toBe(2);
+  const stored = await loadSessionDiffPayload('fs-steering', 'sub-a', delivered.session_diff!.id);
+  expect(stored!.payload.repositories[0].patch).toContain('accepted.ts');
+  expect(stored!.payload.repositories[0].patch).not.toContain('superseded.ts');
+});
+
+it('rejects non-string filesystem coverage status without coercion', () => {
+  const baseline = {
+    root: ROOT,
+    head: null,
+    capturedAt: new Date().toISOString(),
+    source: 'turn_start' as const,
+  };
+  const req = {
+    request_id: 'coverage-type',
+    candidate_paths: [ROOT],
+    baselines: [baseline],
+    filesystem: true,
+  };
+  expect(() =>
+    validateGitTurnFinalResponse(
+      {
+        request_id: req.request_id,
+        status: 'ok',
+        repositories: [],
+        coverage: [{ root: ROOT, status: ['complete'], reason: 'ok', suggestedFix: '' }],
+      },
+      req,
+    ),
+  ).toThrow();
+});
+
+it('discloses a ninth discovered root instead of silently dropping its coverage', async () => {
+  const roots = Array.from({ length: 9 }, (_, i) => `/Users/dev/projects/root-${i}`);
+  queueResults(
+    toolCalls([
+      {
+        id: 'ninth',
+        name: 'shell_script',
+        arguments: { script: 'ls', working_directory: roots[8] },
+      },
+    ]),
+    finalAnswer('done'),
+  );
+  const t = await turn(
+    'fs-root-limit',
+    `Fix ${roots.slice(0, 8).join(' and ')}`,
+    {
+      heads: Object.fromEntries(roots.map((root) => [root, null])),
+      final: (req) => ({
+        ...turnReply(filePatch('file.ts'), null)(req),
+        coverage: req.baselines!.map((b) => ({
+          root: b.root,
+          status: 'complete',
+          reason: 'Captured',
+          suggestedFix: '',
+        })),
+      }),
+    },
+    { filesystem: true },
+  );
+  const summary = t.frames.find((f) => f.session_diff)!.session_diff!;
+  expect(summary.coverage).toHaveLength(9);
+  expect(summary.coverage!.find((c) => c.root === roots[8])?.status).toBe('unavailable');
+  expect(cleanSessionDiffSummary(summary)?.coverage).toHaveLength(9);
+});
+
+it('records only issued filesystem aliases and avoids duplicate unavailable coverage', async () => {
+  const alias = ROOT.toUpperCase();
+  const baseline = {
+    root: ROOT,
+    head: null,
+    capturedAt: new Date().toISOString(),
+    source: 'turn_start' as const,
+  };
+  const client = fakeClient('fs-alias', {
+    heads: {},
+    baseline: () => ({
+      status: 'ok',
+      repositories: [],
+      baselines: [baseline],
+      root_aliases: [{ root: ROOT, alias }],
+    }),
+    final: () => ({
+      status: 'ok',
+      repositories: [],
+      coverage: [{ root: ROOT, status: 'complete', reason: '', suggestedFix: '' }],
+    }),
+  });
+  const run = createGitRunState({
+    sessionId: 'fs-alias',
+    subscriptionId: 'sub-a',
+    send: client.send,
+    connection: client.connection.signal,
+    turnDiff: true,
+    filesystem: true,
+  });
+
+  await AgentSession.create({ id: 'fs-alias', subscriptionId: 'sub-a' } as any);
+  run.candidates.add(ROOT, 'project');
+  run.candidates.add(alias, 'working_directory');
+  await captureTurnBaselines(run, [ROOT, alias], 'turn_start', undefined, log);
+  expect(run.baselines).toEqual([baseline]);
+  expect(run.rootAliases.get(alias)).toBe(ROOT);
+  const summary = await captureSessionDiffBeforeFinal(run, [], undefined, log);
+  expect(summary?.coverage).toEqual([
+    { root: ROOT, status: 'complete', reason: '', suggestedFix: '' },
+  ]);
+  const req = {
+    request_id: 'alias',
+    candidate_paths: [ROOT],
+    baseline_source: 'turn_start' as const,
+  };
+  const response = {
+    request_id: 'alias',
+    status: 'ok',
+    repositories: [],
+    baselines: [baseline],
+    root_aliases: [{ root: ROOT, alias }],
+  };
+  expect(() =>
+    validateGitBaselineResponse(response, req, { notBefore: run.startedAt, now: Date.now() }),
+  ).toThrow('root alias');
+  expect(() =>
+    validateGitBaselineResponse(
+      { ...response, root_aliases: [{ root: '/unrequested', alias: ROOT }] },
+      req,
+      { notBefore: run.startedAt, now: Date.now() },
+    ),
+  ).toThrow('root alias');
 });

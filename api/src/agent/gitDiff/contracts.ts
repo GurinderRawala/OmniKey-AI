@@ -9,6 +9,8 @@
 
 export const GIT_DIFF_MAX_CANDIDATES = 8;
 export const GIT_DIFF_MAX_REPOSITORIES = 8;
+/** Eight captured roots plus the bounded candidate ledger of omitted scopes. */
+export const FILESYSTEM_MAX_COVERAGE_ROOTS = 40;
 export const GIT_DIFF_MAX_PATCH_BYTES = 2 * 1024 * 1024; // combined UTF-8
 export const GIT_DIFF_MAX_UNTRACKED_FILES = 300;
 export const GIT_DIFF_NATIVE_TIMEOUT_MS = 10_000;
@@ -23,9 +25,18 @@ export const GIT_MAX_REQUEST_ID_LENGTH = 64;
 export const GIT_DIFF_DISPLAY_LIMIT = 300;
 /** Backend wait for a baseline (HEAD-only) reply; it delays the model/shell. */
 export const GIT_TURN_BASELINE_TIMEOUT_MS = 6_000;
+/** Content capture shares the native queue with bounded live reconciliation. */
+export const FILESYSTEM_CAPTURE_TIMEOUT_MS = 20_000;
 /** Accepted clock skew for client baseline timestamps. */
 export const GIT_TURN_BASELINE_CLOCK_SKEW_MS = 5 * 60_000;
 const GIT_MAX_TIMESTAMP_LENGTH = 40;
+
+export interface TurnRootCoverage {
+  root: string;
+  status: 'complete' | 'partial' | 'late' | 'unavailable';
+  reason: string;
+  suggestedFix: string;
+}
 
 export type SessionDiffScope = 'working_tree' | 'commit' | 'turn';
 export type SessionDiffSummaryScope = SessionDiffScope | 'mixed';
@@ -195,7 +206,12 @@ export interface SessionDiffCandidate {
   /** Native disclosure text (e.g. sensitive exclusion counts). */
   reason?: string;
   /** Present for v3 turn captures. */
-  turn?: { baselines: GitTurnBaseline[]; displayLimit: number };
+  turn?: {
+    baselines: GitTurnBaseline[];
+    displayLimit: number;
+    filesystem?: boolean;
+    coverage?: TurnRootCoverage[];
+  };
 }
 
 export interface SessionDiffCaptureOutcome {
@@ -222,6 +238,10 @@ export interface GitTurnBaseline {
 
 /** Snapshot summary stored on history metadata and sent with the live final. */
 export interface SessionDiffSummary {
+  additions?: number;
+  deletions?: number;
+  filesystem?: boolean;
+  coverage?: TurnRootCoverage[];
   id: string;
   fileCount: number;
   repositoryCount: number;
@@ -253,6 +273,7 @@ export interface EligibleCommit {
 
 /** Server -> client control frame, sent before the final answer. */
 export interface GitDiffRequest {
+  filesystem?: boolean;
   request_id: string;
   candidate_paths: string[];
   eligible_commits: EligibleCommit[];
@@ -288,6 +309,10 @@ export type GitDiffResponseStatus = 'ok' | 'not_repository' | 'unavailable';
 
 /** Client -> server reply to a GitDiffRequest. */
 export interface GitDiffResponse {
+  /** Native filesystem identity aliases, scoped to issued baseline candidates. */
+  root_aliases?: Array<{ root: string; alias: string }>;
+  filesystem?: boolean;
+  coverage?: TurnRootCoverage[];
   request_id: string;
   status: GitDiffResponseStatus;
   repositories: GitDiffRepository[];
@@ -310,6 +335,8 @@ export interface GitCommitObservation {
 
 /** Stored, compressed snapshot payload (AgentSessionDiff.payload). */
 export interface SessionDiffPayload {
+  filesystem?: boolean;
+  coverage?: TurnRootCoverage[];
   version: 1;
   repositories: GitDiffRepository[];
   notice?: string;
@@ -489,6 +516,7 @@ export function validateGitBaselineResponse(
   request: Pick<GitDiffRequest, 'request_id' | 'candidate_paths' | 'baseline_source'>,
   bounds: { notBefore: number; now: number },
   recorded: readonly GitTurnBaseline[] = [],
+  issued: readonly Pick<GitDiffRequest, 'candidate_paths' | 'baseline_source'>[] = [],
 ): GitDiffResponse {
   if (!isPlainObject(raw)) throw new GitDiffValidationError('not an object');
   if (raw.request_id !== request.request_id) throw new GitDiffValidationError('request id');
@@ -522,11 +550,15 @@ export function validateGitBaselineResponse(
         b.source === source &&
         Date.parse(b.capturedAt) === Date.parse(String(capturedAt)),
     );
-    if (!existing && !relatedToAny(root, request.candidate_paths)) {
+    const origin = [...issued, request].find((sent) => relatedToAny(root, sent.candidate_paths));
+    if (!existing && recorded.some((b) => comparablePath(b.root) === comparablePath(root))) {
+      throw new GitDiffValidationError('baseline changed');
+    }
+    if (!existing && !origin) {
       throw new GitDiffValidationError('baseline root not related to requested candidates');
     }
     if (head !== null && !isGitOid(head)) throw new GitDiffValidationError('baseline head');
-    if (!isBaselineSource(source) || (!existing && source !== request.baseline_source)) {
+    if (!isBaselineSource(source) || (!existing && source !== origin?.baseline_source)) {
       throw new GitDiffValidationError('baseline source');
     }
     const timestamp = normalizeBaselineTimestamp(capturedAt, bounds);
@@ -536,7 +568,42 @@ export function validateGitBaselineResponse(
     seen.add(key);
     baselines.push({ root: normalizeAbsolutePath(root), head, capturedAt: timestamp, source });
   }
-  return { request_id: request.request_id, status, repositories: [], baselines };
+  let aliases: Array<{ root: string; alias: string }> | undefined;
+  if (raw.root_aliases !== undefined) {
+    if (!Array.isArray(raw.root_aliases) || raw.root_aliases.length > 64) {
+      throw new GitDiffValidationError('root aliases');
+    }
+    const seenAliases = new Set<string>();
+    aliases = raw.root_aliases.map((item) => {
+      if (
+        !isPlainObject(item) ||
+        !isSafeAbsolutePath(item.root) ||
+        !isSafeAbsolutePath(item.alias)
+      ) {
+        throw new GitDiffValidationError('root alias');
+      }
+      const { root, alias } = item;
+      if (
+        !baselines.some((b) => comparablePath(b.root) === comparablePath(root)) ||
+        ![...issued, request].some((sent) =>
+          sent.candidate_paths.some((path) => comparablePath(path) === comparablePath(alias)),
+        ) ||
+        seenAliases.has(comparablePath(alias))
+      ) {
+        throw new GitDiffValidationError('root alias');
+      }
+      seenAliases.add(comparablePath(alias));
+      return { root: normalizeAbsolutePath(root), alias: normalizeAbsolutePath(alias) };
+    });
+  }
+
+  return {
+    request_id: request.request_id,
+    status,
+    repositories: [],
+    baselines,
+    ...(aliases ? { root_aliases: aliases } : {}),
+  };
 }
 
 /**
@@ -547,7 +614,7 @@ export function validateGitBaselineResponse(
  */
 export function validateGitTurnFinalResponse(
   raw: unknown,
-  request: Pick<GitDiffRequest, 'request_id' | 'candidate_paths' | 'baselines'>,
+  request: Pick<GitDiffRequest, 'request_id' | 'candidate_paths' | 'baselines' | 'filesystem'>,
 ): GitDiffResponse {
   const recorded = new Map<string, GitTurnBaseline>();
   for (const baseline of request.baselines ?? []) {
@@ -613,7 +680,48 @@ export function validateGitTurnFinalResponse(
       baselineSource: baseline.source,
     };
   });
-  return { ...base, repositories };
+  let coverage: TurnRootCoverage[] | undefined;
+  if (request.filesystem) {
+    coverage = validateFilesystemCoverage(raw.coverage);
+    const seen = new Set(coverage.map((item) => comparablePath(item.root)));
+    if (coverage.some((item) => !recorded.has(comparablePath(item.root)))) {
+      throw new GitDiffValidationError('filesystem root coverage');
+    }
+    if (seen.size !== recorded.size || repositories.some((r) => r.scope !== 'turn')) {
+      throw new GitDiffValidationError('missing filesystem root coverage');
+    }
+  }
+  return { ...base, repositories, ...(coverage ? { coverage } : {}) };
+}
+
+/** Bounded coverage metadata shared by final captures and ephemeral previews. */
+export function validateFilesystemCoverage(raw: unknown): TurnRootCoverage[] {
+  if (!Array.isArray(raw) || raw.length > GIT_DIFF_MAX_REPOSITORIES) {
+    throw new GitDiffValidationError('filesystem coverage');
+  }
+  const seen = new Set<string>();
+  return raw.map((item) => {
+    if (
+      !isPlainObject(item) ||
+      !isSafeAbsolutePath(item.root) ||
+      seen.has(comparablePath(item.root)) ||
+      typeof item.status !== 'string' ||
+      !['complete', 'partial', 'late', 'unavailable'].includes(item.status) ||
+      typeof item.reason !== 'string' ||
+      item.reason.length > 1000 ||
+      typeof item.suggestedFix !== 'string' ||
+      item.suggestedFix.length > 1000
+    ) {
+      throw new GitDiffValidationError('filesystem root coverage');
+    }
+    seen.add(comparablePath(item.root));
+    return {
+      root: normalizeAbsolutePath(item.root),
+      status: item.status as TurnRootCoverage['status'],
+      reason: item.reason,
+      suggestedFix: item.suggestedFix,
+    };
+  });
 }
 
 /** Literal, conservative detection of a direct `git commit` invocation. */
@@ -687,10 +795,41 @@ export function cleanSessionDiffSummary(value: unknown): SessionDiffSummary | un
   if (!isSessionDiffSummary(value)) return undefined;
   return {
     id: value.id,
+    ...(Number.isSafeInteger(value.additions) && value.additions! >= 0
+      ? { additions: value.additions }
+      : {}),
+    ...(Number.isSafeInteger(value.deletions) && value.deletions! >= 0
+      ? { deletions: value.deletions }
+      : {}),
     fileCount: value.fileCount,
     repositoryCount: value.repositoryCount,
     createdAt: value.createdAt,
     scope: value.scope,
+    ...(value.filesystem === true
+      ? {
+          filesystem: true,
+          coverage: Array.isArray(value.coverage)
+            ? value.coverage
+                .slice(0, FILESYSTEM_MAX_COVERAGE_ROOTS)
+                .filter(
+                  (c) =>
+                    isPlainObject(c) &&
+                    isSafeAbsolutePath(c.root) &&
+                    ['complete', 'partial', 'late', 'unavailable'].includes(c.status) &&
+                    typeof c.reason === 'string' &&
+                    c.reason.length <= 1000 &&
+                    typeof c.suggestedFix === 'string' &&
+                    c.suggestedFix.length <= 1000,
+                )
+                .map((c) => ({
+                  root: c.root,
+                  status: c.status,
+                  reason: c.reason,
+                  suggestedFix: c.suggestedFix,
+                }))
+            : [],
+        }
+      : {}),
     ...(value.commit ? { commit: value.commit } : {}),
     ...(value.displayLimit !== undefined ? { displayLimit: value.displayLimit } : {}),
     ...(isBaselineSource(value.baselineSource) ? { baselineSource: value.baselineSource } : {}),
@@ -753,4 +892,23 @@ export function isSafeRelativePath(value: unknown): value is string {
 export function countPatchFiles(patch: string): number {
   const matches = patch.match(/^diff --git /gm);
   return matches ? matches.length : 0;
+}
+
+/** Count hunk lines only: file headers (including +++ content inside a hunk) are distinct. */
+export function countPatchLines(repositories: ReadonlyArray<{ patch: string }>): {
+  additions: number;
+  deletions: number;
+} {
+  let additions = 0,
+    deletions = 0;
+  for (const { patch } of repositories) {
+    let inHunk = false;
+    for (const line of patch.split('\n')) {
+      if (line.startsWith('diff --git ')) inHunk = false;
+      else if (line.startsWith('@@ ')) inHunk = true;
+      else if (inHunk && line.startsWith('+')) additions++;
+      else if (inHunk && line.startsWith('-')) deletions++;
+    }
+  }
+  return { additions, deletions };
 }

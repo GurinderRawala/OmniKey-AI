@@ -431,6 +431,22 @@ const BLOCK_OPEN = /^ {0,3}<(file_patches|changed_files)>/;
  * (a truncated patch never leaks into the answer). A report is returned only
  * with the marker AND exactly one well-formed, fully valid patch block.
  */
+// Protocol delimiters inside JSON strings are ordinary patch content.
+function closingOutsideString(text: string, closing: string): number {
+  let quoted = false;
+  let escaped = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (c === '\\') escaped = true;
+      else if (c === '"') quoted = false;
+    } else if (text.startsWith(closing, i)) return i;
+    else if (c === '"') quoted = true;
+  }
+  return -1;
+}
+
 export function parseAgentFinal(content: string): {
   display: string;
   report?: AgentPatchReport;
@@ -473,7 +489,7 @@ export function parseAgentFinal(content: string): {
       let j = i;
       let found = -1;
       for (; j < lines.length; j++) {
-        const at = lines[j].indexOf(closing);
+        const at = closingOutsideString(lines[j], closing);
         if (at >= 0) {
           found = j;
           break;
@@ -485,7 +501,7 @@ export function parseAgentFinal(content: string): {
         break;
       }
       const last = lines[found];
-      const at = last.indexOf(closing);
+      const at = closingOutsideString(last, closing);
       const wellFormed = !last.slice(at + closing.length).trim();
       if (tag === 'file_patches') {
         const joined = lines.slice(i, found + 1).join('\n');
