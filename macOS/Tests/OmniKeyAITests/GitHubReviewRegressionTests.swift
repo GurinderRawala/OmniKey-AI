@@ -1,4 +1,6 @@
 import Foundation
+import AppKit
+import SwiftUI
 import XCTest
 @testable import OmniKeyAI
 
@@ -42,6 +44,62 @@ final class GitHubReviewRegressionTests: XCTestCase {
         await model.refresh(session: "existing", path: paths.first, texts: [], paths: paths)
         XCTAssertEqual(model.info?.repository, "owner/repo")
         XCTAssertEqual(model.info.map { TurnChangeTracker.comparable($0.root) }, TurnChangeTracker.comparable(repo.root))
+    }
+
+    @MainActor
+    func testMountedEmptyChatDiscoversRepositoryAfterHistoryHydrates() async throws {
+        let repo = try GitTestRepo()
+        try repo.git("remote", "add", "origin", "https://github.com/owner/repo.git")
+        let suite = "github-mounted-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let card = SessionGitHubCardModel(defaults: defaults, discovery: { root, old, texts, _ in
+            SessionGitHubDiscovery.refresh(path: root, previous: old, texts: texts, loadPullRequests: false)
+        })
+        let model = ChatModel(authToken: { nil })
+        let host = NSHostingView(rootView: SessionGitHubCard(model: model, card: card).frame(width: 500))
+        let window = NSWindow(contentRect: NSRect(x: -10000, y: -10000, width: 500, height: 200), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = host
+        window.orderBack(nil)
+        defer { window.orderOut(nil) }
+        try await Task.sleep(for: .milliseconds(50))
+        model.activeSessionId = "hydrated"
+        var message = ChatMessage.assistant()
+        message.blocks = [ChatBlock(kind: .shellCommand, text: "git status", workingDirectory: repo.root)]
+        model.messages = [message]
+        for _ in 0..<100 {
+            if card.info != nil { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertEqual(card.info?.repository, "owner/repo")
+    }
+
+    @MainActor
+    func testMountedSavedChatDiscoversRepositoryWithoutPlaceholder() async throws {
+        let repo = try GitTestRepo()
+        try repo.git("remote", "add", "origin", "https://github.com/owner/repo.git")
+        let suite = "github-mounted-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let card = SessionGitHubCardModel(defaults: defaults, discovery: { root, old, texts, _ in
+            SessionGitHubDiscovery.refresh(path: root, previous: old, texts: texts, loadPullRequests: false)
+        })
+        let model = ChatModel(authToken: { nil })
+        model.activeSessionId = "hydrated"
+        var message = ChatMessage.assistant()
+        message.blocks = [ChatBlock(kind: .shellCommand, text: "git status", workingDirectory: repo.root)]
+        model.messages = [message]
+        let host = NSHostingView(rootView: SessionGitHubCard(model: model, card: card).frame(width: 500))
+        let window = NSWindow(contentRect: NSRect(x: -10000, y: -10000, width: 500, height: 200), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = host
+        window.orderBack(nil)
+        defer { window.orderOut(nil) }
+        try await Task.sleep(for: .milliseconds(50))
+        for _ in 0..<100 {
+            if card.info != nil { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertEqual(card.info?.repository, "owner/repo")
     }
 
     func testStructuredDirectorySurvivesHistoryAndDoesNotNeedDiffCoverage() throws {

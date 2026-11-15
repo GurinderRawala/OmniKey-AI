@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 import SwiftUI
 
 struct SessionPullRequest: Codable, Equatable, Identifiable, Sendable {
@@ -185,6 +186,7 @@ final class SessionGitHubCardModel: ObservableObject {
     }
 
     func refresh(session: String, path: String?, texts: [String], paths: [String] = []) async {
+        Logger(subsystem: "com.omnikeyai", category: "SessionGitHub").notice("Refreshing repository card; candidate count: \(paths.count)")
         load(session: session)
         var seen = Set<String>()
         let candidates = ([path].compactMap { $0 } + paths + [info?.root].compactMap { $0 })
@@ -208,6 +210,7 @@ final class SessionGitHubCardModel: ObservableObject {
                     guard self.generation == request.token else { break }
                 }
                 guard self.selectedSession == request.session, self.generation == request.token else { continue }
+                Logger(subsystem: "com.omnikeyai", category: "SessionGitHub").notice("Repository card discovery completed; found: \(updated != nil)")
                 self.info = updated
                 if let updated, let data = try? JSONEncoder().encode(updated) {
                     self.defaults.set(data, forKey: "sessionGitHub:\(request.session)")
@@ -223,14 +226,18 @@ final class SessionGitHubCardModel: ObservableObject {
 
 struct SessionGitHubCard: View {
     @ObservedObject var model: ChatModel
-    @StateObject private var card = SessionGitHubCardModel()
+    @StateObject private var card: SessionGitHubCardModel
+    init(model: ChatModel, card: SessionGitHubCardModel = SessionGitHubCardModel()) {
+        self.model = model
+        _card = StateObject(wrappedValue: card)
+    }
     private var session: String { model.activeSessionId ?? "" }
     private var paths: [String] { SessionGitHubDiscovery.startingPaths(in: model.messages) }
     private var refreshKey: String {
         "\(session):\(paths.joined(separator: "|")):\(model.isRunning):\(model.messages.flatMap(\.blocks).filter { $0.kind == .terminalOutput || $0.kind == .finalAnswer }.count)"
     }
     var body: some View {
-        Group {
+        VStack(spacing: 0) {
             if !session.isEmpty, card.selectedSession == session, let info = card.info {
                 GitHubRepositoryCard(info: info)
                     .padding(.trailing, 22).padding(.top, 10).padding(.bottom, 2)

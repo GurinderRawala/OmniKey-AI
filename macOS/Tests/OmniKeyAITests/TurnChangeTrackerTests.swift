@@ -115,6 +115,24 @@ final class TurnChangeTrackerTests: XCTestCase {
         XCTAssertEqual(result.coverage.first?.status, "unavailable")
     }
 
+    func testCleanedWorktreeRetainsLastCapturedEditsButNotDeletionNoise() throws {
+        let repo = try GitTestRepo()
+        try repo.write("file", "original\n")
+        _ = try repo.commitAll()
+        let parent = try folder(), worktree = parent.appendingPathComponent("worker")
+        try repo.git("worktree", "add", "--detach", worktree.path)
+        let tracker = TurnChangeTracker()
+        _ = begin(tracker, worktree, source: .beforeTool)
+        try write(worktree, "file", "updated dependency\n")
+        let captured = tracker.capture(status: "running")
+        XCTAssertTrue(captured.repositories.first?.patch.contains("+updated dependency") == true)
+        try repo.git("worktree", "remove", "--force", worktree.path)
+        let final = tracker.capture(status: "final")
+        XCTAssertEqual(final.repositories, captured.repositories)
+        XCTAssertTrue(final.coverage.first?.reason.contains("before this folder was removed") == true)
+        XCTAssertFalse(final.repositories.first?.patch.contains("deleted file mode") == true)
+    }
+
     func testNonGitStartingContentsAndNextTurnDoNotLeak() throws {
         let root = try folder()
         try write(root, "file.txt", "preexisting uncommitted content\n")

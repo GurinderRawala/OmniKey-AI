@@ -149,7 +149,7 @@ enum SessionDiffHTMLDocument {
         + "script-src 'none'; frame-src 'none'; child-src 'none'; form-action 'none'; base-uri 'none'; "
         + "connect-src 'none'; media-src 'none'; object-src 'none'"
 
-    static let nativeStyle = "<style>header.snapshot{display:none}[hidden]{display:none!important}</style>"
+    static let nativeStyle = "<style>header.snapshot{padding:0;margin:0}header.snapshot>h1,header.snapshot>p{display:none}header.snapshot .capture-details{margin:8px 0}[hidden]{display:none!important}</style>"
 
     static var metaTag: String {
         "<meta http-equiv=\"Content-Security-Policy\" content=\"\(contentSecurityPolicy)\">"
@@ -673,7 +673,7 @@ struct SessionDiffCardView: View {
     @ObservedObject private var model = ChatModel.shared
     var body: some View {
         TurnChangesCard(files: diff.fileCount, additions: diff.additions, deletions: diff.deletions,
-            selected: model.inspectedSessionDiff?.diff.id == diff.id) { model.toggleSessionDiff(diff) }
+            selected: model.inspectedSessionDiff?.diff.id == diff.id, captureUnavailable: diff.captureUnavailable) { model.toggleSessionDiff(diff) }
     }
 }
 
@@ -692,6 +692,7 @@ struct TurnChangesCard: View {
     let additions: Int?
     let deletions: Int?
     let selected: Bool
+    var captureUnavailable = false
     let action: () -> Void
     @State private var hovered = false
     var body: some View {
@@ -703,8 +704,12 @@ struct TurnChangesCard: View {
                     .background(Color.accentColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
                 VStack(alignment: .leading, spacing: 5) {
                     Text("Changes").font(.system(size: 13, weight: .semibold))
-                    ChangeCountsLabel(files: files, additions: additions, deletions: deletions)
-                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                    if captureUnavailable {
+                        Text("Snapshot unavailable").font(.system(size: 12)).foregroundStyle(.secondary)
+                    } else {
+                        ChangeCountsLabel(files: files, additions: additions, deletions: deletions)
+                            .font(.system(size: 12)).foregroundStyle(.secondary)
+                    }
                 }
                 Spacer(minLength: 8)
                 Image(systemName: selected ? "sidebar.right" : "chevron.right")
@@ -717,7 +722,7 @@ struct TurnChangesCard: View {
         }
         .buttonStyle(.plain).onHover { hovered = $0 }
         .help("View changes from this turn")
-        .accessibilityLabel("Changes from this turn, \(files) files")
+        .accessibilityLabel(captureUnavailable ? "Changes from this turn, snapshot unavailable" : "Changes from this turn, \(files) files")
     }
 }
 
@@ -730,7 +735,7 @@ enum ChatSessionDiffPlacement {
         guard let finalIndex = blocks.firstIndex(where: { $0.kind == .finalAnswer }) else { return [] }
         var seen = Set<String>()
         return blocks[..<finalIndex].filter { block in
-            guard block.kind == .sessionDiff, let diff = block.sessionDiff, diff.isEligibleForViewer, diff.fileCount > 0 else { return false }
+            guard block.kind == .sessionDiff, let diff = block.sessionDiff, diff.isEligibleForViewer, (diff.fileCount > 0 || diff.captureUnavailable) else { return false }
             return seen.insert(diff.id).inserted
         }
     }

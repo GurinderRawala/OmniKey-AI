@@ -935,6 +935,13 @@ final class ChatSessionRunner {
                                 ? gitProvenance.baseline(script: executionScript, context: response.gitDiffContext)
                                 : nil
                             guard !completion.isFinished, !handle.isCancelledByUser else { return }
+                            if diffViewEnabled && baselineReady {
+                                gitQueue.sync {
+                                    guard !completion.isFinished, !handle.isCancelledByUser else { return }
+                                    changes.refresh(publish: publishChanges)
+                                }
+                            }
+                            guard !completion.isFinished, !handle.isCancelledByUser else { return }
                             let (output, status) = baselineReady ? executeShell(
                                 executionScript,
                                 { process in
@@ -947,7 +954,7 @@ final class ChatSessionRunner {
                             ) : ("COMMAND ERROR: Starting-file capture did not finish. This script was not executed. Check folder access, or disable Diff view and retry.", Int32(1))
 
                             completion.setShellRunning(false)
-                            gitQueue.async {
+                            gitQueue.sync {
                                 guard !completion.isFinished, !handle.isCancelledByUser else { return }
                                 changes.refresh(publish: publishChanges)
                             }

@@ -74,6 +74,16 @@ final class ChangesDrawerTests: XCTestCase {
         XCTAssertTrue(ChatSessionDiffPlacement.cards(beforeFinalIn: Array(blocks.dropLast())).isEmpty)
     }
 
+    func testUnavailableCaptureRemainsAccessibleAfterFinalAnswer() throws {
+        let data = Data("""
+        {"id":"missing","fileCount":0,"repositoryCount":0,"createdAt":"now","filesystem":true,"coverage":[{"root":"/removed","status":"unavailable","reason":"Removed","suggestedFix":""}]}
+        """.utf8)
+        let missing = try JSONDecoder().decode(SavedSessionDiff.self, from: data)
+        XCTAssertTrue(missing.captureUnavailable)
+        let blocks = [ChatBlock(kind: .sessionDiff, text: "", sessionDiff: missing), ChatBlock(kind: .finalAnswer, text: "Done")]
+        XCTAssertEqual(ChatSessionDiffPlacement.cards(beforeFinalIn: blocks).count, 1)
+    }
+
     func testIsolatedNativeScriptsPreserveScrollAndFileDisclosuresWithoutPageScripts() async throws {
         let web = WKWebView(frame: NSRect(x: 0, y: 0, width: 500, height: 300), configuration: SessionDiffWebView.makeConfiguration())
         let coordinator = SessionDiffWebView.Coordinator()

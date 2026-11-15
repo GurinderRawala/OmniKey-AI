@@ -49,6 +49,7 @@ final class TurnChangeTracker: @unchecked Sendable {
     var limits = Limits()
     var scanNow: () -> Date = Date.init
     private var roots: [String: Root] = [:]
+    private var latestManifests: [String: Manifest] = [:]
     private var rootOrder: [String] = []
     private var rootAliases: [GitRootAlias] = []
     private var omittedRoots: Set<String> = []
@@ -181,16 +182,16 @@ final class TurnChangeTracker: @unchecked Sendable {
             let entry = roots[root]!
             let displayRoot = entry.baseline.root
             if let acceptedRoots, !acceptedRoots.contains(Self.comparable(displayRoot)) { continue }
-            // A removed/replaced checkout is unavailable, not an empty directory.
-            // Otherwise worktree cleanup becomes thousands of fabricated deletions.
-            if let identity = entry.identity,
-               (try? TurnFileReader(root: root))?.directoryIdentity != identity {
-                coverage.append(TurnRootCoverage(root: displayRoot, status: "unavailable",
-                    reason: "The captured folder was removed or replaced; its cleanup is not a file-change comparison.",
-                    suggestedFix: "Review changes in the retained project folder."))
-                continue
-            }
-            guard let before = entry.manifest, let after = scan(root, deadline: deadline, prioritizing: before.files.keys.sorted()) else {
+            // Preserve the last observation when a worktree is cleaned up.
+            // This is an explicitly labelled captured snapshot, never a diff
+            // against an imaginary empty directory or a replacement checkout.
+            let currentIdentity = (try? TurnFileReader(root: root))?.directoryIdentity
+            let removed = entry.identity != nil && currentIdentity == nil && !fm.fileExists(atPath: root)
+            let replaced = entry.identity != nil && currentIdentity != entry.identity && !removed
+            let current = removed ? latestManifests[root] : replaced ? nil
+                : scan(root, deadline: deadline, prioritizing: entry.manifest?.files.keys.sorted() ?? [])
+            if !removed, !replaced, let current { latestManifests[root] = current }
+            guard let before = entry.manifest, let after = current else {
                 let protected = Self.sensitive(root)
                 coverage.append(TurnRootCoverage(root: displayRoot, status: "unavailable",
                     reason: protected ? "This root is excluded by the sensitive-path policy." : "Starting or current files could not be read safely.",
@@ -223,8 +224,9 @@ final class TurnChangeTracker: @unchecked Sendable {
             if !patch.isEmpty { repositories.append(GitDiffRepositoryPatch(root: displayRoot, patch: patch, baseline: entry.baseline, head: nil)) }
             let excluded = before.excluded + after.excluded
             let late = entry.baseline.source == .beforeTool
-            let state = incomplete ? "partial" : late ? "late" : "complete"
+            let state = incomplete ? "partial" : (late || removed) ? "late" : "complete"
             var notes: [String] = []
+            if removed { notes.append("Snapshot retained from before this folder was removed; it is not the current filesystem state.") }
             if late { notes.append("Baseline captured before the first tool in this folder, not at run start.") }
             if incomplete {
                 notes.append("Captured \(before.files.count) starting files; compared \(Set(before.files.keys).intersection(after.files.keys).count) existing files.")

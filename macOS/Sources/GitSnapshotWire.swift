@@ -432,6 +432,8 @@ struct SavedSessionDiff: Codable, Equatable, Hashable, Sendable {
 
     /// Coverage is distinct from accuracy: an AI-generated patch remains
     /// unverified, but a known partial snapshot is never a viewer candidate.
+    var captureUnavailable: Bool { filesystem == true && fileCount == 0 && (coverage?.isEmpty != false || coverage?.contains { $0.status != "complete" } == true) }
+
     var isEligibleForViewer: Bool { hasSafeID && recoveryIncomplete != true && baselineUnavailable != true }
 
     var shortCommit: String? {
