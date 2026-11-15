@@ -8,7 +8,7 @@ The products do not currently share one version number.
 
 | Product | Version source | Additional update metadata |
 | --- | --- | --- |
-| CLI | `cli/package.json` and `cli/package-lock.json` | Git tag `v<CLI_VERSION>` drives the GitHub CLI release and Homebrew workflow. |
+| CLI | `cli/package.json` | Git tag `v<CLI_VERSION>` drives the GitHub CLI release and Homebrew workflow. |
 | API | `api/package.json` | Deploy the API/container after merging the release artifacts. |
 | macOS | `CFBundleShortVersionString` and `CFBundleVersion` in `macOS/build_release_dmg.sh` | The matching `shortVersion` and `bundleVersion` in `api/src/index.ts` drive `/macos/appcast`. |
 | Windows | `Version`, `AssemblyVersion`, and `FileVersion` in `windows/OmniKey.Windows.csproj` | The matching `WIN_VERSION` in `api/src/index.ts` drives `/windows/update`. |
@@ -56,10 +56,9 @@ For a minor release, increment the middle SemVer component and reset the patch c
 Update:
 
 - `cli/package.json`
-- the top-level version and `packages[""]` version in `cli/package-lock.json`
 - `api/package.json`
 
-The CLI and API normally use the same version. Do not manually update `Formula/omnikey-cli.rb` before the release workflow; it inserts the release version and checksums after building the tagged artifacts.
+There is no `cli/package-lock.json` to update: `pnpm-lock.yaml` is the repository's only lockfile, and a version-only bump normally leaves it unchanged — confirm with `pnpm install --frozen-lockfile`, and if it fails, run `pnpm install` and commit the updated `pnpm-lock.yaml`. The CLI and API normally use the same version, and must move together whenever `cli/**` changes because merging to `main` publishes the CLI. Do not manually update `Formula/omnikey-cli.rb` before the release workflow; it inserts the release version and checksums after building the tagged artifacts.
 
 ### macOS
 
@@ -104,24 +103,34 @@ The helper does **not** bump the CLI/API package versions or the update constant
 
 ## 3. Validate source before packaging
 
-Install dependencies using the repository lockfile if needed:
+Use the development Node baseline (`^22.12.0 || >=24.0.0`; CI uses Node 22) and the pinned pnpm (`corepack enable` selects 10.34.9 from `packageManager`). Install dependencies from the repository lockfile without rewriting it:
 
 ```bash
-yarn install --frozen-lockfile
+pnpm install --frozen-lockfile
 ```
 
-Run the API tests and build:
+Run the tests, lint, and the full Turbo build:
 
 ```bash
-(cd api && yarn test && yarn build)
+pnpm test
+pnpm lint
+pnpm build
 ```
 
-Build and smoke-test the CLI:
+Build and smoke-test the CLI. Use `pnpm build:cli` (not `pnpm --filter omnikey-cli build`, which bypasses the Turbo graph and can bundle stale API/Telegram output):
 
 ```bash
-yarn workspace omnikey-cli run build
+pnpm build:cli
 node cli/dist/index.js --version
 ```
+
+Optionally reproduce the release workflow's staged bundle in an empty directory outside the repo:
+
+```bash
+pnpm --filter omnikey-cli deploy --prod <EMPTY_STAGE_DIR>
+```
+
+The stage must contain a loadable `sqlite3` native binding and no symlink that resolves outside `<EMPTY_STAGE_DIR>`.
 
 Build the macOS app with Xcode:
 
@@ -243,7 +252,7 @@ The Dockerfile copies both desktop artifacts into the API image. Pushing only ve
 
 ## 7. Publish CLI/npm, GitHub release, and Homebrew
 
-Pushing CLI changes to `main` triggers `.github/workflows/publish-cli.yaml`, which builds the workspaces and publishes `cli/` to npm.
+Pushing CLI changes to `main` triggers `.github/workflows/publish-cli.yaml`, which runs `pnpm install --frozen-lockfile` and `pnpm build` on Node 22, then publishes `cli/` with `npm publish`.
 
 Create and push the CLI tag from the intended `main` commit:
 
@@ -254,7 +263,7 @@ git push origin v<CLI_VERSION>
 
 The `Release Omnikey CLI` workflow then:
 
-1. builds arm64 and x86_64 macOS CLI tarballs;
+1. builds arm64 and x86_64 macOS CLI tarballs (frozen pnpm install, `pnpm build`, then `pnpm --filter omnikey-cli deploy --prod` into a stage that is checked for `sqlite3` and escaping symlinks);
 2. creates/updates the GitHub release;
 3. computes release checksums;
 4. updates `Formula/omnikey-cli.rb` on `main`; and
@@ -348,8 +357,9 @@ https://github.com/GurinderRawala/OmniKey-AI/compare/v<PREVIOUS_VERSION>...v<CLI
 - [ ] macOS marketing version and numeric build were incremented.
 - [ ] `api/src/index.ts` macOS appcast values match the packaged app.
 - [ ] Windows project version and `WIN_VERSION` match.
-- [ ] API tests and production build passed.
-- [ ] CLI build passed and `omnikey --version` is correct.
+- [ ] `pnpm install --frozen-lockfile` succeeded without lockfile changes.
+- [ ] `pnpm test`, `pnpm lint`, and `pnpm build` passed.
+- [ ] `pnpm build:cli` passed and `omnikey --version` is correct.
 - [ ] macOS clean Xcode build passed.
 - [ ] macOS production bundle was built with `OMNIKEY_BACKEND_URL=https://omnikeyai.ca`.
 - [ ] macOS app is universal, signed, notarized, stapled, and Gatekeeper accepted.

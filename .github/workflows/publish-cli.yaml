@@ -22,26 +22,36 @@ jobs:
       # containing  //registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN} .
       # `always-auth` forces npm to actually use it on publish (without this,
       # newer npm versions can skip the credential for unscoped packages).
+      - name: Setup pnpm (version pinned in package.json)
+        uses: pnpm/action-setup@v4
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: 'yarn'
+          cache: 'pnpm'
           registry-url: 'https://registry.npmjs.org'
           always-auth: true
 
       - name: Show versions
         run: |
           node -v
-          yarn -v
+          pnpm -v
           npm -v
 
-      # ── Monorepo install + build use Yarn (single source of truth) ──────────
-      - name: Install monorepo dependencies (yarn workspaces)
-        run: yarn install --frozen-lockfile
+      # ── Monorepo install + build use pnpm (single source of truth) ──────────
+      - name: Install monorepo dependencies (pnpm workspaces)
+        run: pnpm install --frozen-lockfile
 
       - name: Build all workspaces (api, telegram, cli)
-        run: yarn build
+        run: pnpm build
+
+      - name: Verify the npm package before publishing
+        run: |
+          mkdir -p "$RUNNER_TEMP/omnikey-pack" "$RUNNER_TEMP/omnikey-consumer"
+          npm pack ./cli --pack-destination "$RUNNER_TEMP/omnikey-pack"
+          npm install --prefix "$RUNNER_TEMP/omnikey-consumer" --no-save --package-lock=false "$RUNNER_TEMP"/omnikey-pack/*.tgz
+          node scripts/verify-cli-bundle.mjs "$RUNNER_TEMP/omnikey-consumer/node_modules/omnikey-cli" "$RUNNER_TEMP/omnikey-consumer"
 
       # ── Publish the CLI workspace with npm ──────────────────────────────────
       # NODE_AUTH_TOKEN is read by the .npmrc that actions/setup-node wrote.
