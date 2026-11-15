@@ -987,3 +987,68 @@ it('discloses a ninth discovered root instead of silently dropping its coverage'
   expect(summary.coverage!.find((c) => c.root === roots[8])?.status).toBe('unavailable');
   expect(cleanSessionDiffSummary(summary)?.coverage).toHaveLength(9);
 });
+
+it('records only issued filesystem aliases and avoids duplicate unavailable coverage', async () => {
+  const alias = ROOT.toUpperCase();
+  const baseline = {
+    root: ROOT,
+    head: null,
+    capturedAt: new Date().toISOString(),
+    source: 'turn_start' as const,
+  };
+  const client = fakeClient('fs-alias', {
+    heads: {},
+    baseline: () => ({
+      status: 'ok',
+      repositories: [],
+      baselines: [baseline],
+      root_aliases: [{ root: ROOT, alias }],
+    }),
+    final: () => ({
+      status: 'ok',
+      repositories: [],
+      coverage: [{ root: ROOT, status: 'complete', reason: '', suggestedFix: '' }],
+    }),
+  });
+  const run = createGitRunState({
+    sessionId: 'fs-alias',
+    subscriptionId: 'sub-a',
+    send: client.send,
+    connection: client.connection.signal,
+    turnDiff: true,
+    filesystem: true,
+  });
+
+  await AgentSession.create({ id: 'fs-alias', subscriptionId: 'sub-a' } as any);
+  run.candidates.add(ROOT, 'project');
+  run.candidates.add(alias, 'working_directory');
+  await captureTurnBaselines(run, [ROOT, alias], 'turn_start', undefined, log);
+  expect(run.baselines).toEqual([baseline]);
+  expect(run.rootAliases.get(alias)).toBe(ROOT);
+  const summary = await captureSessionDiffBeforeFinal(run, [], undefined, log);
+  expect(summary?.coverage).toEqual([
+    { root: ROOT, status: 'complete', reason: '', suggestedFix: '' },
+  ]);
+  const req = {
+    request_id: 'alias',
+    candidate_paths: [ROOT],
+    baseline_source: 'turn_start' as const,
+  };
+  const response = {
+    request_id: 'alias',
+    status: 'ok',
+    repositories: [],
+    baselines: [baseline],
+    root_aliases: [{ root: ROOT, alias }],
+  };
+  expect(() =>
+    validateGitBaselineResponse(response, req, { notBefore: run.startedAt, now: Date.now() }),
+  ).toThrow('root alias');
+  expect(() =>
+    validateGitBaselineResponse(
+      { ...response, root_aliases: [{ root: '/unrequested', alias: ROOT }] },
+      req,
+      { notBefore: run.startedAt, now: Date.now() },
+    ),
+  ).toThrow('root alias');
+});

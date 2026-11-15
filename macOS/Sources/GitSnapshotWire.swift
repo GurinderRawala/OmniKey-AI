@@ -239,6 +239,11 @@ struct GitDiffRepositoryPatch: Codable, Equatable, Sendable {
     }
 }
 
+struct GitRootAlias: Codable, Equatable, Sendable {
+    let root: String
+    let alias: String
+}
+
 struct GitDiffResponsePayload: Codable, Equatable, Sendable {
     let requestID: String
     let status: GitDiffResponseStatus
@@ -247,6 +252,7 @@ struct GitDiffResponsePayload: Codable, Equatable, Sendable {
     let baselines: [GitTurnBaseline]?
     let reason: String?
     let coverage: [TurnRootCoverage]?
+    let rootAliases: [GitRootAlias]?
 
     init(
         requestID: String,
@@ -254,7 +260,8 @@ struct GitDiffResponsePayload: Codable, Equatable, Sendable {
         repositories: [GitDiffRepositoryPatch] = [],
         baselines: [GitTurnBaseline]? = nil,
         reason: String? = nil,
-        coverage: [TurnRootCoverage]? = nil
+        coverage: [TurnRootCoverage]? = nil,
+        rootAliases: [GitRootAlias]? = nil
     ) {
         self.requestID = requestID
         self.status = status
@@ -263,6 +270,7 @@ struct GitDiffResponsePayload: Codable, Equatable, Sendable {
         self.baselines = baselines.map { status == .ok ? $0 : [] }
         self.reason = reason
         self.coverage = coverage
+        self.rootAliases = status == .ok ? rootAliases : nil
     }
 
     enum CodingKeys: String, CodingKey {
@@ -271,6 +279,7 @@ struct GitDiffResponsePayload: Codable, Equatable, Sendable {
         case repositories
         case baselines
         case reason, coverage
+        case rootAliases = "root_aliases"
     }
 }
 

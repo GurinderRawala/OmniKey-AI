@@ -20,6 +20,30 @@ private actor DiscoveryProbe {
 }
 
 final class GitHubReviewRegressionTests: XCTestCase {
+    @MainActor
+    func testMissingWorktreeDoesNotHideRepositoryFromOldSavedCoverage() async throws {
+        let repo = try GitTestRepo()
+        try repo.git("remote", "add", "origin", "https://github.com/owner/repo.git")
+        let missing = repo.root + "/removed-worktree"
+        let diff = LiveTurnDiff(turnID: "old", revision: 1, status: "final", repositories: [], coverage: [
+            TurnRootCoverage(root: missing, status: "partial", reason: "", suggestedFix: ""),
+            TurnRootCoverage(root: repo.root, status: "partial", reason: "", suggestedFix: ""),
+        ])
+        var message = ChatMessage.assistant()
+        message.blocks = [ChatBlock(kind: .sessionDiff, text: "", liveDiff: diff)]
+        let paths = SessionGitHubDiscovery.startingPaths(in: [message])
+        XCTAssertEqual(paths, [missing, repo.root])
+        let suite = "github-fallback-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let model = SessionGitHubCardModel(defaults: defaults, discovery: { root, old, texts, _ in
+            SessionGitHubDiscovery.refresh(path: root, previous: old, texts: texts, loadPullRequests: false)
+        })
+        await model.refresh(session: "existing", path: paths.first, texts: [], paths: paths)
+        XCTAssertEqual(model.info?.repository, "owner/repo")
+        XCTAssertEqual(model.info.map { TurnChangeTracker.comparable($0.root) }, TurnChangeTracker.comparable(repo.root))
+    }
+
     func testStructuredDirectorySurvivesHistoryAndDoesNotNeedDiffCoverage() throws {
         let data = Data("""
         [{"id":"answer","role":"assistant","text":"","blocks":[{"id":"shell","kind":"shellCommand","text":"git status","workingDirectory":"/Projects/Repo"}]}]

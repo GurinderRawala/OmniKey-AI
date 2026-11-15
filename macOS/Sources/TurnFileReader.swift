@@ -5,6 +5,9 @@ import Foundation
 /// between directory enumeration and reading. Metadata and reads use openat /
 /// fstatat / readlinkat against the same directory descriptors.
 final class TurnFileReader {
+    struct DirectoryIdentity: Equatable, Hashable { let device: dev_t; let inode: ino_t }
+    var directoryIdentity: DirectoryIdentity { DirectoryIdentity(device: identity.st_dev, inode: identity.st_ino) }
+
     enum Failure: Error { case absent, unavailable, tooLarge(Int64) }
     enum Entry {
         case directory

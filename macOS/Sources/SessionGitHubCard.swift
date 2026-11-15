@@ -45,17 +45,21 @@ enum SessionGitHubDiscovery {
         return numbers
     }
 
-    static func startingPath(in messages: [ChatMessage]) -> String? {
-        for message in messages {
-            for block in message.blocks {
-                if let root = block.liveDiff?.coverage.first?.root ?? block.sessionDiff?.coverage?.first?.root { return root }
-                if block.kind == .shellCommand {
-                    if let root = block.workingDirectory, root.hasPrefix("/") { return root }
-                    if let root = GitShellCommandAnalyzer.analyze(block.text, initialDirectory: block.workingDirectory).observedDirectories.first { return root }
-                }
-            }
+    static func startingPaths(in messages: [ChatMessage]) -> [String] {
+        let blocks = messages.flatMap(\.blocks)
+        let structured = blocks.compactMap { $0.kind == .shellCommand ? $0.workingDirectory : nil }
+        let commands = blocks.filter { $0.kind == .shellCommand }.flatMap {
+            GitShellCommandAnalyzer.analyze($0.text, initialDirectory: $0.workingDirectory).observedDirectories
         }
-        return nil
+        let captured = blocks.flatMap { block in
+            block.liveDiff?.coverage.map(\.root) ?? block.sessionDiff?.coverage?.map(\.root) ?? []
+        }
+        var seen = Set<String>()
+        return (structured + captured + commands).filter { $0.hasPrefix("/") && seen.insert($0).inserted }
+    }
+
+    static func startingPath(in messages: [ChatMessage]) -> String? {
+        startingPaths(in: messages).first
     }
 
     struct BranchPullRequest: Decodable {
@@ -88,13 +92,15 @@ enum SessionGitHubDiscovery {
 
     /// Read-only local Git + authenticated GitHub CLI, never a shell command.
     static func refresh(path: String, previous: SessionGitHubInfo?, texts: [String], loadPullRequests: Bool = true, refreshIndex: Int = 0) -> SessionGitHubInfo? {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory), isDirectory.boolValue else { return nil }
         guard let git = GitCommandRunner() else { return previous }
         let localDeadline = Date().addingTimeInterval(3)
         func gitText(_ args: [String]) -> String? {
             guard let result = try? git.run(args, in: path, maxStdout: 512 * 1024, deadline: localDeadline), result.status == 0 else { return nil }
             return String(decoding: result.stdout, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        guard let root = gitText(["rev-parse", "--show-toplevel"]) else { return previous }
+        guard let root = gitText(["rev-parse", "--show-toplevel"]) else { return nil }
         let branch = gitText(["branch", "--show-current"]) ?? previous?.branch ?? ""
         let remoteName = branch.isEmpty ? nil : gitText(["config", "--get", "branch.\(branch).remote"])
         let names = [remoteName, "origin"].compactMap { $0 } + (gitText(["remote"]) ?? "").components(separatedBy: "\n")
@@ -155,7 +161,7 @@ final class SessionGitHubCardModel: ObservableObject {
     typealias Discovery = @Sendable (String, SessionGitHubInfo?, [String], Int) async -> SessionGitHubInfo?
     private let discovery: Discovery
     private var worker: Task<Void, Never>?
-    private var pending: (session: String, root: String, texts: [String], token: UUID)?
+    private var pending: (session: String, paths: [String], texts: [String], token: UUID)?
     private var refreshIndex = 0
     init(defaults: UserDefaults = .standard, discovery: @escaping Discovery = { root, old, texts, index in
         await Task.detached(priority: .utility) {
@@ -178,12 +184,15 @@ final class SessionGitHubCardModel: ObservableObject {
         }
     }
 
-    func refresh(session: String, path: String?, texts: [String]) async {
+    func refresh(session: String, path: String?, texts: [String], paths: [String] = []) async {
         load(session: session)
-        guard let root = info?.root ?? path else { return }
+        var seen = Set<String>()
+        let candidates = ([path].compactMap { $0 } + paths + [info?.root].compactMap { $0 })
+            .filter { seen.insert($0).inserted }
+        guard !candidates.isEmpty else { return }
         let token = UUID()
         generation = token
-        pending = (session, root, texts, token)
+        pending = (session, candidates, texts, token)
         if let worker { await worker.value; return }
         let task = Task { @MainActor in
             while let request = self.pending {
@@ -191,7 +200,13 @@ final class SessionGitHubCardModel: ObservableObject {
                 let old = self.selectedSession == request.session ? self.info : nil
                 let index = self.refreshIndex
                 self.refreshIndex += 1
-                let updated = await self.discovery(request.root, old, request.texts, index)
+                var updated: SessionGitHubInfo?
+                // One bad/removed first folder must not hide a valid project.
+                for root in request.paths.prefix(32) {
+                    updated = await self.discovery(root, old, request.texts, index)
+                    if updated != nil { break }
+                    guard self.generation == request.token else { break }
+                }
                 guard self.selectedSession == request.session, self.generation == request.token else { continue }
                 self.info = updated
                 if let updated, let data = try? JSONEncoder().encode(updated) {
@@ -210,9 +225,9 @@ struct SessionGitHubCard: View {
     @ObservedObject var model: ChatModel
     @StateObject private var card = SessionGitHubCardModel()
     private var session: String { model.activeSessionId ?? "" }
-    private var path: String? { SessionGitHubDiscovery.startingPath(in: model.messages) }
+    private var paths: [String] { SessionGitHubDiscovery.startingPaths(in: model.messages) }
     private var refreshKey: String {
-        "\(session):\(path ?? ""):\(model.isRunning):\(model.messages.flatMap(\.blocks).filter { $0.kind == .terminalOutput || $0.kind == .finalAnswer }.count)"
+        "\(session):\(paths.joined(separator: "|")):\(model.isRunning):\(model.messages.flatMap(\.blocks).filter { $0.kind == .terminalOutput || $0.kind == .finalAnswer }.count)"
     }
     var body: some View {
         Group {
@@ -226,7 +241,7 @@ struct SessionGitHubCard: View {
             guard !session.isEmpty else { card.load(session: ""); return }
             let texts = model.messages.flatMap { [$0.text] + $0.blocks.map(\.text) }
             repeat {
-                await card.refresh(session: session, path: path, texts: texts)
+                await card.refresh(session: session, path: paths.first, texts: texts, paths: paths)
                 guard model.isRunning, !Task.isCancelled else { break }
                 try? await Task.sleep(for: .seconds(30))
             } while !Task.isCancelled

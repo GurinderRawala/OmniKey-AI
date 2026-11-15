@@ -78,6 +78,7 @@ export interface GitRunState {
   /** Candidate paths a baseline was already requested for (never retried). */
   baselineAttempted: Set<string>;
   baselineRequests: GitDiffRequest[];
+  rootAliases: Map<string, string>;
   /** Count of baseline requests that failed (timeout/invalid/unavailable). */
   baselineFailures: number;
   /**
@@ -113,6 +114,7 @@ export function createGitRunState(input: {
     baselines: [],
     baselineAttempted: new Set(),
     baselineRequests: [],
+    rootAliases: new Map(),
     baselineFailures: 0,
     agentPatches: input.agentPatches === true,
     filesystem: input.filesystem === true,
@@ -590,6 +592,11 @@ export async function captureTurnBaselines(
       return;
     }
     const added = recordTurnBaselines(run, response.baselines ?? []);
+    for (const alias of response.root_aliases ?? []) {
+      if (!run.rootAliases.has(comparablePath(alias.alias))) {
+        run.rootAliases.set(comparablePath(alias.alias), alias.root);
+      }
+    }
     log.info('Recorded git turn baselines', {
       sessionId: run.sessionId,
       source,
@@ -740,7 +747,8 @@ async function captureTurnSnapshot(
   if (coverage) {
     for (const root of run.candidates.list(GIT_DIFF_MAX_CANDIDATES * 4)) {
       if (coverage.length >= FILESYSTEM_MAX_COVERAGE_ROOTS) break;
-      if (coverage.some((c) => pathIsWithin(root, c.root))) continue;
+      const canonical = run.rootAliases.get(comparablePath(root)) ?? root;
+      if (coverage.some((c) => pathIsWithin(canonical, c.root))) continue;
       coverage.push({
         root,
         status: 'unavailable',

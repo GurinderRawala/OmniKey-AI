@@ -309,6 +309,8 @@ export type GitDiffResponseStatus = 'ok' | 'not_repository' | 'unavailable';
 
 /** Client -> server reply to a GitDiffRequest. */
 export interface GitDiffResponse {
+  /** Native filesystem identity aliases, scoped to issued baseline candidates. */
+  root_aliases?: Array<{ root: string; alias: string }>;
   filesystem?: boolean;
   coverage?: TurnRootCoverage[];
   request_id: string;
@@ -566,7 +568,42 @@ export function validateGitBaselineResponse(
     seen.add(key);
     baselines.push({ root: normalizeAbsolutePath(root), head, capturedAt: timestamp, source });
   }
-  return { request_id: request.request_id, status, repositories: [], baselines };
+  let aliases: Array<{ root: string; alias: string }> | undefined;
+  if (raw.root_aliases !== undefined) {
+    if (!Array.isArray(raw.root_aliases) || raw.root_aliases.length > 64) {
+      throw new GitDiffValidationError('root aliases');
+    }
+    const seenAliases = new Set<string>();
+    aliases = raw.root_aliases.map((item) => {
+      if (
+        !isPlainObject(item) ||
+        !isSafeAbsolutePath(item.root) ||
+        !isSafeAbsolutePath(item.alias)
+      ) {
+        throw new GitDiffValidationError('root alias');
+      }
+      const { root, alias } = item;
+      if (
+        !baselines.some((b) => comparablePath(b.root) === comparablePath(root)) ||
+        ![...issued, request].some((sent) =>
+          sent.candidate_paths.some((path) => comparablePath(path) === comparablePath(alias)),
+        ) ||
+        seenAliases.has(comparablePath(alias))
+      ) {
+        throw new GitDiffValidationError('root alias');
+      }
+      seenAliases.add(comparablePath(alias));
+      return { root: normalizeAbsolutePath(root), alias: normalizeAbsolutePath(alias) };
+    });
+  }
+
+  return {
+    request_id: request.request_id,
+    status,
+    repositories: [],
+    baselines,
+    ...(aliases ? { root_aliases: aliases } : {}),
+  };
 }
 
 /**

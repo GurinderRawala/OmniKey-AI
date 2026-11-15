@@ -43,11 +43,14 @@ final class TurnChangeTracker: @unchecked Sendable {
     struct Root {
         let baseline: GitTurnBaseline
         let manifest: Manifest?
+        let identity: TurnFileReader.DirectoryIdentity?
     }
     let turnID = UUID().uuidString
     var limits = Limits()
     var scanNow: () -> Date = Date.init
     private var roots: [String: Root] = [:]
+    private var rootOrder: [String] = []
+    private var rootAliases: [GitRootAlias] = []
     private var omittedRoots: Set<String> = []
     private var revision = 0
     private var previous: LiveTurnDiff?
@@ -134,7 +137,15 @@ final class TurnChangeTracker: @unchecked Sendable {
             let root = TurnFileReader.physicalPath(canonical ?? candidate) ?? canonical ?? candidate
             guard root.hasPrefix("/"), root != "/", root != TurnFileReader.physicalPath(NSHomeDirectory()),
                   !root.contains("\0"), !root.split(separator: "/").contains("..") else { continue }
-            if roots[root] != nil || roots.keys.contains(where: { root.hasPrefix($0 + "/") }) { continue }
+            let identity = (try? TurnFileReader(root: root))?.directoryIdentity
+            if let existing = roots.first(where: { $0.key == root || (identity != nil && $0.value.identity == identity) }) {
+                if candidate != existing.value.baseline.root, rootAliases.count < 64,
+                   !rootAliases.contains(where: { $0.alias == candidate }) {
+                    rootAliases.append(GitRootAlias(root: existing.value.baseline.root, alias: candidate))
+                }
+                continue
+            }
+            if roots.keys.contains(where: { root.hasPrefix($0 + "/") }) { continue }
             let reported = Self.reportedRoot(root, candidates: request.candidatePaths)
             if roots.count >= 8 {
                 if omittedRoots.count < 32 { omittedRoots.insert(reported) }
@@ -142,11 +153,12 @@ final class TurnChangeTracker: @unchecked Sendable {
             }
             let baseline = GitTurnBaseline(root: reported, head: nil, capturedAt: GitTurnBaseline.timestamp(), source: request.baselineSource ?? .turnStart)
             let manifest = Self.sensitive(root) ? nil : scan(root, deadline: deadline)
-            roots[root] = Root(baseline: baseline, manifest: manifest)
+            roots[root] = Root(baseline: baseline, manifest: manifest, identity: identity)
+            rootOrder.append(root)
         }
         observeRoots()
         return GitDiffResponsePayload(requestID: request.requestID, status: .ok,
-                                      baselines: roots.values.map(\.baseline).sorted { $0.root < $1.root })
+                                      baselines: rootOrder.compactMap { roots[$0]?.baseline }, rootAliases: rootAliases)
     }
 
     func final(_ request: GitDiffRequestPayload) -> GitDiffResponsePayload {
@@ -162,10 +174,22 @@ final class TurnChangeTracker: @unchecked Sendable {
         var budget = limits.patchBytes
         var deadline = Date().addingTimeInterval(limits.seconds)
         var patchSecondsRemaining = limits.patchSeconds
-        for root in roots.keys.sorted() {
+        // Starting folders get the shared budgets before auxiliary, late roots.
+        let orderedRoots = rootOrder.filter { roots[$0]?.baseline.source == .turnStart }
+            + rootOrder.filter { roots[$0]?.baseline.source != .turnStart }
+        for root in orderedRoots {
             let entry = roots[root]!
             let displayRoot = entry.baseline.root
             if let acceptedRoots, !acceptedRoots.contains(Self.comparable(displayRoot)) { continue }
+            // A removed/replaced checkout is unavailable, not an empty directory.
+            // Otherwise worktree cleanup becomes thousands of fabricated deletions.
+            if let identity = entry.identity,
+               (try? TurnFileReader(root: root))?.directoryIdentity != identity {
+                coverage.append(TurnRootCoverage(root: displayRoot, status: "unavailable",
+                    reason: "The captured folder was removed or replaced; its cleanup is not a file-change comparison.",
+                    suggestedFix: "Review changes in the retained project folder."))
+                continue
+            }
             guard let before = entry.manifest, let after = scan(root, deadline: deadline, prioritizing: before.files.keys.sorted()) else {
                 let protected = Self.sensitive(root)
                 coverage.append(TurnRootCoverage(root: displayRoot, status: "unavailable",
@@ -304,6 +328,46 @@ final class TurnChangeTracker: @unchecked Sendable {
             if read(path) { result.unknown.insert(path) } // file became a directory
         }
         let known = Set(knownPaths)
+        // Git supplies file eligibility only; starting/current bytes still come
+        // from the pinned filesystem reader. Ignore rules keep generated builds,
+        // caches and dependencies from consuming the source-content budget.
+        if let git = GitCommandRunner(), scanNow() < deadline {
+            do {
+                let listing = try git.run(["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "."],
+                    in: root, maxStdout: 4 * 1024 * 1024, deadline: deadline)
+                if listing.status == 0 {
+                    var paths = Set<String>()
+                    for bytes in listing.stdout.split(separator: 0) {
+                        guard scanNow() < deadline, paths.count < limits.files else {
+                            result.enumerated = false
+                            result.limitsReached.insert("Filesystem entry/time limit reached.")
+                            break
+                        }
+                        guard let relative = String(bytes: bytes, encoding: .utf8) else {
+                            result.enumerated = false; continue
+                        }
+                        paths.insert(relative)
+                    }
+                    // Keep root manifests ahead of deep trees within the budget.
+                    for relative in paths.sorted(by: {
+                        let left = $0.split(separator: "/").count, right = $1.split(separator: "/").count
+                        return left == right ? $0 < $1 : left < right
+                    }) where !known.contains(relative) {
+                        guard scanNow() < deadline else { result.enumerated = false; break }
+                        if Self.sensitive(relative) || roots.keys.contains(where: { $0 != root && (root as NSString).appendingPathComponent(relative).hasPrefix($0 + "/") }) {
+                            result.excluded += 1; continue
+                        }
+                        if read(relative) { result.excluded += 1 } // submodule/directory, never follow it
+                    }
+                    guard reader.isStillAtRoot() else { return nil }
+                    return result
+                }
+            } catch {
+                // A failed bounded Git listing cannot establish completeness.
+                result.enumerated = false
+                result.limitsReached.insert("Git file enumeration exceeded its bounds or was unavailable.")
+            }
+        }
         // Breadth-first, lexical traversal captures root files before descending
         // into a large subtree. Foundation's depth-first order is unspecified.
         var directories = [URL(fileURLWithPath: root)], nextDirectory = 0

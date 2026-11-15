@@ -30,6 +30,91 @@ final class TurnChangeTrackerTests: XCTestCase {
         XCTAssertTrue(diff.repositories.isEmpty)
     }
 
+    func testWorktreeCleanupCannotConsumeProjectPatchBudget() throws {
+        let repo = try GitTestRepo()
+        try repo.write("package.json", "before\n")
+        try repo.write("README.md", "readme\n")
+        _ = try repo.commitAll()
+        let parent = try folder()
+        let auxiliary = parent.appendingPathComponent("worktree")
+        try repo.git("worktree", "add", "--detach", auxiliary.path)
+        let tracker = TurnChangeTracker()
+        tracker.limits.patchBytes = 300
+        _ = begin(tracker, URL(fileURLWithPath: repo.root))
+        _ = begin(tracker, auxiliary, source: .beforeTool)
+        try repo.write("package.json", "after migration\n")
+        try repo.git("worktree", "remove", "--force", auxiliary.path)
+        let result = tracker.capture(status: "final")
+        XCTAssertEqual(result.repositories.count, 1)
+        XCTAssertEqual(result.repositories.first?.root, repo.root)
+        XCTAssertTrue(result.repositories.first?.patch.contains("+after migration") == true)
+        XCTAssertFalse(result.repositories.map(\.patch).joined().contains("deleted file mode"))
+        XCTAssertEqual(result.coverage.first(where: { $0.root == auxiliary.path })?.status, "unavailable")
+        // The later PR-creation turn begins from the already-edited checkout.
+        let next = TurnChangeTracker()
+        _ = begin(next, URL(fileURLWithPath: repo.root))
+        try repo.git("worktree", "add", "--detach", auxiliary.path)
+        _ = begin(next, auxiliary, source: .beforeTool)
+        try repo.git("worktree", "remove", "--force", auxiliary.path)
+        XCTAssertTrue(next.capture(status: "final").repositories.isEmpty)
+    }
+
+    func testIgnoredBuildOutputsDoNotExhaustSourceBudget() throws {
+        let repo = try GitTestRepo()
+        try repo.write(".gitignore", "dist/\n.turbo/\n")
+        try repo.write("package.json", "original\n")
+        try repo.write("dist/tracked.txt", "tracked\n")
+        try repo.git("add", "-f", "dist/tracked.txt")
+        _ = try repo.commitAll()
+        try repo.write("dist/generated.js", String(repeating: "generated", count: 1000))
+        let tracker = TurnChangeTracker()
+        tracker.limits.rootBytes = 100
+        _ = begin(tracker, URL(fileURLWithPath: repo.root))
+        try repo.write("package.json", "migrated\n")
+        try repo.write("new-config.json", "new\n")
+        try repo.write("dist/tracked.txt", "updated tracked\n")
+        try repo.write(".turbo/cache/output", String(repeating: "cache", count: 1000))
+        let result = tracker.capture(status: "final")
+        let patch = result.repositories.map(\.patch).joined()
+        XCTAssertTrue(patch.contains("+migrated"))
+        XCTAssertTrue(patch.contains("a/new-config.json b/new-config.json"))
+        XCTAssertTrue(patch.contains("+updated tracked"))
+        XCTAssertFalse(patch.contains("generated.js"))
+        XCTAssertFalse(patch.contains(".turbo/cache"))
+        XCTAssertEqual(result.coverage.first?.status, "complete")
+    }
+
+    func testCaseAliasesUseFilesystemIdentityWithoutRebasing() throws {
+        let parent = try folder()
+        let root = parent.appendingPathComponent("MixedCaseProject")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        let alias = parent.appendingPathComponent("mixedcaseproject")
+        guard FileManager.default.fileExists(atPath: alias.path) else { throw XCTSkip("Case-sensitive filesystem") }
+        try write(root, "file", "original\n")
+        let tracker = TurnChangeTracker()
+        let first = begin(tracker, root)
+        try write(root, "file", "edited\n")
+        let next = begin(tracker, alias, source: .beforeTool)
+        XCTAssertEqual(next.baselines, first.baselines)
+        XCTAssertEqual(next.rootAliases, [GitRootAlias(root: root.path, alias: alias.path)])
+        XCTAssertTrue(patch(tracker).contains("-original"))
+        XCTAssertEqual(tracker.capture(status: "final").coverage.count, 1)
+    }
+
+    func testExistingRootReplacementIsNotComparedWithUnrelatedContents() throws {
+        let parent = try folder(), root = parent.appendingPathComponent("checkout")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        try write(root, "file", "original\n")
+        let tracker = TurnChangeTracker()
+        _ = begin(tracker, root)
+        try FileManager.default.moveItem(at: root, to: parent.appendingPathComponent("original-checkout"))
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        try write(root, "file", "unrelated\n")
+        let result = tracker.capture(status: "final")
+        XCTAssertTrue(result.repositories.isEmpty)
+        XCTAssertEqual(result.coverage.first?.status, "unavailable")
+    }
+
     func testNonGitStartingContentsAndNextTurnDoNotLeak() throws {
         let root = try folder()
         try write(root, "file.txt", "preexisting uncommitted content\n")
@@ -162,7 +247,7 @@ final class TurnChangeTrackerTests: XCTestCase {
 }
 
 extension TurnChangeTrackerTests {
-    func testDeletedRootAndNewDirectoryAreComparedAsAbsentEndpoints() throws {
+    func testNewDirectoryIsCapturedButRemovedRootIsUnavailable() throws {
         let parent = try folder()
         let root = parent.appendingPathComponent("new-folder")
         let tracker = TurnChangeTracker()
@@ -173,7 +258,9 @@ extension TurnChangeTrackerTests {
         let deletion = TurnChangeTracker()
         _ = begin(deletion, root)
         try FileManager.default.removeItem(at: root)
-        XCTAssertTrue(patch(deletion).contains("-created"))
+        let removed = deletion.capture(status: "final")
+        XCTAssertTrue(removed.repositories.isEmpty)
+        XCTAssertEqual(removed.coverage.first?.status, "unavailable")
     }
 
     func testAliasesShareOneBaselineAndPatchesUseRelativePaths() throws {
