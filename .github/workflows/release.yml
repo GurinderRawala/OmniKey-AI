@@ -11,6 +11,10 @@ on:
         required: true
         type: string
 
+# Build tooling must not send anonymous usage telemetry.
+env:
+  TURBO_TELEMETRY_DISABLED: "1"
+
 jobs:
   build:
     name: Build ${{ matrix.arch }} tarball
@@ -31,11 +35,14 @@ jobs:
         with:
           ref: ${{ github.event.inputs.tag || github.ref_name }}
 
+      - name: Setup pnpm (version pinned in package.json)
+        uses: pnpm/action-setup@v4
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: 'yarn'
+          cache: 'pnpm'
 
       - name: Get version from tag
         id: version
@@ -47,37 +54,28 @@ jobs:
           echo "VERSION=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
 
       - name: Install monorepo dependencies
-        run: yarn install --frozen-lockfile
+        run: pnpm install --frozen-lockfile
         env:
           npm_config_arch: ${{ matrix.npm_arch }}
 
       - name: Build all workspaces (api, telegram, cli)
-        run: yarn build
+        run: pnpm build
         env:
           npm_config_arch: ${{ matrix.npm_arch }}
 
       - name: Stage self-contained CLI bundle
         run: |
           STAGE="$RUNNER_TEMP/omnikey-cli-stage"
-          rm -rf "$STAGE"
-          mkdir -p "$STAGE"
-          # Copy build artifacts and metadata. node_modules is intentionally omitted —
-          # we re-resolve production-only dependencies inside the staging directory below.
-          cp -R cli/dist "$STAGE/dist"
-          cp -R cli/backend-dist "$STAGE/backend-dist"
-          cp -R cli/telegram-client-dist "$STAGE/telegram-client-dist"
-          cp cli/package.json "$STAGE/package.json"
-          cp cli/README.md "$STAGE/README.md"
-          # Install production dependencies in the staging dir, isolated from the
-          # monorepo's workspaces so `node_modules` is fully resolved under cli/.
-          cd "$STAGE"
-          yarn install --production --no-lockfile
+          # Frozen workspace lockfile supplies production dependencies; deploy keeps
+          # the virtual store inside the bundle, never linked to the checkout.
+          pnpm --filter omnikey-cli deploy --prod "$STAGE"
           echo "STAGE=$STAGE" >> "$GITHUB_ENV"
 
       - name: Verify staged CLI and native dependencies
         env:
           EXPECTED_ARCH: ${{ matrix.npm_arch }}
         run: |
+          node scripts/verify-cli-bundle.mjs "$STAGE"
           cd "$STAGE"
           node -e 'if (process.arch !== process.env.EXPECTED_ARCH) throw new Error("Unexpected runner architecture: " + process.arch); require("sqlite3");'
           node dist/index.js --version

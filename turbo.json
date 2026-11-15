@@ -1,0 +1,45 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "globalDependencies": ["eslint.config.mjs", "**/tsconfig*.json", ".prettier*"],
+  "globalEnv": ["NODE_ENV"],
+  "tasks": {
+    "build": {
+      "outputs": ["dist/**"],
+      "dependsOn": ["clean"]
+    },
+    "omnikey-cli#build": {
+      "dependsOn": ["clean", "omnikey-ai-api#build", "telegram#build"],
+      "outputs": ["dist/**", "backend-dist/**", "telegram-client-dist/**"]
+    },
+    "test": {
+      "cache": false,
+      "passThroughEnv": [
+        "TMPDIR",
+        "HOME",
+        "SKILLS_TEST_PG_URL",
+        "SKILLS_TEST_PG_SOCKET",
+        "CI",
+        "USER"
+      ]
+    },
+    "test:types": {
+      "cache": false
+    },
+    "lint": {
+      "outputs": []
+    },
+    "format:check": {
+      "outputs": []
+    },
+    "dev": {
+      "cache": false,
+      "persistent": true
+    },
+    "format": {
+      "cache": false
+    },
+    "clean": {
+      "cache": false
+    }
+  }
+}

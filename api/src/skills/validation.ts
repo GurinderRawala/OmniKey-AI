@@ -16,8 +16,7 @@ export type SkillField = 'name' | 'keyword' | 'instructions' | 'enabled' | 'body
 export type SkillFieldErrors = Partial<Record<SkillField, string>>;
 
 export type ValidationResult<T> =
-  | { ok: true; value: T }
-  | { ok: false; fields: Record<string, string> };
+  { ok: true; value: T } | { ok: false; fields: Record<string, string> };
 
 /** Validated, normalized values ready for persistence. */
 export interface NormalizedSkillFields {

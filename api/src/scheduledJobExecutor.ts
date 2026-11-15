@@ -1,6 +1,6 @@
 import cuid from 'cuid';
 import { Op } from 'sequelize';
-import { parseExpression } from 'cron-parser';
+import { CronExpressionParser } from 'cron-parser';
 import { ScheduledJob } from './models/scheduledJob';
 import { Subscription } from './models/subscription';
 import { logger } from './logger';
@@ -19,7 +19,7 @@ const RUNNING_JOB_IDS = new Set<string>();
 export function computeNextRunAt(cronExpression: string | null, runAt: Date | null): Date | null {
   if (cronExpression) {
     try {
-      const interval = parseExpression(cronExpression, { currentDate: new Date() });
+      const interval = CronExpressionParser.parse(cronExpression, { currentDate: new Date() });
       return interval.next().toDate();
     } catch {
       return null;

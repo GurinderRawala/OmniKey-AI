@@ -5,16 +5,15 @@
     "registry": "https://registry.npmjs.org/"
   },
   "version": "1.8.22",
-  "description": "CLI for onboarding users to Omnikey AI and configuring OPENAI_API_KEY. Use Yarn for install/build.",
+  "description": "CLI for onboarding users to Omnikey AI and configuring OPENAI_API_KEY. Use pnpm for install/build.",
   "engines": {
-    "node": ">=22",
-    "yarn": ">=1.22.0"
+    "node": ">=22"
   },
   "bin": {
     "omnikey": "dist/index.js"
   },
   "scripts": {
-    "build": "tsc && yarn run copy-backend && yarn run build:telegram-client",
+    "build": "tsc && pnpm run copy-backend && pnpm run build:telegram-client",
     "start": "node dist/index.js",
     "copy-backend": "rm -rf backend-dist && mkdir -p backend-dist && cp -R ../api/dist/* backend-dist/",
     "build:telegram-client": "rm -rf telegram-client-dist && mkdir -p telegram-client-dist && cp -R ../telegram/dist/* telegram-client-dist/",
@@ -22,7 +21,8 @@
     "format": "prettier --write \"src/**/*.ts\"",
     "test": "vitest run",
     "lint": "eslint --config ../eslint.config.mjs \"src/**/*.ts\"",
-    "test:types": "tsc --noEmit --skipLibCheck --esModuleInterop --strict --target ES2017 --module commonjs --moduleResolution node src/__tests__/skills.test.ts"
+    "test:types": "tsc --noEmit --skipLibCheck --esModuleInterop --strict --target ES2017 --module commonjs --moduleResolution node src/__tests__/skills.test.ts",
+    "format:check": "prettier --check \"src/**/*.ts\""
   },
   "keywords": [
     "cli",
@@ -33,37 +33,38 @@
   "author": "Gurinder Rawala",
   "license": "MIT",
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.96.0",
-    "@google-cloud/storage": "^7.19.0",
-    "@google/genai": "^1.46.0",
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@anthropic-ai/sdk": "^0.137.0",
+    "@google-cloud/storage": "^9.0.0",
+    "@google/genai": "^1.52.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "@pierre/diffs": "1.6.4",
-    "axios": "^1.13.5",
-    "commander": "^11.0.0",
+    "axios": "^1.21.1",
+    "commander": "^14.0.3",
     "compression": "^1.8.2",
-    "cors": "^2.8.5",
-    "cron-parser": "^4.9.0",
+    "cors": "^2.8.6",
+    "cron-parser": "^5.10.6",
     "cuid": "^3.0.0",
-    "dotenv": "^17.2.3",
-    "express": "^4.21.2",
-    "inquirer": "^9.0.0",
+    "dotenv": "^18.0.10",
+    "express": "^4.22.3",
+    "inquirer": "^9.3.8",
     "jsonwebtoken": "^9.0.3",
-    "node-telegram-bot-api": "^0.61.0",
-    "openai": "^6.37.0",
-    "pg": "^8.18.0",
+    "node-telegram-bot-api": "^0.67.0",
+    "openai": "^7.57.0",
+    "pg": "^8.23.1",
     "pg-hstore": "^2.3.4",
-    "playwright-core": "^1.50.0",
-    "sequelize": "^6.37.7",
-    "sqlite3": "^5.1.6",
+    "playwright-core": "^1.65.1",
+    "sequelize": "^6.37.8",
+    "sqlite3": "^6.0.1",
     "winston": "^3.19.0",
-    "ws": "^8.18.0",
-    "zod": "^4.3.6"
+    "ws": "^8.23.0",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@types/inquirer": "^9.0.9",
-    "@types/node-telegram-bot-api": "^0.64.0",
-    "typescript": "^5.0.0",
-    "vitest": "^4.1.7"
+    "@types/express": "^4.17.25",
+    "@types/inquirer": "^9.0.10",
+    "@types/node": "^22.20.5",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.12"
   },
   "repository": {
     "type": "git",

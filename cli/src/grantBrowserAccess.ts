@@ -1,4 +1,4 @@
-import inquirer from 'inquirer';
+import { loadInquirer } from './loadInquirer';
 import fs from 'fs';
 import path from 'path';
 import net from 'net';
@@ -264,7 +264,9 @@ async function setupDebuggingPort(
 
     const { action } = options.nonInteractive
       ? { action: 'update' }
-      : await inquirer.prompt([
+      : await (
+          await loadInquirer()
+        ).prompt([
           {
             type: 'list',
             name: 'action',
@@ -338,7 +340,9 @@ async function setupDebuggingPort(
     debugUserDataDir = path.join(debugRootDir, `${safeBrowserName}-${safeProfileName}`);
     fs.mkdirSync(debugUserDataDir, { recursive: true });
   } else if (existingDebugProfiles.length > 0) {
-    const { profileMode } = await inquirer.prompt([
+    const { profileMode } = await (
+      await loadInquirer()
+    ).prompt([
       {
         type: 'list',
         name: 'profileMode',
@@ -351,7 +355,9 @@ async function setupDebuggingPort(
     ]);
 
     if (profileMode === 'existing') {
-      const { existingProfile } = await inquirer.prompt([
+      const { existingProfile } = await (
+        await loadInquirer()
+      ).prompt([
         {
           type: 'list',
           name: 'existingProfile',
@@ -366,7 +372,9 @@ async function setupDebuggingPort(
       debugUserDataDir = existingProfile.fullPath;
       debugProfileLabel = existingProfile.displayName;
     } else {
-      const { profileName } = await inquirer.prompt([
+      const { profileName } = await (
+        await loadInquirer()
+      ).prompt([
         {
           type: 'input',
           name: 'profileName',
@@ -387,7 +395,9 @@ async function setupDebuggingPort(
       fs.mkdirSync(debugUserDataDir, { recursive: true });
     }
   } else {
-    const { profileName } = await inquirer.prompt([
+    const { profileName } = await (
+      await loadInquirer()
+    ).prompt([
       {
         type: 'input',
         name: 'profileName',
@@ -440,7 +450,9 @@ async function setupDebuggingPort(
 
   if (!options.nonInteractive) {
     console.log(`Close any open ${browser.name} windows, then press Enter.`);
-    await inquirer.prompt([{ type: 'input', name: '_', message: 'Press Enter when ready…' }]);
+    await (
+      await loadInquirer()
+    ).prompt([{ type: 'input', name: '_', message: 'Press Enter when ready…' }]);
   }
 
   console.log(`Closing any remaining ${browser.name} processes…`);
@@ -705,8 +717,7 @@ function removeMacOSLaunchAgent(): void {
 }
 
 type StartupEntrySnapshot =
-  | { platform: 'windows'; command: string | null }
-  | { platform: 'macos'; plist: string | null };
+  { platform: 'windows'; command: string | null } | { platform: 'macos'; plist: string | null };
 
 function captureStartupEntry(): StartupEntrySnapshot {
   if (isWindows) {
@@ -798,7 +809,9 @@ async function setupAppleScript(selectedBrowsers?: string[]): Promise<void> {
   const selectedNames: string[] = selectedBrowsers?.length
     ? selectedBrowsers
     : (
-        await inquirer.prompt([
+        await (
+          await loadInquirer()
+        ).prompt([
           {
             type: 'checkbox',
             name: 'selectedNames',
@@ -872,7 +885,9 @@ export async function grantBrowserAccess(options: GrantBrowserAccessOptions = {}
     throw new Error('--method is required with --non-interactive.');
   }
   if (!isWindows && !method) {
-    ({ method } = await inquirer.prompt([
+    ({ method } = await (
+      await loadInquirer()
+    ).prompt([
       {
         type: 'list',
         name: 'method',
@@ -921,7 +936,9 @@ export async function grantBrowserAccess(options: GrantBrowserAccessOptions = {}
   } else if (options.nonInteractive) {
     throw new Error('--browser is required for non-interactive debug-profile setup.');
   } else {
-    ({ browser } = await inquirer.prompt([
+    ({ browser } = await (
+      await loadInquirer()
+    ).prompt([
       {
         type: 'list',
         name: 'browser',
@@ -973,7 +990,9 @@ async function recoverDebugConfig(): Promise<DebugConfig | null> {
     chosen = candidates[0];
     console.log(`Recovered debug profile: ${chosen.browser.name} › ${chosen.profileDir}`);
   } else {
-    const { selection } = await inquirer.prompt([
+    const { selection } = await (
+      await loadInquirer()
+    ).prompt([
       {
         type: 'list',
         name: 'selection',

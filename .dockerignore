@@ -1,0 +1,13 @@
+.git
+**/node_modules
+**/.turbo
+**/dist
+**/backend-dist
+**/telegram-client-dist
+**/.build
+**/bin
+**/obj
+**/.env*
+!**/.env.example
+**/*.sqlite*
+**/logs

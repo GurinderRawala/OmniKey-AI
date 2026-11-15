@@ -163,3 +163,7 @@ Sends an abort signal to the running agent turn. The session stops cleanly and y
 | Commands are silently ignored | Message is coming from a chat ID that doesn't match `TELEGRAM_CHAT_ID` |
 | Daemon not running | Check `omnikey telegram status` and `omnikey telegram logs` |
 | Nothing listening on port | Confirm `omnikey daemon` is running; check `omnikey status` |
+
+## Workspace development
+
+From the repository root, use the pinned pnpm version: `pnpm install --frozen-lockfile`, then `pnpm build:telegram` or `pnpm --filter telegram dev`. To bundle Telegram with the CLI, use `pnpm build:cli` so Turborepo rebuilds both upstream services first. See [DEVELOPMENT.md](../DEVELOPMENT.md) for the Node baseline, lockfile policy, tests, and cache troubleshooting.

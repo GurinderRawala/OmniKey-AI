@@ -21,12 +21,16 @@ Full environment setup, build order, and the monorepo tour live in
 ```sh
 git clone https://github.com/GurinderRawala/OmniKey-AI.git
 cd OmniKey-AI
-yarn install
-yarn build
-yarn test
+corepack enable  # if Corepack is unavailable: npm install -g pnpm@10.34.9
+pnpm install --frozen-lockfile
+pnpm build
+pnpm test
 ```
 
-Node ≥ 22 and Yarn 1.22+. Xcode 15+ only if you are touching `macOS/`; .NET 10 only for
+Node `^22.12.0 || >=24.0.0` for development (the published CLI/API only require Node ≥ 22
+at runtime) and pnpm 10.34.9, pinned by the root `packageManager` field. `pnpm-lock.yaml` is
+the only lockfile; commit it whenever you change dependencies, and never add `yarn.lock` or
+`package-lock.json`. Xcode 15+ only if you are touching `macOS/`; .NET 10 only for
 `windows/`. Neither native client is needed to work on the TypeScript services.
 
 ## Where to start
@@ -46,7 +50,9 @@ to contribute to meaningfully:
 
 1. Branch off `main`.
 2. Keep the change focused. One concern per pull request.
-3. Run `yarn test` and `yarn format` before pushing. For native changes run
+3. Run `pnpm test`, `pnpm lint`, and `pnpm format` (or confirm with `pnpm format:check`)
+   before pushing. If you touch workspace tooling (`package.json` scripts,
+   `pnpm-workspace.yaml`, `turbo.json`), also run `pnpm test:tooling` and `pnpm test:cache` (the latter only in a disposable checkout: it deletes and restores build outputs). For native changes run
    `swift build && swift test` (macOS) or `dotnet build` and `dotnet test windows.Tests/OmniKey.Windows.Tests.csproj` (Windows).
 4. Add tests when you change behaviour. The `api` workspace uses vitest; see
    `api/src/__tests__/` for the established patterns.
@@ -63,7 +69,8 @@ to contribute to meaningfully:
 
 `cli/package.json` and `api/package.json` move together. Any merged change that touches
 `cli/**` triggers a publish to npm, and npm rejects a republish of an existing version, so
-bump the patch in both files (plus `cli/package-lock.json`) in the same pull request.
+bump the patch in both files in the same pull request. (There is no `cli/package-lock.json`;
+the repo's only lockfile is `pnpm-lock.yaml`.)
 Releases are cut by pushing a matching `v*` tag, which builds the macOS tarballs, publishes
 the GitHub Release, and updates the Homebrew formula and tap.
 
