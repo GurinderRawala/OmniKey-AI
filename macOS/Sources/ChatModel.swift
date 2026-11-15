@@ -110,6 +110,7 @@ struct ChatBlock: Identifiable, Equatable {
     var fullContentID: String? = nil
     var previewText: String? = nil
     var sessionDiff: SavedSessionDiff? = nil
+    var liveDiff: LiveTurnDiff? = nil
 
     init(
         id: String = "local:block:\(UUID().uuidString)",
@@ -122,7 +123,8 @@ struct ChatBlock: Identifiable, Equatable {
         isContentTruncated: Bool = false,
         fullContentID: String? = nil,
         previewText: String? = nil,
-        sessionDiff: SavedSessionDiff? = nil
+        sessionDiff: SavedSessionDiff? = nil,
+        liveDiff: LiveTurnDiff? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -135,6 +137,7 @@ struct ChatBlock: Identifiable, Equatable {
         self.fullContentID = fullContentID
         self.previewText = previewText
         self.sessionDiff = sessionDiff
+        self.liveDiff = liveDiff
     }
 
     static func == (lhs: ChatBlock, rhs: ChatBlock) -> Bool {
@@ -147,6 +150,7 @@ struct ChatBlock: Identifiable, Equatable {
             && lhs.fullContentID == rhs.fullContentID
             && lhs.previewText == rhs.previewText
             && lhs.sessionDiff == rhs.sessionDiff
+            && lhs.liveDiff == rhs.liveDiff
     }
 }
 
@@ -1873,6 +1877,8 @@ final class ChatModel: ObservableObject {
     }
 
     private func recomputeSteeringRedirect(for redirectKey: String, in sessionSt: ChatSessionState) {
+        let previousTarget = sessionSt.assistantRedirects[redirectKey] ?? redirectKey
+        let live = sessionSt.messages.first(where: { $0.id == previousTarget })?.blocks.filter { $0.liveDiff != nil } ?? []
         if let target = SteeringRedirectResolver.target(
             for: redirectKey,
             records: sessionSt.steeringRedirectRecords
@@ -1882,6 +1888,15 @@ final class ChatModel: ObservableObject {
         } else {
             sessionSt.assistantRedirects.removeValue(forKey: redirectKey)
             sessionSt.streamingAssistantMessageID = redirectKey
+        }
+        let newTarget = sessionSt.assistantRedirects[redirectKey] ?? redirectKey
+        if newTarget != previousTarget, !live.isEmpty {
+            for index in sessionSt.messages.indices {
+                if sessionSt.messages[index].id == previousTarget {
+                    sessionSt.messages[index].blocks.removeAll { $0.liveDiff != nil }
+                }
+                if sessionSt.messages[index].id == newTarget { sessionSt.messages[index].blocks.append(contentsOf: live) }
+            }
         }
     }
 
@@ -1909,8 +1924,18 @@ final class ChatModel: ObservableObject {
         guard let targetIndex = sessionSt.messages.firstIndex(where: { $0.id == targetID }) else {
             return
         }
+        if let live = block.liveDiff {
+            // Steering may move the assistant bubble, but the run keeps one
+            // baseline and one live card. Reject stale deliveries across moves.
+            let existing = sessionSt.messages.flatMap(\.blocks).compactMap(\.liveDiff).first { $0.turnID == live.turnID }
+            if let existing, existing.revision >= live.revision { return }
+            for index in sessionSt.messages.indices {
+                sessionSt.messages[index].blocks.removeAll { $0.liveDiff?.turnID == live.turnID }
+            }
+        }
         var message = sessionSt.messages[targetIndex]
         guard message.role == .assistant else { return }
+        if block.sessionDiff != nil { message.blocks.removeAll { $0.liveDiff != nil } }
         message.blocks.append(block)
         sessionSt.messages[targetIndex] = message
 

@@ -132,7 +132,7 @@ final class AgentDiffViewSettingTests: XCTestCase {
         XCTAssertEqual(AgentDiffViewSetting.capabilities(enabled: false),
                        .init(gitDiff: false, gitTurnDiff: false, agentPatches: false))
         XCTAssertEqual(AgentDiffViewSetting.capabilities(enabled: true),
-                       .init(gitDiff: true, gitTurnDiff: true, agentPatches: true))
+                       .init(gitDiff: true, gitTurnDiff: true, agentPatches: false))
     }
 
     // MARK: Runner
@@ -179,7 +179,7 @@ final class AgentDiffViewSettingTests: XCTestCase {
         let flags = LockedBox<[Bool?]>([])
         let socket = GitDiffTestSocket { message in
             if message.content == "Start" {
-                flags.set([message.supportsGitDiff, message.supportsGitTurnDiff, message.supportsAgentPatches])
+                flags.set([message.supportsGitDiff, message.supportsGitTurnDiff, message.supportsFilesystemDiff, message.supportsAgentPatches])
                 sent.fulfill()
             }
         }
@@ -191,12 +191,12 @@ final class AgentDiffViewSettingTests: XCTestCase {
     @MainActor
     func testInitialFrameFlagsFalseWhenOffAndTrueWhenOnOrDefault() async {
         let off = await initialFlags(diffViewEnabled: false)
-        XCTAssertEqual(off, [false, false, false])
+        XCTAssertEqual(off, [false, false, false, false])
         let on = await initialFlags(diffViewEnabled: true)
-        XCTAssertEqual(on, [true, true, true])
+        XCTAssertEqual(on, [true, true, true, false])
         if UserDefaults.standard.object(forKey: AgentDiffViewSetting.defaultsKey) == nil {
             let byDefault = await initialFlags(diffViewEnabled: nil)
-            XCTAssertEqual(byDefault, [true, true, true])
+            XCTAssertEqual(byDefault, [true, true, true, false])
         }
     }
 

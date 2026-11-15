@@ -9,6 +9,8 @@
 
 export const GIT_DIFF_MAX_CANDIDATES = 8;
 export const GIT_DIFF_MAX_REPOSITORIES = 8;
+/** Eight captured roots plus the bounded candidate ledger of omitted scopes. */
+export const FILESYSTEM_MAX_COVERAGE_ROOTS = 40;
 export const GIT_DIFF_MAX_PATCH_BYTES = 2 * 1024 * 1024; // combined UTF-8
 export const GIT_DIFF_MAX_UNTRACKED_FILES = 300;
 export const GIT_DIFF_NATIVE_TIMEOUT_MS = 10_000;
@@ -23,9 +25,18 @@ export const GIT_MAX_REQUEST_ID_LENGTH = 64;
 export const GIT_DIFF_DISPLAY_LIMIT = 300;
 /** Backend wait for a baseline (HEAD-only) reply; it delays the model/shell. */
 export const GIT_TURN_BASELINE_TIMEOUT_MS = 6_000;
+/** Content capture shares the native queue with bounded live reconciliation. */
+export const FILESYSTEM_CAPTURE_TIMEOUT_MS = 20_000;
 /** Accepted clock skew for client baseline timestamps. */
 export const GIT_TURN_BASELINE_CLOCK_SKEW_MS = 5 * 60_000;
 const GIT_MAX_TIMESTAMP_LENGTH = 40;
+
+export interface TurnRootCoverage {
+  root: string;
+  status: 'complete' | 'partial' | 'late' | 'unavailable';
+  reason: string;
+  suggestedFix: string;
+}
 
 export type SessionDiffScope = 'working_tree' | 'commit' | 'turn';
 export type SessionDiffSummaryScope = SessionDiffScope | 'mixed';
@@ -195,7 +206,12 @@ export interface SessionDiffCandidate {
   /** Native disclosure text (e.g. sensitive exclusion counts). */
   reason?: string;
   /** Present for v3 turn captures. */
-  turn?: { baselines: GitTurnBaseline[]; displayLimit: number };
+  turn?: {
+    baselines: GitTurnBaseline[];
+    displayLimit: number;
+    filesystem?: boolean;
+    coverage?: TurnRootCoverage[];
+  };
 }
 
 export interface SessionDiffCaptureOutcome {
@@ -222,6 +238,8 @@ export interface GitTurnBaseline {
 
 /** Snapshot summary stored on history metadata and sent with the live final. */
 export interface SessionDiffSummary {
+  filesystem?: boolean;
+  coverage?: TurnRootCoverage[];
   id: string;
   fileCount: number;
   repositoryCount: number;
@@ -253,6 +271,7 @@ export interface EligibleCommit {
 
 /** Server -> client control frame, sent before the final answer. */
 export interface GitDiffRequest {
+  filesystem?: boolean;
   request_id: string;
   candidate_paths: string[];
   eligible_commits: EligibleCommit[];
@@ -288,6 +307,8 @@ export type GitDiffResponseStatus = 'ok' | 'not_repository' | 'unavailable';
 
 /** Client -> server reply to a GitDiffRequest. */
 export interface GitDiffResponse {
+  filesystem?: boolean;
+  coverage?: TurnRootCoverage[];
   request_id: string;
   status: GitDiffResponseStatus;
   repositories: GitDiffRepository[];
@@ -310,6 +331,8 @@ export interface GitCommitObservation {
 
 /** Stored, compressed snapshot payload (AgentSessionDiff.payload). */
 export interface SessionDiffPayload {
+  filesystem?: boolean;
+  coverage?: TurnRootCoverage[];
   version: 1;
   repositories: GitDiffRepository[];
   notice?: string;
@@ -547,7 +570,7 @@ export function validateGitBaselineResponse(
  */
 export function validateGitTurnFinalResponse(
   raw: unknown,
-  request: Pick<GitDiffRequest, 'request_id' | 'candidate_paths' | 'baselines'>,
+  request: Pick<GitDiffRequest, 'request_id' | 'candidate_paths' | 'baselines' | 'filesystem'>,
 ): GitDiffResponse {
   const recorded = new Map<string, GitTurnBaseline>();
   for (const baseline of request.baselines ?? []) {
@@ -613,7 +636,40 @@ export function validateGitTurnFinalResponse(
       baselineSource: baseline.source,
     };
   });
-  return { ...base, repositories };
+  let coverage: TurnRootCoverage[] | undefined;
+  if (request.filesystem) {
+    if (!Array.isArray(raw.coverage) || raw.coverage.length > GIT_DIFF_MAX_REPOSITORIES) {
+      throw new GitDiffValidationError('filesystem coverage');
+    }
+    const seen = new Set<string>();
+    coverage = raw.coverage.map((item) => {
+      if (
+        !isPlainObject(item) ||
+        !isSafeAbsolutePath(item.root) ||
+        !recorded.has(comparablePath(item.root)) ||
+        seen.has(comparablePath(item.root)) ||
+        typeof item.status !== 'string' ||
+        !['complete', 'partial', 'late', 'unavailable'].includes(item.status) ||
+        typeof item.reason !== 'string' ||
+        item.reason.length > 1000 ||
+        typeof item.suggestedFix !== 'string' ||
+        item.suggestedFix.length > 1000
+      ) {
+        throw new GitDiffValidationError('filesystem root coverage');
+      }
+      seen.add(comparablePath(item.root));
+      return {
+        root: normalizeAbsolutePath(item.root),
+        status: item.status as TurnRootCoverage['status'],
+        reason: item.reason,
+        suggestedFix: item.suggestedFix,
+      };
+    });
+    if (seen.size !== recorded.size || repositories.some((r) => r.scope !== 'turn')) {
+      throw new GitDiffValidationError('missing filesystem root coverage');
+    }
+  }
+  return { ...base, repositories, ...(coverage ? { coverage } : {}) };
 }
 
 /** Literal, conservative detection of a direct `git commit` invocation. */
@@ -691,6 +747,31 @@ export function cleanSessionDiffSummary(value: unknown): SessionDiffSummary | un
     repositoryCount: value.repositoryCount,
     createdAt: value.createdAt,
     scope: value.scope,
+    ...(value.filesystem === true
+      ? {
+          filesystem: true,
+          coverage: Array.isArray(value.coverage)
+            ? value.coverage
+                .slice(0, FILESYSTEM_MAX_COVERAGE_ROOTS)
+                .filter(
+                  (c) =>
+                    isPlainObject(c) &&
+                    isSafeAbsolutePath(c.root) &&
+                    ['complete', 'partial', 'late', 'unavailable'].includes(c.status) &&
+                    typeof c.reason === 'string' &&
+                    c.reason.length <= 1000 &&
+                    typeof c.suggestedFix === 'string' &&
+                    c.suggestedFix.length <= 1000,
+                )
+                .map((c) => ({
+                  root: c.root,
+                  status: c.status,
+                  reason: c.reason,
+                  suggestedFix: c.suggestedFix,
+                }))
+            : [],
+        }
+      : {}),
     ...(value.commit ? { commit: value.commit } : {}),
     ...(value.displayLimit !== undefined ? { displayLimit: value.displayLimit } : {}),
     ...(isBaselineSource(value.baselineSource) ? { baselineSource: value.baselineSource } : {}),

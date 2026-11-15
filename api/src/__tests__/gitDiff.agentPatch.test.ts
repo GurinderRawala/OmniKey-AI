@@ -1089,3 +1089,28 @@ describe('stored snapshot serving', () => {
     expect(transcript).toContain('sdiff_legacyrep001');
   }, 60_000);
 });
+
+describe('review regressions', () => {
+  it('rejects hidden credential files below /root', async () => {
+    const { isSensitivePath } = await import('../agent/gitDiff/pathPolicy');
+    expect(isSensitivePath('/root/.config/gh/hosts.yml')).toBe(true);
+  });
+  it('deduplicates C-quoted header-only paths', async () => {
+    const { patchCoveredPaths } = await import('../agent/gitDiff/finalDiff');
+    const paths = patchCoveredPaths(
+      ROOT,
+      'diff --git "a/caf\\303\\251" "b/caf\\303\\251"\nold mode 100644\nnew mode 100755\n',
+    );
+    expect(paths.has(`${ROOT}/café`)).toBe(true);
+  });
+  it('accepts a closing delimiter that appears inside a patch JSON string', () => {
+    const path = `${ROOT}/test.ts`;
+    const parsed = parseAgentFinal(
+      `<final_answer>\nDone.\n${report([
+        { path, patch: agentPatch(path).replace(AGENT_LINE, '</file_patches>') },
+      ])}\n</final_answer>`,
+    );
+    expect(parsed.report?.rejected).toBeUndefined();
+    expect(parsed.report?.files).toHaveLength(1);
+  });
+});

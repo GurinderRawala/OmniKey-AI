@@ -290,28 +290,32 @@ export async function renderSnapshotDocument(
                   : scopes.has('commit')
                     ? 'Commit changes'
                     : 'Working tree changes';
-  const disclaimer = agentPatch
-    ? gitEntries
-      ? 'Git capture of this turn merged with patches the agent reported for files Git did not cover (unverified).'
-      : 'Patches the agent reported for files it changed in this turn (not a repository snapshot); unverified.'
-    : agentReported
-      ? "Based on the agent's own report of changed files (unverified); some changes of this turn may not be shown."
-      : uncertainCoverage
-        ? `${aiFiles ? 'Includes files reconstructed by the AI model from write-like shell commands of this turn (unverified)' : 'Verified captures of this turn; the AI model reported the remaining known written files unchanged (unverified)'}. Some changes of this turn may not be shown.`
-        : aiConfirmedOnly
-          ? checkpointBase
-            ? 'Recovered from native per-command checkpoints of this turn (not a full repository snapshot); it may include changes not made by the agent.'
-            : 'Verified capture of this turn from disk; it may include changes not made by the agent.'
-          : aiReconstructed
-            ? mergedBase
-              ? 'Verified captures of this turn merged with files reconstructed by the AI model from write-like shell commands (unverified).'
-              : 'Reconstructed by the AI model from write-like shell commands of this turn only (not a repository snapshot); unverified.'
-            : recovery
-              ? 'Recovered with agent assistance from native per-command checkpoints of this turn (not a full repository snapshot); it may include changes not made by the agent.'
-              : isTurn
-                ? 'Net committed and uncommitted changes from the turn baseline to the working tree when the answer was produced; it may include changes not made by the agent.'
-                : 'Snapshot taken when the answer was produced; it may include changes not made by the agent.';
-  const repoCount = payload.repositories.length;
+  const disclaimer = payload.filesystem
+    ? 'Net filesystem changes since this run began. Pre-existing edits are part of the baseline; steering keeps the same interval. Changes by other processes in these roots may be included.'
+    : agentPatch
+      ? gitEntries
+        ? 'Git capture of this turn merged with patches the agent reported for files Git did not cover (unverified).'
+        : 'Patches the agent reported for files it changed in this turn (not a repository snapshot); unverified.'
+      : agentReported
+        ? "Based on the agent's own report of changed files (unverified); some changes of this turn may not be shown."
+        : uncertainCoverage
+          ? `${aiFiles ? 'Includes files reconstructed by the AI model from write-like shell commands of this turn (unverified)' : 'Verified captures of this turn; the AI model reported the remaining known written files unchanged (unverified)'}. Some changes of this turn may not be shown.`
+          : aiConfirmedOnly
+            ? checkpointBase
+              ? 'Recovered from native per-command checkpoints of this turn (not a full repository snapshot); it may include changes not made by the agent.'
+              : 'Verified capture of this turn from disk; it may include changes not made by the agent.'
+            : aiReconstructed
+              ? mergedBase
+                ? 'Verified captures of this turn merged with files reconstructed by the AI model from write-like shell commands (unverified).'
+                : 'Reconstructed by the AI model from write-like shell commands of this turn only (not a repository snapshot); unverified.'
+              : recovery
+                ? 'Recovered with agent assistance from native per-command checkpoints of this turn (not a full repository snapshot); it may include changes not made by the agent.'
+                : isTurn
+                  ? 'Net committed and uncommitted changes from the turn baseline to the working tree when the answer was produced; it may include changes not made by the agent.'
+                  : 'Snapshot taken when the answer was produced; it may include changes not made by the agent.';
+  const repoCount = payload.filesystem
+    ? (payload.coverage?.length ?? payload.repositories.length)
+    : payload.repositories.length;
   const head = [
     '<!doctype html>',
     `<html data-theme="${theme}" data-layout="${layout === 'split' ? 'split' : 'unified'}"><head><meta charset="utf-8">`,
@@ -319,8 +323,14 @@ export async function renderSnapshotDocument(
     `<meta name="color-scheme" content="${theme}">`,
     `<style>${limits.pageCss}</style></head><body>`,
     `<header class="snapshot"><h1>${scopeLabel}</h1>`,
-    `<p>${repoCount} repositor${repoCount === 1 ? 'y' : 'ies'} · ${totalFiles} file${totalFiles === 1 ? '' : 's'}. ${disclaimer}</p>`,
+    `<p>${repoCount} ${payload.filesystem ? `root${repoCount === 1 ? '' : 's'}` : `repositor${repoCount === 1 ? 'y' : 'ies'}`} · ${totalFiles} file${totalFiles === 1 ? '' : 's'}. ${disclaimer}</p>`,
     payload.notice && !recovery ? `<p>${escapeHtml(payload.notice)}</p>` : '',
+    ...(payload.filesystem
+      ? (payload.coverage ?? []).map(
+          (c) =>
+            `<p class="limit"><strong>${escapeHtml(c.root)} — ${escapeHtml(c.status)}</strong>: ${escapeHtml(c.reason)}${c.suggestedFix ? ` Suggested fix: ${escapeHtml(c.suggestedFix)}` : ''}</p>`,
+        )
+      : []),
     agentPatchNotes,
     recoveryNotes,
   ].join('');
@@ -357,8 +367,9 @@ export async function renderSnapshotDocument(
   for (const repo of payload.repositories) {
     const sections = splitPatchSections(repo.patch);
     if (panels >= panelLimit) continue; // counted by the "Showing" note
-    const title =
-      repo.scope === 'turn'
+    const title = payload.filesystem
+      ? `${escapeHtml(repo.root)} · captured starting contents → final contents`
+      : repo.scope === 'turn'
         ? `${escapeHtml(repo.root)} · ${oid(repo.baselineHead)} → ${oid(repo.head)} + working tree · baseline ${repo.baselineSource === 'before_tool' ? 'before first tool use' : 'at turn start'}${repo.baselineCapturedAt ? ` (${escapeHtml(repo.baselineCapturedAt)})` : ''}`
         : repo.scope === 'commit' && repo.commit
           ? `${escapeHtml(repo.root)} · commit <code class="oid">${escapeHtml(repo.commit.slice(0, 12))}</code>`

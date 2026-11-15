@@ -104,12 +104,12 @@ enum AgentDiffViewSetting {
     struct Capabilities: Equatable, Sendable {
         let gitDiff: Bool
         let gitTurnDiff: Bool
-        /// `supports_agent_patches`: the server may ask the agent for a
-        /// unified patch when native Git capture cannot cover the turn.
+        /// Legacy flag retained for wire compatibility; current clients use
+        /// deterministic filesystem capture and never request agent patches.
         let agentPatches: Bool
     }
 
     static func capabilities(enabled: Bool) -> Capabilities {
-        Capabilities(gitDiff: enabled, gitTurnDiff: enabled, agentPatches: enabled)
+        Capabilities(gitDiff: enabled, gitTurnDiff: enabled, agentPatches: false)
     }
 }

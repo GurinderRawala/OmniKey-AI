@@ -80,6 +80,7 @@ export interface AgentMessage {
   // enabled, the editing agent is asked to append unified patches of the
   // files it changed to its final answer. Literal true only.
   supports_agent_patches?: boolean;
+  supports_filesystem_diff?: boolean;
   // Server -> client control frame sent before a final answer.
   git_diff_request?: GitDiffRequest;
   // Client -> server reply to git_diff_request (validated; never a turn input).

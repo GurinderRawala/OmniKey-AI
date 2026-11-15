@@ -976,7 +976,9 @@ export async function runAgentTurn(
   // capability (literal true). Cron/internal/other clients never get one, and
   // the server never inspects its own repository on their behalf.
   const supportsAnyGitDiff =
-    options?.supportsGitDiff === true || options?.supportsGitTurnDiff === true;
+    options?.supportsGitDiff === true ||
+    options?.supportsGitTurnDiff === true ||
+    options?.supportsFilesystemDiff === true;
   const gitCapable = Boolean(
     options?.interactiveInput &&
     supportsAnyGitDiff &&
@@ -997,8 +999,9 @@ export async function runAgentTurn(
           subscriptionId: subscription.id,
           connection: options.signal,
           send,
-          turnDiff: options.supportsGitTurnDiff === true,
-          agentPatches: options.supportsAgentPatches === true,
+          turnDiff: options.supportsGitTurnDiff === true || options.supportsFilesystemDiff === true,
+          agentPatches: options.supportsAgentPatches === true && !options.supportsFilesystemDiff,
+          filesystem: options.supportsFilesystemDiff === true,
         })
       : undefined;
   const provenanceRun =

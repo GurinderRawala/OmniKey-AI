@@ -3290,6 +3290,9 @@ struct AssistantMessageView: View {
                     }
                     FinalAnswerView(block: final)
                 }
+                if diffViewEnabled, let live = message.blocks.last(where: { $0.liveDiff != nil })?.liveDiff {
+                    LiveTurnDiffView(diff: live, isRunning: isStreaming && finalBlock == nil)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

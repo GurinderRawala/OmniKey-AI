@@ -1,5 +1,6 @@
 /**
- * Final-answer diff: Git first, agent patches only as a per-file fallback.
+ * Final-answer diff: deterministic filesystem snapshots for capable clients.
+ * The Git/agent-patch path below is retained for legacy clients only.
  *
  * 1. The normal native Git capture runs exactly as before (no model call).
  *    Its valid repositories are authoritative. In turn mode only roots with a
@@ -18,6 +19,7 @@
 import type { Logger } from 'winston';
 import {
   GIT_DIFF_MAX_REPOSITORIES,
+  FILESYSTEM_MAX_COVERAGE_ROOTS,
   comparablePath,
   isSafeAbsolutePath,
   isSafeRelativePath,
@@ -93,6 +95,14 @@ function sectionPaths(header: string, meta: string[]): string[] {
   // Header-only sections (mode change, empty file, binary): the symmetric
   // `a/P b/P` form only.
   const rest = header.slice('diff --git '.length);
+  if (rest.startsWith('"')) {
+    const pair = /^"((?:[^"\\]|\\.)*)" "((?:[^"\\]|\\.)*)"$/.exec(rest);
+    if (pair) {
+      const left = unquoteGitPath(pair[1]);
+      const right = unquoteGitPath(pair[2]);
+      if (left?.startsWith('a/') && right === `b/${left.slice(2)}`) add(left.slice(2));
+    }
+  }
   if (rest.startsWith('a/') && (rest.length - 5) % 2 === 0) {
     const half = (rest.length - 5) / 2;
     const left = rest.slice(2, 2 + half);
@@ -257,6 +267,33 @@ export async function captureFinalSessionDiff(
     const outcome = await captureSessionDiffCandidate(run, history, signal, log);
     if (aborted()) return undefined;
     const candidate = outcome.candidate;
+    if (run.filesystem) {
+      // Deterministic filesystem snapshots, including empty/partial roots, are
+      // authoritative. Never merge an agent-authored patch into this capture.
+      if (candidate?.turn) {
+        return await saveSessionDiff(run, candidate.repositories, candidate.notice, candidate.turn);
+      }
+      const roots = [
+        ...new Set([...run.baselines.map((b) => b.root), ...run.candidates.list(32)]),
+      ].slice(0, FILESYSTEM_MAX_COVERAGE_ROOTS);
+      return await saveSessionDiff(
+        run,
+        [],
+        'Final filesystem capture was unavailable. This is not a claim that no files changed.',
+        {
+          baselines: run.baselines,
+          displayLimit: 300,
+          filesystem: true,
+          coverage: roots.map((root) => ({
+            root,
+            status: 'unavailable',
+            reason: 'The final capture failed or did not arrive. Changes could not be verified.',
+            suggestedFix:
+              'Check the execution host connection and folder access, then start a new turn.',
+          })),
+        },
+      );
+    }
     const git = authoritativeGitRepositories(candidate);
     const report = run.agentPatches ? options.agentReport : undefined;
     if (report?.rejected) {
