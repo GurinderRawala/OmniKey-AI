@@ -3184,55 +3184,39 @@ struct UserBubbleView: View {
     }
 }
 
-// MARK: - Typing Dots
+// MARK: - Thinking Indicator
 
-/// Animated three-dot indicator shown while the assistant hasn't yet produced
-/// any content block. Disappears the moment the first thinking block arrives.
-private struct TypingDotsView: View {
+struct ChatThinkingIndicator: View {
     @Environment(\.colorScheme) private var colorScheme
-    @State private var animating = false
-    @State private var iconPulse = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        // A subtly-pulsing sparkles glyph sits to the left of the
-        // dots as the assistant-is-thinking cue. It uses the accent
-        // purple shared with the thinking section so the visual
-        // language is consistent across the two states.
-        HStack(spacing: 8) {
-            Image(systemName: "sparkles")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(NordTheme.accentPurple(colorScheme))
-                .scaleEffect(iconPulse ? 1.08 : 0.94)
-                .opacity(iconPulse ? 1.0 : 0.75)
-                .animation(
-                    .easeInOut(duration: 0.9).repeatForever(autoreverses: true),
-                    value: iconPulse
-                )
+        HStack(spacing: 9) {
+            Image(systemName: "sparkle")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(NordTheme.accentPurple(colorScheme))
+                .symbolEffect(.pulse, options: .repeating, isActive: !reduceMotion)
+                .frame(width: 28, height: 28)
+                .background(NordTheme.accentPurple(colorScheme).opacity(0.1), in: Circle())
+            Text("Thinking")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(NordTheme.secondaryText(colorScheme))
+        }
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Agent is thinking")
+    }
+}
 
-            HStack(spacing: 5) {
-                dotView(delay: 0.00)
-                dotView(delay: 0.18)
-                dotView(delay: 0.36)
+enum ChatThinkingPresentation {
+    static func isAwaitingTool(blocks: [ChatBlock], isStreaming: Bool) -> Bool {
+        guard isStreaming else { return false }
+        return !blocks.contains { block in
+            switch AgentTimelineSummarizer.classify(kind: block.kind, text: block.text) {
+            case .agentReasoning, .skillStatus, .sessionDiff: return false
+            default: return true
             }
         }
-        .onAppear {
-            animating = true
-            iconPulse = true
-        }
-    }
-
-    private func dotView(delay: Double) -> some View {
-        Circle()
-            .fill(NordTheme.secondaryText(colorScheme).opacity(0.55))
-            .frame(width: 5, height: 5)
-            .scaleEffect(animating ? 1.0 : 0.55)
-            .opacity(animating ? 1.0 : 0.30)
-            .animation(
-                .easeInOut(duration: 0.5)
-                    .repeatForever(autoreverses: true)
-                    .delay(delay),
-                value: animating
-            )
     }
 }
 
@@ -3269,11 +3253,10 @@ struct AssistantMessageView: View {
         // slim pill — matching the reference design while keeping the
         // existing Nord palette.
         VStack(alignment: .leading, spacing: 10) {
-            if message.blocks.isEmpty {
-                // No blocks yet — show animated dots until the first block arrives.
-                TypingDotsView()
-                    .padding(.vertical, 6)
-            } else {
+            if ChatThinkingPresentation.isAwaitingTool(blocks: message.blocks, isStreaming: isStreaming) {
+                ChatThinkingIndicator()
+            }
+            if !message.blocks.isEmpty {
                 if !thinkingBlocks.isEmpty {
                     AgentExecutionHistoryView(
                         blocks: thinkingBlocks,
