@@ -372,6 +372,7 @@ final class ChatModel: ObservableObject {
             guard oldValue != activeSessionId else { return }
             sentMessageID = nil
             showsLiveChanges = false
+            inspectedCapturedDiff = nil
             // A snapshot belongs to one session; never show it over another.
             if inspectedSessionDiff?.sessionId != activeSessionId { inspectedSessionDiff = nil }
             let draft = readingStore.draft(for: activeSessionId ?? pendingNewChatKey)
@@ -384,9 +385,11 @@ final class ChatModel: ObservableObject {
     /// card selects its own immutable ID; switching sessions clears it.
     @Published private(set) var inspectedSessionDiff: SessionDiffSelection? = nil
     @Published var showsLiveChanges = false
+    @Published private(set) var inspectedCapturedDiff: LiveTurnDiff?
 
     func toggleSessionDiff(_ diff: SavedSessionDiff, diffViewEnabled: Bool = AgentDiffViewSetting.currentRunValue()) {
         showsLiveChanges = false
+        inspectedCapturedDiff = nil
         guard diffViewEnabled else { inspectedSessionDiff = nil; return }
         guard let sessionId = activeSessionId, diff.isEligibleForViewer else { return }
         if inspectedSessionDiff?.sessionId == sessionId, inspectedSessionDiff?.diff.id == diff.id {
@@ -396,7 +399,13 @@ final class ChatModel: ObservableObject {
         }
     }
 
+    func inspectCapturedChanges(_ diff: LiveTurnDiff) {
+        closeSessionDiff()
+        inspectedCapturedDiff = diff
+    }
+
     func closeSessionDiff() {
+        inspectedCapturedDiff = nil
         showsLiveChanges = false
         inspectedSessionDiff = nil
     }

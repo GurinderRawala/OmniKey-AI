@@ -33,10 +33,12 @@ on a 750 ms timer, reconciles at least every five seconds in case events are los
 and reconciles again after a shell. If observation cannot start, bounded polling
 remains available. Scans are bounded; busy roots can take longer than the timer interval. Changed
 results publish a stable turn ID and increasing revision. The chat shows a compact
-pill directly above the composer only when the current turn has changed files.
-It shows the file count, green added-line count and red removed-line count. Clicking
-it opens a right-hand drawer; live patches update there without fetching immutable
-server HTML. Steering preserves the same interval. Late/stale revisions are ignored.
+pill directly above the composer only while the current turn is running and has
+changed files. It is labelled "Changes" and shows the file count, green added-line
+count and red removed-line count. Clicking it opens the right-hand drawer. Each
+completed turn instead keeps a full-width "Changes" card before its final answer,
+bound to its own immutable snapshot ID. No completed-turn pill remains over the
+composer. Steering preserves the same interval. Late/stale revisions are ignored.
 A new turn with no changes does not retain the previous turn's pill. Binary and
 mode-only changes still show a file count even with zero added/removed text lines.
 
@@ -45,9 +47,36 @@ snapshot store. An open live drawer transitions to that saved snapshot; its insp
 uses the isolated Pierre renderer. Summary/history metadata includes additions and
 deletions; older snapshots obtain counts from the authenticated viewer response.
 Coverage diagnostics remain stored for investigation but are not shown as chat
-banners or viewer warnings. No inline diff cards or patches appear in the transcript.
-Cancellation/disconnection stops observation and retains the last captured changes.
+banners or viewer warnings. The transcript shows only the completed summary card;
+patch content stays in the drawer. Cancellation/disconnection stops observation and
+retains a local summary card for the last captured changes (not a durable snapshot).
 In-memory baselines are released with the run; they are not a crash-recovery journal.
+
+## Shared native drawer
+
+Running and saved changes use the same Pierre syntax-highlighted renderer, file
+sections, line numbers, and unified/side-by-side layout. The native toolbar uses
+system materials, semantic colors, an updating indicator, a file filter, and
+expand/collapse actions. Layout preference persists; Escape closes the drawer.
+Document revisions retain vertical/horizontal scroll and file disclosure state,
+including the transition from an updating preview to the final saved snapshot.
+Previous rendered content stays mounted during refresh; out-of-order replies are
+ignored. The reader can open earlier turn cards while another turn is running.
+
+The authenticated `POST /api/agent/sessions/:sessionId/diffs/preview` route renders
+bounded native patches without storing them or adding provider/transcript messages.
+It verifies session ownership, validates the existing eight-root / 2 MiB patch
+contract, and uses the same bounded renderer/cache as saved snapshots. Its vendor
+JSON media type (`application/vnd.omnikey.diff+json`) has a route-owned 14 MiB
+transport limit to accommodate JSON escaping; other routes keep their existing
+parser limits. Native requests render one revision at a time and coalesce pending edits to the
+newest revision, so continuous edits cannot starve the first useful frame.
+Requests are cancelled when the drawer closes.
+
+The web view still forbids page scripts and external navigation/resources. Only
+fixed application-owned scripts in WebKit's isolated client content world manage
+scroll, disclosure state and filtering; values are passed as arguments, never
+executed as code. This behavior is exercised by real WebKit regression tests.
 
 ## Session GitHub card
 

@@ -14,11 +14,11 @@ final class LiveTurnDiffViewTests: XCTestCase {
             TurnRootCoverage(root: baseline.root, status: "complete", reason: "Compared with the contents captured at the start of this run.", suggestedFix: ""),
             TurnRootCoverage(root: "/Projects/Notes", status: "partial", reason: "One file exceeded the capture size limit.", suggestedFix: "Narrow the workspace before the next turn."),
         ])
-        let view = NSHostingView(rootView: LiveTurnDiffView(diff: diff, isRunning: true)
+        let view = NSHostingView(rootView: ChangesDrawerHeader(files: DiffLineCounts(patches: diff.repositories.map(\.patch)).files, additions: 1, deletions: 1, isUpdating: true, layout: .constant(.unified), filter: .constant(""), expand: {}, collapse: {}, close: {})
             .padding().frame(width: 620).background(Color(nsColor: .windowBackgroundColor)))
         view.frame = CGRect(x: 0, y: 0, width: 620, height: 500)
         view.layoutSubtreeIfNeeded()
-        XCTAssertGreaterThan(view.fittingSize.height, 100)
+        XCTAssertGreaterThan(view.fittingSize.height, 70)
         if let path = ProcessInfo.processInfo.environment["OMNIKEY_DIFF_PREVIEW"] {
             let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
             view.cacheDisplay(in: view.bounds, to: bitmap)

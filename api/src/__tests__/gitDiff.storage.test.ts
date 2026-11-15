@@ -716,3 +716,80 @@ describe('agent turn integration', () => {
     expect(await AgentSessionDiff.count({ where: { sessionId: 's-legacy' } })).toBe(0);
   });
 });
+
+// Preview reuses the saved renderer without recording a new snapshot or history.
+describe('POST /api/agent/sessions/:sessionId/diffs/preview', () => {
+  beforeEach(async () => {
+    await AgentSession.destroy({ where: { id: 's-preview' } });
+  });
+  const app = express();
+  app.use(express.json()); // production global parser must not truncate vendor JSON
+  app.use('/api/agent', createAgentRouter());
+  const body = { theme: 'dark', layout: 'unified', repositories: [{ root: ROOT, patch: PATCH }] };
+  const post = (session = 's-preview') =>
+    request(app)
+      .post(`/api/agent/sessions/${session}/diffs/preview`)
+      .set('Content-Type', 'application/vnd.omnikey.diff+json');
+
+  it('requires authentication and session ownership', async () => {
+    await newSession('s-preview');
+    expect((await post().send(JSON.stringify(body))).status).toBe(401);
+    expect(
+      (await post().set('x-test-subscription', 'sub-b').send(JSON.stringify(body))).status,
+    ).toBe(404);
+  });
+
+  it('uses Pierre panels and native layout options without persisting a preview', async () => {
+    await newSession('s-preview');
+    const before = await AgentSessionDiff.count();
+    const unified = await post().set('x-test-subscription', 'sub-a').send(JSON.stringify(body));
+    expect(unified.status).toBe(200);
+    expect(unified.body.html).toContain('data-line-type');
+    expect(unified.body.html).toContain('file-stats');
+    expect(unified.body.html).toContain('data-file-key');
+    const split = await post()
+      .set('x-test-subscription', 'sub-a')
+      .send(JSON.stringify({ ...body, layout: 'split' }));
+    expect(split.status).toBe(200);
+    expect(split.body.html).toContain('data-layout="split"');
+    expect(split.body.additions).toBeGreaterThan(0);
+    expect(await AgentSessionDiff.count()).toBe(before);
+  });
+
+  it('validates input and accepts bounded previews larger than the global JSON limit', async () => {
+    await newSession('s-preview');
+    const large = {
+      ...body,
+      repositories: [{ root: ROOT, patch: PATCH + '\n' + ' '.repeat(110_000) }],
+    };
+    expect(
+      (await post().set('x-test-subscription', 'sub-a').send(JSON.stringify(large))).status,
+    ).toBe(200);
+    expect(
+      (
+        await post()
+          .set('x-test-subscription', 'sub-a')
+          .send(JSON.stringify({ ...body, repositories: [{ root: '../bad', patch: PATCH }] }))
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await post()
+          .set('x-test-subscription', 'sub-a')
+          .send(
+            JSON.stringify({
+              ...body,
+              repositories: [{ root: ROOT, patch: 'x'.repeat(2 * 1024 * 1024 + 1) }],
+            }),
+          )
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await post()
+          .set('x-test-subscription', 'sub-a')
+          .send(JSON.stringify({ ...body, layout: 'unknown' }))
+      ).status,
+    ).toBe(400);
+  });
+});

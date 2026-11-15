@@ -52,28 +52,20 @@ struct ChangeCountsLabel: View {
 struct TurnChangesPill: View {
     @ObservedObject var model: ChatModel
     @AppStorage(AgentDiffViewSetting.defaultsKey) private var enabled = true
-    @State private var historicalCounts: SessionDiffHTMLResponse?
-    private var block: ChatBlock? { model.currentChangeBlock }
-    private var liveCounts: DiffLineCounts? { block?.liveDiff.map { DiffLineCounts(patches: $0.repositories.map(\.patch)) } }
-    private var saved: SavedSessionDiff? { block?.sessionDiff }
-    private var files: Int { liveCounts?.files ?? (saved?.isEligibleForViewer == true ? saved?.fileCount ?? 0 : 0) }
+    private var counts: DiffLineCounts { DiffLineCounts(patches: model.currentLiveDiff?.repositories.map(\.patch) ?? []) }
 
     var body: some View {
         Group {
-            if enabled, files > 0 {
+            if enabled, model.isRunning, counts.files > 0 {
                 Button {
-                    if let saved { model.toggleSessionDiff(saved) }
-                    else {
-                        let open = model.showsLiveChanges
-                        model.closeSessionDiff()
-                        model.showsLiveChanges = !open
-                    }
+                    let open = model.showsLiveChanges
+                    model.closeSessionDiff()
+                    model.showsLiveChanges = !open
                 } label: {
                     HStack(spacing: 10) {
-                        Image(systemName: "plus.forwardslash.minus")
-                        ChangeCountsLabel(files: files,
-                            additions: liveCounts?.additions ?? saved?.additions ?? historicalCounts?.additions,
-                            deletions: liveCounts?.deletions ?? saved?.deletions ?? historicalCounts?.deletions)
+                        Circle().fill(Color.accentColor).frame(width: 6, height: 6)
+                        Text("Changes")
+                        ChangeCountsLabel(files: counts.files, additions: counts.additions, deletions: counts.deletions)
                         Image(systemName: "sidebar.right").foregroundStyle(.secondary)
                     }
                     .font(.system(size: 12, weight: .medium))
@@ -83,39 +75,8 @@ struct TurnChangesPill: View {
                 }
                 .buttonStyle(.plain)
                 .help("Open changes")
-                .accessibilityLabel("View changes in \(files) files")
+                .accessibilityLabel("Changes in \(counts.files) files, \(counts.additions) lines added, \(counts.deletions) lines removed")
             }
-        }
-        .task(id: "\(model.activeSessionId ?? ""):\(saved?.id ?? "")") {
-            historicalCounts = nil
-            guard enabled, let saved, saved.fileCount > 0, saved.additions == nil,
-                  let session = model.activeSessionId else { return }
-            let response = try? await SessionDiffHTTPFetcher().fetch(sessionId: session, diffId: saved.id, theme: .dark, layout: .unified)
-            guard !Task.isCancelled, response?.id == saved.id else { return }
-            historicalCounts = response
-        }
-    }
-}
-
-/// Live content belongs exclusively in the right-hand drawer.
-struct LiveTurnDiffView: View {
-    let diff: LiveTurnDiff
-    let isRunning: Bool
-    var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 18) {
-                ForEach(diff.repositories, id: \.root) { repository in
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(URL(fileURLWithPath: repository.root).lastPathComponent)
-                            .font(.system(size: 12, weight: .semibold))
-                        LivePatchView(patch: repository.patch)
-                    }
-                }
-                if diff.repositories.isEmpty {
-                    Text("No changes").font(.callout).foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity).padding(.top, 40)
-                }
-            }.padding(16)
         }
     }
 }
@@ -123,33 +84,10 @@ struct LiveTurnDiffView: View {
 struct LiveChangesDrawer: View {
     @ObservedObject var model: ChatModel
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("Changes").font(.system(size: 13, weight: .semibold))
-                if model.isRunning { Text("Live").font(.caption).foregroundStyle(.secondary) }
-                Spacer()
-                Button { model.closeSessionDiff() } label: { Image(systemName: "xmark").frame(width: 24, height: 24) }
-                    .buttonStyle(.plain).help("Close changes").keyboardShortcut(.cancelAction)
-            }.padding(.horizontal, 14).frame(height: 52)
-            Divider()
-            if let diff = model.currentLiveDiff { LiveTurnDiffView(diff: diff, isRunning: model.isRunning) }
-            else { Text("No changes").foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity) }
-        }
-    }
-}
-
-private struct LivePatchView: View {
-    let patch: String
-    var body: some View {
-        ScrollView(.horizontal) {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(patch.components(separatedBy: "\n").enumerated()), id: \.offset) { _, line in
-                    Text(line.isEmpty ? " " : line)
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(line.hasPrefix("+") ? Color.green : line.hasPrefix("-") ? Color.red : Color.primary)
-                        .textSelection(.enabled)
-                }
-            }
+        if let diff = model.currentLiveDiff, let session = model.activeSessionId {
+            ChangesInspectorView(model: model, source: .preview(sessionID: session, diff: diff))
+        } else {
+            ContentUnavailableView("No changes", systemImage: "doc.text")
         }
     }
 }

@@ -755,7 +755,8 @@ describe('deterministic filesystem snapshots', () => {
     expect(response.body.html).not.toContain('Net filesystem changes since');
     expect(response.body.additions).toBeGreaterThan(0);
     expect(response.body.deletions).toBeGreaterThan(0);
-    expect(response.body.html).toContain('captured starting contents');
+    expect(response.body.html).toContain('data-file-key');
+    expect(response.body.html).not.toContain('captured starting contents');
     expect(response.body.html).not.toContain('unborn');
   });
 

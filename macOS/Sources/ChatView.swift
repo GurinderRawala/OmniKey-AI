@@ -49,7 +49,7 @@ struct ChatView: View {
         ZStack {
             NordTheme.windowBackground(colorScheme).ignoresSafeArea()
             GeometryReader { proxy in
-                let inspector = diffViewEnabled ? model.inspectedSessionDiff : nil
+                let inspector = diffViewEnabled ? model.changesInspectorSource : nil
                 // With the inspector open in a narrow window, show the rail
                 // without changing the user's saved sidebar preference.
                 let compact = ChatLayoutMetrics.usesCompactSidebar(
@@ -79,13 +79,8 @@ struct ChatView: View {
                         ChatConversationView(model: model, onToggleSidebar: toggleSidebar)
                             .frame(minWidth: ChatLayoutMetrics.conversationMinWidth,
                                    maxWidth: .infinity, maxHeight: .infinity)
-                        if diffViewEnabled && model.showsLiveChanges {
-                            LiveChangesDrawer(model: model)
-                                .frame(minWidth: ChatLayoutMetrics.inspectorMinWidth,
-                                       idealWidth: ChatLayoutMetrics.inspectorIdealWidth,
-                                       maxWidth: .infinity, maxHeight: .infinity)
-                        } else if let inspector {
-                            SessionDiffInspectorView(model: model, selection: inspector)
+                        if let inspector {
+                            ChangesInspectorView(model: model, source: inspector)
                                 .frame(minWidth: ChatLayoutMetrics.inspectorMinWidth,
                                        idealWidth: ChatLayoutMetrics.inspectorIdealWidth,
                                        maxWidth: .infinity, maxHeight: .infinity)
@@ -3247,6 +3242,7 @@ private struct TypingDotsView: View {
 struct AssistantMessageView: View {
     let message: ChatMessage
     var isStreaming: Bool = false
+    @AppStorage(AgentDiffViewSetting.defaultsKey) private var diffViewEnabled = true
     @Environment(\.colorScheme) private var colorScheme
 
     private var thinkingBlocks: [ChatBlock] {
@@ -3287,7 +3283,18 @@ struct AssistantMessageView: View {
                         finalAnswer: finalBlock?.text
                     )
                 }
+                if diffViewEnabled, !isStreaming,
+                   !message.blocks.contains(where: { $0.sessionDiff != nil }),
+                   let captured = message.blocks.last(where: { $0.liveDiff != nil })?.liveDiff,
+                   !captured.repositories.isEmpty {
+                    CapturedChangesCardView(diff: captured)
+                }
                 if let final = finalBlock {
+                    if diffViewEnabled {
+                        ForEach(ChatSessionDiffPlacement.cards(beforeFinalIn: message.blocks)) { block in
+                            if let diff = block.sessionDiff { SessionDiffCardView(diff: diff) }
+                        }
+                    }
                     FinalAnswerView(block: final)
                 }
             }
