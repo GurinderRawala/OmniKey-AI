@@ -25,7 +25,7 @@ import {
   readOrBackfillNormalizedTranscript,
 } from './transcriptStore';
 import { loadSessionDiffPayload } from '../gitDiff/coordinator';
-import { isKnownPartialPayload } from '../gitDiff/contracts';
+import { countPatchLines, isKnownPartialPayload } from '../gitDiff/contracts';
 import {
   DiffRenderTimeoutError,
   renderSessionDiffHtml,
@@ -595,7 +595,7 @@ export function createAgentRouter(): express.Router {
         layout === 'split' ? 'split' : 'unified',
       );
       res.setHeader('Cache-Control', 'private, no-store');
-      res.json({ id: stored.row.id, html });
+      res.json({ id: stored.row.id, html, ...countPatchLines(stored.payload.repositories) });
     } catch (err) {
       if (err instanceof DiffRenderTimeoutError) {
         res.status(503).json({ error: 'Diff rendering timed out' });

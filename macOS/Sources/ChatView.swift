@@ -53,7 +53,7 @@ struct ChatView: View {
                 // With the inspector open in a narrow window, show the rail
                 // without changing the user's saved sidebar preference.
                 let compact = ChatLayoutMetrics.usesCompactSidebar(
-                    windowWidth: proxy.size.width, inspectorOpen: inspector != nil
+                    windowWidth: proxy.size.width, inspectorOpen: inspector != nil || (diffViewEnabled && model.showsLiveChanges)
                 )
                 let collapsed = sidebarCollapsed || compact
                 HStack(spacing: 0) {
@@ -79,7 +79,12 @@ struct ChatView: View {
                         ChatConversationView(model: model, onToggleSidebar: toggleSidebar)
                             .frame(minWidth: ChatLayoutMetrics.conversationMinWidth,
                                    maxWidth: .infinity, maxHeight: .infinity)
-                        if let inspector {
+                        if diffViewEnabled && model.showsLiveChanges {
+                            LiveChangesDrawer(model: model)
+                                .frame(minWidth: ChatLayoutMetrics.inspectorMinWidth,
+                                       idealWidth: ChatLayoutMetrics.inspectorIdealWidth,
+                                       maxWidth: .infinity, maxHeight: .infinity)
+                        } else if let inspector {
                             SessionDiffInspectorView(model: model, selection: inspector)
                                 .frame(minWidth: ChatLayoutMetrics.inspectorMinWidth,
                                        idealWidth: ChatLayoutMetrics.inspectorIdealWidth,
@@ -1631,6 +1636,9 @@ struct ChatConversationView: View {
                 .fill(NordTheme.border(colorScheme))
                 .frame(height: 1)
 
+            SessionGitHubCard(model: model)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+
             if showLandingLayout {
                 ChatNewChatLandingView(model: model)
             } else {
@@ -1654,7 +1662,11 @@ struct ChatConversationView: View {
             }
 
             if !showLandingLayout {
-                LandingInputComposer(model: model)
+                VStack(spacing: 10) {
+                    TurnChangesPill(model: model)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                    LandingInputComposer(model: model)
+                }
                     .frame(maxWidth: 980)
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.horizontal, 22)
@@ -2345,7 +2357,7 @@ struct ComposerSelectionToolbar<SendButton: View>: View {
         .accessibilityHint(model.canChangeSessionSetup ? "Choose project" : "Locked to this session")
     }
 }
-private struct LandingInputComposer: View {
+struct LandingInputComposer: View {
     @ObservedObject var model: ChatModel
     @Environment(\.colorScheme) private var colorScheme
     @State private var isFocused = false
@@ -3236,8 +3248,6 @@ struct AssistantMessageView: View {
     let message: ChatMessage
     var isStreaming: Bool = false
     @Environment(\.colorScheme) private var colorScheme
-    /// Diff view off hides saved snapshot cards (they stay stored).
-    @AppStorage(AgentDiffViewSetting.defaultsKey) private var diffViewEnabled: Bool = true
 
     private var thinkingBlocks: [ChatBlock] {
         message.blocks.filter { block in
@@ -3255,10 +3265,6 @@ struct AssistantMessageView: View {
 
     private var finalBlock: ChatBlock? {
         message.blocks.first { $0.kind == .finalAnswer }
-    }
-
-    private var sessionDiffBlocks: [ChatBlock] {
-        diffViewEnabled ? ChatSessionDiffPlacement.cards(beforeFinalIn: message.blocks) : []
     }
 
     var body: some View {
@@ -3282,16 +3288,7 @@ struct AssistantMessageView: View {
                     )
                 }
                 if let final = finalBlock {
-                    // Snapshot cards bound to this final render right before it.
-                    ForEach(sessionDiffBlocks) { block in
-                        if let diff = block.sessionDiff {
-                            SessionDiffCardView(diff: diff)
-                        }
-                    }
                     FinalAnswerView(block: final)
-                }
-                if diffViewEnabled, let live = message.blocks.last(where: { $0.liveDiff != nil })?.liveDiff {
-                    LiveTurnDiffView(diff: live, isRunning: isStreaming && finalBlock == nil)
                 }
             }
         }

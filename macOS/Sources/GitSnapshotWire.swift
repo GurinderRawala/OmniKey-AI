@@ -329,6 +329,8 @@ enum SavedSessionDiffScope: String, Codable, Equatable, Sendable {
 
 /// Immutable server-side snapshot bound to exactly one final answer.
 struct SavedSessionDiff: Codable, Equatable, Hashable, Sendable {
+    var additions: Int? = nil
+    var deletions: Int? = nil
     let filesystem: Bool?
     let coverage: [TurnRootCoverage]?
     let id: String
@@ -387,6 +389,8 @@ struct SavedSessionDiff: Codable, Equatable, Hashable, Sendable {
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        additions = (try? c.decodeIfPresent(Int.self, forKey: .additions)).flatMap { $0 >= 0 ? $0 : nil }
+        deletions = (try? c.decodeIfPresent(Int.self, forKey: .deletions)).flatMap { $0 >= 0 ? $0 : nil }
         filesystem = try? c.decodeIfPresent(Bool.self, forKey: .filesystem)
         coverage = try? c.decodeIfPresent([TurnRootCoverage].self, forKey: .coverage)
         id = try c.decode(String.self, forKey: .id)

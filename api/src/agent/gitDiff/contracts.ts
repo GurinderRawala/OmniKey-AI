@@ -238,6 +238,8 @@ export interface GitTurnBaseline {
 
 /** Snapshot summary stored on history metadata and sent with the live final. */
 export interface SessionDiffSummary {
+  additions?: number;
+  deletions?: number;
   filesystem?: boolean;
   coverage?: TurnRootCoverage[];
   id: string;
@@ -743,6 +745,12 @@ export function cleanSessionDiffSummary(value: unknown): SessionDiffSummary | un
   if (!isSessionDiffSummary(value)) return undefined;
   return {
     id: value.id,
+    ...(Number.isSafeInteger(value.additions) && value.additions! >= 0
+      ? { additions: value.additions }
+      : {}),
+    ...(Number.isSafeInteger(value.deletions) && value.deletions! >= 0
+      ? { deletions: value.deletions }
+      : {}),
     fileCount: value.fileCount,
     repositoryCount: value.repositoryCount,
     createdAt: value.createdAt,
@@ -834,4 +842,23 @@ export function isSafeRelativePath(value: unknown): value is string {
 export function countPatchFiles(patch: string): number {
   const matches = patch.match(/^diff --git /gm);
   return matches ? matches.length : 0;
+}
+
+/** Count hunk lines only: file headers (including +++ content inside a hunk) are distinct. */
+export function countPatchLines(repositories: ReadonlyArray<{ patch: string }>): {
+  additions: number;
+  deletions: number;
+} {
+  let additions = 0,
+    deletions = 0;
+  for (const { patch } of repositories) {
+    let inHunk = false;
+    for (const line of patch.split('\n')) {
+      if (line.startsWith('diff --git ')) inHunk = false;
+      else if (line.startsWith('@@ ')) inHunk = true;
+      else if (inHunk && line.startsWith('+')) additions++;
+      else if (inHunk && line.startsWith('-')) deletions++;
+    }
+  }
+  return { additions, deletions };
 }

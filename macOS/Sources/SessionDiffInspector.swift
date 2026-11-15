@@ -21,6 +21,8 @@ enum SessionDiffLayout: String, CaseIterable, Sendable {
 struct SessionDiffHTMLResponse: Decodable, Equatable, Sendable {
     let id: String
     let html: String
+    var additions: Int? = nil
+    var deletions: Int? = nil
 }
 
 enum SessionDiffFetchError: LocalizedError, Equatable {
@@ -348,12 +350,12 @@ struct SessionDiffInspectorView: View {
                 Text(selection.diff.headerTitle)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundColor(NordTheme.primaryText(colorScheme))
-                Text(selection.diff.detailText)
+                Text("\(selection.diff.fileCount) files changed")
                     .font(.system(size: 11))
                     .foregroundColor(NordTheme.secondaryText(colorScheme))
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .help(selection.diff.detailText)
+                    .help("Changes captured for this turn")
             }
             Spacer(minLength: 4)
             Picker("Diff layout", selection: $layout) {

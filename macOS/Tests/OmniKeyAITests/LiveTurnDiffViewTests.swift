@@ -62,9 +62,12 @@ extension LiveTurnDiffViewTests {
         hooks.onBlock(block(1))
         XCTAssertEqual(chat.messages.flatMap(\.blocks).compactMap(\.liveDiff).count, 1)
         XCTAssertEqual(chat.messages.last?.blocks.last?.liveDiff?.revision, 2)
+        chat.showsLiveChanges = true
         hooks.onBlock(ChatBlock(kind: .sessionDiff, text: "", sessionDiff:
             SavedSessionDiff(id: "saved", fileCount: 1, repositoryCount: 1, createdAt: "now", filesystem: true)))
         XCTAssertTrue(chat.messages.flatMap(\.blocks).compactMap(\.liveDiff).isEmpty)
+        XCTAssertFalse(chat.showsLiveChanges)
+        XCTAssertEqual(chat.inspectedSessionDiff?.diff.id, "saved")
         chat.cancelCurrentTurn()
     }
 }

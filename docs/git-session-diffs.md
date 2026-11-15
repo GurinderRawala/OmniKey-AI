@@ -32,30 +32,49 @@ a shell is still executing. A serial native capture queue coalesces invalidation
 on a 750 ms timer, reconciles at least every five seconds in case events are lost,
 and reconciles again after a shell. If observation cannot start, bounded polling
 remains available. Scans are bounded; busy roots can take longer than the timer interval. Changed
-results publish a stable turn ID and increasing revision to one live card at the
-bottom of the active assistant response. No content goes through the model, and
-live updates do not repeatedly fetch/render immutable server HTML. The live card
-moves with a steering continuation without resetting its interval. Late/stale
-revisions are ignored. Expanded roots retain their disclosure state.
+results publish a stable turn ID and increasing revision. The chat shows a compact
+pill directly above the composer only when the current turn has changed files.
+It shows the file count, green added-line count and red removed-line count. Clicking
+it opens a right-hand drawer; live patches update there without fetching immutable
+server HTML. Steering preserves the same interval. Late/stale revisions are ignored.
+A new turn with no changes does not retain the previous turn's pill. Binary and
+mode-only changes still show a file count even with zero added/removed text lines.
 
-The live preview displays at most 500 lines per root, with an explicit notice.
-Final capture saves the full bounded patches and coverage in the existing
-immutable snapshot store; the historical inspector uses the existing isolated
-Pierre renderer. `filesystem` and `coverage` survive summary/history replay.
-Cancellation/disconnection stops observation; the local last captured card remains
-labelled as such. In-memory baselines are released with the run. They are not a
-crash-recovery journal. Final capture failure produces an explicit unavailable
-snapshot instead of silently asserting no changes.
+Final capture saves the bounded patches and coverage in the existing immutable
+snapshot store. An open live drawer transitions to that saved snapshot; its inspector
+uses the isolated Pierre renderer. Summary/history metadata includes additions and
+deletions; older snapshots obtain counts from the authenticated viewer response.
+Coverage diagnostics remain stored for investigation but are not shown as chat
+banners or viewer warnings. No inline diff cards or patches appear in the transcript.
+Cancellation/disconnection stops observation and retains the last captured changes.
+In-memory baselines are released with the run; they are not a crash-recovery journal.
+
+## Session GitHub card
+
+A compact card at the top right appears only when the session's detected starting
+folder resolves to a repository with a GitHub.com remote. It shows the repository,
+branch, working-tree change count, and related pull requests. Repository inspection
+uses bounded read-only Git commands. PR lookup uses the installed, authenticated
+GitHub CLI without shell interpolation or login prompts; when unavailable, local
+repository information still appears with a short PR availability label.
+
+Related PRs are those on observed session branches plus explicit PR URLs for that
+repository in loaded user/assistant messages and tool output. Discovered PRs are
+cached per session and retained across branch changes; their states refresh after
+tool results/final answers, on opening the chat, and every 30 seconds during a run.
+The card never lists unrelated repository-wide PRs. Long lists scroll inside the
+card. Switching sessions clears the visible repository state before loading the
+next session. GitHub PR actions are read-only links; no PRs or Git state are changed.
 
 ## Coverage, limits and suggested fixes
 
 Each acknowledged root has `status`, `reason`, and `suggestedFix`. Status is
 `complete` for all eligible files, `late` for a later baseline, `partial` for
 read/size/enumeration gaps, or `unavailable` when an endpoint cannot be read.
-Policy exclusions are disclosed even when all eligible files were captured.
+Policy exclusions are retained in metadata even when all eligible files were captured.
 Roots lacking an acknowledged baseline are explicitly unavailable. A failed root
-does not suppress successfully captured roots. Empty snapshots can still show
-coverage and suggested fixes. A missing baseline is never invented from current
+does not suppress successfully captured roots. Empty snapshots retain coverage
+and suggested fixes for diagnostics, without displaying a change pill. A missing baseline is never invented from current
 contents, Git HEAD, or an agent report.
 
 Default bounds: eight captured roots (up to 40 coverage entries disclose additional known scopes); 10,000 enumerated entries and 32 MiB of baseline
@@ -83,7 +102,7 @@ Unknown/unreadable entries are never interpreted as deletions or new empty files
 This is a net filesystem view of the captured roots: edit-then-undo disappears.
 It may include concurrent edits by other processes. Arbitrary writes outside
 captured roots cannot be reconstructed. Select the intended project folder before
-starting a turn; late discovery and capture gaps remain visible rather than being
+starting a turn; late discovery and capture gaps remain recorded rather than being
 filled with generated patches.
 
 ## Verification

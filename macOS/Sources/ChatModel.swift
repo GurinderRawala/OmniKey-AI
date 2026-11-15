@@ -371,6 +371,7 @@ final class ChatModel: ObservableObject {
         didSet {
             guard oldValue != activeSessionId else { return }
             sentMessageID = nil
+            showsLiveChanges = false
             // A snapshot belongs to one session; never show it over another.
             if inspectedSessionDiff?.sessionId != activeSessionId { inspectedSessionDiff = nil }
             let draft = readingStore.draft(for: activeSessionId ?? pendingNewChatKey)
@@ -382,8 +383,10 @@ final class ChatModel: ObservableObject {
     /// The saved snapshot shown in the right-hand inspector, if any. Each
     /// card selects its own immutable ID; switching sessions clears it.
     @Published private(set) var inspectedSessionDiff: SessionDiffSelection? = nil
+    @Published var showsLiveChanges = false
 
     func toggleSessionDiff(_ diff: SavedSessionDiff, diffViewEnabled: Bool = AgentDiffViewSetting.currentRunValue()) {
+        showsLiveChanges = false
         guard diffViewEnabled else { inspectedSessionDiff = nil; return }
         guard let sessionId = activeSessionId, diff.isEligibleForViewer else { return }
         if inspectedSessionDiff?.sessionId == sessionId, inspectedSessionDiff?.diff.id == diff.id {
@@ -394,6 +397,7 @@ final class ChatModel: ObservableObject {
     }
 
     func closeSessionDiff() {
+        showsLiveChanges = false
         inspectedSessionDiff = nil
     }
 
@@ -1555,6 +1559,7 @@ final class ChatModel: ObservableObject {
             sendSteeringInput(text, to: currentState)
             return
         }
+        closeSessionDiff()
         inputText = ""
         if activeSessionId == nil && messages.isEmpty {
             activeSessionTaskInstructionTitle = defaultTaskTemplate?.heading
@@ -1935,7 +1940,15 @@ final class ChatModel: ObservableObject {
         }
         var message = sessionSt.messages[targetIndex]
         guard message.role == .assistant else { return }
-        if block.sessionDiff != nil { message.blocks.removeAll { $0.liveDiff != nil } }
+        if let saved = block.sessionDiff {
+            message.blocks.removeAll { $0.liveDiff != nil }
+            if states[activeStateKey] === sessionSt, showsLiveChanges {
+                showsLiveChanges = false
+                if saved.fileCount > 0, let sessionID = activeSessionId {
+                    inspectedSessionDiff = SessionDiffSelection(sessionId: sessionID, diff: saved)
+                }
+            }
+        }
         message.blocks.append(block)
         sessionSt.messages[targetIndex] = message
 

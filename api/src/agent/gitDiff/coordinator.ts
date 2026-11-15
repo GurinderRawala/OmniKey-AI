@@ -24,6 +24,7 @@ import {
   isServableAgentPatchRecovery,
   pathIsWithin,
   countPatchFiles,
+  countPatchLines,
   GIT_DIFF_DISPLAY_LIMIT,
   GIT_DIFF_MAX_CANDIDATES,
   GIT_DIFF_MAX_REPOSITORIES,
@@ -406,6 +407,7 @@ export async function saveSessionDiff(
   });
   return {
     id: row.id,
+    ...countPatchLines(repositories),
     fileCount,
     repositoryCount,
     createdAt: (row.createdAt ?? new Date()).toISOString(),

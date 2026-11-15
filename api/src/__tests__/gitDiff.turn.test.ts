@@ -750,7 +750,11 @@ describe('deterministic filesystem snapshots', () => {
       .get(`/api/agent/sessions/fs-complete/diffs/${summary.id}`)
       .set('x-test-subscription', 'sub-a');
     expect(response.status).toBe(200);
-    expect(response.body.html).toContain('Fix file permissions');
+    expect(response.body.html).not.toContain('Fix file permissions');
+    expect(response.body.html).not.toContain('Suggested fix:');
+    expect(response.body.html).not.toContain('Net filesystem changes since');
+    expect(response.body.additions).toBeGreaterThan(0);
+    expect(response.body.deletions).toBeGreaterThan(0);
     expect(response.body.html).toContain('captured starting contents');
     expect(response.body.html).not.toContain('unborn');
   });
