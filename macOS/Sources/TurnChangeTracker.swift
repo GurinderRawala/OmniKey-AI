@@ -26,6 +26,7 @@ final class TurnChangeTracker: @unchecked Sendable {
         var rootBytes = 32 * 1_048_576
         var patchBytes = 2 * 1_048_576
         var seconds: TimeInterval = 4
+        var patchSeconds: TimeInterval = 4
     }
     struct File: Equatable {
         let bytes: Data
@@ -34,6 +35,8 @@ final class TurnChangeTracker: @unchecked Sendable {
     struct Manifest {
         var files: [String: File] = [:]
         var unknown: Set<String> = []
+        var absent: Set<String> = []
+        var limitsReached: Set<String> = []
         var excluded = 0
         var enumerated = true
     }
@@ -43,6 +46,7 @@ final class TurnChangeTracker: @unchecked Sendable {
     }
     let turnID = UUID().uuidString
     var limits = Limits()
+    var scanNow: () -> Date = Date.init
     private var roots: [String: Root] = [:]
     private var omittedRoots: Set<String> = []
     private var revision = 0
@@ -125,12 +129,9 @@ final class TurnChangeTracker: @unchecked Sendable {
                   !candidate.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }),
                   !candidate.split(separator: "/").contains(where: { $0 == "." || $0 == ".." }) else { continue }
             let canonical = GitSnapshotCollector.canonicalDirectory(candidate)
-            var root = canonical ?? candidate
-            if Date() < deadline, let canonical, let runner = GitCommandRunner(),
-               let gitRoot = try? GitSnapshotCollector.repositoryRoot(of: canonical, runner: runner, deadline: min(deadline, Date().addingTimeInterval(0.5))) {
-                root = gitRoot
-            }
-            root = TurnFileReader.physicalPath(root) ?? root
+            // Respect the selected filesystem scope. Promoting a selected
+            // subfolder to the Git top level defeats narrowing a large workspace.
+            let root = TurnFileReader.physicalPath(canonical ?? candidate) ?? canonical ?? candidate
             guard root.hasPrefix("/"), root != "/", root != TurnFileReader.physicalPath(NSHomeDirectory()),
                   !root.contains("\0"), !root.split(separator: "/").contains("..") else { continue }
             if roots[root] != nil || roots.keys.contains(where: { root.hasPrefix($0 + "/") }) { continue }
@@ -159,12 +160,13 @@ final class TurnChangeTracker: @unchecked Sendable {
         var repositories: [GitDiffRepositoryPatch] = []
         var coverage: [TurnRootCoverage] = []
         var budget = limits.patchBytes
-        let deadline = Date().addingTimeInterval(limits.seconds)
+        var deadline = Date().addingTimeInterval(limits.seconds)
+        var patchSecondsRemaining = limits.patchSeconds
         for root in roots.keys.sorted() {
             let entry = roots[root]!
             let displayRoot = entry.baseline.root
             if let acceptedRoots, !acceptedRoots.contains(Self.comparable(displayRoot)) { continue }
-            guard let before = entry.manifest, let after = scan(root, deadline: deadline) else {
+            guard let before = entry.manifest, let after = scan(root, deadline: deadline, prioritizing: before.files.keys.sorted()) else {
                 let protected = Self.sensitive(root)
                 coverage.append(TurnRootCoverage(root: displayRoot, status: "unavailable",
                     reason: protected ? "This root is excluded by the sensitive-path policy." : "Starting or current files could not be read safely.",
@@ -172,28 +174,40 @@ final class TurnChangeTracker: @unchecked Sendable {
                 continue
             }
             var patch = ""
+            var limitsReached = before.limitsReached.union(after.limitsReached)
+            // Scanning must never consume the time reserved for patch generation.
+            let patchStarted = Date()
+            let patchDeadline = patchStarted.addingTimeInterval(patchSecondsRemaining)
             var incomplete = !before.enumerated || !after.enumerated || !before.unknown.isEmpty || !after.unknown.isEmpty
             for path in Set(before.files.keys).union(after.files.keys).sorted() {
                 guard !before.unknown.contains(path), !after.unknown.contains(path),
                       before.enumerated || before.files[path] != nil,
-                      after.enumerated || after.files[path] != nil else { incomplete = true; continue }
+                      after.enumerated || after.files[path] != nil || after.absent.contains(path) else { incomplete = true; continue }
                 let old = before.files[path], new = after.files[path]
                 guard old != new else { continue }
-                guard Date() < deadline else { incomplete = true; break }
+                guard Date() < patchDeadline else { incomplete = true; limitsReached.insert("Patch generation time limit reached."); break }
                 do {
-                    let section = try Self.patch(path: path, old: old, new: new, budget: budget)
-                    guard section.utf8.count <= budget else { incomplete = true; continue }
+                    let section = try Self.patch(path: path, old: old, new: new, budget: budget, deadline: patchDeadline)
+                    guard section.utf8.count <= budget else { incomplete = true; limitsReached.insert("Patch size limit reached."); continue }
                     patch += section
                     budget -= section.utf8.count
-                } catch { incomplete = true }
+                } catch { incomplete = true; limitsReached.insert("A changed file exceeded the patch size/time limit or could not be rendered.") }
             }
+            let patchElapsed = Date().timeIntervalSince(patchStarted)
+            patchSecondsRemaining = max(0, patchSecondsRemaining - patchElapsed)
+            deadline = deadline.addingTimeInterval(patchElapsed)
             if !patch.isEmpty { repositories.append(GitDiffRepositoryPatch(root: displayRoot, patch: patch, baseline: entry.baseline, head: nil)) }
             let excluded = before.excluded + after.excluded
             let late = entry.baseline.source == .beforeTool
             let state = incomplete ? "partial" : late ? "late" : "complete"
             var notes: [String] = []
             if late { notes.append("Baseline captured before the first tool in this folder, not at run start.") }
-            if incomplete { notes.append("Some files exceeded capture limits, changed during reading, or were unreadable.") }
+            if incomplete {
+                notes.append("Captured \(before.files.count) starting files; compared \(Set(before.files.keys).intersection(after.files.keys).count) existing files.")
+                notes += limitsReached.sorted()
+                if !before.unknown.isEmpty || !after.unknown.isEmpty { notes.append("\(before.unknown.union(after.unknown).count) files exceeded the per-file/remaining byte limit, changed during reading, or were unreadable.") }
+                if patch.isEmpty { notes.append("No patch could be produced within this coverage; this does not establish that no files changed.") }
+            }
             if excluded > 0 { notes.append("Sensitive paths, dependency/build directories and special files are excluded.") }
             if notes.isEmpty { notes.append("All eligible files in this root were compared with their starting contents.") }
             coverage.append(TurnRootCoverage(root: displayRoot, status: state, reason: notes.joined(separator: " "), suggestedFix: state == "complete" ? "" : "Select the folder before a new turn; narrow large workspaces or fix unreadable files. Excluded sensitive files are never captured."))
@@ -248,44 +262,92 @@ final class TurnChangeTracker: @unchecked Sendable {
         return false
     }
 
-    private func scan(_ root: String, deadline: Date) -> Manifest? {
-        guard Date() < deadline else { return nil }
+    private func scan(_ root: String, deadline: Date, prioritizing knownPaths: [String] = []) -> Manifest? {
+        guard scanNow() < deadline else { return nil }
         let reader: TurnFileReader
         do { reader = try TurnFileReader(root: root) }
         catch TurnFileReader.Failure.absent { return Manifest() }
         catch { return nil }
-        var enumerationFailed = false
-        var directory: ObjCBool = false
-        guard fm.fileExists(atPath: root, isDirectory: &directory), directory.boolValue,
-              let walker = fm.enumerator(at: URL(fileURLWithPath: root), includingPropertiesForKeys: nil,
-                                         errorHandler: { _, _ in enumerationFailed = true; return false }) else { return nil }
         var result = Manifest(), total = 0, count = 0
-        while let url = walker.nextObject() as? URL {
-            count += 1
-            if count > limits.files || Date() > deadline { result.enumerated = false; break }
-            // Foundation enumeration can return /private/var URLs for a /var
-            // root (and vice versa). Never slice by an unchecked string length.
-            let itemPath = Self.comparable(url.path), rootPath = Self.comparable(root)
-            guard itemPath.hasPrefix(rootPath + "/") else { result.enumerated = false; continue }
-            let relative = String(itemPath.dropFirst(rootPath.count + 1))
-            if roots.keys.contains(where: { Self.comparable($0) == itemPath }) || Self.sensitive(relative) || skippedDirectories.contains(url.lastPathComponent) {
-                walker.skipDescendants(); result.excluded += 1; continue
-            }
+        func read(_ relative: String) -> Bool {
             do {
                 switch try reader.read(relative, limit: min(limits.fileBytes, max(0, limits.rootBytes - total))) {
-                case .directory: continue
+                case .directory: return true
                 case .excluded: result.excluded += 1
                 case let .file(file):
-                    guard Date() < deadline else {
-                        result.unknown.insert(relative); result.enumerated = false
-                        continue
+                    guard scanNow() < deadline else {
+                        result.unknown.insert(relative)
+                        result.enumerated = false
+                        return false
                     }
                     total += file.bytes.count
                     result.files[relative] = file
                 }
+            } catch TurnFileReader.Failure.absent {
+                result.absent.insert(relative)
+            } catch TurnFileReader.Failure.tooLarge(let size) {
+                result.unknown.insert(relative)
+                result.limitsReached.insert(size > limits.fileBytes
+                    ? "Per-file size limit reached (\(limits.fileBytes) bytes)."
+                    : "Root content budget reached (\(limits.rootBytes) bytes).")
             } catch { result.unknown.insert(relative) }
+            return false
         }
-        if enumerationFailed { result.enumerated = false }
+        // Revisit every captured baseline path first. A changed enumeration order,
+        // added build output, or scan cutoff must not hide an already captured edit.
+        for path in knownPaths {
+            guard scanNow() < deadline else {
+                result.enumerated = false
+                result.limitsReached.insert("Filesystem scan time limit reached (\(limits.seconds) seconds).")
+                break
+            }
+            if read(path) { result.unknown.insert(path) } // file became a directory
+        }
+        let known = Set(knownPaths)
+        // Breadth-first, lexical traversal captures root files before descending
+        // into a large subtree. Foundation's depth-first order is unspecified.
+        var directories = [URL(fileURLWithPath: root)], nextDirectory = 0
+        traversal: while nextDirectory < directories.count {
+            guard scanNow() < deadline else {
+                result.enumerated = false
+                result.limitsReached.insert("Filesystem scan time limit reached (\(limits.seconds) seconds).")
+                break
+            }
+            let directory = directories[nextDirectory]
+            nextDirectory += 1
+            let children: [URL]
+            do { children = try fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil).sorted { $0.lastPathComponent < $1.lastPathComponent } }
+            catch {
+                result.enumerated = false
+                result.limitsReached.insert("Some directories could not be enumerated.")
+                continue
+            }
+            for url in children {
+                if scanNow() >= deadline {
+                    result.enumerated = false
+                    result.limitsReached.insert("Filesystem scan time limit reached (\(limits.seconds) seconds).")
+                    break traversal
+                }
+                count += 1
+                if count > limits.files {
+                    result.enumerated = false
+                    result.limitsReached.insert("Filesystem entry limit reached (\(limits.files) entries).")
+                    break traversal
+                }
+                let itemPath = Self.comparable(url.path), rootPath = Self.comparable(root)
+                guard itemPath.hasPrefix(rootPath + "/") else { result.enumerated = false; continue }
+                let relative = String(itemPath.dropFirst(rootPath.count + 1))
+                if roots.keys.contains(where: { Self.comparable($0) == itemPath }) || Self.sensitive(relative) || skippedDirectories.contains(url.lastPathComponent) {
+                    result.excluded += 1; continue
+                }
+                if known.contains(relative) { continue }
+                if read(relative) { directories.append(url) }
+            }
+        }
+        if scanNow() >= deadline {
+            result.enumerated = false
+            result.limitsReached.insert("Filesystem scan time limit reached (\(limits.seconds) seconds).")
+        }
         guard reader.isStillAtRoot() else { return nil }
         return result
     }
@@ -300,7 +362,7 @@ final class TurnChangeTracker: @unchecked Sendable {
         }.joined() + "\""
     }
 
-    static func patch(path: String, old: File?, new: File?, budget: Int) throws -> String {
+    static func patch(path: String, old: File?, new: File?, budget: Int, deadline: Date? = nil) throws -> String {
         let a = quoted("a/" + path), b = quoted("b/" + path)
         var text = "diff --git \(a) \(b)\n"
         if old == nil { text += "new file mode \(new!.mode)\n" }
@@ -317,7 +379,7 @@ final class TurnChangeTracker: @unchecked Sendable {
         try left.write(to: temp.appendingPathComponent("before"))
         try right.write(to: temp.appendingPathComponent("after"))
         let runner = GitCommandRunner(gitPath: "/usr/bin/diff", prefixArguments: [])!
-        let diff = try runner.run(["-u", "before", "after"], in: temp.path, maxStdout: max(1, budget), deadline: Date().addingTimeInterval(2))
+        let diff = try runner.run(["-u", "before", "after"], in: temp.path, maxStdout: max(1, budget), deadline: min(deadline ?? .distantFuture, Date().addingTimeInterval(2)))
         guard diff.status == 1 else { throw CocoaError(.fileReadUnknown) }
         let body = String(decoding: diff.stdout, as: UTF8.self).split(separator: "\n", omittingEmptySubsequences: false).dropFirst(2).joined(separator: "\n")
         return text + "--- \(old == nil ? "/dev/null" : a)\n+++ \(new == nil ? "/dev/null" : b)\n" + body

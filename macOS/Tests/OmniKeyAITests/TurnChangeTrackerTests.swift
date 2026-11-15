@@ -281,3 +281,74 @@ extension TurnChangeTrackerTests {
         XCTAssertEqual(update.coverage.first { $0.root == ninth!.path }?.status, "unavailable")
     }
 }
+
+extension TurnChangeTrackerTests {
+    func testLargeSubtreeCannotStarveRootDocumentsAndCapturedDeletions() throws {
+        let root = try folder()
+        let subtree = root.appendingPathComponent("aaa-large-subtree")
+        try FileManager.default.createDirectory(at: subtree, withIntermediateDirectories: false)
+        for index in 0..<40 { try write(subtree, "file-\(index)", "irrelevant\n") }
+        try write(root, "README.md", "original readme\n")
+        try write(root, "CONTRIBUTING.md", "original contributing\n")
+        let tracker = TurnChangeTracker()
+        tracker.limits.files = 10
+        _ = begin(tracker, root)
+        try write(root, "README.md", "updated readme\n")
+        try FileManager.default.removeItem(at: root.appendingPathComponent("CONTRIBUTING.md"))
+        // New entries must not displace previously captured paths on subsequent scans.
+        for index in 0..<15 { try write(root, "000-added-\(index)", "new\n") }
+        let result = tracker.capture(status: "final")
+        let diff = result.repositories.map(\.patch).joined()
+        XCTAssertTrue(diff.contains("-original readme"), diff)
+        XCTAssertTrue(diff.contains("+updated readme"), diff)
+        XCTAssertTrue(diff.contains("-original contributing"), diff)
+        XCTAssertFalse(diff.contains("+new\n"), "An incomplete baseline cannot prove new paths were absent")
+        XCTAssertEqual(result.coverage.first?.status, "partial")
+        XCTAssertTrue(result.coverage.first?.reason.contains("entry limit reached (10 entries)") == true)
+    }
+
+    func testScanDeadlineDoesNotConsumePatchGenerationBudget() throws {
+        let root = try folder()
+        try write(root, "README.md", "original\n")
+        let tracker = TurnChangeTracker()
+        _ = begin(tracker, root)
+        try write(root, "README.md", "changed\n")
+        var clockCalls = 0
+        tracker.scanNow = {
+            clockCalls += 1
+            // Admit the root and its prioritized read, then expire enumeration.
+            return clockCalls <= 3 ? Date() : Date.distantFuture
+        }
+        let result = tracker.capture(status: "final")
+        XCTAssertTrue(result.repositories.first?.patch.contains("+changed") == true)
+        XCTAssertEqual(result.coverage.first?.status, "partial")
+        XCTAssertTrue(result.coverage.first?.reason.contains("scan time limit reached") == true)
+    }
+
+    func testPartialEmptyCaptureExplicitlyDoesNotClaimNoChanges() throws {
+        let root = try folder()
+        try write(root, "file", String(repeating: "x", count: 100))
+        let tracker = TurnChangeTracker()
+        tracker.limits.fileBytes = 16
+        _ = begin(tracker, root)
+        try write(root, "file", "short\n")
+        let result = tracker.capture(status: "final")
+        XCTAssertTrue(result.repositories.isEmpty)
+        XCTAssertTrue(result.coverage.first?.reason.contains("does not establish that no files changed") == true)
+        XCTAssertTrue(result.coverage.first?.reason.contains("Captured 0 starting files") == true)
+    }
+}
+
+extension TurnChangeTrackerTests {
+    func testSelectedSubfolderIsNotExpandedToGitMonorepoRoot() throws {
+        let repo = try GitTestRepo()
+        let subfolder = URL(fileURLWithPath: repo.root).appendingPathComponent("docs")
+        try FileManager.default.createDirectory(at: subfolder, withIntermediateDirectories: false)
+        try write(subfolder, "README.md", "before\n")
+        let tracker = TurnChangeTracker()
+        let baseline = begin(tracker, subfolder)
+        XCTAssertEqual(baseline.baselines?.first?.root, subfolder.path)
+        try write(subfolder, "README.md", "after\n")
+        XCTAssertTrue(patch(tracker).hasPrefix("diff --git a/README.md b/README.md\n"))
+    }
+}

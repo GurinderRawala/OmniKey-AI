@@ -5,7 +5,7 @@ import Foundation
 /// between directory enumeration and reading. Metadata and reads use openat /
 /// fstatat / readlinkat against the same directory descriptors.
 final class TurnFileReader {
-    enum Failure: Error { case absent, unavailable }
+    enum Failure: Error { case absent, unavailable, tooLarge(Int64) }
     enum Entry {
         case directory
         case excluded
@@ -79,11 +79,12 @@ final class TurnFileReader {
         let parent = try Self.openDirectory(parentPath, from: descriptor)
         defer { close(parent) }
         var before = stat()
-        guard fstatat(parent, name, &before, AT_SYMLINK_NOFOLLOW) == 0 else { throw Failure.unavailable }
+        guard fstatat(parent, name, &before, AT_SYMLINK_NOFOLLOW) == 0 else { throw errno == ENOENT ? Failure.absent : Failure.unavailable }
         let type = before.st_mode & S_IFMT
         if type == S_IFDIR { return .directory }
         guard type == S_IFREG || type == S_IFLNK else { return .excluded }
-        guard before.st_size >= 0, before.st_size <= limit else { throw Failure.unavailable }
+        guard before.st_size >= 0 else { throw Failure.unavailable }
+        guard before.st_size <= limit else { throw Failure.tooLarge(before.st_size) }
         let bytes: Data
         let mode: String
         if type == S_IFLNK {

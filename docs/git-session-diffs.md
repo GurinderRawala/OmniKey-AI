@@ -17,7 +17,8 @@ roots are captured before their first shell and permanently labelled late.
 The `filesystem: true` baseline/final control frames reuse authenticated request
 correlation. Baseline `head: null` is a compatibility field in this mode, not a
 claim that a repository is unborn. Final frames echo the acknowledged baselines.
-Git is optional and used only to resolve repository roots. Patches compare the
+Filesystem capture respects selected folders without expanding them to Git roots,
+so selecting a smaller folder actually narrows coverage. Git is not required. Patches compare the
 captured bytes with current bytes through local `/usr/bin/diff`; neither Git
 history nor an LLM supplies the old contents. Commits, amendments and resets do
 not rebase capture. Renames are represented deterministically as deletion/addition.
@@ -59,7 +60,13 @@ contents, Git HEAD, or an agent report.
 
 Default bounds: eight captured roots (up to 40 coverage entries disclose additional known scopes); 10,000 enumerated entries and 32 MiB of baseline
 content per root; 1 MiB per file; 2 MiB combined patches; a four-second scan budget
-plus bounded diff subprocess time. Filesystem control requests allow 20 seconds
+and a separate four-second patch-generation budget (with bounded diff subprocesses).
+Scanning uses deterministic breadth-first traversal, so a large subtree cannot
+starve top-level files. Subsequent scans revisit captured baseline paths first,
+including explicit absence checks for deletions, before discovering other files.
+Scan exhaustion does not prevent patches for successfully captured changes.
+Partial coverage reports starting/compared file counts and specific limits; an
+empty partial snapshot is not evidence that no files changed. Filesystem control requests allow 20 seconds
 including queued reconciliation and transport. The local shell also waits for
 pending baseline work, so a server timeout cannot make it overtake the snapshot.
 If that local wait also exceeds 20 seconds, the shell returns an explicit error
