@@ -520,3 +520,53 @@ describe('compact change counts', () => {
     expect(cleanSessionDiffSummary(value)?.deletions).toBe(7);
   });
 });
+
+it('keeps incomplete filesystem captures honest without a warning banner', async () => {
+  const payload = {
+    version: 1 as const,
+    capturedAt: new Date().toISOString(),
+    repositories: [],
+    filesystem: true,
+    coverage: [
+      {
+        root: '/tmp/<private>',
+        status: 'partial' as const,
+        reason: 'Some files exceeded limits',
+        suggestedFix: '',
+      },
+    ],
+    notice: 'Only captured changes are shown.',
+  };
+  const html = await renderSessionDiffHtml('partial-coverage', payload, 'dark');
+  expect(html).toContain('Changes unavailable');
+  expect(html).toContain('<summary>Capture details</summary>');
+  expect(html).toContain('/tmp/&lt;private&gt;');
+  expect(html).toContain('Only captured changes are shown.');
+  const empty = await renderSessionDiffHtml(
+    'no-roots',
+    { ...payload, coverage: [], notice: 'No filesystem roots were captured.' },
+    'dark',
+  );
+  expect(empty).toContain('Changes unavailable');
+  expect(empty).toContain('No filesystem roots were captured.');
+});
+
+it('retains structured shell directories in the transcript independently of diffs', () => {
+  const transcript = buildTranscript([
+    {
+      role: 'assistant',
+      content: '',
+      tool_calls: [
+        {
+          id: 'shell-1',
+          name: 'shell_script',
+          arguments: { script: 'git status', working_directory: '/Projects/Repo' },
+        },
+      ],
+    },
+  ]);
+  expect(transcript[0].blocks?.[0]).toMatchObject({
+    text: 'git status',
+    workingDirectory: '/Projects/Repo',
+  });
+});

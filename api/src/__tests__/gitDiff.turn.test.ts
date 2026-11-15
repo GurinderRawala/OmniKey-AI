@@ -647,6 +647,46 @@ describe('coordinator and validation units', () => {
     // Same path later (e.g. a tool in it): never a late baseline.
     await captureTurnBaselines(r, [ROOT], 'before_tool', undefined, log, 20);
     expect(frames).toHaveLength(1);
+    // A disjoint later request recovers the original capture from a cumulative reply.
+    const other = ROOT + '-other';
+    const capturing = captureTurnBaselines(r, [other], 'before_tool', undefined, log, 1000);
+    const later = frames[1].git_diff_request!;
+    handleGitDiffResponseFrame(
+      {
+        session_id: 'u-late',
+        sender: 'client',
+        content: '',
+        git_diff_response: {
+          request_id: later.request_id,
+          status: 'ok',
+          repositories: [],
+          baselines: [good, { ...good, root: other, source: 'before_tool' }],
+        },
+      },
+      'sub-a',
+      connection.signal,
+      log,
+    );
+    await capturing;
+    expect(r.baselines).toEqual([good, { ...good, root: other, source: 'before_tool' }]);
+    const response = {
+      request_id: later.request_id,
+      status: 'ok',
+      repositories: [],
+      baselines: [good],
+    };
+    expect(() =>
+      validateGitBaselineResponse(response, later, { notBefore: r.startedAt, now: Date.now() }),
+    ).toThrow();
+    expect(() =>
+      validateGitBaselineResponse(
+        { ...response, baselines: [{ ...good, source: 'before_tool' }] },
+        later,
+        { notBefore: r.startedAt, now: Date.now() },
+        [],
+        r.baselineRequests,
+      ),
+    ).toThrow('baseline source');
   });
 });
 
@@ -862,7 +902,11 @@ it('filesystem steering keeps the original baseline across superseded finals', a
           );
         }
         return {
-          ...turnReply(filePatch('before-steering.ts') + filePatch('after-steering.ts'), null)(req),
+          ...turnReply(
+            filePatch('before-steering.ts') +
+              filePatch(captures === 1 ? 'superseded.ts' : 'accepted.ts'),
+            null,
+          )(req),
           coverage: [
             { root: ROOT, status: 'complete', reason: 'Captured contents', suggestedFix: '' },
           ],
@@ -878,6 +922,9 @@ it('filesystem steering keeps the original baseline across superseded finals', a
   const delivered = t.frames.find((f) => f.session_diff)!;
   expect(delivered.content).toContain('accepted');
   expect(delivered.session_diff?.fileCount).toBe(2);
+  const stored = await loadSessionDiffPayload('fs-steering', 'sub-a', delivered.session_diff!.id);
+  expect(stored!.payload.repositories[0].patch).toContain('accepted.ts');
+  expect(stored!.payload.repositories[0].patch).not.toContain('superseded.ts');
 });
 
 it('rejects non-string filesystem coverage status without coercion', () => {

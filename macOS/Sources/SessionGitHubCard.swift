@@ -49,15 +49,45 @@ enum SessionGitHubDiscovery {
         for message in messages {
             for block in message.blocks {
                 if let root = block.liveDiff?.coverage.first?.root ?? block.sessionDiff?.coverage?.first?.root { return root }
-                if block.kind == .shellCommand,
-                   let root = GitShellCommandAnalyzer.analyze(block.text, initialDirectory: nil).observedDirectories.first { return root }
+                if block.kind == .shellCommand {
+                    if let root = block.workingDirectory, root.hasPrefix("/") { return root }
+                    if let root = GitShellCommandAnalyzer.analyze(block.text, initialDirectory: block.workingDirectory).observedDirectories.first { return root }
+                }
             }
         }
         return nil
     }
 
+    struct BranchPullRequest: Decodable {
+        struct Repository: Decodable { let name: String }
+        struct Owner: Decodable { let login: String }
+        let number: Int
+        let title: String
+        let url: String
+        let state: String
+        let isDraft: Bool
+        let headRepository: Repository?
+        let headRepositoryOwner: Owner?
+        func belongs(to repository: String) -> Bool { headRepositoryName?.lowercased() == repository.lowercased() }
+        var headRepositoryName: String? {
+            guard let headRepository, let headRepositoryOwner else { return nil }
+            return headRepositoryOwner.login + "/" + headRepository.name
+        }
+        var pullRequest: SessionPullRequest {
+            SessionPullRequest(number: number, title: title, url: url, state: state, isDraft: isDraft)
+        }
+    }
+
+    static func lookupOrder(linked: Set<Int>, cached: Set<Int>, refreshIndex: Int) -> [Int] {
+        let fresh = linked.subtracting(cached).sorted()
+        let old = cached.sorted()
+        let offset = old.isEmpty ? 0 : refreshIndex % old.count
+        let freshOffset = fresh.isEmpty ? 0 : refreshIndex % fresh.count
+        return Array((Array(fresh.dropFirst(freshOffset)) + Array(fresh.prefix(freshOffset))).prefix(3)) + Array((Array(old.dropFirst(offset)) + Array(old.prefix(offset))).prefix(1))
+    }
+
     /// Read-only local Git + authenticated GitHub CLI, never a shell command.
-    static func refresh(path: String, previous: SessionGitHubInfo?, texts: [String], loadPullRequests: Bool = true) -> SessionGitHubInfo? {
+    static func refresh(path: String, previous: SessionGitHubInfo?, texts: [String], loadPullRequests: Bool = true, refreshIndex: Int = 0) -> SessionGitHubInfo? {
         guard let git = GitCommandRunner() else { return previous }
         let localDeadline = Date().addingTimeInterval(3)
         func gitText(_ args: [String]) -> String? {
@@ -72,6 +102,9 @@ enum SessionGitHubDiscovery {
             if let remote = gitText(["remote", "get-url", name]), let repo = repository(from: remote), !found.contains(repo) { found.append(repo) }
         }
         guard let repository = previous.flatMap({ repositories.contains($0.repository) ? $0.repository : nil }) ?? repositories.first else { return nil }
+        // origin describes this clone's head repository; the branch may track
+        // upstream, which is the base repository queried above.
+        let headRepository = gitText(["remote", "get-url", "origin"]).flatMap { Self.repository(from: $0) } ?? repository
         let old = previous?.repository == repository ? previous : nil
         let status = gitText(["status", "--porcelain=v1", "--untracked-files=normal"])
         var info = SessionGitHubInfo(root: root, repository: repository, branch: branch,
@@ -81,25 +114,29 @@ enum SessionGitHubDiscovery {
         guard let ghPath = ["/opt/homebrew/bin/gh", "/usr/local/bin/gh"].first(where: { FileManager.default.isExecutableFile(atPath: $0) }),
               let gh = GitCommandRunner(gitPath: ghPath, prefixArguments: []) else { return info }
         let deadline = Date().addingTimeInterval(15)
-        let fields = "number,title,url,state,isDraft"
+        let fields = "number,title,url,state,isDraft,headRepository,headRepositoryOwner"
         func request(_ args: [String]) -> Data? {
-            guard let result = try? gh.run(args, in: root, maxStdout: 512 * 1024, deadline: deadline), result.status == 0 else { return nil }
+            guard let result = try? gh.run(args, in: root, maxStdout: 512 * 1024, deadline: min(deadline, Date().addingTimeInterval(3))), result.status == 0 else { return nil }
             return result.stdout
         }
         var prs = Dictionary(uniqueKeysWithValues: info.pullRequests.map { ($0.number, $0) })
-        var fetched = Set<Int>()
+        // Newly linked PRs have priority over all refresh work. Rotate cached
+        // lookups, with a per-command timeout, so one slow PR cannot starve others.
+        let linked = linkedPRs(in: texts, repository: repository)
+        for number in lookupOrder(linked: linked, cached: Set(prs.keys), refreshIndex: refreshIndex) where Date() < deadline {
+            if let data = request(["pr", "view", String(number), "--repo", repository, "--json", fields]),
+               let item = try? JSONDecoder().decode(BranchPullRequest.self, from: data) {
+                if linked.contains(number) || item.belongs(to: headRepository) { prs[number] = item.pullRequest }
+                else { prs.removeValue(forKey: number) }
+            }
+        }
         if !branch.isEmpty,
            let data = request(["pr", "list", "--repo", repository, "--head", branch, "--state", "all", "--limit", "100", "--json", fields]),
-           let current = try? JSONDecoder().decode([SessionPullRequest].self, from: data) {
+           let current = try? JSONDecoder().decode([BranchPullRequest].self, from: data) {
             info.pullRequestsLoaded = true
-            for pr in current { prs[pr.number] = pr; fetched.insert(pr.number) }
-        }
-        // Remember every PR seen in this session, even after branch changes.
-        let numbers = linkedPRs(in: texts, repository: repository).union(prs.keys).subtracting(fetched)
-        for number in numbers.sorted() where Date() < deadline {
-            if let data = request(["pr", "view", String(number), "--repo", repository, "--json", fields]),
-               let pr = try? JSONDecoder().decode(SessionPullRequest.self, from: data) {
-                prs[number] = pr
+            for item in current where item.belongs(to: headRepository) {
+                let pr = item.pullRequest
+                prs[pr.number] = pr
             }
         }
         info.pullRequests = prs.values.filter {
@@ -115,11 +152,24 @@ final class SessionGitHubCardModel: ObservableObject {
     private(set) var selectedSession: String?
     private var generation = UUID()
     private let defaults: UserDefaults
-    init(defaults: UserDefaults = .standard) { self.defaults = defaults }
+    typealias Discovery = @Sendable (String, SessionGitHubInfo?, [String], Int) async -> SessionGitHubInfo?
+    private let discovery: Discovery
+    private var worker: Task<Void, Never>?
+    private var pending: (session: String, root: String, texts: [String], token: UUID)?
+    private var refreshIndex = 0
+    init(defaults: UserDefaults = .standard, discovery: @escaping Discovery = { root, old, texts, index in
+        await Task.detached(priority: .utility) {
+            SessionGitHubDiscovery.refresh(path: root, previous: old, texts: texts, refreshIndex: index)
+        }.value
+    }) {
+        self.defaults = defaults
+        self.discovery = discovery
+    }
 
     func load(session: String) {
         guard selectedSession != session else { return }
         selectedSession = session
+        pending = nil
         generation = UUID()
         info = defaults.data(forKey: "sessionGitHub:\(session)").flatMap { try? JSONDecoder().decode(SessionGitHubInfo.self, from: $0) }
         if let cached = info {
@@ -133,15 +183,27 @@ final class SessionGitHubCardModel: ObservableObject {
         guard let root = info?.root ?? path else { return }
         let token = UUID()
         generation = token
-        let old = info
-        let updated = await Task.detached(priority: .utility) {
-            SessionGitHubDiscovery.refresh(path: root, previous: old, texts: texts)
-        }.value
-        guard !Task.isCancelled, selectedSession == session, generation == token else { return }
-        info = updated
-        if let updated, let data = try? JSONEncoder().encode(updated) { defaults.set(data, forKey: "sessionGitHub:\(session)") }
-        else { defaults.removeObject(forKey: "sessionGitHub:\(session)") }
+        pending = (session, root, texts, token)
+        if let worker { await worker.value; return }
+        let task = Task { @MainActor in
+            while let request = self.pending {
+                self.pending = nil
+                let old = self.selectedSession == request.session ? self.info : nil
+                let index = self.refreshIndex
+                self.refreshIndex += 1
+                let updated = await self.discovery(request.root, old, request.texts, index)
+                guard self.selectedSession == request.session, self.generation == request.token else { continue }
+                self.info = updated
+                if let updated, let data = try? JSONEncoder().encode(updated) {
+                    self.defaults.set(data, forKey: "sessionGitHub:\(request.session)")
+                } else { self.defaults.removeObject(forKey: "sessionGitHub:\(request.session)") }
+            }
+            self.worker = nil
+        }
+        worker = task
+        await task.value
     }
+
 }
 
 struct SessionGitHubCard: View {

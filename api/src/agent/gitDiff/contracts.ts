@@ -514,6 +514,7 @@ export function validateGitBaselineResponse(
   request: Pick<GitDiffRequest, 'request_id' | 'candidate_paths' | 'baseline_source'>,
   bounds: { notBefore: number; now: number },
   recorded: readonly GitTurnBaseline[] = [],
+  issued: readonly Pick<GitDiffRequest, 'candidate_paths' | 'baseline_source'>[] = [],
 ): GitDiffResponse {
   if (!isPlainObject(raw)) throw new GitDiffValidationError('not an object');
   if (raw.request_id !== request.request_id) throw new GitDiffValidationError('request id');
@@ -547,11 +548,15 @@ export function validateGitBaselineResponse(
         b.source === source &&
         Date.parse(b.capturedAt) === Date.parse(String(capturedAt)),
     );
-    if (!existing && !relatedToAny(root, request.candidate_paths)) {
+    const origin = [...issued, request].find((sent) => relatedToAny(root, sent.candidate_paths));
+    if (!existing && recorded.some((b) => comparablePath(b.root) === comparablePath(root))) {
+      throw new GitDiffValidationError('baseline changed');
+    }
+    if (!existing && !origin) {
       throw new GitDiffValidationError('baseline root not related to requested candidates');
     }
     if (head !== null && !isGitOid(head)) throw new GitDiffValidationError('baseline head');
-    if (!isBaselineSource(source) || (!existing && source !== request.baseline_source)) {
+    if (!isBaselineSource(source) || (!existing && source !== origin?.baseline_source)) {
       throw new GitDiffValidationError('baseline source');
     }
     const timestamp = normalizeBaselineTimestamp(capturedAt, bounds);
@@ -640,38 +645,46 @@ export function validateGitTurnFinalResponse(
   });
   let coverage: TurnRootCoverage[] | undefined;
   if (request.filesystem) {
-    if (!Array.isArray(raw.coverage) || raw.coverage.length > GIT_DIFF_MAX_REPOSITORIES) {
-      throw new GitDiffValidationError('filesystem coverage');
+    coverage = validateFilesystemCoverage(raw.coverage);
+    const seen = new Set(coverage.map((item) => comparablePath(item.root)));
+    if (coverage.some((item) => !recorded.has(comparablePath(item.root)))) {
+      throw new GitDiffValidationError('filesystem root coverage');
     }
-    const seen = new Set<string>();
-    coverage = raw.coverage.map((item) => {
-      if (
-        !isPlainObject(item) ||
-        !isSafeAbsolutePath(item.root) ||
-        !recorded.has(comparablePath(item.root)) ||
-        seen.has(comparablePath(item.root)) ||
-        typeof item.status !== 'string' ||
-        !['complete', 'partial', 'late', 'unavailable'].includes(item.status) ||
-        typeof item.reason !== 'string' ||
-        item.reason.length > 1000 ||
-        typeof item.suggestedFix !== 'string' ||
-        item.suggestedFix.length > 1000
-      ) {
-        throw new GitDiffValidationError('filesystem root coverage');
-      }
-      seen.add(comparablePath(item.root));
-      return {
-        root: normalizeAbsolutePath(item.root),
-        status: item.status as TurnRootCoverage['status'],
-        reason: item.reason,
-        suggestedFix: item.suggestedFix,
-      };
-    });
     if (seen.size !== recorded.size || repositories.some((r) => r.scope !== 'turn')) {
       throw new GitDiffValidationError('missing filesystem root coverage');
     }
   }
   return { ...base, repositories, ...(coverage ? { coverage } : {}) };
+}
+
+/** Bounded coverage metadata shared by final captures and ephemeral previews. */
+export function validateFilesystemCoverage(raw: unknown): TurnRootCoverage[] {
+  if (!Array.isArray(raw) || raw.length > GIT_DIFF_MAX_REPOSITORIES) {
+    throw new GitDiffValidationError('filesystem coverage');
+  }
+  const seen = new Set<string>();
+  return raw.map((item) => {
+    if (
+      !isPlainObject(item) ||
+      !isSafeAbsolutePath(item.root) ||
+      seen.has(comparablePath(item.root)) ||
+      typeof item.status !== 'string' ||
+      !['complete', 'partial', 'late', 'unavailable'].includes(item.status) ||
+      typeof item.reason !== 'string' ||
+      item.reason.length > 1000 ||
+      typeof item.suggestedFix !== 'string' ||
+      item.suggestedFix.length > 1000
+    ) {
+      throw new GitDiffValidationError('filesystem root coverage');
+    }
+    seen.add(comparablePath(item.root));
+    return {
+      root: normalizeAbsolutePath(item.root),
+      status: item.status as TurnRootCoverage['status'],
+      reason: item.reason,
+      suggestedFix: item.suggestedFix,
+    };
+  });
 }
 
 /** Literal, conservative detection of a direct `git commit` invocation. */

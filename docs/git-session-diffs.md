@@ -5,6 +5,16 @@ agent-authored patches. The backend selects this mode once per outer run when
 Diff view is enabled. Older clients and historical snapshots retain the legacy
 protocol described below.
 
+## GitHub session discovery
+
+Shell blocks retain their structured working directory in live events and persisted
+transcripts, so GitHub discovery also works with diff capture disabled. Each card
+runs one discovery operation at a time and coalesces subsequent requests. Explicitly
+linked PRs are queried before cached PRs; cached lookups rotate with individual
+three-second deadlines. Branch matches must belong to the clone's `origin` repository
+(or the selected remote when origin is absent), even if the branch tracks upstream.
+Explicit links may identify PRs from other forks targeting the selected repository.
+
 ## Interval and deterministic capture
 
 One socket run owns one `TurnChangeTracker`. Its first baseline captures actual
@@ -25,7 +35,17 @@ not rebase capture. Renames are represented deterministically as deletion/additi
 Binary contents are represented by a summary, and symlinks by their target text.
 The user's Git index, configuration and object database are never modified.
 
+A timed-out baseline request remains in the run's authorization ledger. A later
+cumulative reply may acknowledge that original capture, using its original source;
+it cannot introduce roots never requested by this run or replace an accepted baseline.
+Wide directories are enumerated incrementally, with time and entry limits checked
+before retaining entries or sorting the bounded collection.
+
 ## Live view and final history
+
+Running previews and saved drawers carry bounded capture status. Incomplete empty
+comparisons say "Changes unavailable"; optional Capture details contain escaped,
+bounded root information. These details do not appear in the composer pill.
 
 FSEvents invalidate the current view while the agent is running, including while
 a shell is still executing. A serial native capture queue coalesces invalidations

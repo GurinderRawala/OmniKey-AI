@@ -290,6 +290,24 @@ export async function renderSnapshotDocument(
                   : scopes.has('commit')
                     ? 'Commit changes'
                     : 'Working tree changes';
+  const incompleteRoots = (payload.coverage ?? []).filter((root) => root.status !== 'complete');
+  const captureSummary =
+    payload.filesystem &&
+    (incompleteRoots.length > 0 || payload.coverage?.length === 0 || !!payload.notice)
+      ? totalFiles === 0
+        ? 'Changes unavailable'
+        : `${totalFiles} files changed · Some changes may not be included`
+      : `${totalFiles} file${totalFiles === 1 ? '' : 's'} changed`;
+  const captureDetails =
+    payload.filesystem && (payload.notice || incompleteRoots.length > 0)
+      ? `<details class="capture-details"><summary>Capture details</summary>${payload.notice ? `<p>${escapeHtml(payload.notice.slice(0, 600))}</p>` : ''}${incompleteRoots
+          .slice(0, 8)
+          .map(
+            (root) =>
+              `<p>${escapeHtml(root.root.slice(0, 300))} · ${escapeHtml(root.status)}<br>${escapeHtml(root.reason.slice(0, 300))}</p>`,
+          )
+          .join('')}</details>`
+      : '';
   const head = [
     '<!doctype html>',
     `<html data-theme="${theme}" data-layout="${layout === 'split' ? 'split' : 'unified'}"><head><meta charset="utf-8">`,
@@ -297,7 +315,8 @@ export async function renderSnapshotDocument(
     `<meta name="color-scheme" content="${theme}">`,
     `<style>${limits.pageCss}</style></head><body>`,
     `<header class="snapshot"><h1>${scopeLabel}</h1>`,
-    `<p>${totalFiles} file${totalFiles === 1 ? '' : 's'} changed</p>`,
+    `<p>${captureSummary}</p>`,
+    captureDetails,
     agentPatchNotes,
     recoveryNotes,
   ].join('');

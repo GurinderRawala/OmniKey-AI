@@ -87,7 +87,7 @@ struct LiveChangesDrawer: View {
         if let diff = model.currentLiveDiff, let session = model.activeSessionId {
             ChangesInspectorView(model: model, source: .preview(sessionID: session, diff: diff))
         } else {
-            ContentUnavailableView("No changes", systemImage: "doc.text")
+            ContentUnavailableView("Changes unavailable", systemImage: "doc.text")
         }
     }
 }

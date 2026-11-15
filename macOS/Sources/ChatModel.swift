@@ -103,6 +103,7 @@ struct ChatBlock: Identifiable, Equatable {
     var createdAt: Date = Date()
     /// Stable server-provided identity used to pair the start and result of
     /// concurrent tool calls without relying on arrival order.
+    var workingDirectory: String? = nil
     var activityId: String? = nil
     var activityPhase: ChatActivityPhase? = nil
     var contentLength: Int? = nil
@@ -117,6 +118,7 @@ struct ChatBlock: Identifiable, Equatable {
         kind: ChatBlockKind,
         text: String,
         createdAt: Date = Date(),
+        workingDirectory: String? = nil,
         activityId: String? = nil,
         activityPhase: ChatActivityPhase? = nil,
         contentLength: Int? = nil,
@@ -130,6 +132,7 @@ struct ChatBlock: Identifiable, Equatable {
         self.kind = kind
         self.text = text
         self.createdAt = createdAt
+        self.workingDirectory = workingDirectory
         self.activityId = activityId
         self.activityPhase = activityPhase
         self.contentLength = contentLength
@@ -143,6 +146,7 @@ struct ChatBlock: Identifiable, Equatable {
     static func == (lhs: ChatBlock, rhs: ChatBlock) -> Bool {
         return lhs.id == rhs.id
             && lhs.text == rhs.text
+            && lhs.workingDirectory == rhs.workingDirectory
             && lhs.activityId == rhs.activityId
             && lhs.activityPhase == rhs.activityPhase
             && lhs.contentLength == rhs.contentLength
@@ -1351,6 +1355,7 @@ final class ChatModel: ObservableObject {
                         kind: kind,
                         text: block.text,
                         createdAt: hydratedAt,
+                        workingDirectory: block.workingDirectory,
                         activityId: block.activityId,
                         activityPhase: block.activityPhase,
                         contentLength: block.contentLength,

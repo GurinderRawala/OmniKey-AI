@@ -315,23 +315,34 @@ final class TurnChangeTracker: @unchecked Sendable {
             }
             let directory = directories[nextDirectory]
             nextDirectory += 1
-            let children: [URL]
-            do { children = try fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil).sorted { $0.lastPathComponent < $1.lastPathComponent } }
-            catch {
+            // Collect at most the remaining entry budget, checking time before
+            // each lazy read. Never allocate/sort a whole wide directory.
+            guard let entries = fm.enumerator(at: directory, includingPropertiesForKeys: nil,
+                options: [.skipsSubdirectoryDescendants], errorHandler: { _, _ in
+                    result.enumerated = false
+                    result.limitsReached.insert("Some directories could not be enumerated.")
+                    return false
+                }) else {
                 result.enumerated = false
-                result.limitsReached.insert("Some directories could not be enumerated.")
                 continue
             }
-            for url in children {
+            var children: [URL] = []
+            var reachedLimit = false
+            while scanNow() < deadline {
+                guard let url = entries.nextObject() as? URL else { break }
+                guard count < limits.files else {
+                    result.enumerated = false
+                    result.limitsReached.insert("Filesystem entry limit reached (\(limits.files) entries).")
+                    reachedLimit = true
+                    break
+                }
+                count += 1
+                children.append(url)
+            }
+            for url in children.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
                 if scanNow() >= deadline {
                     result.enumerated = false
                     result.limitsReached.insert("Filesystem scan time limit reached (\(limits.seconds) seconds).")
-                    break traversal
-                }
-                count += 1
-                if count > limits.files {
-                    result.enumerated = false
-                    result.limitsReached.insert("Filesystem entry limit reached (\(limits.files) entries).")
                     break traversal
                 }
                 let itemPath = Self.comparable(url.path), rootPath = Self.comparable(root)
@@ -343,6 +354,7 @@ final class TurnChangeTracker: @unchecked Sendable {
                 if known.contains(relative) { continue }
                 if read(relative) { directories.append(url) }
             }
+            if reachedLimit { break }
         }
         if scanNow() >= deadline {
             result.enumerated = false

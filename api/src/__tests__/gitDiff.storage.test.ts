@@ -756,6 +756,27 @@ describe('POST /api/agent/sessions/:sessionId/diffs/preview', () => {
     expect(await AgentSessionDiff.count()).toBe(before);
   });
 
+  it('carries bounded capture status through the shared preview renderer', async () => {
+    await newSession('s-preview');
+    const coverage = [
+      { root: ROOT, status: 'partial', reason: 'Some files were not captured.', suggestedFix: '' },
+    ];
+    const response = await post()
+      .set('x-test-subscription', 'sub-a')
+      .send(JSON.stringify({ repositories: [], coverage }))
+      .expect(200);
+    expect(response.body.html).toContain('Changes unavailable');
+    expect(response.body.html).toContain('Some files were not captured.');
+    await post()
+      .set('x-test-subscription', 'sub-a')
+      .send(JSON.stringify({ repositories: [], coverage: [{ ...coverage[0], status: 'invalid' }] }))
+      .expect(400);
+    await post()
+      .set('x-test-subscription', 'sub-a')
+      .send(JSON.stringify({ repositories: [], coverage: Array(9).fill(coverage[0]) }))
+      .expect(400);
+  });
+
   it('validates input and accepts bounded previews larger than the global JSON limit', async () => {
     await newSession('s-preview');
     const large = {

@@ -77,6 +77,7 @@ export interface GitRunState {
   baselines: GitTurnBaseline[];
   /** Candidate paths a baseline was already requested for (never retried). */
   baselineAttempted: Set<string>;
+  baselineRequests: GitDiffRequest[];
   /** Count of baseline requests that failed (timeout/invalid/unavailable). */
   baselineFailures: number;
   /**
@@ -111,6 +112,7 @@ export function createGitRunState(input: {
     turnStartRequested: false,
     baselines: [],
     baselineAttempted: new Set(),
+    baselineRequests: [],
     baselineFailures: 0,
     agentPatches: input.agentPatches === true,
     filesystem: input.filesystem === true,
@@ -214,6 +216,7 @@ function awaitCapture(
     }
     for (const s of signals) s.addEventListener('abort', onAbort, { once: true });
     timing.timer = setTimeout(() => settle(null), Math.min(timeoutMs, maxTimeoutMs));
+    if (request.phase === 'baseline') run.baselineRequests.push(request);
     run.send({
       session_id: run.sessionId,
       sender: 'agent',
@@ -573,6 +576,7 @@ export async function captureTurnBaselines(
           request,
           { notBefore: run.startedAt, now: Date.now() },
           run.baselines,
+          run.baselineRequests,
         ),
       run.filesystem ? FILESYSTEM_CAPTURE_TIMEOUT_MS : GIT_TURN_BASELINE_TIMEOUT_MS,
     );

@@ -30,6 +30,7 @@ import {
   countPatchLines,
   isKnownPartialPayload,
   validateGitDiffResponse,
+  validateFilesystemCoverage,
   GitDiffValidationError,
   GIT_DIFF_DISPLAY_LIMIT,
 } from '../gitDiff/contracts';
@@ -554,7 +555,7 @@ export function createAgentRouter(): express.Router {
     async (req, res: Response<unknown, AuthLocals>) => {
       const { sessionId } = req.params;
       const { subscription } = res.locals;
-      const { theme = 'dark', layout = 'unified', repositories } = req.body ?? {};
+      const { theme = 'dark', layout = 'unified', repositories, coverage } = req.body ?? {};
       if (
         !sessionId ||
         sessionId.length > 128 ||
@@ -581,6 +582,7 @@ export function createAgentRouter(): express.Router {
         const payload = {
           version: 1 as const,
           filesystem: true,
+          ...(coverage !== undefined ? { coverage: validateFilesystemCoverage(coverage) } : {}),
           repositories: validated.repositories,
           displayLimit: GIT_DIFF_DISPLAY_LIMIT,
         };

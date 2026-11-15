@@ -5,6 +5,7 @@ import type { SessionState } from '../types';
 import { extractProgressSummary, isProgressOnlyResponse } from './progressSummary';
 import {
   cleanSessionDiffSummary,
+  isSafeAbsolutePath,
   isKnownPartialSummary,
   type SessionDiffSummary,
 } from '../gitDiff/contracts';
@@ -32,6 +33,7 @@ export type TranscriptBlock = {
   id: string;
   kind: HistoryBlockKind;
   text: string;
+  workingDirectory?: string;
   activityId?: string;
   activityPhase?: 'pending' | 'started' | 'completed' | 'failed' | 'cancelled';
   contentLength?: number;
@@ -460,14 +462,22 @@ function toolInvocationKind(toolName?: string): HistoryBlockKind {
   return 'agentReasoning';
 }
 
-function toolInvocationText(call: unknown): { id?: string; name?: string; text: string } | null {
+function toolInvocationText(
+  call: unknown,
+): { id?: string; name?: string; text: string; workingDirectory?: string } | null {
   if (!call || typeof call !== 'object') return null;
   const value = call as { id?: unknown; name?: unknown; arguments?: unknown };
   const id = typeof value.id === 'string' ? value.id : undefined;
   const name = typeof value.name === 'string' ? value.name : undefined;
   const args = value.arguments && typeof value.arguments === 'object' ? value.arguments : {};
   if (name === 'shell_script' && typeof (args as { script?: unknown }).script === 'string') {
-    return { id, name, text: String((args as { script: string }).script) };
+    const directory = (args as { working_directory?: unknown }).working_directory;
+    return {
+      id,
+      name,
+      text: String((args as { script: string }).script),
+      ...(isSafeAbsolutePath(directory) ? { workingDirectory: directory } : {}),
+    };
   }
   const serialized = JSON.stringify(args, null, 2);
   return { id, name, text: `Tool: ${name ?? 'unknown'}\n\nInput:\n${serialized}` };
@@ -540,10 +550,12 @@ export function buildTranscript(raw: RawHistoryMessage[]): TranscriptMessage[] {
     activityId?: string,
     activityPhase?: TranscriptBlock['activityPhase'],
     sessionDiff?: SessionDiffSummary,
+    workingDirectory?: string,
   ) => {
     const cleaned = text.trim();
     if (!cleaned) return;
     const block = makeBlock(kind, cleaned, activityId, activityPhase);
+    if (workingDirectory && kind === 'shellCommand') block.workingDirectory = workingDirectory;
     if (sessionDiff && kind === 'finalAnswer') block.sessionDiff = sessionDiff;
     ensureAssistant().blocks?.push(block);
   };
@@ -623,7 +635,14 @@ export function buildTranscript(raw: RawHistoryMessage[]): TranscriptMessage[] {
       for (const rawCall of entry.tool_calls ?? []) {
         const call = toolInvocationText(rawCall);
         if (!call) continue;
-        appendAssistantBlock(toolInvocationKind(call.name), call.text, call.id, 'started');
+        appendAssistantBlock(
+          toolInvocationKind(call.name),
+          call.text,
+          call.id,
+          'started',
+          undefined,
+          call.workingDirectory,
+        );
       }
       return;
     }

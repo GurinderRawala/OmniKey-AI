@@ -911,6 +911,7 @@ final class ChatSessionRunner {
                             onBlock(ChatBlock(
                                 kind: .shellCommand,
                                 text: script,
+                                workingDirectory: response.workingDirectory,
                                 activityId: response.activityID,
                                 activityPhase: response.activityPhase
                             ))

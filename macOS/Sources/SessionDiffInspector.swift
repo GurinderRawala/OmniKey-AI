@@ -112,6 +112,7 @@ struct SessionDiffHTTPFetcher: SessionDiffFetching, SessionDiffPreviewFetching {
         request.httpBody = try JSONSerialization.data(withJSONObject: [
             "theme": theme.rawValue, "layout": layout.rawValue,
             "repositories": diff.repositories.map { ["root": $0.root, "patch": $0.patch] },
+            "coverage": diff.coverage.prefix(8).map { ["root": $0.root, "status": $0.status, "reason": $0.reason, "suggestedFix": $0.suggestedFix] },
         ])
         return try await perform(request, expectedID: nil)
     }

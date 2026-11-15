@@ -18,6 +18,18 @@ final class TurnChangeTrackerTests: XCTestCase {
         tracker.capture(status: "running").repositories.map(\.patch).joined()
     }
 
+    func testWideDirectoryStopsAtEntryBudget() throws {
+        let root = try folder()
+        for i in 0..<300 { try write(root, "file-\(i)", "original\n") }
+        let tracker = TurnChangeTracker()
+        tracker.limits.files = 3
+        _ = begin(tracker, root)
+        let diff = tracker.capture(status: "running")
+        XCTAssertEqual(diff.coverage.first?.status, "partial")
+        XCTAssertTrue(diff.coverage.first?.reason.contains("entry limit") == true)
+        XCTAssertTrue(diff.repositories.isEmpty)
+    }
+
     func testNonGitStartingContentsAndNextTurnDoNotLeak() throws {
         let root = try folder()
         try write(root, "file.txt", "preexisting uncommitted content\n")
