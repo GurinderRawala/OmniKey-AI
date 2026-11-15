@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
+import os from 'node:os';
 
 const root = realpathSync(process.argv[2]);
 // npm installs hoist dependencies beside the CLI; deploy keeps them beneath it.
@@ -42,6 +43,26 @@ const version = execFileSync(process.execPath, ['dist/index.js', '--version'], {
   encoding: 'utf8',
 }).trim();
 assert.equal(version, manifest.version);
+// Interactive commands must resolve Inquirer from the installed CLI, not the
+// user's current directory. --version does not exercise this lazy ESM loader.
+execFileSync(
+  process.execPath,
+  [
+    '-e',
+    `
+  require(${JSON.stringify(path.join(root, 'dist', 'loadInquirer.js'))}).loadInquirer()
+    .then((module) => {
+      if (typeof module.prompt !== 'function') process.exitCode = 1;
+    }, (error) => { console.error(error); process.exitCode = 1; });
+`,
+  ],
+  {
+    cwd: os.tmpdir(),
+    env: { ...process.env, NODE_PATH: '' },
+    timeout: 10_000,
+    stdio: 'pipe',
+  },
+);
 console.log(
   `Standalone CLI ${version}: dependencies, sqlite3 (${process.arch}) and internal symlinks verified`,
 );

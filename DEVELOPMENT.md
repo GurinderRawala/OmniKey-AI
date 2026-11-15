@@ -27,6 +27,7 @@ git clone https://github.com/GurinderRawala/OmniKey-AI.git
 cd OmniKey-AI
 corepack enable                 # once per machine; selects pnpm 10.34.9 from packageManager
 pnpm install --frozen-lockfile  # installs every workspace exactly as pnpm-lock.yaml records
+pnpm exec turbo telemetry disable  # once per machine; no anonymous build-tool usage reporting
 cp api/.env.example api/.env    # API commands run with api/ as their working directory
 pnpm build                      # Turbo builds api + telegram, then the CLI that bundles them
 ```
@@ -40,6 +41,8 @@ A successful `pnpm build` produces:
 - `cli/telegram-client-dist/` — copy of `telegram/dist/` (so `omnikey telegram start` works)
 
 ## Day-to-day workflow
+
+CI and Docker disable Turborepo telemetry with `TURBO_TELEMETRY_DISABLED=1`. For local builds, run `pnpm exec turbo telemetry disable` once (or export that variable). This controls third-party build-tool reporting, not application behavior.
 
 ### Dependencies and the lockfile
 
@@ -103,6 +106,7 @@ Telegram needs `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `.env` — see [`t
 
 - `pnpm --filter <name> <script>` runs one workspace's script directly, where `<name>` is `omnikey-ai-api`, `omnikey-cli`, or `telegram` (list them with `pnpm -r ls --depth -1`). It **bypasses the Turbo task graph**: `pnpm --filter omnikey-cli build` does not rebuild the API or Telegram first, so it can copy stale or missing outputs. Use `pnpm build:cli` (or `pnpm build`) when you need complete CLI artifacts.
 - The root `build*`, `test`, `lint`, and `dev:all` scripts run through Turbo, which replays unchanged cacheable tasks (such as builds) from its local cache. Tests and CLI test type-checking, persistent dev tasks, `pnpm format`, and `pnpm clean` are never cached. Development tasks use loose environment mode so existing shell-supplied provider/runtime settings keep working; build hashes include `NODE_ENV` and shared lint/TypeScript configuration. No secret or runtime-state directories are declared as cache outputs. To force a re-run while debugging, pass `--force`, e.g. `pnpm turbo run build --force`.
+- Every Turbo build depends on its workspace’s uncached `clean` task before compilation or cache restoration. This prevents deleted/renamed source files from surviving in `dist/` or the CLI’s bundled services. `pnpm test:cache` exercises additions, renames, deletions, and cache restoration for all three workspaces. As with clean builds generally, do not run builds in a checkout serving a live daemon.
 - If a task gains a new input or output, update `turbo.json` in the same change so the cache cannot replay stale results; `pnpm test:cache` exercises the cache contract. Run it only in a disposable checkout: it deliberately deletes and restores compiled output. Never run it against the checkout serving a live daemon.
 
 The lint toolchain is pinned to ESLint 9.39.5, @eslint/js 9.39.5, and typescript-eslint 8.72.2, which support the Node 22 development baseline above. The published API/CLI runtime metadata declares Node ≥22; that does not mean every Node 22 release supports the full development toolchain.

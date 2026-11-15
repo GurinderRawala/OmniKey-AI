@@ -8,6 +8,10 @@ on:
     paths:
       - 'cli/**'
 
+# Build tooling must not send anonymous usage telemetry.
+env:
+  TURBO_TELEMETRY_DISABLED: "1"
+
 jobs:
   publish:
     runs-on: ubuntu-latest

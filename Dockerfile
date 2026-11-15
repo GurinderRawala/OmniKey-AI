@@ -1,5 +1,6 @@
 # pnpm workspace build; the final image ships only API production dependencies.
 FROM node:22-alpine AS build
+ENV TURBO_TELEMETRY_DISABLED=1
 WORKDIR /usr/src/app
 # sqlite3 falls back to node-gyp on musl when no prebuilt binary is available.
 RUN apk add --no-cache python3 make g++

@@ -10,6 +10,8 @@ onlyBuiltDependencies:
 # protobufjs only prints version-range advice; no generated runtime artifacts.
 ignoredBuiltDependencies:
   - protobufjs
+  # Registry package ships dist; preinstall only prints "preinstall: no-op".
+  - '@google/genai'
 
 # pnpm's lockfile-based deploy creates a portable, isolated production graph.
 injectWorkspacePackages: true

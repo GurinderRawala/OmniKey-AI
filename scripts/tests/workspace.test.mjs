@@ -26,7 +26,8 @@ test('one pinned pnpm lockfile and deliberately separate development/runtime eng
 });
 test('CLI build explicitly depends on both copied services and caches every output', () => {
   const build = turbo.tasks['omnikey-cli#build'];
-  assert.deepEqual(build.dependsOn, ['omnikey-ai-api#build', 'telegram#build']);
+  assert.deepEqual(turbo.tasks.build.dependsOn, ['clean']);
+  assert.deepEqual(build.dependsOn, ['clean', 'omnikey-ai-api#build', 'telegram#build']);
   assert.deepEqual(build.outputs, ['dist/**', 'backend-dist/**', 'telegram-client-dist/**']);
   for (const task of ['dev', 'format', 'clean', 'test', 'test:types'])
     assert.equal(turbo.tasks[task].cache, false);
@@ -95,12 +96,14 @@ test('CI and release installs are frozen, portable staging is verified', () => {
     const workflow = read(`.github/workflows/${name}`);
     assert.match(workflow, /pnpm\/action-setup@v4/);
     assert.match(workflow, /pnpm install --frozen-lockfile/);
+    assert.match(workflow, /TURBO_TELEMETRY_DISABLED: ["']?1/);
     assert.doesNotMatch(workflow, /\byarn\b/);
   }
   assert.match(read('.github/workflows/release.yml'), /deploy --prod/);
   assert.match(read('.github/workflows/release.yml'), /scripts\/verify-cli-bundle.mjs/);
   assert.match(read('.github/workflows/publish-cli.yaml'), /npm publish --access public/);
   assert.match(read('Dockerfile'), /pnpm install --frozen-lockfile/);
+  assert.match(read('Dockerfile'), /ENV TURBO_TELEMETRY_DISABLED=1/);
   assert.match(read('Dockerfile'), /CMD \["node", "api\/dist\/index.js"\]/);
 });
 

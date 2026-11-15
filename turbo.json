@@ -4,10 +4,11 @@
   "globalEnv": ["NODE_ENV"],
   "tasks": {
     "build": {
-      "outputs": ["dist/**"]
+      "outputs": ["dist/**"],
+      "dependsOn": ["clean"]
     },
     "omnikey-cli#build": {
-      "dependsOn": ["omnikey-ai-api#build", "telegram#build"],
+      "dependsOn": ["clean", "omnikey-ai-api#build", "telegram#build"],
       "outputs": ["dist/**", "backend-dist/**", "telegram-client-dist/**"]
     },
     "test": {

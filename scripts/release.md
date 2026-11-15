@@ -103,7 +103,7 @@ The helper does **not** bump the CLI/API package versions or the update constant
 
 ## 3. Validate source before packaging
 
-Use the development Node baseline (`^22.12.0 || >=24.0.0`; CI uses Node 22) and the pinned pnpm (`corepack enable` selects 10.34.9 from `packageManager`). Install dependencies from the repository lockfile without rewriting it:
+Use the development Node baseline (`^22.12.0 || >=24.0.0`; CI uses Node 22) and the pinned pnpm (`corepack enable` selects 10.34.9 from `packageManager`; if Corepack is unavailable, run `npm install -g pnpm@10.34.9`). Install dependencies from the repository lockfile without rewriting it:
 
 ```bash
 pnpm install --frozen-lockfile

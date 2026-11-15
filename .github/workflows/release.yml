@@ -11,6 +11,10 @@ on:
         required: true
         type: string
 
+# Build tooling must not send anonymous usage telemetry.
+env:
+  TURBO_TELEMETRY_DISABLED: "1"
+
 jobs:
   build:
     name: Build ${{ matrix.arch }} tarball

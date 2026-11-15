@@ -21,7 +21,7 @@ Full environment setup, build order, and the monorepo tour live in
 ```sh
 git clone https://github.com/GurinderRawala/OmniKey-AI.git
 cd OmniKey-AI
-corepack enable
+corepack enable  # if Corepack is unavailable: npm install -g pnpm@10.34.9
 pnpm install --frozen-lockfile
 pnpm build
 pnpm test
