@@ -101,6 +101,7 @@ struct GitDiffRequestPayload: Codable, Equatable, Sendable {
     /// Baseline phase: the source the server expects echoed.
     let baselineSource: GitTurnBaselineSource?
     let displayLimit: Int?
+    let filesystem: Bool?
 
     init(
         requestID: String,
@@ -109,7 +110,8 @@ struct GitDiffRequestPayload: Codable, Equatable, Sendable {
         phase: GitDiffPhase? = nil,
         baselines: [GitTurnBaseline]? = nil,
         baselineSource: GitTurnBaselineSource? = nil,
-        displayLimit: Int? = nil
+        displayLimit: Int? = nil,
+        filesystem: Bool? = nil
     ) {
         self.requestID = requestID
         self.candidatePaths = candidatePaths
@@ -119,6 +121,7 @@ struct GitDiffRequestPayload: Codable, Equatable, Sendable {
         self.baselines = baselines
         self.baselineSource = baselineSource
         self.displayLimit = displayLimit
+        self.filesystem = filesystem
     }
 
     enum CodingKeys: String, CodingKey {
@@ -128,6 +131,7 @@ struct GitDiffRequestPayload: Codable, Equatable, Sendable {
         case phase
         case baselines
         case baselineSource = "baseline_source"
+        case filesystem
         case displayLimit = "display_limit"
     }
 
@@ -149,6 +153,7 @@ struct GitDiffRequestPayload: Codable, Equatable, Sendable {
         baselineSource = rawSource.flatMap(GitTurnBaselineSource.init(rawValue:))
         let badSource = rawSource != nil && baselineSource == nil
         displayLimit = (try? c.decodeIfPresent(Int.self, forKey: .displayLimit)) ?? nil
+        filesystem = try? c.decodeIfPresent(Bool.self, forKey: .filesystem)
         hasUnsupportedPhase = badPhase || badBaselines || badSource
     }
 
@@ -160,6 +165,7 @@ struct GitDiffRequestPayload: Codable, Equatable, Sendable {
         try c.encodeIfPresent(phase, forKey: .phase)
         try c.encodeIfPresent(baselines, forKey: .baselines)
         try c.encodeIfPresent(baselineSource, forKey: .baselineSource)
+        try c.encodeIfPresent(filesystem, forKey: .filesystem)
         try c.encodeIfPresent(displayLimit, forKey: .displayLimit)
     }
 }
@@ -233,6 +239,11 @@ struct GitDiffRepositoryPatch: Codable, Equatable, Sendable {
     }
 }
 
+struct GitRootAlias: Codable, Equatable, Sendable {
+    let root: String
+    let alias: String
+}
+
 struct GitDiffResponsePayload: Codable, Equatable, Sendable {
     let requestID: String
     let status: GitDiffResponseStatus
@@ -240,13 +251,17 @@ struct GitDiffResponsePayload: Codable, Equatable, Sendable {
     /// Baseline phase only (always `[]` with a failure status).
     let baselines: [GitTurnBaseline]?
     let reason: String?
+    let coverage: [TurnRootCoverage]?
+    let rootAliases: [GitRootAlias]?
 
     init(
         requestID: String,
         status: GitDiffResponseStatus,
         repositories: [GitDiffRepositoryPatch] = [],
         baselines: [GitTurnBaseline]? = nil,
-        reason: String? = nil
+        reason: String? = nil,
+        coverage: [TurnRootCoverage]? = nil,
+        rootAliases: [GitRootAlias]? = nil
     ) {
         self.requestID = requestID
         self.status = status
@@ -254,6 +269,8 @@ struct GitDiffResponsePayload: Codable, Equatable, Sendable {
         self.repositories = status == .ok ? repositories : []
         self.baselines = baselines.map { status == .ok ? $0 : [] }
         self.reason = reason
+        self.coverage = coverage
+        self.rootAliases = status == .ok ? rootAliases : nil
     }
 
     enum CodingKeys: String, CodingKey {
@@ -261,7 +278,8 @@ struct GitDiffResponsePayload: Codable, Equatable, Sendable {
         case status
         case repositories
         case baselines
-        case reason
+        case reason, coverage
+        case rootAliases = "root_aliases"
     }
 }
 
@@ -320,6 +338,10 @@ enum SavedSessionDiffScope: String, Codable, Equatable, Sendable {
 
 /// Immutable server-side snapshot bound to exactly one final answer.
 struct SavedSessionDiff: Codable, Equatable, Hashable, Sendable {
+    var additions: Int? = nil
+    var deletions: Int? = nil
+    let filesystem: Bool?
+    let coverage: [TurnRootCoverage]?
     let id: String
     let fileCount: Int
     let repositoryCount: Int
@@ -354,8 +376,12 @@ struct SavedSessionDiff: Codable, Equatable, Hashable, Sendable {
         baselineUnavailable: Bool? = nil,
         recovered: Bool? = nil,
         recoveryIncomplete: Bool? = nil,
-        recoveryMethod: String? = nil
+        recoveryMethod: String? = nil,
+        filesystem: Bool? = nil,
+        coverage: [TurnRootCoverage]? = nil
     ) {
+        self.filesystem = filesystem
+        self.coverage = coverage
         self.id = id
         self.fileCount = fileCount
         self.repositoryCount = repositoryCount
@@ -372,6 +398,10 @@ struct SavedSessionDiff: Codable, Equatable, Hashable, Sendable {
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        additions = (try? c.decodeIfPresent(Int.self, forKey: .additions)).flatMap { $0 >= 0 ? $0 : nil }
+        deletions = (try? c.decodeIfPresent(Int.self, forKey: .deletions)).flatMap { $0 >= 0 ? $0 : nil }
+        filesystem = try? c.decodeIfPresent(Bool.self, forKey: .filesystem)
+        coverage = try? c.decodeIfPresent([TurnRootCoverage].self, forKey: .coverage)
         id = try c.decode(String.self, forKey: .id)
         fileCount = try c.decode(Int.self, forKey: .fileCount)
         repositoryCount = try c.decode(Int.self, forKey: .repositoryCount)
@@ -402,6 +432,8 @@ struct SavedSessionDiff: Codable, Equatable, Hashable, Sendable {
 
     /// Coverage is distinct from accuracy: an AI-generated patch remains
     /// unverified, but a known partial snapshot is never a viewer candidate.
+    var captureUnavailable: Bool { filesystem == true && fileCount == 0 && (coverage?.isEmpty != false || coverage?.contains { $0.status != "complete" } == true) }
+
     var isEligibleForViewer: Bool { hasSafeID && recoveryIncomplete != true && baselineUnavailable != true }
 
     var shortCommit: String? {
@@ -453,6 +485,11 @@ struct SavedSessionDiff: Codable, Equatable, Hashable, Sendable {
         let files = "\(fileCount) \(fileCount == 1 ? "file" : "files")"
         let repos = repositoryCount > 1 ? " in \(repositoryCount) repositories" : ""
         let shown = displayLimitNotice.map { " · \($0)" } ?? ""
+        if filesystem == true {
+            if coverage?.isEmpty == true { return "No folders captured · changes unavailable" + shown }
+            let partial = coverage?.contains { $0.status != "complete" } == true
+            return "Changes since this run started · \(files)" + (partial ? " · see root coverage" : "") + shown
+        }
         if isRecovered {
             var text = "\(isAIReconstructed ? "AI-generated patch for this turn" : "Recovered from this turn's tool evidence") · \(files)\(repos)\(shown)"
             if let warning = recoveryWarning { text += " · \(warning)" }
@@ -489,6 +526,7 @@ struct SavedSessionDiff: Codable, Equatable, Hashable, Sendable {
     }
 
     var helpText: String {
+        if filesystem == true { return "Compared with captured starting file contents, including pre-existing edits. Steering keeps the same baseline. Coverage and exclusions are shown per root." }
         if isAIReconstructed { return "AI-generated patch reported by the agent for this turn, not a verified filesystem diff. May be incomplete; review against the actual files." }
         if isRecovered {
             return "Changes the agent's tool calls were observed making on this Mac, reconstructed from locally recorded before/after checkpoints when the normal turn capture was unavailable. May include uncommitted edits that already existed in touched files. "

@@ -453,6 +453,7 @@ final class ChatSessionRunner {
         /// The legacy `supports_diff_recovery` checkpoint protocol is never
         /// advertised: this client keeps no per-shell checkpoints.
         let supportsAgentPatches: Bool?
+        let supportsFilesystemDiff: Bool?
         let workingDirectory: String?
         /// Server -> client control frame; never a model/tool/transcript message.
         let gitDiffRequest: GitDiffRequestPayload?
@@ -487,6 +488,7 @@ final class ChatSessionRunner {
             supportsGitDiff: Bool? = nil,
             supportsGitTurnDiff: Bool? = nil,
             supportsAgentPatches: Bool? = nil,
+            supportsFilesystemDiff: Bool? = nil,
             workingDirectory: String? = nil,
             gitDiffRequest: GitDiffRequestPayload? = nil,
             gitDiffResponse: GitDiffResponsePayload? = nil,
@@ -515,6 +517,7 @@ final class ChatSessionRunner {
             self.supportsGitDiff = supportsGitDiff
             self.supportsGitTurnDiff = supportsGitTurnDiff
             self.supportsAgentPatches = supportsAgentPatches
+            self.supportsFilesystemDiff = supportsFilesystemDiff
             self.workingDirectory = workingDirectory
             self.gitDiffRequest = gitDiffRequest
             self.gitDiffResponse = gitDiffResponse
@@ -545,6 +548,7 @@ final class ChatSessionRunner {
             case supportsGitDiff = "supports_git_diff"
             case supportsGitTurnDiff = "supports_git_turn_diff"
             case supportsAgentPatches = "supports_agent_patches"
+            case supportsFilesystemDiff = "supports_filesystem_diff"
             case workingDirectory = "working_directory"
             case gitDiffRequest = "git_diff_request"
             case gitDiffResponse = "git_diff_response"
@@ -578,6 +582,7 @@ final class ChatSessionRunner {
             supportsGitDiff = try? c.decodeIfPresent(Bool.self, forKey: .supportsGitDiff)
             supportsGitTurnDiff = try? c.decodeIfPresent(Bool.self, forKey: .supportsGitTurnDiff)
             supportsAgentPatches = try? c.decodeIfPresent(Bool.self, forKey: .supportsAgentPatches)
+            supportsFilesystemDiff = try? c.decodeIfPresent(Bool.self, forKey: .supportsFilesystemDiff)
             workingDirectory = try? c.decodeIfPresent(String.self, forKey: .workingDirectory)
             gitDiffRequest = try? c.decodeIfPresent(GitDiffRequestPayload.self, forKey: .gitDiffRequest)
             gitDiffResponse = try? c.decodeIfPresent(GitDiffResponsePayload.self, forKey: .gitDiffResponse)
@@ -678,13 +683,24 @@ final class ChatSessionRunner {
         // Git snapshot work runs serially off the receive/main paths.
         let gitQueue = DispatchQueue(label: "ChatSessionRunner.git-snapshot", qos: .userInitiated)
         let gitRequests = GitDiffRequestLedger()
+        // Even if the server's baseline deadline expires, a queued shell must
+        // not overtake a still-running local before-tool snapshot.
+        let baselineWork = DispatchGroup()
         // First HEAD captured per repository for this run (one outer user
         // input, reused across recursion and steering; never reset or
         // rebased within the run). The next turn gets a fresh store.
         let turnBaselines = GitTurnBaselineStore()
+        let changes = TurnChangeTracker()
+        @Sendable func publishChanges(_ update: LiveTurnDiff) {
+            DispatchQueue.main.async {
+                guard !completion.isFinished else { return }
+                onBlock(ChatBlock(id: "live-diff:" + update.turnID, kind: .sessionDiff, text: "", liveDiff: update))
+            }
+        }
 
         @Sendable func finishWithError(_ error: Error) {
             guard completion.finish() else { return }
+            gitQueue.async { changes.stop() }
             DispatchQueue.main.async { onError(error) }
             task.cancel(with: .goingAway, reason: nil)
             handle.detach()
@@ -692,6 +708,7 @@ final class ChatSessionRunner {
 
         @Sendable func finishWithFinal(_ text: String, sessionDiff: SavedSessionDiff? = nil) {
             guard completion.finish() else { return }
+            gitQueue.async { changes.stop() }
             // One main-queue hop keeps the snapshot card strictly before the
             // final answer it belongs to.
             DispatchQueue.main.async {
@@ -760,7 +777,10 @@ final class ChatSessionRunner {
                         if response.sender == "agent", response.sessionID == sessionID,
                            gitRequests.begin(gitRequest.requestID)
                         {
+                            let isBaseline = gitRequest.phase == .baseline
+                            if isBaseline { baselineWork.enter() }
                             gitQueue.async {
+                                defer { if isBaseline { baselineWork.leave() } }
                                 guard !completion.isFinished, !handle.isCancelledByUser else { return }
                                 // Diff view off: answer immediately without any
                                 // Git work so a stale server never waits on us.
@@ -776,7 +796,12 @@ final class ChatSessionRunner {
                                         requestID: gitRequest.requestID, status: .unavailable,
                                         reason: ChatSessionRunner.unsupportedRecoveryReason
                                     )
+                                    : gitRequest.filesystem == true
+                                    ? changes.collect(gitRequest)
                                     : collectGitDiff(gitRequest, turnBaselines)
+                                if diffViewEnabled, gitRequest.filesystem == true {
+                                    changes.start(queue: gitQueue, isActive: { !completion.isFinished && !handle.isCancelledByUser }, publish: publishChanges)
+                                }
                                 let reply = AgentMessage(
                                     sessionID: sessionID, sender: "client", content: "",
                                     platform: "macos", gitDiffResponse: payload
@@ -886,6 +911,7 @@ final class ChatSessionRunner {
                             onBlock(ChatBlock(
                                 kind: .shellCommand,
                                 text: script,
+                                workingDirectory: response.workingDirectory,
                                 activityId: response.activityID,
                                 activityPhase: response.activityPhase
                             ))
@@ -897,6 +923,7 @@ final class ChatSessionRunner {
                             // chat's running script. The global
                             // `AgentSessionState.shared.shellProcess` slot is
                             // intentionally untouched here.
+                            let baselineReady = baselineWork.wait(timeout: .now() + 20) == .success
                             guard !completion.isFinished, !handle.isCancelledByUser else { return }
                             // Apply the structured directory as a quoted literal cd
                             // so production and injected executors share identical semantics.
@@ -904,11 +931,18 @@ final class ChatSessionRunner {
                             // Diff view off: no provenance work. On, only HEADs of
                             // repositories a literal `git commit` may touch are
                             // read (commit provenance); no file contents or patches.
-                            let gitBaseline = diffViewEnabled
+                            let gitBaseline = diffViewEnabled && baselineReady
                                 ? gitProvenance.baseline(script: executionScript, context: response.gitDiffContext)
                                 : nil
                             guard !completion.isFinished, !handle.isCancelledByUser else { return }
-                            let (output, status) = executeShell(
+                            if diffViewEnabled && baselineReady {
+                                gitQueue.sync {
+                                    guard !completion.isFinished, !handle.isCancelledByUser else { return }
+                                    changes.refresh(publish: publishChanges)
+                                }
+                            }
+                            guard !completion.isFinished, !handle.isCancelledByUser else { return }
+                            let (output, status) = baselineReady ? executeShell(
                                 executionScript,
                                 { process in
                                     if let process {
@@ -917,9 +951,13 @@ final class ChatSessionRunner {
                                         handle.detachProcess()
                                     }
                                 }
-                            )
+                            ) : ("COMMAND ERROR: Starting-file capture did not finish. This script was not executed. Check folder access, or disable Diff view and retry.", Int32(1))
 
                             completion.setShellRunning(false)
+                            gitQueue.sync {
+                                guard !completion.isFinished, !handle.isCancelledByUser else { return }
+                                changes.refresh(publish: publishChanges)
+                            }
                             let commitObservations = gitBaseline.map(gitProvenance.observations(after:)) ?? []
                             guard !completion.isFinished else { return }
 
@@ -1019,7 +1057,8 @@ final class ChatSessionRunner {
             supportsSkillStatus: true,
             supportsGitDiff: capabilities.gitDiff,
             supportsGitTurnDiff: capabilities.gitTurnDiff,
-            supportsAgentPatches: capabilities.agentPatches
+            supportsAgentPatches: false,
+            supportsFilesystemDiff: diffViewEnabled
         )
 
         guard let data = try? encoder.encode(initial),
@@ -1059,7 +1098,7 @@ final class ChatSessionRunner {
     /// session is shown; error finals never get a snapshot card.
     nonisolated static func acceptedSessionDiff(from response: AgentMessage, sessionID: String) -> SavedSessionDiff? {
         guard  response.sessionID == sessionID,
-              let diff = response.sessionDiff, diff.isEligibleForViewer, diff.fileCount >= 0, diff.repositoryCount > 0
+              let diff = response.sessionDiff, diff.isEligibleForViewer, diff.fileCount >= 0, (diff.repositoryCount > 0 || diff.filesystem == true)
         else { return nil }
         return diff
     }

@@ -8,6 +8,7 @@ import { planShellGitContext } from '../agent/gitDiff/shellContext';
 import { createGitRunState } from '../agent/gitDiff/coordinator';
 import {
   cleanSessionDiffSummary,
+  countPatchLines,
   GIT_DIFF_MAX_PATCH_BYTES,
   scriptInvokesGitCommit,
   validateCommitObservations,
@@ -496,5 +497,76 @@ describe('commit detector complexity', () => {
     const start = performance.now();
     expect(scriptInvokesGitCommit('git ' + '-C "a" '.repeat(100) + 'status')).toBe(false);
     expect(performance.now() - start).toBeLessThan(500);
+  });
+});
+
+describe('compact change counts', () => {
+  it('counts only hunk lines, including content that starts with header markers', () => {
+    const patch =
+      'diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1,2 +1,2 @@\n---content\n+++content\n context\ndiff --git a/b b/b\nold mode 100644\nnew mode 100755\n';
+    expect(countPatchLines([{ patch }])).toEqual({ additions: 1, deletions: 1 });
+  });
+  it('drops invalid counts while retaining valid values in history', () => {
+    const value = {
+      id: 'sdiff_abcdefgh1234',
+      fileCount: 1,
+      repositoryCount: 1,
+      createdAt: 'now',
+      scope: 'turn',
+      additions: -1,
+      deletions: 7,
+    };
+    expect(cleanSessionDiffSummary(value)).not.toHaveProperty('additions');
+    expect(cleanSessionDiffSummary(value)?.deletions).toBe(7);
+  });
+});
+
+it('keeps incomplete filesystem captures honest without a warning banner', async () => {
+  const payload = {
+    version: 1 as const,
+    capturedAt: new Date().toISOString(),
+    repositories: [],
+    filesystem: true,
+    coverage: [
+      {
+        root: '/tmp/<private>',
+        status: 'partial' as const,
+        reason: 'Some files exceeded limits',
+        suggestedFix: '',
+      },
+    ],
+    notice: 'Only captured changes are shown.',
+  };
+  const html = await renderSessionDiffHtml('partial-coverage', payload, 'dark');
+  expect(html).toContain('Changes unavailable');
+  expect(html).toContain('<summary>Capture details</summary>');
+  expect(html).toContain('/tmp/&lt;private&gt;');
+  expect(html).toContain('Only captured changes are shown.');
+  const empty = await renderSessionDiffHtml(
+    'no-roots',
+    { ...payload, coverage: [], notice: 'No filesystem roots were captured.' },
+    'dark',
+  );
+  expect(empty).toContain('Changes unavailable');
+  expect(empty).toContain('No filesystem roots were captured.');
+});
+
+it('retains structured shell directories in the transcript independently of diffs', () => {
+  const transcript = buildTranscript([
+    {
+      role: 'assistant',
+      content: '',
+      tool_calls: [
+        {
+          id: 'shell-1',
+          name: 'shell_script',
+          arguments: { script: 'git status', working_directory: '/Projects/Repo' },
+        },
+      ],
+    },
+  ]);
+  expect(transcript[0].blocks?.[0]).toMatchObject({
+    text: 'git status',
+    workingDirectory: '/Projects/Repo',
   });
 });

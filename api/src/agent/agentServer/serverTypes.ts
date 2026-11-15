@@ -34,6 +34,7 @@ export interface AgentTurnOptions {
   // Literal-true agent patch capability of that connection: the editing agent
   // may append unified patches of its changed files to the final answer.
   supportsAgentPatches?: boolean;
+  supportsFilesystemDiff?: boolean;
 }
 
 export interface QueuedMessage {

@@ -77,7 +77,8 @@ final class AgentPatchWireTests: XCTestCase {
         let on = try await initialFrame(diffViewEnabled: true)
         XCTAssertEqual(on["supports_git_diff"] as? Bool, true)
         XCTAssertEqual(on["supports_git_turn_diff"] as? Bool, true)
-        XCTAssertEqual(on["supports_agent_patches"] as? Bool, true)
+        XCTAssertEqual(on["supports_agent_patches"] as? Bool, false)
+        XCTAssertEqual(on["supports_filesystem_diff"] as? Bool, true)
         XCTAssertNil(on["supports_diff_recovery"], "legacy checkpoint recovery is never advertised")
 
         let off = try await initialFrame(diffViewEnabled: false)

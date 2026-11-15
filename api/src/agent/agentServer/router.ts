@@ -1,4 +1,5 @@
 import express, { Response } from 'express';
+import { createHash } from 'node:crypto';
 import { Op } from 'sequelize';
 import { config } from '../../config';
 import { AgentSession } from '../../models/agentSession';
@@ -25,7 +26,14 @@ import {
   readOrBackfillNormalizedTranscript,
 } from './transcriptStore';
 import { loadSessionDiffPayload } from '../gitDiff/coordinator';
-import { isKnownPartialPayload } from '../gitDiff/contracts';
+import {
+  countPatchLines,
+  isKnownPartialPayload,
+  validateGitDiffResponse,
+  validateFilesystemCoverage,
+  GitDiffValidationError,
+  GIT_DIFF_DISPLAY_LIMIT,
+} from '../gitDiff/contracts';
 import {
   DiffRenderTimeoutError,
   renderSessionDiffHtml,
@@ -537,6 +545,69 @@ export function createAgentRouter(): express.Router {
     },
   );
 
+  // Ephemeral presentation only: the same bounded renderer as saved changes,
+  // without creating snapshots, provider messages or filesystem writes.
+  // The vendor type bypasses the global 100KB JSON parser; this authenticated
+  // route owns its bounded parser (JSON escaping may expand a 2MiB patch sixfold).
+  router.post(
+    '/sessions/:sessionId/diffs/preview',
+    express.json({ type: 'application/vnd.omnikey.diff+json', limit: '14mb' }),
+    async (req, res: Response<unknown, AuthLocals>) => {
+      const { sessionId } = req.params;
+      const { subscription } = res.locals;
+      const { theme = 'dark', layout = 'unified', repositories, coverage } = req.body ?? {};
+      if (
+        !sessionId ||
+        sessionId.length > 128 ||
+        !['dark', 'light'].includes(theme) ||
+        !['unified', 'split'].includes(layout) ||
+        !Array.isArray(repositories)
+      ) {
+        res.status(400).json({ error: 'Invalid preview request' });
+        return;
+      }
+      try {
+        const session = await AgentSession.findOne({
+          where: { id: sessionId, subscriptionId: subscription.id },
+          attributes: ['id'],
+        });
+        if (!session) {
+          res.status(404).json({ error: 'Session not found' });
+          return;
+        }
+        const validated = validateGitDiffResponse(
+          { request_id: 'preview', status: 'ok', repositories },
+          { request_id: 'preview', eligible_commits: [] },
+        );
+        const payload = {
+          version: 1 as const,
+          filesystem: true,
+          ...(coverage !== undefined ? { coverage: validateFilesystemCoverage(coverage) } : {}),
+          repositories: validated.repositories,
+          displayLimit: GIT_DIFF_DISPLAY_LIMIT,
+        };
+        const id =
+          'preview_' +
+          createHash('sha256')
+            .update(subscription.id + '\0' + sessionId + '\0' + JSON.stringify(payload))
+            .digest('hex');
+        const html = await renderSessionDiffHtml(id, payload, theme, undefined, layout);
+        res.setHeader('Cache-Control', 'private, no-store');
+        res.json({ id, html, ...countPatchLines(validated.repositories) });
+      } catch (error) {
+        res
+          .status(
+            error instanceof GitDiffValidationError
+              ? 400
+              : error instanceof DiffRenderTimeoutError
+                ? 503
+                : 500,
+          )
+          .json({ error: 'Unable to render changes' });
+      }
+    },
+  );
+
   // GET /api/agent/sessions/:sessionId/diffs/:diffId?theme=dark|light
   // Server-rendered (Pierre SSR) HTML of one immutable Git snapshot. Owner
   // and session scoped; a foreign/missing session or snapshot is a 404.
@@ -595,7 +666,7 @@ export function createAgentRouter(): express.Router {
         layout === 'split' ? 'split' : 'unified',
       );
       res.setHeader('Cache-Control', 'private, no-store');
-      res.json({ id: stored.row.id, html });
+      res.json({ id: stored.row.id, html, ...countPatchLines(stored.payload.repositories) });
     } catch (err) {
       if (err instanceof DiffRenderTimeoutError) {
         res.status(503).json({ error: 'Diff rendering timed out' });

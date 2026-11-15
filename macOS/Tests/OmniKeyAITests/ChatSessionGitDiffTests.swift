@@ -216,3 +216,109 @@ final class GitDiffTestSocket: ChatSessionSocket, @unchecked Sendable {
         onSend(decoded)
     }
 }
+
+extension ChatSessionGitDiffTests {
+    @MainActor
+    func testFilesystemSocketPublishesDuringShellAndFinalUsesSameBaseline() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("live-socket-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("file.txt")
+        try Data("starting dirty content\n".utf8).write(to: file)
+        let baselineReply = expectation(description: "baseline")
+        let live = expectation(description: "live while shell blocked")
+        live.assertForOverFulfill = false
+        let terminal = expectation(description: "shell finished")
+        let finalCapture = expectation(description: "final snapshot")
+        let finished = expectation(description: "final answer")
+        let baselines = LockedBox<[GitTurnBaseline]>([])
+        let finalPatch = LockedBox<String>("")
+        let release = DispatchSemaphore(value: 0)
+        let socket = GitDiffTestSocket { message in
+            if let reply = message.gitDiffResponse {
+                if reply.requestID == "fs-baseline" {
+                    baselines.set(reply.baselines ?? []); baselineReply.fulfill()
+                } else if reply.requestID == "fs-final" {
+                    XCTAssertEqual(reply.status, .ok)
+                    finalPatch.set(reply.repositories.map(\.patch).joined())
+                    XCTAssertEqual(reply.coverage?.count, 1)
+                    finalCapture.fulfill()
+                }
+            }
+            if message.isTerminalOutput == true { terminal.fulfill() }
+        }
+        ChatSessionRunner.shared.startAgentWebSocketSession(
+            url: URL(string: "ws://localhost/unused")!, sessionID: "session", jwt: "",
+            originalText: "Start", groupName: nil, allowReauth: false, handle: ChatSessionRunHandle(),
+            onBlock: { block in
+                if let diff = block.liveDiff, diff.repositories.first?.patch.contains("+during shell") == true {
+                    XCTAssertTrue(diff.repositories[0].patch.contains("-starting dirty content"))
+                    live.fulfill()
+                }
+            }, onSteeringEvent: { _ in }, onFinal: { _ in finished.fulfill() },
+            onError: { XCTFail("\($0)") }, socket: socket,
+            executeShell: { _, _ in
+                try? Data("during shell\n".utf8).write(to: file)
+                _ = release.wait(timeout: .now() + 8)
+                return ("done", 0)
+            }, diffViewEnabled: true
+        )
+        func deliver(_ request: GitDiffRequestPayload) throws {
+            let message = ChatSessionRunner.AgentMessage(sessionID: "session", sender: "agent", content: "", gitDiffRequest: request)
+            socket.deliver(String(decoding: try JSONEncoder().encode(message), as: UTF8.self))
+        }
+        try deliver(GitDiffRequestPayload(requestID: "fs-baseline", candidatePaths: [root.path], phase: .baseline, baselineSource: .turnStart, filesystem: true))
+        await fulfillment(of: [baselineReply], timeout: 5)
+        socket.deliver(#"{"session_id":"session","sender":"agent","content":"<shell_script>write file</shell_script>"}"#)
+        await fulfillment(of: [live], timeout: 5)
+        release.signal()
+        await fulfillment(of: [terminal], timeout: 3)
+        try deliver(GitDiffRequestPayload(requestID: "fs-final", candidatePaths: [root.path], phase: .final, baselines: baselines.get(), filesystem: true))
+        await fulfillment(of: [finalCapture], timeout: 5)
+        XCTAssertTrue(finalPatch.get().contains("-starting dirty content"))
+        XCTAssertTrue(finalPatch.get().contains("+during shell"))
+        socket.deliver(#"{"session_id":"session","sender":"agent","content":"<final_answer>Done</final_answer>"}"#)
+        await fulfillment(of: [finished], timeout: 2)
+    }
+}
+
+extension ChatSessionGitDiffTests {
+    @MainActor
+    func testShellCannotOvertakePendingBaselineEvenIfServerContinues() async throws {
+        let collecting = expectation(description: "baseline started")
+        let command = expectation(description: "shell frame received")
+        let ran = expectation(description: "shell ran after baseline")
+        let terminal = expectation(description: "terminal output")
+        let release = DispatchSemaphore(value: 0)
+        let captured = LockedCounter()
+        let shellCount = LockedCounter()
+        let socket = GitDiffTestSocket { frame in
+            if frame.isTerminalOutput == true { terminal.fulfill() }
+        }
+        ChatSessionRunner.shared.startAgentWebSocketSession(
+            url: URL(string: "ws://localhost/unused")!, sessionID: "session", jwt: "",
+            originalText: "Start", groupName: nil, allowReauth: false, handle: ChatSessionRunHandle(),
+            onBlock: { if $0.kind == .shellCommand { command.fulfill() } },
+            onSteeringEvent: { _ in }, onFinal: { _ in }, onError: { XCTFail("\($0)") }, socket: socket,
+            executeShell: { _, _ in
+                XCTAssertEqual(captured.value, 1)
+                shellCount.increment(); ran.fulfill()
+                return ("done", 0)
+            }, collectGitDiff: { req, _ in
+                collecting.fulfill()
+                _ = release.wait(timeout: .now() + 5)
+                captured.increment()
+                return GitDiffResponsePayload(requestID: req.requestID, status: .ok, baselines: [])
+            }, diffViewEnabled: true
+        )
+        socket.deliver(#"{"session_id":"session","sender":"agent","content":"","git_diff_request":{"request_id":"slow-base","candidate_paths":[],"phase":"baseline","baseline_source":"before_tool"}}"#)
+        await fulfillment(of: [collecting], timeout: 2)
+        socket.deliver(#"{"session_id":"session","sender":"agent","content":"<shell_script>write</shell_script>"}"#)
+        await fulfillment(of: [command], timeout: 2)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(shellCount.value, 0)
+        release.signal()
+        await fulfillment(of: [ran, terminal], timeout: 3)
+        socket.deliver(#"{"session_id":"session","sender":"agent","content":"<final_answer>Done</final_answer>"}"#)
+    }
+}

@@ -159,6 +159,7 @@ export async function renderSnapshotDocument(
     themeType: theme,
     diffStyle: layout === 'split' ? 'split' : 'unified',
     overflow: 'scroll',
+    disableFileHeader: true,
     // SSR stays unhydrated (JavaScript is intentionally disabled). Pierre's
     // dehydrated split CSS flattens code wrappers and clips content. Restore
     // two bounded code scrollports inside the shadow root, not on the page.
@@ -205,7 +206,6 @@ export async function renderSnapshotDocument(
   const agentPatch = payload.recovery?.kind === 'agent_patch';
   const isAgentPatchEntry = (repo: (typeof payload.repositories)[number]) =>
     agentPatch && repo.reconstructed === true;
-  const gitEntries = agentPatch && payload.repositories.some((r) => !isAgentPatchEntry(r));
   const recovery =
     payload.recovery &&
     (payload.recovery.kind === 'agent_assisted' || payload.recovery.kind === 'ai_reconstructed')
@@ -290,28 +290,24 @@ export async function renderSnapshotDocument(
                   : scopes.has('commit')
                     ? 'Commit changes'
                     : 'Working tree changes';
-  const disclaimer = agentPatch
-    ? gitEntries
-      ? 'Git capture of this turn merged with patches the agent reported for files Git did not cover (unverified).'
-      : 'Patches the agent reported for files it changed in this turn (not a repository snapshot); unverified.'
-    : agentReported
-      ? "Based on the agent's own report of changed files (unverified); some changes of this turn may not be shown."
-      : uncertainCoverage
-        ? `${aiFiles ? 'Includes files reconstructed by the AI model from write-like shell commands of this turn (unverified)' : 'Verified captures of this turn; the AI model reported the remaining known written files unchanged (unverified)'}. Some changes of this turn may not be shown.`
-        : aiConfirmedOnly
-          ? checkpointBase
-            ? 'Recovered from native per-command checkpoints of this turn (not a full repository snapshot); it may include changes not made by the agent.'
-            : 'Verified capture of this turn from disk; it may include changes not made by the agent.'
-          : aiReconstructed
-            ? mergedBase
-              ? 'Verified captures of this turn merged with files reconstructed by the AI model from write-like shell commands (unverified).'
-              : 'Reconstructed by the AI model from write-like shell commands of this turn only (not a repository snapshot); unverified.'
-            : recovery
-              ? 'Recovered with agent assistance from native per-command checkpoints of this turn (not a full repository snapshot); it may include changes not made by the agent.'
-              : isTurn
-                ? 'Net committed and uncommitted changes from the turn baseline to the working tree when the answer was produced; it may include changes not made by the agent.'
-                : 'Snapshot taken when the answer was produced; it may include changes not made by the agent.';
-  const repoCount = payload.repositories.length;
+  const incompleteRoots = (payload.coverage ?? []).filter((root) => root.status !== 'complete');
+  const captureSummary =
+    payload.filesystem &&
+    (incompleteRoots.length > 0 || payload.coverage?.length === 0 || !!payload.notice)
+      ? totalFiles === 0
+        ? 'Changes unavailable'
+        : `${totalFiles} files changed · Some changes may not be included`
+      : `${totalFiles} file${totalFiles === 1 ? '' : 's'} changed`;
+  const captureDetails =
+    payload.filesystem && (payload.notice || incompleteRoots.length > 0)
+      ? `<details class="capture-details"><summary>Capture details</summary>${payload.notice ? `<p>${escapeHtml(payload.notice.slice(0, 600))}</p>` : ''}${incompleteRoots
+          .slice(0, 8)
+          .map(
+            (root) =>
+              `<p>${escapeHtml(root.root.slice(0, 300))} · ${escapeHtml(root.status)}<br>${escapeHtml(root.reason.slice(0, 300))}</p>`,
+          )
+          .join('')}</details>`
+      : '';
   const head = [
     '<!doctype html>',
     `<html data-theme="${theme}" data-layout="${layout === 'split' ? 'split' : 'unified'}"><head><meta charset="utf-8">`,
@@ -319,8 +315,8 @@ export async function renderSnapshotDocument(
     `<meta name="color-scheme" content="${theme}">`,
     `<style>${limits.pageCss}</style></head><body>`,
     `<header class="snapshot"><h1>${scopeLabel}</h1>`,
-    `<p>${repoCount} repositor${repoCount === 1 ? 'y' : 'ies'} · ${totalFiles} file${totalFiles === 1 ? '' : 's'}. ${disclaimer}</p>`,
-    payload.notice && !recovery ? `<p>${escapeHtml(payload.notice)}</p>` : '',
+    `<p>${captureSummary}</p>`,
+    captureDetails,
     agentPatchNotes,
     recoveryNotes,
   ].join('');
@@ -357,8 +353,9 @@ export async function renderSnapshotDocument(
   for (const repo of payload.repositories) {
     const sections = splitPatchSections(repo.patch);
     if (panels >= panelLimit) continue; // counted by the "Showing" note
-    const title =
-      repo.scope === 'turn'
+    const title = payload.filesystem
+      ? `${escapeHtml(repo.root.split('/').filter(Boolean).pop() ?? repo.root)}`
+      : repo.scope === 'turn'
         ? `${escapeHtml(repo.root)} · ${oid(repo.baselineHead)} → ${oid(repo.head)} + working tree · baseline ${repo.baselineSource === 'before_tool' ? 'before first tool use' : 'at turn start'}${repo.baselineCapturedAt ? ` (${escapeHtml(repo.baselineCapturedAt)})` : ''}`
         : repo.scope === 'commit' && repo.commit
           ? `${escapeHtml(repo.root)} · commit <code class="oid">${escapeHtml(repo.commit.slice(0, 12))}</code>`
@@ -383,7 +380,7 @@ export async function renderSnapshotDocument(
       panels += 1;
       const filePath = headerPath(section);
       const stub = (label: string, reason: string) =>
-        `<details class="file"><summary><span class="kind">${label}</span>${escapeHtml(filePath)}</summary><div class="note">${reason}</div></details>`;
+        `<details class="file" data-file-key="${Buffer.from(repo.root + '\0' + filePath).toString('base64url')}"><summary><span class="kind">${label}</span>${escapeHtml(filePath)}</summary><div class="note">${reason}</div></details>`;
       if (bytes(section) > limits.maxFileSectionBytes || remaining <= 0) {
         skippedFiles += 1;
         tryPush(
@@ -419,7 +416,16 @@ export async function renderSnapshotDocument(
           : file
             ? file.name
             : filePath;
-      const chunk = `<details class="file" open><summary><span class="kind">${kindLabel[kind]}</span>${escapeHtml(displayPath)}</summary>${body}</details>`;
+      let additions = 0,
+        deletions = 0,
+        inHunk = false;
+      for (const line of section.split('\n')) {
+        if (line.startsWith('@@ ')) inHunk = true;
+        else if (inHunk && line.startsWith('+')) additions++;
+        else if (inHunk && line.startsWith('-')) deletions++;
+      }
+      const stats = `<span class="file-stats"><span class="added">+${additions}</span><span class="deleted">−${deletions}</span></span>`;
+      const chunk = `<details class="file" data-file-key="${Buffer.from(repo.root + '\0' + displayPath).toString('base64url')}" open><summary title="${escapeHtml(displayPath).replace(/\s/g, (c) => `&#${c.charCodeAt(0)};`)}">${stats}<span class="kind">${kindLabel[kind]}</span><span class="file-path">${escapeHtml(displayPath)}</span></summary>${body}</details>`;
       if (!tryPush(chunk)) {
         skippedFiles += 1;
         tryPush(
@@ -820,7 +826,7 @@ export class DiffRenderPool {
 
 const PAGE_CSS = `
 :root{color-scheme:var(--scheme);font:13px -apple-system,system-ui,sans-serif}
-html[data-theme=dark]{--scheme:dark;--bg:#0d0d0d;--fg:#e6e6e6;--muted:#9a9a9a;--line:#2a2a2a;--card:#151515}
+html[data-theme=dark]{--scheme:dark;--bg:#1e1e1e;--fg:#eeeeee;--muted:#a0a0a5;--line:#38383a;--card:#29292c}
 html[data-theme=light]{--scheme:light;--bg:#ffffff;--fg:#1d1d1f;--muted:#6e6e73;--line:#e3e3e6;--card:#f7f7f8}
 html,body{width:100%;max-width:100%;min-width:0;overflow-x:clip}
 body{margin:0;background:var(--bg);color:var(--fg)}
@@ -831,7 +837,13 @@ header.snapshot h1{font-size:13px;margin:0 0 4px}
 header.snapshot p{margin:2px 0;color:var(--muted)}
 section.repo>h2{font-size:12px;margin:0;padding:8px 14px;color:var(--muted);border-bottom:1px solid var(--line);word-break:break-all}
 details.file{border-bottom:1px solid var(--line)}
-details.file>summary{cursor:default;padding:6px 14px;background:var(--card);list-style-position:inside;word-break:break-all}
+details.file>summary{cursor:pointer;padding:10px 14px;background:var(--card);list-style-position:inside;word-break:break-all}
+.file-stats{float:right;display:inline-flex;gap:8px;font-variant-numeric:tabular-nums;font-size:11px}
+.file-path{display:inline-block;max-width:calc(100% - 160px);vertical-align:middle;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.added{color:#16803b}.deleted{color:#c03532}
+html[data-theme=dark] .added{color:#63d995}html[data-theme=dark] .deleted{color:#f08c87}
+details.file>summary:focus-visible{outline:2px solid Highlight;outline-offset:-2px}
+details.file>summary:hover{filter:brightness(1.06)}
 .kind{display:inline-block;min-width:62px;font-size:11px;color:var(--muted)}
 .note{padding:8px 14px;color:var(--muted)}
 code.oid{font:12px ui-monospace,Menlo,monospace}
