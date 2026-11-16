@@ -273,6 +273,8 @@ export interface EligibleCommit {
 
 /** Server -> client control frame, sent before the final answer. */
 export interface GitDiffRequest {
+  /** Opt-in: native host may admit verified linked worktrees of these roots. */
+  discover_worktrees?: boolean;
   filesystem?: boolean;
   request_id: string;
   candidate_paths: string[];
@@ -309,6 +311,13 @@ export type GitDiffResponseStatus = 'ok' | 'not_repository' | 'unavailable';
 
 /** Client -> server reply to a GitDiffRequest. */
 export interface GitDiffResponse {
+  /** Native-verified Git common-directory relationship; only accepted on opt-in requests. */
+  discovered_worktrees?: Array<{
+    root: string;
+    repository: string;
+    scope?: string;
+    physical_scope?: string;
+  }>;
   /** Native filesystem identity aliases, scoped to issued baseline candidates. */
   root_aliases?: Array<{ root: string; alias: string }>;
   filesystem?: boolean;
@@ -513,7 +522,8 @@ export function normalizeBaselineTimestamp(
  */
 export function validateGitBaselineResponse(
   raw: unknown,
-  request: Pick<GitDiffRequest, 'request_id' | 'candidate_paths' | 'baseline_source'>,
+  request: Pick<GitDiffRequest, 'request_id' | 'candidate_paths' | 'baseline_source'> &
+    Partial<Pick<GitDiffRequest, 'filesystem' | 'discover_worktrees'>>,
   bounds: { notBefore: number; now: number },
   recorded: readonly GitTurnBaseline[] = [],
   issued: readonly Pick<GitDiffRequest, 'candidate_paths' | 'baseline_source'>[] = [],
@@ -537,6 +547,48 @@ export function validateGitBaselineResponse(
   if (rawBaselines.length > GIT_DIFF_MAX_REPOSITORIES) {
     throw new GitDiffValidationError('too many baselines');
   }
+  const discoveries: Array<{
+    root: string;
+    repository: string;
+    scope?: string;
+    physical_scope?: string;
+  }> = [];
+  if (raw.discovered_worktrees !== undefined) {
+    if (
+      request.filesystem !== true ||
+      request.discover_worktrees !== true ||
+      !Array.isArray(raw.discovered_worktrees) ||
+      raw.discovered_worktrees.length > GIT_DIFF_MAX_REPOSITORIES
+    ) {
+      throw new GitDiffValidationError('worktree discovery not requested');
+    }
+    for (const entry of raw.discovered_worktrees) {
+      if (
+        !isPlainObject(entry) ||
+        !isSafeAbsolutePath(entry.root) ||
+        !isSafeAbsolutePath(entry.repository) ||
+        !request.candidate_paths.some(
+          (p) => comparablePath(p) === comparablePath(entry.repository as string),
+        ) ||
+        !(
+          request.candidate_paths.some((p) => pathIsWithin(entry.root as string, p)) ||
+          (isSafeAbsolutePath(entry.scope) &&
+            isSafeAbsolutePath(entry.physical_scope) &&
+            request.candidate_paths.some(
+              (p) => comparablePath(p) === comparablePath(entry.scope as string),
+            ) &&
+            pathIsWithin(entry.root as string, entry.physical_scope as string))
+        ) ||
+        discoveries.some((d) => comparablePath(d.root) === comparablePath(entry.root as string))
+      ) {
+        throw new GitDiffValidationError('worktree discovery relationship');
+      }
+      discoveries.push({
+        root: normalizeAbsolutePath(entry.root),
+        repository: normalizeAbsolutePath(entry.repository),
+      });
+    }
+  }
   const seen = new Set<string>();
   const baselines: GitTurnBaseline[] = [];
   for (const entry of rawBaselines) {
@@ -550,7 +602,18 @@ export function validateGitBaselineResponse(
         b.source === source &&
         Date.parse(b.capturedAt) === Date.parse(String(capturedAt)),
     );
-    const origin = [...issued, request].find((sent) => relatedToAny(root, sent.candidate_paths));
+    // A timed-out request may still have installed a native baseline. Later
+    // replies echo it: retain its original source and match an issued request
+    // with that source, rather than assigning it to the newest related path.
+    const relatedRequests = [request, ...issued.slice().reverse()].filter((sent) =>
+      relatedToAny(root, sent.candidate_paths),
+    );
+    const origin =
+      relatedRequests.find((sent) => sent.baseline_source === source) ??
+      relatedRequests[0] ??
+      (discoveries.some((d) => comparablePath(d.root) === comparablePath(root))
+        ? request
+        : undefined);
     if (!existing && recorded.some((b) => comparablePath(b.root) === comparablePath(root))) {
       throw new GitDiffValidationError('baseline changed');
     }
@@ -585,8 +648,10 @@ export function validateGitBaselineResponse(
       const { root, alias } = item;
       if (
         !baselines.some((b) => comparablePath(b.root) === comparablePath(root)) ||
-        ![...issued, request].some((sent) =>
-          sent.candidate_paths.some((path) => comparablePath(path) === comparablePath(alias)),
+        !(
+          [...issued, request].some((sent) =>
+            sent.candidate_paths.some((path) => comparablePath(path) === comparablePath(alias)),
+          ) || discoveries.some((d) => comparablePath(d.root) === comparablePath(alias))
         ) ||
         seenAliases.has(comparablePath(alias))
       ) {
@@ -603,6 +668,7 @@ export function validateGitBaselineResponse(
     repositories: [],
     baselines,
     ...(aliases ? { root_aliases: aliases } : {}),
+    ...(discoveries.length ? { discovered_worktrees: discoveries } : {}),
   };
 }
 

@@ -3268,7 +3268,7 @@ struct AssistantMessageView: View {
                 if diffViewEnabled, !isStreaming,
                    !message.blocks.contains(where: { $0.sessionDiff != nil }),
                    let captured = message.blocks.last(where: { $0.liveDiff != nil })?.liveDiff,
-                   !captured.repositories.isEmpty {
+                   captured.capturePresentation.showsCard {
                     CapturedChangesCardView(diff: captured)
                 }
                 if let final = finalBlock {

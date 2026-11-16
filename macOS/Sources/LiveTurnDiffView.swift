@@ -18,6 +18,12 @@ struct DiffLineCounts: Equatable, Sendable {
     }
 }
 
+extension LiveTurnDiff {
+    /// Shared presentation; a zero-file live/captured card is worth showing
+    /// only when it carries a coverage caveat (see `showsCard`).
+    var capturePresentation: TurnCapturePresentation { TurnCapturePresentation(live: self) }
+}
+
 extension ChatModel {
     var currentChangeBlock: ChatBlock? {
         // Do not fall back to a previous turn when the current turn has no edits.
@@ -48,15 +54,30 @@ struct ChangeCountsLabel: View {
     }
 }
 
+/// Counts plus a neutral coverage qualifier, or the coverage-aware empty state.
+struct TurnCaptureSummaryLabel: View {
+    let presentation: TurnCapturePresentation
+    var body: some View {
+        if let empty = presentation.emptySummary {
+            Text(empty)
+        } else {
+            HStack(spacing: 9) {
+                ChangeCountsLabel(files: presentation.files, additions: presentation.additions, deletions: presentation.deletions)
+                if let qualifier = presentation.coverageQualifier { Text("· " + qualifier) }
+            }
+        }
+    }
+}
+
 /// One compact control above the composer; never render coverage diagnostics here.
 struct TurnChangesPill: View {
     @ObservedObject var model: ChatModel
     @AppStorage(AgentDiffViewSetting.defaultsKey) private var enabled = true
-    private var counts: DiffLineCounts { DiffLineCounts(patches: model.currentLiveDiff?.repositories.map(\.patch) ?? []) }
+    private var presentation: TurnCapturePresentation? { model.currentLiveDiff.map(TurnCapturePresentation.init(live:)) }
 
     var body: some View {
         Group {
-            if enabled, model.isRunning, counts.files > 0 {
+            if enabled, model.isRunning, let presentation, presentation.files > 0 {
                 Button {
                     let open = model.showsLiveChanges
                     model.closeSessionDiff()
@@ -64,8 +85,8 @@ struct TurnChangesPill: View {
                 } label: {
                     HStack(spacing: 10) {
                         Circle().fill(Color.accentColor).frame(width: 6, height: 6)
-                        Text("Changes")
-                        ChangeCountsLabel(files: counts.files, additions: counts.additions, deletions: counts.deletions)
+                        Text(presentation.title)
+                        ChangeCountsLabel(files: presentation.files, additions: presentation.additions, deletions: presentation.deletions)
                         Image(systemName: "sidebar.right").foregroundStyle(.secondary)
                     }
                     .font(.system(size: 12, weight: .medium))
@@ -74,8 +95,9 @@ struct TurnChangesPill: View {
                     .overlay(Capsule().strokeBorder(.secondary.opacity(0.18)))
                 }
                 .buttonStyle(.plain)
-                .help("Open changes")
-                .accessibilityLabel("Changes in \(counts.files) files, \(counts.additions) lines added, \(counts.deletions) lines removed")
+                .help("Open turn changes. " + TurnCapturePresentation.scopeHelp)
+                .accessibilityLabel(presentation.accessibilityLabel)
+                .accessibilityHint("Opens the changes inspector")
             }
         }
     }
@@ -87,7 +109,7 @@ struct LiveChangesDrawer: View {
         if let diff = model.currentLiveDiff, let session = model.activeSessionId {
             ChangesInspectorView(model: model, source: .preview(sessionID: session, diff: diff))
         } else {
-            ContentUnavailableView("Changes unavailable", systemImage: "doc.text")
+            ContentUnavailableView("Capture unavailable", systemImage: "doc.text")
         }
     }
 }
