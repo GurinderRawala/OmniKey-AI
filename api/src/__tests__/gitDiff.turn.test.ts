@@ -1174,3 +1174,76 @@ it('accepts physical path aliases for opted-in native linked worktree candidates
     }).root_aliases,
   ).toEqual(response.root_aliases);
 });
+
+it('accepts a physically scoped worktree through a selected symlink without widening scope', () => {
+  const request = {
+    request_id: 'symlink',
+    candidate_paths: [ROOT, '/Users/dev/tasks'],
+    baseline_source: 'before_tool' as const,
+    filesystem: true,
+    discover_worktrees: true,
+  };
+  const baseline = {
+    root: '/Volumes/work/tasks/worker',
+    head: null,
+    capturedAt: new Date().toISOString(),
+    source: 'before_tool' as const,
+  };
+  const discovery = {
+    root: baseline.root,
+    repository: ROOT,
+    scope: '/Users/dev/tasks',
+    physical_scope: '/Volumes/work/tasks',
+  };
+  const reply = {
+    request_id: request.request_id,
+    status: 'ok',
+    baselines: [baseline],
+    discovered_worktrees: [discovery],
+  };
+  const bounds = { notBefore: Date.now() - 1000, now: Date.now() + 1000 };
+  expect(validateGitBaselineResponse(reply, request, bounds).baselines).toEqual([baseline]);
+  for (const invalid of [
+    { ...discovery, scope: '/Users/dev/unselected' },
+    { ...discovery, physical_scope: '/Volumes/other' },
+    { ...discovery, physical_scope: undefined },
+    { root: baseline.root, repository: ROOT },
+  ]) {
+    expect(() =>
+      validateGitBaselineResponse({ ...reply, discovered_worktrees: [invalid] }, request, bounds),
+    ).toThrow();
+  }
+});
+
+it('recovers an unacknowledged turn-start baseline alongside a later child baseline', () => {
+  const first = {
+    request_id: 'timed-out',
+    candidate_paths: [ROOT],
+    baseline_source: 'turn_start' as const,
+  };
+  const later = {
+    request_id: 'later',
+    candidate_paths: [ROOT + '/child'],
+    baseline_source: 'before_tool' as const,
+  };
+  const capturedAt = new Date().toISOString();
+  const parent = { root: ROOT, head: null, capturedAt, source: 'turn_start' as const };
+  const child = { root: ROOT + '/child', head: null, capturedAt, source: 'before_tool' as const };
+  const reply = { request_id: later.request_id, status: 'ok', baselines: [parent, child] };
+  const bounds = { notBefore: Date.now() - 1000, now: Date.now() + 1000 };
+  expect(validateGitBaselineResponse(reply, later, bounds, [], [first]).baselines).toEqual([
+    parent,
+    child,
+  ]);
+  expect(() => validateGitBaselineResponse(reply, later, bounds, [], [])).toThrow();
+  // Recovery cannot overwrite a baseline the API already acknowledged.
+  expect(() =>
+    validateGitBaselineResponse(
+      reply,
+      later,
+      bounds,
+      [{ ...parent, head: 'a'.repeat(40) }],
+      [first],
+    ),
+  ).toThrow('baseline changed');
+});

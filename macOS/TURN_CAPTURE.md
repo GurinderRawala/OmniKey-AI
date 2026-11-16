@@ -33,3 +33,5 @@ Shared live/saved presentation distinguishes complete-empty (no changes detected
 `swift test --package-path macOS` covers real linked worktrees, nested ownership in both orders, staged 46k-line cleanup, failed and nested cleanup, socket/timer integration, storage corruption/quota/lease cleanup, UI states, and a >10k-file/>32MiB fixture with edits beyond old limits.
 
 `pnpm --filter omnikey-ai-api test` covers admission/alias validation, legacy fallback, no rebasing, explicit registration and safe preamble parsing. Neither needs a daemon restart or app installation.
+
+Symlinked selected scopes carry their native-resolved physical scope in discovery responses; the API validates worktree containment against that scope without resolving execution-host paths on the server. A retained baseline from a timed-out request may be acknowledged in a later reply only when its source and path match an issued request. Already acknowledged baselines cannot be replaced.

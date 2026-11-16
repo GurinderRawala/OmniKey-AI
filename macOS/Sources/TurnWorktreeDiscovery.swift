@@ -8,6 +8,11 @@ struct TurnWorktreeDiscovery {
         return physical == scope || physical.hasPrefix(scope + "/")
     }
 
+    private static func rootWithinLexically(_ path: String, _ scope: String) -> Bool {
+        let root = TurnChangeTracker.comparable(path), selected = TurnChangeTracker.comparable(scope)
+        return root == selected || root.hasPrefix(selected + "/")
+    }
+
     static func discover(_ candidates: [String], deadline: Date) -> [GitDiscoveredWorktree] {
         guard let git = GitCommandRunner() else { return [] }
         var found: [GitDiscoveredWorktree] = []
@@ -41,7 +46,18 @@ struct TurnWorktreeDiscovery {
                       let linked = output(["rev-parse", "--path-format=absolute", "--git-common-dir"], at: root),
                       TurnFileReader.physicalPath(linked) == canonicalCommon else { continue }
                 seen.insert(root)
-                found.append(GitDiscoveredWorktree(root: root, repository: candidate))
+                var discovered = GitDiscoveredWorktree(root: root, repository: candidate)
+                // The API cannot resolve paths on this host. Carry the selected
+                // scope and its physical form when lexical containment differs.
+                if !candidates.contains(where: { rootWithinLexically(root, $0) }),
+                   let scope = candidates.first(where: {
+                       guard let physicalScope = TurnFileReader.physicalPath($0) else { return false }
+                       return rootWithin(root, physicalScope)
+                   }) {
+                    discovered.scope = scope
+                    discovered.physicalScope = TurnFileReader.physicalPath(scope)
+                }
+                found.append(discovered)
                 if found.count == 8 { return found }
             }
         }

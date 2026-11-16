@@ -312,7 +312,12 @@ export type GitDiffResponseStatus = 'ok' | 'not_repository' | 'unavailable';
 /** Client -> server reply to a GitDiffRequest. */
 export interface GitDiffResponse {
   /** Native-verified Git common-directory relationship; only accepted on opt-in requests. */
-  discovered_worktrees?: Array<{ root: string; repository: string }>;
+  discovered_worktrees?: Array<{
+    root: string;
+    repository: string;
+    scope?: string;
+    physical_scope?: string;
+  }>;
   /** Native filesystem identity aliases, scoped to issued baseline candidates. */
   root_aliases?: Array<{ root: string; alias: string }>;
   filesystem?: boolean;
@@ -542,7 +547,12 @@ export function validateGitBaselineResponse(
   if (rawBaselines.length > GIT_DIFF_MAX_REPOSITORIES) {
     throw new GitDiffValidationError('too many baselines');
   }
-  const discoveries: Array<{ root: string; repository: string }> = [];
+  const discoveries: Array<{
+    root: string;
+    repository: string;
+    scope?: string;
+    physical_scope?: string;
+  }> = [];
   if (raw.discovered_worktrees !== undefined) {
     if (
       request.filesystem !== true ||
@@ -560,7 +570,15 @@ export function validateGitBaselineResponse(
         !request.candidate_paths.some(
           (p) => comparablePath(p) === comparablePath(entry.repository as string),
         ) ||
-        !request.candidate_paths.some((p) => pathIsWithin(entry.root as string, p)) ||
+        !(
+          request.candidate_paths.some((p) => pathIsWithin(entry.root as string, p)) ||
+          (isSafeAbsolutePath(entry.scope) &&
+            isSafeAbsolutePath(entry.physical_scope) &&
+            request.candidate_paths.some(
+              (p) => comparablePath(p) === comparablePath(entry.scope as string),
+            ) &&
+            pathIsWithin(entry.root as string, entry.physical_scope as string))
+        ) ||
         discoveries.some((d) => comparablePath(d.root) === comparablePath(entry.root as string))
       ) {
         throw new GitDiffValidationError('worktree discovery relationship');
@@ -584,10 +602,15 @@ export function validateGitBaselineResponse(
         b.source === source &&
         Date.parse(b.capturedAt) === Date.parse(String(capturedAt)),
     );
+    // A timed-out request may still have installed a native baseline. Later
+    // replies echo it: retain its original source and match an issued request
+    // with that source, rather than assigning it to the newest related path.
+    const relatedRequests = [request, ...issued.slice().reverse()].filter((sent) =>
+      relatedToAny(root, sent.candidate_paths),
+    );
     const origin =
-      [request, ...issued.slice().reverse()].find((sent) =>
-        relatedToAny(root, sent.candidate_paths),
-      ) ??
+      relatedRequests.find((sent) => sent.baseline_source === source) ??
+      relatedRequests[0] ??
       (discoveries.some((d) => comparablePath(d.root) === comparablePath(root))
         ? request
         : undefined);

@@ -253,6 +253,13 @@ struct GitRootAlias: Codable, Equatable, Sendable {
 struct GitDiscoveredWorktree: Codable, Equatable, Sendable {
     let root: String
     let repository: String
+    var scope: String? = nil
+    var physicalScope: String? = nil
+
+    enum CodingKeys: String, CodingKey {
+        case root, repository, scope
+        case physicalScope = "physical_scope"
+    }
 }
 
 struct GitDiffResponsePayload: Codable, Equatable, Sendable {
