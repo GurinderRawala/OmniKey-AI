@@ -1052,3 +1052,125 @@ it('records only issued filesystem aliases and avoids duplicate unavailable cove
     ),
   ).toThrow('root alias');
 });
+
+describe('native linked-worktree admission', () => {
+  const root = '/Users/dev/repo';
+  const worker = '/Users/dev/tasks/worker';
+  const source = 'before_tool' as const;
+  const baseline = { root: worker, head: null, source, capturedAt: new Date().toISOString() };
+  const req = {
+    request_id: 'inventory',
+    candidate_paths: [root, '/Users/dev/tasks'],
+    baseline_source: source,
+    filesystem: true,
+    discover_worktrees: true,
+  };
+  const reply = {
+    request_id: req.request_id,
+    status: 'ok',
+    repositories: [],
+    baselines: [baseline],
+    discovered_worktrees: [{ root: worker, repository: root }],
+  };
+  const bounds = { notBefore: Date.now() - 60_000, now: Date.now() + 60_000 };
+  it('accepts host-verified linked worktrees only for an opted-in filesystem request', () => {
+    expect(validateGitBaselineResponse(reply, req, bounds).baselines).toEqual([baseline]);
+    expect(() =>
+      validateGitBaselineResponse(reply, { ...req, discover_worktrees: false }, bounds),
+    ).toThrow();
+    expect(() =>
+      validateGitBaselineResponse(reply, { ...req, filesystem: false }, bounds),
+    ).toThrow();
+  });
+  it('rejects unrequested repositories, duplicate links, wrong source and unrelated roots', () => {
+    expect(() =>
+      validateGitBaselineResponse(
+        { ...reply, discovered_worktrees: [{ root: worker, repository: '/Users/dev/other' }] },
+        req,
+        bounds,
+      ),
+    ).toThrow();
+    expect(() =>
+      validateGitBaselineResponse(
+        {
+          ...reply,
+          discovered_worktrees: [...reply.discovered_worktrees, ...reply.discovered_worktrees],
+        },
+        req,
+        bounds,
+      ),
+    ).toThrow();
+    expect(() =>
+      validateGitBaselineResponse(
+        { ...reply, baselines: [{ ...baseline, source: 'turn_start' }] },
+        req,
+        bounds,
+      ),
+    ).toThrow();
+    expect(() =>
+      validateGitBaselineResponse(
+        {
+          ...reply,
+          baselines: [{ ...baseline, root: '/Users/dev/rogue' }],
+          discovered_worktrees: [],
+        },
+        req,
+        bounds,
+      ),
+    ).toThrow();
+  });
+});
+
+it('accepts a newly admitted child with current before-tool timing, not an earlier parent timing', () => {
+  const capturedAt = new Date().toISOString();
+  const parent = {
+    request_id: 'parent',
+    candidate_paths: [ROOT],
+    baseline_source: 'turn_start' as const,
+  };
+  const child = {
+    request_id: 'child',
+    candidate_paths: [ROOT + '/worker'],
+    baseline_source: 'before_tool' as const,
+  };
+  const b = { root: ROOT + '/worker', head: null, capturedAt, source: 'before_tool' as const };
+  expect(
+    validateGitBaselineResponse(
+      { request_id: 'child', status: 'ok', repositories: [], baselines: [b] },
+      child,
+      { notBefore: Date.now() - 60_000, now: Date.now() + 60_000 },
+      [],
+      [parent],
+    ).baselines,
+  ).toEqual([b]);
+});
+
+it('accepts physical path aliases for opted-in native linked worktree candidates', () => {
+  const request = {
+    request_id: 'alias-link',
+    candidate_paths: [ROOT, '/tmp/task'],
+    baseline_source: 'before_tool' as const,
+    filesystem: true,
+    discover_worktrees: true,
+  };
+  const baseline = {
+    root: '/tmp/task/worker',
+    head: null,
+    capturedAt: new Date().toISOString(),
+    source: 'before_tool' as const,
+  };
+  const response = {
+    request_id: request.request_id,
+    status: 'ok',
+    repositories: [],
+    baselines: [baseline],
+    discovered_worktrees: [{ root: '/private/tmp/task/worker', repository: ROOT }],
+    root_aliases: [{ root: baseline.root, alias: '/private/tmp/task/worker' }],
+  };
+  expect(
+    validateGitBaselineResponse(response, request, {
+      notBefore: Date.now() - 1000,
+      now: Date.now() + 1000,
+    }).root_aliases,
+  ).toEqual(response.root_aliases);
+});

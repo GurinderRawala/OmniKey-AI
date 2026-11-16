@@ -123,7 +123,11 @@ final class TurnChangeTrackerTests: XCTestCase {
         try repo.git("worktree", "add", "--detach", worktree.path)
         let tracker = TurnChangeTracker()
         _ = begin(tracker, worktree, source: .beforeTool)
+        // Retention needs an explicit tool boundary; live scans alone are not
+        // trusted after removal (one may have run mid-cleanup).
+        tracker.beginTool()
         try write(worktree, "file", "updated dependency\n")
+        tracker.endTool()
         let captured = tracker.capture(status: "running")
         XCTAssertTrue(captured.repositories.first?.patch.contains("+updated dependency") == true)
         try repo.git("worktree", "remove", "--force", worktree.path)
@@ -218,7 +222,7 @@ final class TurnChangeTrackerTests: XCTestCase {
         XCTAssertEqual(result.repositories.count, 1)
         let partial = try XCTUnwrap(result.coverage.first { $0.root == two.path })
         XCTAssertEqual(partial.status, "partial")
-        XCTAssertTrue(partial.reason.contains("first tool"))
+        XCTAssertTrue(partial.reason.contains("later tool"))
         XCTAssertFalse(partial.suggestedFix.isEmpty)
     }
 
@@ -467,5 +471,329 @@ extension TurnChangeTrackerTests {
         XCTAssertEqual(baseline.baselines?.first?.root, subfolder.path)
         try write(subfolder, "README.md", "after\n")
         XCTAssertTrue(patch(tracker).hasPrefix("diff --git a/README.md b/README.md\n"))
+    }
+}
+
+// MARK: - Tool-boundary checkpoints
+
+extension TurnChangeTrackerTests {
+    private func lines(_ count: Int) -> String {
+        (0..<count).map { "line \($0)\n" }.joined()
+    }
+
+    func testCleanupInterleavedWithinToolRetainsOnlyRealChanges() throws {
+        let parent = try folder(), root = parent.appendingPathComponent("worker")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        try write(root, "large.txt", lines(46_000))
+        try write(root, "edit.txt", "original\n")
+        let tracker = TurnChangeTracker()
+        _ = begin(tracker, root, source: .beforeTool)
+        tracker.beginTool()
+        try write(root, "edit.txt", "edited\n")
+        tracker.endTool()
+        // Cleanup tool: a live scan lands between deletion stages.
+        tracker.beginTool()
+        try FileManager.default.removeItem(at: root.appendingPathComponent("large.txt"))
+        let midCleanup = tracker.capture(status: "running")
+        XCTAssertTrue(midCleanup.repositories.first?.patch.contains("deleted file mode") == true, "Live view shows current state")
+        try FileManager.default.removeItem(at: root)
+        tracker.endTool()
+        let final = tracker.capture(status: "final")
+        let patch = final.repositories.map(\.patch).joined()
+        XCTAssertTrue(patch.contains("-original\n+edited"), patch)
+        XCTAssertFalse(patch.contains("deleted file mode"))
+        XCTAssertFalse(patch.contains("line 45999"))
+        XCTAssertEqual(final.coverage.first?.status, "late")
+        // The cleanup tool's own pre-tool checkpoint is the retained state.
+        XCTAssertTrue(final.coverage.first?.reason.contains("before-tool checkpoint before this folder was removed") == true)
+    }
+
+    func testRealLinkedWorktreeCleanupInterleavingRetainsCheckpoint() throws {
+        let repo = try GitTestRepo()
+        try repo.write("large.txt", lines(46_000))
+        try repo.write("edit.txt", "original\n")
+        _ = try repo.commitAll()
+        let parent = try folder(), worktree = parent.appendingPathComponent("worker")
+        try repo.git("worktree", "add", "--detach", worktree.path)
+        let tracker = TurnChangeTracker()
+        _ = begin(tracker, worktree, source: .beforeTool)
+        tracker.beginTool()
+        try write(worktree, "edit.txt", "edited\n")
+        tracker.endTool()
+        tracker.beginTool()
+        try FileManager.default.removeItem(at: worktree.appendingPathComponent("large.txt"))
+        _ = tracker.capture(status: "running")
+        try repo.git("worktree", "remove", "--force", worktree.path)
+        tracker.endTool()
+        let patch = tracker.capture(status: "final").repositories.map(\.patch).joined()
+        XCTAssertTrue(patch.contains("+edited"), patch)
+        XCTAssertFalse(patch.contains("deleted file mode"))
+    }
+
+    func testLegitimateDeletionsRemainVisibleWhenRootSurvives() throws {
+        let root = try folder()
+        try write(root, "obsolete.txt", lines(500))
+        try write(root, "keep.txt", "keep\n")
+        let tracker = TurnChangeTracker()
+        _ = begin(tracker, root)
+        tracker.beginTool()
+        try FileManager.default.removeItem(at: root.appendingPathComponent("obsolete.txt"))
+        tracker.endTool()
+        let final = tracker.capture(status: "final")
+        XCTAssertTrue(final.repositories.first?.patch.contains("deleted file mode 100644") == true)
+        XCTAssertTrue(final.repositories.first?.patch.contains("-line 499") == true)
+        XCTAssertEqual(final.coverage.first?.status, "complete")
+    }
+
+    func testRootRemovedBeforeAnyCheckpointLosesOnlyLiveObservations() throws {
+        let parent = try folder(), root = parent.appendingPathComponent("worker")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        try write(root, "file", "original\n")
+        let tracker = TurnChangeTracker()
+        _ = begin(tracker, root, source: .beforeTool)
+        try write(root, "file", "edited\n")
+        XCTAssertTrue(patch(tracker).contains("+edited"))
+        try FileManager.default.removeItem(at: root)
+        let final = tracker.capture(status: "final")
+        XCTAssertTrue(final.repositories.isEmpty, "No mass deletion and no unverified retained poll")
+        XCTAssertEqual(final.coverage.first?.status, "unavailable")
+        XCTAssertTrue(final.coverage.first?.reason.contains("before a tool-boundary checkpoint") == true)
+    }
+
+    func testRemovalDuringFirstToolUsesPreToolCheckpoint() throws {
+        let parent = try folder(), root = parent.appendingPathComponent("worker")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        try write(root, "file", "original\n")
+        let tracker = TurnChangeTracker()
+        _ = begin(tracker, root, source: .beforeTool)
+        tracker.beginTool()
+        try write(root, "file", "edited and removed by one opaque tool\n")
+        _ = tracker.capture(status: "running")
+        try FileManager.default.removeItem(at: root)
+        tracker.endTool()
+        let final = tracker.capture(status: "final")
+        // Documented limitation: edit+remove inside one tool is not recovered.
+        XCTAssertTrue(final.repositories.isEmpty)
+        XCTAssertEqual(final.coverage.first?.status, "late")
+        XCTAssertTrue(final.coverage.first?.reason.contains("before-tool checkpoint") == true)
+        XCTAssertTrue(final.coverage.first?.reason.contains("same tool") == true)
+    }
+
+    func testReplacedRootUsesCheckpointNeverReplacementContents() throws {
+        let parent = try folder(), root = parent.appendingPathComponent("checkout")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        try write(root, "file", "original\n")
+        let tracker = TurnChangeTracker()
+        _ = begin(tracker, root)
+        tracker.beginTool()
+        try write(root, "file", "checkpointed\n")
+        tracker.endTool()
+        tracker.beginTool()
+        try FileManager.default.moveItem(at: root, to: parent.appendingPathComponent("moved"))
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        try write(root, "file", "unrelated\n")
+        tracker.endTool() // must not checkpoint the replacement
+        let final = tracker.capture(status: "final")
+        let patch = final.repositories.map(\.patch).joined()
+        XCTAssertTrue(patch.contains("+checkpointed"), patch)
+        XCTAssertFalse(patch.contains("unrelated"))
+        XCTAssertTrue(final.coverage.first?.reason.contains("replaced") == true)
+    }
+
+    func testUnbalancedEndToolIsIgnoredAndNestedToolsCheckpointOnce() throws {
+        let root = try folder()
+        try write(root, "file", "a\n")
+        let tracker = TurnChangeTracker()
+        _ = begin(tracker, root)
+        tracker.endTool()
+        tracker.beginTool(); tracker.beginTool()
+        try write(root, "file", "b\n")
+        tracker.endTool()
+        try write(root, "file", "c\n")
+        tracker.endTool()
+        XCTAssertTrue(patch(tracker).contains("+c"))
+    }
+}
+
+// MARK: - Nested roots
+
+extension TurnChangeTrackerTests {
+    /// Parent repo whose budget cannot cover a nested linked worktree.
+    private func nestedFixture() throws -> (GitTestRepo, URL) {
+        let repo = try GitTestRepo()
+        try repo.write(".gitignore", "worktrees/\n")
+        try repo.write("a-parent.txt", "parent\n")
+        try repo.write("z-big.txt", String(repeating: "z", count: 400) + "\n")
+        _ = try repo.commitAll()
+        let child = URL(fileURLWithPath: repo.root).appendingPathComponent("worktrees/child")
+        try repo.git("worktree", "add", "--detach", child.path)
+        try write(child, "child.txt", "child start\n")
+        return (repo, child)
+    }
+
+    func testNestedWorktreeUnderPartialParentIsCapturedIndependently() throws {
+        let (repo, child) = try nestedFixture()
+        let tracker = TurnChangeTracker()
+        tracker.limits.rootBytes = 200
+        _ = begin(tracker, URL(fileURLWithPath: repo.root))
+        let admitted = begin(tracker, child, source: .beforeTool)
+        XCTAssertEqual(admitted.baselines?.count, 2)
+        try write(child, "child.txt", "child edited\n")
+        try repo.write("a-parent.txt", "parent edited\n")
+        let result = tracker.capture(status: "final")
+        let childPatch = try XCTUnwrap(result.repositories.first { $0.root == child.path }?.patch)
+        XCTAssertTrue(childPatch.contains("-child start\n+child edited"), childPatch)
+        let parentPatch = try XCTUnwrap(result.repositories.first { $0.root == repo.root }?.patch)
+        XCTAssertTrue(parentPatch.contains("+parent edited"))
+        XCTAssertFalse(parentPatch.contains("child"))
+        XCTAssertEqual(result.coverage.first { $0.root == repo.root }?.status, "partial")
+        XCTAssertNotNil(result.coverage.first { $0.root == child.path })
+    }
+
+    func testPartialParentKeepsStartingBytesItOwnsAndChildCapturesTheRest() throws {
+        let parent = try folder()
+        let child = parent.appendingPathComponent("child")
+        try FileManager.default.createDirectory(at: child, withIntermediateDirectories: false)
+        try write(child, "a-owned", "parent start\n")
+        try write(child, "b-omitted", String(repeating: "o", count: 300) + "\n")
+        let tracker = TurnChangeTracker()
+        tracker.limits.rootBytes = 100
+        _ = begin(tracker, parent)
+        tracker.limits.rootBytes = 1_000 // the child root has room for what the parent omitted
+        // Edited before the child is registered: only the parent knows the original.
+        try write(child, "a-owned", "edited before child\n")
+        _ = begin(tracker, child, source: .beforeTool)
+        try write(child, "b-omitted", "child edit\n")
+        try write(child, "c-new", "new in child\n")
+        try FileManager.default.removeItem(at: child.appendingPathComponent("a-owned"))
+        let result = tracker.capture(status: "final")
+        let all = result.repositories.map(\.patch).joined()
+        XCTAssertEqual(all.components(separatedBy: "diff --git").count, 4, all) // a-owned, b-omitted, c-new once each
+        let parentPatch = try XCTUnwrap(result.repositories.first { $0.root == parent.path }?.patch)
+        XCTAssertTrue(parentPatch.contains("-parent start"), "Original bytes come from the parent, never the child")
+        let childPatch = try XCTUnwrap(result.repositories.first { $0.root == child.path }?.patch)
+        XCTAssertTrue(childPatch.contains("+child edit"), childPatch)
+        XCTAssertTrue(childPatch.contains("+new in child"))
+        XCTAssertFalse(childPatch.contains("a-owned"))
+        XCTAssertFalse(childPatch.contains("edited before child"))
+    }
+
+    func testChildRegisteredBeforeParentOwnsItsSubtree() throws {
+        let (repo, child) = try nestedFixture()
+        let tracker = TurnChangeTracker()
+        _ = begin(tracker, child)
+        _ = begin(tracker, URL(fileURLWithPath: repo.root), source: .beforeTool)
+        try write(child, "child.txt", "child edited\n")
+        try write(child, "child-new.txt", "added\n")
+        try repo.write("a-parent.txt", "parent edited\n")
+        let result = tracker.capture(status: "final")
+        XCTAssertEqual(result.repositories.count, 2)
+        let parentPatch = try XCTUnwrap(result.repositories.first { $0.root == repo.root }?.patch)
+        XCTAssertFalse(parentPatch.contains("child"), parentPatch)
+        let childPatch = try XCTUnwrap(result.repositories.first { $0.root == child.path }?.patch)
+        XCTAssertTrue(childPatch.contains("+child edited") && childPatch.contains("+added"))
+        XCTAssertEqual(result.coverage.first { $0.root == child.path }?.status, "complete")
+    }
+
+    func testCompleteParentKeepsItsStartingBytesWithoutDuplicates() throws {
+        let parent = try folder()
+        let child = parent.appendingPathComponent("child")
+        try FileManager.default.createDirectory(at: child, withIntermediateDirectories: false)
+        try write(child, "file", "start\n")
+        let tracker = TurnChangeTracker()
+        _ = begin(tracker, parent)
+        try write(child, "file", "edited before child\n")
+        _ = begin(tracker, child, source: .beforeTool)
+        try write(child, "new", "new\n")
+        let result = tracker.capture(status: "final")
+        let parentPatch = try XCTUnwrap(result.repositories.first { $0.root == parent.path }?.patch)
+        XCTAssertTrue(parentPatch.contains("-start\n+edited before child"), parentPatch)
+        XCTAssertFalse(parentPatch.contains("new"))
+        let childPatch = try XCTUnwrap(result.repositories.first { $0.root == child.path }?.patch)
+        XCTAssertTrue(childPatch.contains("+new"))
+        XCTAssertFalse(childPatch.contains("a/file"), "Never uses the child's later bytes as an original")
+        XCTAssertEqual(result.coverage.first { $0.root == parent.path }?.status, "complete")
+        XCTAssertEqual(result.coverage.first { $0.root == child.path }?.status, "late")
+        XCTAssertTrue(result.coverage.first { $0.root == child.path }?.reason.contains("enclosing") == true)
+    }
+}
+
+// MARK: - Large disk-backed baselines
+
+extension TurnChangeTrackerTests {
+    func testDefaultLimitsCaptureOver10kFilesAndOver32MiBWithDirtyTailEdit() throws {
+        let root = try folder()
+        let small = root.appendingPathComponent("small")
+        try FileManager.default.createDirectory(at: small, withIntermediateDirectories: false)
+        for index in 0..<10_500 { try autoreleasepool { try Data("file \(index)\n".utf8).write(to: small.appendingPathComponent(String(format: "f%05d", index))) } }
+        let large = root.appendingPathComponent("large")
+        try FileManager.default.createDirectory(at: large, withIntermediateDirectories: false)
+        let chunk = Data(repeating: UInt8(ascii: "x"), count: 1_000_000)
+        for index in 0..<36 {
+            var distinct = chunk
+            distinct.replaceSubrange(0..<8, with: Data(String(format: "%08d", index).utf8))
+            try autoreleasepool { try distinct.write(to: large.appendingPathComponent("blob-\(index)")) }
+        }
+        // Dirty-at-start tail file: sorts and traverses last.
+        try write(root, "zzz-tail", "dirty at start\n")
+        let zzz = root.appendingPathComponent("zzzz")
+        try FileManager.default.createDirectory(at: zzz, withIntermediateDirectories: false)
+        try write(zzz, "tail.txt", "dirty tail start\n")
+        let tracker = TurnChangeTracker()
+        let started = Date()
+        _ = begin(tracker, root)
+        let baselineSeconds = Date().timeIntervalSince(started)
+        XCTAssertGreaterThan(tracker.store.diskUsed, 32 * 1_048_576)
+        XCTAssertLessThanOrEqual(tracker.store.inlineUsed, tracker.limits.store.inlineBytes)
+        tracker.beginTool()
+        try write(zzz, "tail.txt", "edited tail\n")
+        try write(small, "f10499", "edited small\n")
+        tracker.endTool()
+        let result = tracker.capture(status: "final")
+        let patch = result.repositories.map(\.patch).joined()
+        XCTAssertTrue(patch.contains("-dirty tail start\n+edited tail"), patch)
+        XCTAssertTrue(patch.contains("+edited small"))
+        XCTAssertEqual(result.coverage.first?.status, "complete", result.coverage.first?.reason ?? "")
+        print("[measure] baseline \(String(format: "%.2f", baselineSeconds))s, disk \(tracker.store.diskUsed) bytes, inline \(tracker.store.inlineUsed) bytes")
+    }
+}
+
+
+extension TurnChangeTrackerTests {
+    func testFailedCleanupDoesNotPromoteIntermediateDeletionToCheckpoint() throws {
+        let root = try folder()
+        try write(root, "bulk", String(repeating: "line\n", count: 46_000))
+        try write(root, "edit", "before\n")
+        let tracker = TurnChangeTracker(); _ = begin(tracker, root)
+        tracker.beginTool(); try write(root, "edit", "after\n"); tracker.endTool()
+        tracker.beginTool()
+        try FileManager.default.removeItem(at: root.appendingPathComponent("bulk"))
+        _ = tracker.capture(status: "running")
+        tracker.endTool(success: false) // cancelled or failed while a child may still run
+        try FileManager.default.removeItem(at: root)
+        let final = tracker.capture(status: "final")
+        let text = final.repositories.map(\.patch).joined()
+        XCTAssertTrue(text.contains("+after"))
+        XCTAssertFalse(text.contains("deleted file mode"))
+    }
+}
+
+
+extension TurnChangeTrackerTests {
+    func testNestedCleanupDoesNotBecomeMassParentDeletions() throws {
+        let parent = try folder(), child = parent.appendingPathComponent("worker")
+        try FileManager.default.createDirectory(at: child, withIntermediateDirectories: false)
+        try write(child, "bulk", String(repeating: "line\n", count: 46_000))
+        try write(child, "edit", "before\n")
+        let tracker = TurnChangeTracker(); _ = begin(tracker, parent); _ = begin(tracker, child, source: .beforeTool)
+        tracker.beginTool(); try write(child, "edit", "after\n"); tracker.endTool()
+        tracker.beginTool()
+        try FileManager.default.removeItem(at: child.appendingPathComponent("bulk"))
+        _ = tracker.capture(status: "running")
+        try FileManager.default.removeItem(at: child); tracker.endTool()
+        let final = tracker.capture(status: "final"), text = final.repositories.map(\.patch).joined()
+        XCTAssertTrue(text.contains("+after"))
+        XCTAssertFalse(text.contains("deleted file mode"))
+        XCTAssertTrue(final.coverage.contains { $0.reason.contains("Nested folder removed") })
     }
 }

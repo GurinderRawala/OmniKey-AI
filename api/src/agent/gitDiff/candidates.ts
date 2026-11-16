@@ -78,7 +78,16 @@ const PWD_COMMAND = /(?:^|[;&|\n]|&&)\s*pwd(?:\s+-[LP])?\s*(?:$|[;&|\n])/m;
 /** Literal `cd`/`git -C` targets of a script. Never executes or evaluates it. */
 export function literalScriptDirectories(script: string): string[] {
   const found: string[] = [];
-  const cd = LEADING_CD.exec(script);
+  // Skip only inert preamble lines. Never inspect heredoc bodies, conditionals,
+  // command substitutions or evaluate arbitrary assignments.
+  const prefix = script.split('\n');
+  while (
+    prefix.length &&
+    (/^\s*(?:#.*)?$/.test(prefix[0]) ||
+      /^\s*set\s+(?:-[eufx]+(?:\s+-o\s+pipefail)?|-[eufx]*o\s+pipefail)\s*$/.test(prefix[0]))
+  )
+    prefix.shift();
+  const cd = LEADING_CD.exec(prefix.join('\n'));
   if (cd) {
     const value = unquote(cd[1]);
     const accepted = value ? acceptDirectoryCandidate(value) : null;

@@ -542,6 +542,9 @@ export async function captureTurnBaselines(
   timeoutMs = run?.filesystem ? FILESYSTEM_CAPTURE_TIMEOUT_MS : GIT_TURN_BASELINE_TIMEOUT_MS,
 ): Promise<void> {
   if (!run?.turnDiff) return;
+  // Reconciliation happens per tool, unlike new-root attempts: bound its ledger
+  // too. Existing baselines remain usable after this per-turn admission cap.
+  if (run.baselineRequests.length >= MAX_BASELINE_ATTEMPTS * 2) return;
   const fresh: string[] = [];
   for (const path of paths) {
     const key = comparablePath(path);
@@ -551,7 +554,17 @@ export async function captureTurnBaselines(
     fresh.push(path);
     if (fresh.length >= GIT_DIFF_MAX_CANDIDATES) break;
   }
-  if (!fresh.length && !(run.filesystem && source === 'turn_start')) return;
+  if (!fresh.length && !run.filesystem) return;
+  // Inventory known repositories before every tool without rebasing existing roots.
+  const candidates = run.filesystem
+    ? [
+        ...new Set([
+          ...fresh,
+          ...paths.filter((p) => hasBaselineFor(run, p)),
+          ...run.baselines.map((b) => b.root),
+        ]),
+      ].slice(0, GIT_DIFF_MAX_CANDIDATES)
+    : fresh;
   for (const path of fresh) run.baselineAttempted.add(comparablePath(path));
   if (signal?.aborted || run.connection?.aborted) {
     run.baselineFailures += 1;
@@ -559,10 +572,10 @@ export async function captureTurnBaselines(
   }
   const request: GitDiffRequest = {
     request_id: cuid(),
-    candidate_paths: fresh,
+    candidate_paths: candidates,
     eligible_commits: [],
     phase: 'baseline',
-    ...(run.filesystem ? { filesystem: true } : {}),
+    ...(run.filesystem ? { filesystem: true, discover_worktrees: true } : {}),
     baseline_source: source,
     baselines: [],
   };
@@ -592,6 +605,9 @@ export async function captureTurnBaselines(
       return;
     }
     const added = recordTurnBaselines(run, response.baselines ?? []);
+    for (const discovered of response.discovered_worktrees ?? []) {
+      run.candidates.add(discovered.root, 'command');
+    }
     for (const alias of response.root_aliases ?? []) {
       if (!run.rootAliases.has(comparablePath(alias.alias))) {
         run.rootAliases.set(comparablePath(alias.alias), alias.root);
@@ -748,7 +764,14 @@ async function captureTurnSnapshot(
     for (const root of run.candidates.list(GIT_DIFF_MAX_CANDIDATES * 4)) {
       if (coverage.length >= FILESYSTEM_MAX_COVERAGE_ROOTS) break;
       const canonical = run.rootAliases.get(comparablePath(root)) ?? root;
-      if (coverage.some((c) => pathIsWithin(canonical, c.root))) continue;
+      if (
+        coverage.some(
+          (c) =>
+            comparablePath(canonical) === comparablePath(c.root) ||
+            (c.status === 'complete' && pathIsWithin(canonical, c.root)),
+        )
+      )
+        continue;
       coverage.push({
         root,
         status: 'unavailable',

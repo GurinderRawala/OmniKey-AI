@@ -797,7 +797,7 @@ final class ChatSessionRunner {
                                         reason: ChatSessionRunner.unsupportedRecoveryReason
                                     )
                                     : gitRequest.filesystem == true
-                                    ? changes.collect(gitRequest)
+                                    ? TurnWorktreeDiscovery.collect(gitRequest, tracker: changes)
                                     : collectGitDiff(gitRequest, turnBaselines)
                                 if diffViewEnabled, gitRequest.filesystem == true {
                                     changes.start(queue: gitQueue, isActive: { !completion.isFinished && !handle.isCancelledByUser }, publish: publishChanges)
@@ -935,9 +935,15 @@ final class ChatSessionRunner {
                                 ? gitProvenance.baseline(script: executionScript, context: response.gitDiffContext)
                                 : nil
                             guard !completion.isFinished, !handle.isCancelledByUser else { return }
+                            var beganCaptureTool = false
+                            defer {
+                                if beganCaptureTool { gitQueue.sync { changes.endTool(success: false) } }
+                            }
                             if diffViewEnabled && baselineReady {
                                 gitQueue.sync {
                                     guard !completion.isFinished, !handle.isCancelledByUser else { return }
+                                    changes.beginTool()
+                                    beganCaptureTool = true
                                     changes.refresh(publish: publishChanges)
                                 }
                             }
@@ -955,6 +961,7 @@ final class ChatSessionRunner {
 
                             completion.setShellRunning(false)
                             gitQueue.sync {
+                                if beganCaptureTool { changes.endTool(success: status == 0 && !handle.isCancelledByUser); beganCaptureTool = false }
                                 guard !completion.isFinished, !handle.isCancelledByUser else { return }
                                 changes.refresh(publish: publishChanges)
                             }

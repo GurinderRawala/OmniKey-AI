@@ -102,6 +102,7 @@ struct GitDiffRequestPayload: Codable, Equatable, Sendable {
     let baselineSource: GitTurnBaselineSource?
     let displayLimit: Int?
     let filesystem: Bool?
+    let discoverWorktrees: Bool?
 
     init(
         requestID: String,
@@ -111,7 +112,8 @@ struct GitDiffRequestPayload: Codable, Equatable, Sendable {
         baselines: [GitTurnBaseline]? = nil,
         baselineSource: GitTurnBaselineSource? = nil,
         displayLimit: Int? = nil,
-        filesystem: Bool? = nil
+        filesystem: Bool? = nil,
+        discoverWorktrees: Bool? = nil
     ) {
         self.requestID = requestID
         self.candidatePaths = candidatePaths
@@ -122,6 +124,7 @@ struct GitDiffRequestPayload: Codable, Equatable, Sendable {
         self.baselineSource = baselineSource
         self.displayLimit = displayLimit
         self.filesystem = filesystem
+        self.discoverWorktrees = discoverWorktrees
     }
 
     enum CodingKeys: String, CodingKey {
@@ -133,6 +136,7 @@ struct GitDiffRequestPayload: Codable, Equatable, Sendable {
         case baselineSource = "baseline_source"
         case filesystem
         case displayLimit = "display_limit"
+        case discoverWorktrees = "discover_worktrees"
     }
 
     init(from decoder: Decoder) throws {
@@ -154,6 +158,7 @@ struct GitDiffRequestPayload: Codable, Equatable, Sendable {
         let badSource = rawSource != nil && baselineSource == nil
         displayLimit = (try? c.decodeIfPresent(Int.self, forKey: .displayLimit)) ?? nil
         filesystem = try? c.decodeIfPresent(Bool.self, forKey: .filesystem)
+        discoverWorktrees = try? c.decodeIfPresent(Bool.self, forKey: .discoverWorktrees)
         hasUnsupportedPhase = badPhase || badBaselines || badSource
     }
 
@@ -166,6 +171,7 @@ struct GitDiffRequestPayload: Codable, Equatable, Sendable {
         try c.encodeIfPresent(baselines, forKey: .baselines)
         try c.encodeIfPresent(baselineSource, forKey: .baselineSource)
         try c.encodeIfPresent(filesystem, forKey: .filesystem)
+        try c.encodeIfPresent(discoverWorktrees, forKey: .discoverWorktrees)
         try c.encodeIfPresent(displayLimit, forKey: .displayLimit)
     }
 }
@@ -244,6 +250,11 @@ struct GitRootAlias: Codable, Equatable, Sendable {
     let alias: String
 }
 
+struct GitDiscoveredWorktree: Codable, Equatable, Sendable {
+    let root: String
+    let repository: String
+}
+
 struct GitDiffResponsePayload: Codable, Equatable, Sendable {
     let requestID: String
     let status: GitDiffResponseStatus
@@ -253,6 +264,7 @@ struct GitDiffResponsePayload: Codable, Equatable, Sendable {
     let reason: String?
     let coverage: [TurnRootCoverage]?
     let rootAliases: [GitRootAlias]?
+    let discoveredWorktrees: [GitDiscoveredWorktree]?
 
     init(
         requestID: String,
@@ -261,7 +273,8 @@ struct GitDiffResponsePayload: Codable, Equatable, Sendable {
         baselines: [GitTurnBaseline]? = nil,
         reason: String? = nil,
         coverage: [TurnRootCoverage]? = nil,
-        rootAliases: [GitRootAlias]? = nil
+        rootAliases: [GitRootAlias]? = nil,
+        discoveredWorktrees: [GitDiscoveredWorktree]? = nil
     ) {
         self.requestID = requestID
         self.status = status
@@ -271,6 +284,7 @@ struct GitDiffResponsePayload: Codable, Equatable, Sendable {
         self.reason = reason
         self.coverage = coverage
         self.rootAliases = status == .ok ? rootAliases : nil
+        self.discoveredWorktrees = status == .ok ? discoveredWorktrees : nil
     }
 
     enum CodingKeys: String, CodingKey {
@@ -280,6 +294,7 @@ struct GitDiffResponsePayload: Codable, Equatable, Sendable {
         case baselines
         case reason, coverage
         case rootAliases = "root_aliases"
+        case discoveredWorktrees = "discovered_worktrees"
     }
 }
 
@@ -488,7 +503,7 @@ struct SavedSessionDiff: Codable, Equatable, Hashable, Sendable {
         if filesystem == true {
             if coverage?.isEmpty == true { return "No folders captured · changes unavailable" + shown }
             let partial = coverage?.contains { $0.status != "complete" } == true
-            return "Changes since this run started · \(files)" + (partial ? " · see root coverage" : "") + shown
+            return "Changes since this turn's baseline · \(files)" + (partial ? " · see root coverage" : "") + shown
         }
         if isRecovered {
             var text = "\(isAIReconstructed ? "AI-generated patch for this turn" : "Recovered from this turn's tool evidence") · \(files)\(repos)\(shown)"

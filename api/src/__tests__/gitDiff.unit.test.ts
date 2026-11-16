@@ -4,7 +4,7 @@
  * (no mocks of the renderer). No database, network or user files.
  */
 import { describe, expect, it } from 'vitest';
-import { planShellGitContext } from '../agent/gitDiff/shellContext';
+import { planShellGitContext, baselinePathsForShell } from '../agent/gitDiff/shellContext';
 import { createGitRunState } from '../agent/gitDiff/coordinator';
 import {
   cleanSessionDiffSummary,
@@ -568,5 +568,44 @@ it('retains structured shell directories in the transcript independently of diff
   expect(transcript[0].blocks?.[0]).toMatchObject({
     text: 'git status',
     workingDirectory: '/Projects/Repo',
+  });
+});
+
+describe('explicit capture root registration', () => {
+  it('admits variable-based worker folders before execution without evaluating shell text', () => {
+    const run = createGitRunState({
+      sessionId: 'capture',
+      send: () => {},
+      subscriptionId: 'owner',
+      turnDiff: true,
+      filesystem: true,
+    });
+    const script = 'cd "$T/worktree"; edit-file';
+    const plan = planShellGitContext(run, { capture_paths: ['/Users/dev/task/worktree'] }, script);
+    expect(baselinePathsForShell(plan, script)).toEqual(['/Users/dev/task/worktree']);
+    expect(plan.context?.candidate_paths[0]).toBe('/Users/dev/task/worktree');
+    expect(plan.workingDirectory).toBeUndefined();
+  });
+  it('rejects unsafe or excessive explicit capture roots', () => {
+    const run = createGitRunState({
+      sessionId: 'capture',
+      send: () => {},
+      subscriptionId: 'owner',
+    });
+    for (const value of [
+      ['../relative'],
+      ['/'],
+      ['/Users/dev'],
+      ['$T/worktree'],
+      Array(9).fill(ROOT),
+      'not-array',
+    ]) {
+      expect(planShellGitContext(run, { capture_paths: value }, 'true').error).toBeTruthy();
+    }
+  });
+  it('discovers a literal cd after an inert shell preamble but never evaluates expansions', () => {
+    expect(literalScriptDirectories(`#!/bin/bash\nset -euo pipefail\ncd ${ROOT}`)).toEqual([ROOT]);
+    expect(literalScriptDirectories('#!/bin/bash\nset -e\ncd "$T/worktree"')).toEqual([]);
+    expect(literalScriptDirectories(`echo hi; cd ${ROOT}`)).toEqual([]);
   });
 });
