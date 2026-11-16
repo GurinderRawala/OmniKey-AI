@@ -1,5 +1,18 @@
 # Changelog
 
+## macOS 1.9.23 (build 85) · CLI/API 1.8.24 — 2026-11-16
+
+### Fixed
+- Discover linked worktrees within registered scopes and support explicit capture folders for variable-based shell paths.
+- Preserve turn diffs through worktree cleanup, including intentional deletions and additions made before nested-folder registration.
+- Prevent duplicate nested diffs and cleanup-induced mass deletions.
+- Capture larger workspaces using bounded private snapshot storage.
+- Recover timed-out baselines, validate symlinked scopes, and reserve final-capture capacity for long turns.
+- Distinguish incomplete coverage from unavailable captures and label turn changes separately from PR diffs.
+
+### Release
+- CLI/API 1.8.24 and universal macOS 1.9.23 (build 85). Windows unchanged.
+
 ## macOS 1.9.22 (build 84) · CLI/API 1.8.23 — 2026-11-15
 
 ### Added
