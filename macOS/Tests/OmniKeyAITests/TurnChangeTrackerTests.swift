@@ -797,3 +797,67 @@ extension TurnChangeTrackerTests {
         XCTAssertTrue(final.coverage.contains { $0.reason.contains("Nested folder removed") })
     }
 }
+
+extension TurnChangeTrackerTests {
+    func testNestedCleanupPreservesIntentionalDeletionInParentCheckpoint() throws {
+        let parent = try folder()
+        let child = parent.appendingPathComponent("child")
+        try FileManager.default.createDirectory(at: child, withIntermediateDirectories: true)
+        try write(child, "deleted.txt", "intentional deletion\n")
+        try write(child, "kept.txt", "keep\n")
+        let tracker = TurnChangeTracker()
+        _ = begin(tracker, parent)
+        _ = begin(tracker, child, source: .beforeTool)
+        tracker.beginTool()
+        try FileManager.default.removeItem(at: child.appendingPathComponent("deleted.txt"))
+        tracker.endTool()
+        tracker.beginTool()
+        try FileManager.default.removeItem(at: child)
+        tracker.endTool()
+        let final = tracker.capture(status: "final")
+        let patch = final.repositories.map(\.patch).joined()
+        XCTAssertTrue(patch.contains("-intentional deletion"), patch)
+        XCTAssertFalse(patch.contains("-keep"), patch)
+    }
+
+    func testThreeNestedRootsKeepSingleOriginalOwner() throws {
+        let parent = try folder()
+        let child = parent.appendingPathComponent("child")
+        let grandchild = child.appendingPathComponent("grandchild")
+        try FileManager.default.createDirectory(at: grandchild, withIntermediateDirectories: true)
+        try write(grandchild, "file", "original\n")
+        let tracker = TurnChangeTracker()
+        _ = begin(tracker, parent)
+        _ = begin(tracker, child, source: .beforeTool)
+        try write(grandchild, "file", "before grandchild registration\n")
+        _ = begin(tracker, grandchild, source: .beforeTool)
+        try write(grandchild, "file", "final\n")
+        let final = tracker.capture(status: "final")
+        let patch = final.repositories.map(\.patch).joined()
+        XCTAssertEqual(patch.components(separatedBy: "diff --git").count - 1, 1, patch)
+        XCTAssertTrue(patch.contains("-original\n+final"), patch)
+        XCTAssertFalse(patch.contains("-before grandchild registration"), patch)
+    }
+}
+
+extension TurnChangeTrackerTests {
+    func testNestedRegistrationPreservesEarlierAdditionThroughCleanup() throws {
+        let parent = try folder()
+        let child = parent.appendingPathComponent("child")
+        try FileManager.default.createDirectory(at: child, withIntermediateDirectories: true)
+        let tracker = TurnChangeTracker()
+        _ = begin(tracker, parent)
+        try write(child, "new.txt", "added before registration\n")
+        XCTAssertTrue(patch(tracker).contains("+added before registration"))
+        _ = begin(tracker, child, source: .beforeTool)
+        XCTAssertTrue(patch(tracker).contains("+added before registration"))
+        try write(child, "new.txt", "edited after registration\n")
+        tracker.beginTool()
+        try FileManager.default.removeItem(at: child)
+        tracker.endTool()
+        let result = patch(tracker)
+        XCTAssertTrue(result.contains("+edited after registration"), result)
+        XCTAssertTrue(result.contains("new file mode"), result)
+        XCTAssertEqual(result.components(separatedBy: "diff --git").count - 1, 1, result)
+    }
+}

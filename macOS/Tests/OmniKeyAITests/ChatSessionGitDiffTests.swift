@@ -377,3 +377,14 @@ extension ChatSessionGitDiffTests {
         try sendStep("Done", final: true)
     }
 }
+
+extension ChatSessionGitDiffTests {
+    func testInventoryCapacityReservesFinalCapture() {
+        let ledger = GitDiffRequestLedger()
+        for index in 0..<128 { XCTAssertTrue(ledger.begin("baseline-\(index)")) }
+        XCTAssertFalse(ledger.begin("extra-baseline"))
+        XCTAssertTrue(ledger.begin("final", isFinal: true))
+        XCTAssertFalse(ledger.begin("final", isFinal: true))
+        XCTAssertFalse(ledger.begin("another-final", isFinal: true))
+    }
+}

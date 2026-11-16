@@ -89,7 +89,7 @@ export function planShellGitContext(
   run.candidates.addAll(literal, 'command');
   // This script's own directories first, then the run's other evidence.
   const candidate = acceptDirectoryCandidate(workingDirectory);
-  const ordered = [...(candidate ? [candidate] : []), ...capturePaths, ...literal];
+  const ordered = [...new Set([...(candidate ? [candidate] : []), ...capturePaths, ...literal])];
   for (const path of run.candidates.list(GIT_DIFF_MAX_CANDIDATES)) {
     if (!ordered.includes(path)) ordered.push(path);
   }
@@ -109,9 +109,11 @@ export function planShellGitContext(
 export function baselinePathsForShell(plan: ShellGitPlan, script: string): string[] {
   const structured = acceptDirectoryCandidate(plan.workingDirectory);
   return [
-    ...(structured ? [structured] : []),
-    ...(plan.capturePaths ?? []),
-    ...literalScriptDirectories(script),
+    ...new Set([
+      ...(structured ? [structured] : []),
+      ...(plan.capturePaths ?? []),
+      ...literalScriptDirectories(script),
+    ]),
   ].slice(0, GIT_DIFF_MAX_CANDIDATES);
 }
 

@@ -55,3 +55,17 @@ final class TurnWorktreeDiscoveryTests: XCTestCase {
         XCTAssertTrue(tracker.capture(status: "final").repositories.contains { $0.patch.contains("+next tool edit") })
     }
 }
+
+extension TurnWorktreeDiscoveryTests {
+    func testDiscoveryRejectsInvalidOriginalRequest() throws {
+        let badSource = try JSONDecoder().decode(GitDiffRequestPayload.self, from: Data(
+            #"{"request_id":"bad","candidate_paths":[],"phase":"baseline","baseline_source":"unknown","filesystem":true,"discover_worktrees":true}"#.utf8))
+        let tooMany = GitDiffRequestPayload(requestID: "many", candidatePaths: Array(repeating: "/tmp/project", count: 9),
+            phase: .baseline, baselineSource: .turnStart, filesystem: true, discoverWorktrees: true)
+        for request in [badSource, tooMany] {
+            let result = TurnWorktreeDiscovery.collect(request, tracker: TurnChangeTracker())
+            XCTAssertEqual(result.status, .unavailable)
+            XCTAssertNil(result.baselines)
+        }
+    }
+}

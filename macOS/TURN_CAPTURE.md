@@ -10,7 +10,7 @@ Use `capture_paths: ["/absolute/task/worktree"]` on the shell call that first ed
 
 Native linked-worktree inventory uses bounded `git worktree list --porcelain -z` and verifies the common Git directory. Only worktrees inside selected/registered scopes are admitted. Sibling worktrees belonging to other sessions are not implicitly captured: register their exact path or intentionally select their task parent. Selecting a repository subfolder never expands to its repository parent. Discovery is opt-in on the wire; older clients continue without it. Final snapshots require acknowledged baselines.
 
-Nested roots are independent even under a partial parent. Each file has one owner: the parent keeps starting bytes it captured, and the child captures omitted files with its later timing. Coverage is independent. Removed registered children do not become mass deletions in the parent.
+Nested roots are independent even under a partial parent. Each file has one owner: the parent keeps starting bytes it captured and verifiable additions observed before registration, and the child captures omitted files with its later timing. Ownership is preserved through deeper nesting. Coverage is independent. Removed registered children do not become mass deletions in the parent; intentional deletions verified before cleanup remain in the retained diff.
 
 ## Checkpoints and cleanup
 
@@ -22,7 +22,7 @@ Edits and removal in the **same opaque tool** may be missing. Background process
 
 A private content-addressed store uses 0700 directories, 0600 blobs, digest verification, pinned descriptors and sensitive-path exclusions. A deduplicated 16 MiB inline cache spills to disk; disk is bounded at 1 GiB per turn and per application process. Transient blobs are pruned. Normal release removes only owned blobs. Startup cleanup of version-marked abandoned stores uses advisory locks to preserve live stores, including those in other processes; it never recursively deletes unknown content.
 
-Defaults: 50,000 entries and 256 MiB per root scan; 1 MiB per file; eight roots; 12-second baseline budget plus bounded discovery; four-second live scan and patch-generation budgets; 2 MiB aggregate patch output. Roots receive fair time/patch shares. Discovery admission requests are bounded per turn. Render caps remain separate.
+Defaults: 50,000 entries and 256 MiB per root scan; 1 MiB per file; eight roots; 12-second baseline budget plus bounded discovery; four-second live scan and patch-generation budgets; 2 MiB aggregate patch output. Roots receive fair time/patch shares. Discovery admission requests are bounded to 128 per turn, with a separate reserved native request slot for the final capture. Render caps remain separate.
 
 Limits remain safety controls, not a promise of arbitrary workspace completeness. Excluded/unreadable files, disk failures and exhausted budgets produce partial/unavailable coverage, never invented original bytes or deletions.
 

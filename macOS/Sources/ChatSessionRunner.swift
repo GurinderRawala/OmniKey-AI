@@ -51,11 +51,12 @@ final class GitDiffRequestLedger: @unchecked Sendable {
     private let lock = NSLock()
     private var seen = Set<String>()
 
-    func begin(_ requestID: String) -> Bool {
+    func begin(_ requestID: String, isFinal: Bool = false) -> Bool {
         lock.withLock {
-            // Turn mode adds one baseline request per newly discovered
-            // repository directory, so the per-run bound leaves headroom.
-            guard !requestID.isEmpty, requestID.count <= 128, seen.count < 64 else { return false }
+            // The API admits up to 128 baseline/inventory requests per turn.
+            // Reserve one further slot so long turns still save their final diff.
+            guard !requestID.isEmpty, requestID.count <= 128,
+                  seen.count < (isFinal ? 129 : 128) else { return false }
             return seen.insert(requestID).inserted
         }
     }
@@ -775,7 +776,7 @@ final class ChatSessionRunner {
                     // error/final/shell parsing, and never shown in the chat.
                     if let gitRequest = response.gitDiffRequest {
                         if response.sender == "agent", response.sessionID == sessionID,
-                           gitRequests.begin(gitRequest.requestID)
+                           gitRequests.begin(gitRequest.requestID, isFinal: gitRequest.phase == .final)
                         {
                             let isBaseline = gitRequest.phase == .baseline
                             if isBaseline { baselineWork.enter() }

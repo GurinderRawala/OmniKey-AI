@@ -572,6 +572,24 @@ it('retains structured shell directories in the transcript independently of diff
 });
 
 describe('explicit capture root registration', () => {
+  it('deduplicates overlapping inputs before the eight-root limit', () => {
+    const run = createGitRunState({
+      sessionId: 'capture',
+      send: () => {},
+      subscriptionId: 'owner',
+      turnDiff: true,
+      filesystem: true,
+    });
+    const roots = Array.from({ length: 8 }, (_, index) => `/Users/dev/project-${index}`);
+    const script = `cd ${roots[0]}`;
+    const plan = planShellGitContext(
+      run,
+      { working_directory: roots[0], capture_paths: roots },
+      script,
+    );
+    expect(plan.context?.candidate_paths).toEqual(roots);
+    expect(baselinePathsForShell(plan, script)).toEqual(roots);
+  });
   it('admits variable-based worker folders before execution without evaluating shell text', () => {
     const run = createGitRunState({
       sessionId: 'capture',

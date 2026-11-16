@@ -51,7 +51,8 @@ struct TurnWorktreeDiscovery {
     /// Existing baselines are returned unchanged. Newly discovered worktrees get
     /// this request's timing and must be acknowledged by the server before final.
     static func collect(_ request: GitDiffRequestPayload, tracker: TurnChangeTracker) -> GitDiffResponsePayload {
-        guard request.phase == .baseline, request.discoverWorktrees == true else { return tracker.collect(request) }
+        guard !request.hasUnsupportedPhase, request.candidatePaths.count <= 8,
+              request.phase == .baseline, request.discoverWorktrees == true else { return tracker.collect(request) }
         let discovered = discover(request.candidatePaths, deadline: Date().addingTimeInterval(2))
         // One bounded baseline pass, not a second full timeout per worktree.
         // Explicit candidates get admission first. The tracker still reports

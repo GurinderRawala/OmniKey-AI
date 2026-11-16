@@ -67,6 +67,9 @@ final class TurnChangeTracker: @unchecked Sendable {
         /// Paths (relative to this root) whose starting bytes an enclosing
         /// root already owns. Never captured here, so never duplicated.
         var delegatedPaths: Set<String> = []
+        /// Additions observed before delegating a subtree remain owned here.
+        /// They have no starting blob; rescan them even after enumeration moves.
+        var additionalPaths: Set<String> = []
     }
     struct Checkpoint {
         let manifest: Manifest
@@ -239,13 +242,28 @@ final class TurnChangeTracker: @unchecked Sendable {
             // this root captures everything the enclosing root omitted, with its
             // own honest later timing. Even a "complete" enclosing scan may have
             // skipped ignored/excluded subtrees, so it never implies coverage.
+            let fairDeadline = Date().addingTimeInterval(max(0, deadline.timeIntervalSinceNow) / Double(candidates.count - index))
             var outerUpdates: [String] = []
             for outer in rootOrder where root.hasPrefix(outer + "/") {
-                guard let enclosing = roots[outer] else { continue }
-                // A deeper root the enclosing one already delegated owns this path.
-                if enclosing.excludedSubroots.contains(where: { root == $0 || root.hasPrefix($0 + "/") }) { continue }
+                guard var enclosing = roots[outer] else { continue }
                 let prefix = String(root.dropFirst(outer.count + 1)) + "/"
-                for path in enclosing.manifest.map({ Array($0.files.keys) }) ?? [] where path.hasPrefix(prefix) {
+                // Preserve additions that the enclosing root could already show.
+                // Only its complete enumeration can establish starting absence;
+                // unknown paths must keep the child's honest later baseline.
+                if let before = enclosing.manifest, before.enumerated,
+                   let current = scan(outer, entry: enclosing, deadline: fairDeadline,
+                                      prioritizing: before.files.keys.sorted()) {
+                    for path in current.files.keys where path.hasPrefix(prefix)
+                        && before.files[path] == nil && !before.unknown.contains(path) {
+                        enclosing.additionalPaths.insert(path)
+                    }
+                    roots[outer] = enclosing
+                }
+                // Excluding a subtree stops new enumeration, but the ancestor
+                // still owns any starting files it captured there. Consult all
+                // ancestors so a third-level registration cannot rebase them.
+                let owned = Set(enclosing.manifest.map({ Array($0.files.keys) }) ?? []).union(enclosing.additionalPaths)
+                for path in owned where path.hasPrefix(prefix) {
                     entry.delegatedPaths.insert(String(path.dropFirst(prefix.count)))
                 }
                 outerUpdates.append(outer)
@@ -253,7 +271,6 @@ final class TurnChangeTracker: @unchecked Sendable {
             for outer in outerUpdates { roots[outer]?.excludedSubroots.insert(root) }
             // Roots already inside this one own their subtrees.
             for inner in rootOrder where inner.hasPrefix(root + "/") { entry.excludedSubroots.insert(inner) }
-            let fairDeadline = Date().addingTimeInterval(max(0, deadline.timeIntervalSinceNow) / Double(candidates.count - index))
             let manifest = Self.sensitive(root) ? nil : scan(root, entry: entry, deadline: fairDeadline, baseline: true)
             entry = Root(baseline: baseline, manifest: manifest, identity: identity, excludedSubroots: entry.excludedSubroots,
                          delegatedPaths: entry.delegatedPaths)
@@ -446,7 +463,10 @@ final class TurnChangeTracker: @unchecked Sendable {
                 result.enumerated = false
                 result.limitsReached.insert("Nested folder removed or replaced; owned files use the last tool checkpoint, not cleanup observations.")
                 if let retained = checkpoints[root]?.manifest.files[relative] { result.files[relative] = retained }
-                else { result.unknown.insert(relative) }
+                else if checkpoints[root]?.manifest.absent.contains(relative) == true {
+                    // Keep verified source deletions made before folder cleanup.
+                    result.absent.insert(relative)
+                } else { result.unknown.insert(relative) }
                 return false
             }
             do {
@@ -484,7 +504,8 @@ final class TurnChangeTracker: @unchecked Sendable {
         }
         // Revisit every captured baseline path first. A changed enumeration order,
         // added build output, or scan cutoff must not hide an already captured edit.
-        for path in knownPaths {
+        let ownedPaths = Set(knownPaths).union(entry.additionalPaths).sorted()
+        for path in ownedPaths {
             guard scanNow() < deadline else {
                 result.enumerated = false
                 result.limitsReached.insert("Filesystem scan time limit reached (\(limits.seconds) seconds).")
@@ -492,7 +513,7 @@ final class TurnChangeTracker: @unchecked Sendable {
             }
             if read(path) { result.unknown.insert(path) } // file became a directory
         }
-        let known = Set(knownPaths)
+        let known = Set(ownedPaths)
         // Git supplies file eligibility only; starting/current bytes still come
         // from the pinned filesystem reader. Ignore rules keep generated builds,
         // caches and dependencies from consuming the source-content budget.
