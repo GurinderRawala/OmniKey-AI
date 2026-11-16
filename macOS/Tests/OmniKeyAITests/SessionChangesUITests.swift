@@ -168,3 +168,30 @@ extension SessionChangesUITests {
         XCTAssertEqual(SessionGitHubDiscovery.linkedPRs(in: SessionGitHubDiscovery.associationTexts(in: messages), repository: "owner/repo"), [7, 8])
     }
 }
+
+
+extension SessionChangesUITests {
+    @MainActor
+    func testPartialHistoryPreservesOlderCachedPRsUntilEvidenceIsComplete() async throws {
+        let suite = "PRPartialHistory.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let cached = SessionGitHubInfo(root: "/missing", repository: "owner/repo", branch: "main", pullRequests: [1, 2, 47].map {
+            SessionPullRequest(number: $0, title: "PR", url: "https://github.com/owner/repo/pull/\($0)", state: "OPEN", isDraft: false)
+        }, pullRequestsLoaded: true)
+        defaults.set(try JSONEncoder().encode(cached), forKey: "sessionGitHub:session")
+        let model = SessionGitHubCardModel(defaults: defaults, discovery: { _, old, texts, _ in
+            old.map { SessionGitHubDiscovery.scoped($0, linked: SessionGitHubDiscovery.linkedPRs(in: texts, repository: $0.repository)) }
+        })
+        let latest = ["https://github.com/owner/repo/pull/2"]
+        await model.refresh(session: "session", path: nil, texts: latest, evidenceComplete: false)
+        XCTAssertEqual(Set(model.info?.pullRequests.map(\.number) ?? []), [1, 2, 47])
+        XCTAssertEqual(SessionGitHubDiscovery.scoped(try XCTUnwrap(model.info), linked: [2]).pullRequests.map(\.number), [2])
+        let persisted = try JSONDecoder().decode(SessionGitHubInfo.self, from: XCTUnwrap(defaults.data(forKey: "sessionGitHub:session")))
+        XCTAssertEqual(persisted.pullRequests.map(\.number), [1, 2, 47])
+        await model.refresh(session: "session", path: nil, texts: latest + ["https://github.com/owner/repo/pull/1"])
+        XCTAssertEqual(Set(model.info?.pullRequests.map(\.number) ?? []), [1, 2])
+        let migrated = try JSONDecoder().decode(SessionGitHubInfo.self, from: XCTUnwrap(defaults.data(forKey: "sessionGitHub:session")))
+        XCTAssertEqual(Set(migrated.pullRequests.map(\.number)), [1, 2])
+    }
+}

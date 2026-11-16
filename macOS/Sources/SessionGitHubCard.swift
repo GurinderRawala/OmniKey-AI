@@ -174,7 +174,7 @@ final class SessionGitHubCardModel: ObservableObject {
     typealias Discovery = @Sendable (String, SessionGitHubInfo?, [String], Int) async -> SessionGitHubInfo?
     private let discovery: Discovery
     private var worker: Task<Void, Never>?
-    private var pending: (session: String, paths: [String], texts: [String], token: UUID)?
+    private var pending: (session: String, paths: [String], texts: [String], evidenceComplete: Bool, token: UUID)?
     private var refreshIndex = 0
     init(defaults: UserDefaults = .standard, discovery: @escaping Discovery = { root, old, texts, index in
         await Task.detached(priority: .utility) {
@@ -197,12 +197,12 @@ final class SessionGitHubCardModel: ObservableObject {
         }
     }
 
-    func refresh(session: String, path: String?, texts: [String], paths: [String] = []) async {
+    func refresh(session: String, path: String?, texts: [String], paths: [String] = [], evidenceComplete: Bool = true) async {
         Logger(subsystem: "com.omnikeyai", category: "SessionGitHub").notice("Refreshing repository card; candidate count: \(paths.count)")
         load(session: session)
-        // Migrate legacy caches before filesystem/network discovery, even when
-        // the checkout is gone or GitHub is unavailable.
-        if let cached = info {
+        // Only prune stored evidence once all history pages have loaded.
+        // Partial history still filters display, but must retain older metadata.
+        if evidenceComplete, let cached = info {
             let scoped = SessionGitHubDiscovery.scoped(cached,
                 linked: SessionGitHubDiscovery.linkedPRs(in: texts, repository: cached.repository))
             info = scoped
@@ -216,7 +216,7 @@ final class SessionGitHubCardModel: ObservableObject {
         guard !candidates.isEmpty else { return }
         let token = UUID()
         generation = token
-        pending = (session, candidates, texts, token)
+        pending = (session, candidates, texts, evidenceComplete, token)
         if let worker { await worker.value; return }
         let task = Task { @MainActor in
             while let request = self.pending {
@@ -233,6 +233,17 @@ final class SessionGitHubCardModel: ObservableObject {
                 }
                 guard self.selectedSession == request.session, self.generation == request.token else { continue }
                 Logger(subsystem: "com.omnikeyai", category: "SessionGitHub").notice("Repository card discovery completed; found: \(updated != nil)")
+                if !request.evidenceComplete {
+                    // Discovery also scopes its result; retain older cached PRs
+                    // in memory until their transcript evidence can be loaded.
+                    if var partial = updated, let old, partial.repository == old.repository {
+                        let found = Set(partial.pullRequests.map(\.number))
+                        partial.pullRequests += old.pullRequests.filter { !found.contains($0.number) }
+                        updated = partial
+                    }
+                    self.info = updated ?? old
+                    continue
+                }
                 self.info = updated
                 if let updated, let data = try? JSONEncoder().encode(updated) {
                     self.defaults.set(data, forKey: "sessionGitHub:\(request.session)")
@@ -262,9 +273,11 @@ struct SessionGitHubCard: View {
         let paths: [String]
         let running: Bool
         let evidence: [String]
+        let evidenceComplete: Bool
     }
     private var refreshKey: RefreshKey {
-        RefreshKey(session: session, paths: paths, running: model.isRunning, evidence: texts)
+        RefreshKey(session: session, paths: paths, running: model.isRunning, evidence: texts,
+            evidenceComplete: !model.isLoadingSessionHistory && !model.hasMoreHistory)
     }
     var body: some View {
         VStack(spacing: 0) {
@@ -296,7 +309,8 @@ struct SessionGitHubCard: View {
             guard !session.isEmpty else { card.load(session: ""); return }
             let texts = SessionGitHubDiscovery.associationTexts(in: model.messages)
             repeat {
-                await card.refresh(session: session, path: paths.first, texts: texts, paths: paths)
+                await card.refresh(session: session, path: paths.first, texts: texts, paths: paths,
+                    evidenceComplete: !model.isLoadingSessionHistory && !model.hasMoreHistory)
                 guard model.isRunning, !Task.isCancelled else { break }
                 try? await Task.sleep(for: .seconds(30))
             } while !Task.isCancelled
