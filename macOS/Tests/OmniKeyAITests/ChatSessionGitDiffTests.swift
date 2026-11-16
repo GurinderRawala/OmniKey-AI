@@ -322,3 +322,69 @@ extension ChatSessionGitDiffTests {
         socket.deliver(#"{"session_id":"session","sender":"agent","content":"<final_answer>Done</final_answer>"}"#)
     }
 }
+
+
+extension ChatSessionGitDiffTests {
+    @MainActor
+    func testFilesystemSocketRetainsPreCleanupCheckpointAcrossTimerScan() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("checkpoint-socket-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data(String(repeating: "bulk\n", count: 46_000).utf8).write(to: root.appendingPathComponent("bulk"))
+        try Data("before\n".utf8).write(to: root.appendingPathComponent("edit"))
+        let started = expectation(description: "baseline"), edited = expectation(description: "edit shell"), removed = expectation(description: "cleanup shell"), captured = expectation(description: "final")
+        let baselines = LockedBox<[GitTurnBaseline]>([]), patch = LockedBox<String>("")
+        let terminals = LockedCounter()
+        let socket = GitDiffTestSocket { message in
+            if let reply = message.gitDiffResponse {
+                if reply.requestID == "start" { baselines.set(reply.baselines ?? []); started.fulfill() }
+                if reply.requestID == "end" { patch.set(reply.repositories.map(\.patch).joined()); captured.fulfill() }
+            }
+            if message.isTerminalOutput == true {
+                terminals.increment()
+                if terminals.value == 1 { edited.fulfill() } else { removed.fulfill() }
+            }
+        }
+        start(socket, collect: { _ in XCTFail("filesystem bypassed tracker"); return GitDiffResponsePayload(requestID: "", status: .unavailable) }, executeShell: { script, _ in
+            if script.contains("edit-step") {
+                try? Data("after\n".utf8).write(to: root.appendingPathComponent("edit"))
+            } else {
+                try? FileManager.default.removeItem(at: root.appendingPathComponent("bulk"))
+                Thread.sleep(forTimeInterval: 1.2)
+                try? FileManager.default.removeItem(at: root)
+            }
+            return ("done", 0)
+        })
+        func deliver(_ request: GitDiffRequestPayload) throws {
+            let message = ChatSessionRunner.AgentMessage(sessionID: "session", sender: "agent", content: "", gitDiffRequest: request)
+            socket.deliver(String(decoding: try JSONEncoder().encode(message), as: UTF8.self))
+        }
+        func sendStep(_ text: String, final: Bool = false) throws {
+            let tag = final ? "final" + "_answer" : "shell" + "_script"
+            let message = ChatSessionRunner.AgentMessage(sessionID: "session", sender: "agent", content: "<" + tag + ">" + text + "</" + tag + ">")
+            socket.deliver(String(decoding: try JSONEncoder().encode(message), as: UTF8.self))
+        }
+        try deliver(GitDiffRequestPayload(requestID: "start", candidatePaths: [root.path], phase: .baseline, baselineSource: .turnStart, filesystem: true))
+        await fulfillment(of: [started], timeout: 5)
+        try sendStep("edit-step")
+        await fulfillment(of: [edited], timeout: 5)
+        try sendStep("cleanup-step")
+        await fulfillment(of: [removed], timeout: 8)
+        try deliver(GitDiffRequestPayload(requestID: "end", candidatePaths: [root.path], phase: .final, baselines: baselines.get(), filesystem: true))
+        await fulfillment(of: [captured], timeout: 5)
+        XCTAssertTrue(patch.get().contains("+after"), patch.get())
+        XCTAssertFalse(patch.get().contains("deleted file mode"))
+        try sendStep("Done", final: true)
+    }
+}
+
+extension ChatSessionGitDiffTests {
+    func testInventoryCapacityReservesFinalCapture() {
+        let ledger = GitDiffRequestLedger()
+        for index in 0..<128 { XCTAssertTrue(ledger.begin("baseline-\(index)")) }
+        XCTAssertFalse(ledger.begin("extra-baseline"))
+        XCTAssertTrue(ledger.begin("final", isFinal: true))
+        XCTAssertFalse(ledger.begin("final", isFinal: true))
+        XCTAssertFalse(ledger.begin("another-final", isFinal: true))
+    }
+}

@@ -102,7 +102,9 @@ final class TurnFileReader {
             defer { try? handle.close() }
             var opened = stat()
             guard fstat(fd, &opened) == 0, Self.same(before, opened) else { throw Failure.unavailable }
-            bytes = try handle.read(upToCount: limit + 1) ?? Data()
+            // Size is already validated against limit; avoid allocating the full
+            // per-file budget for every tiny file in a large workspace.
+            bytes = try handle.read(upToCount: Int(before.st_size) + 1) ?? Data()
             guard fstat(fd, &opened) == 0, Self.same(before, opened) else { throw Failure.unavailable }
             mode = before.st_mode & 0o111 == 0 ? "100644" : "100755"
         }

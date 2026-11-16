@@ -522,6 +522,12 @@ enum ChangesInspectorSource: Equatable {
             return (counts.files, counts.additions, counts.deletions)
         }
     }
+    var presentation: TurnCapturePresentation {
+        switch self {
+        case .saved(let selection): return TurnCapturePresentation(saved: selection.diff)
+        case .preview(_, let diff): return TurnCapturePresentation(live: diff)
+        }
+    }
 }
 
 extension ChatModel {
@@ -559,7 +565,8 @@ struct ChangesInspectorView: View {
             ChangesDrawerHeader(files: source.counts.files, additions: source.counts.additions,
                 deletions: source.counts.deletions, isUpdating: inspector.isUpdating,
                 layout: $layout, filter: $filter, expand: { disclosureCommand = abs(disclosureCommand) + 1 },
-                collapse: { disclosureCommand = -(abs(disclosureCommand) + 1) }, close: model.closeSessionDiff)
+                collapse: { disclosureCommand = -(abs(disclosureCommand) + 1) }, close: model.closeSessionDiff,
+                presentation: source.presentation)
             Divider()
             content.frame(maxWidth: .infinity, maxHeight: .infinity)
             if let error = inspector.updateError {
@@ -619,6 +626,12 @@ struct ChangesDrawerHeader: View {
     let expand: () -> Void
     let collapse: () -> Void
     let close: () -> Void
+    /// nil keeps the generic turn wording with plain counts.
+    var presentation: TurnCapturePresentation? = nil
+
+    private var shown: TurnCapturePresentation {
+        presentation ?? TurnCapturePresentation(files: files, additions: additions, deletions: deletions, isFilesystem: false, coverage: nil, legacyTitle: TurnCapturePresentation.turnTitle, legacyHelp: TurnCapturePresentation.scopeHelp)
+    }
 
     var body: some View {
         VStack(spacing: 12) {
@@ -628,10 +641,14 @@ struct ChangesDrawerHeader: View {
                     .frame(width: 30, height: 30)
                     .background(Color.accentColor.opacity(0.09), in: RoundedRectangle(cornerRadius: 7))
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Changes").font(.system(size: 13, weight: .semibold))
-                    ChangeCountsLabel(files: files, additions: additions, deletions: deletions)
+                    Text(shown.title).font(.system(size: 13, weight: .semibold))
+                    TurnCaptureSummaryLabel(presentation: shown)
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                 }
+                .help(shown.help)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(shown.accessibilityLabel)
+                .accessibilityHint(shown.help)
                 Spacer(minLength: 6)
                 if isUpdating { ProgressView().controlSize(.mini).help("Updating changes") }
                 Button(action: close) { Image(systemName: "xmark").frame(width: 18, height: 18) }
@@ -650,6 +667,13 @@ struct ChangesDrawerHeader: View {
                 } label: { Image(systemName: "ellipsis.circle") }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                     .help("File display options").accessibilityLabel("File display options")
+            }
+            if let notice = shown.inspectorNotice {
+                Label(notice, systemImage: "info.circle")
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel("Coverage: " + notice)
             }
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.tertiary)
@@ -673,17 +697,18 @@ struct SessionDiffCardView: View {
     @ObservedObject private var model = ChatModel.shared
     var body: some View {
         TurnChangesCard(files: diff.fileCount, additions: diff.additions, deletions: diff.deletions,
-            selected: model.inspectedSessionDiff?.diff.id == diff.id, captureUnavailable: diff.captureUnavailable) { model.toggleSessionDiff(diff) }
+            selected: model.inspectedSessionDiff?.diff.id == diff.id,
+            presentation: TurnCapturePresentation(saved: diff)) { model.toggleSessionDiff(diff) }
     }
 }
 
 struct CapturedChangesCardView: View {
     let diff: LiveTurnDiff
     @ObservedObject private var model = ChatModel.shared
-    private var counts: DiffLineCounts { DiffLineCounts(patches: diff.repositories.map(\.patch)) }
+    private var presentation: TurnCapturePresentation { TurnCapturePresentation(live: diff) }
     var body: some View {
-        TurnChangesCard(files: counts.files, additions: counts.additions, deletions: counts.deletions,
-            selected: model.inspectedCapturedDiff?.turnID == diff.turnID) { model.inspectCapturedChanges(diff) }
+        TurnChangesCard(files: presentation.files, additions: presentation.additions, deletions: presentation.deletions,
+            selected: model.inspectedCapturedDiff?.turnID == diff.turnID, presentation: presentation) { model.inspectCapturedChanges(diff) }
     }
 }
 
@@ -692,9 +717,19 @@ struct TurnChangesCard: View {
     let additions: Int?
     let deletions: Int?
     let selected: Bool
+    /// Source-compatible legacy flag; prefer `presentation`.
     var captureUnavailable = false
+    var presentation: TurnCapturePresentation? = nil
     let action: () -> Void
     @State private var hovered = false
+    private var shown: TurnCapturePresentation {
+        if let presentation { return presentation }
+        // Legacy callers: only an explicit flag means unavailable.
+        return TurnCapturePresentation(files: captureUnavailable ? 0 : files, additions: additions, deletions: deletions,
+            isFilesystem: captureUnavailable, coverage: nil,
+            legacyTitle: captureUnavailable ? nil : TurnCapturePresentation.turnTitle,
+            legacyHelp: captureUnavailable ? nil : TurnCapturePresentation.scopeHelp)
+    }
     var body: some View {
         Button(action: action) {
             HStack(spacing: 12) {
@@ -703,13 +738,9 @@ struct TurnChangesCard: View {
                     .frame(width: 34, height: 34)
                     .background(Color.accentColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("Changes").font(.system(size: 13, weight: .semibold))
-                    if captureUnavailable {
-                        Text("Snapshot unavailable").font(.system(size: 12)).foregroundStyle(.secondary)
-                    } else {
-                        ChangeCountsLabel(files: files, additions: additions, deletions: deletions)
-                            .font(.system(size: 12)).foregroundStyle(.secondary)
-                    }
+                    Text(shown.title).font(.system(size: 13, weight: .semibold))
+                    TurnCaptureSummaryLabel(presentation: shown)
+                        .font(.system(size: 12)).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 8)
                 Image(systemName: selected ? "sidebar.right" : "chevron.right")
@@ -721,8 +752,8 @@ struct TurnChangesCard: View {
             .contentShape(RoundedRectangle(cornerRadius: 12))
         }
         .buttonStyle(.plain).onHover { hovered = $0 }
-        .help("View changes from this turn")
-        .accessibilityLabel(captureUnavailable ? "Changes from this turn, snapshot unavailable" : "Changes from this turn, \(files) files")
+        .help(shown.help)
+        .accessibilityLabel(shown.accessibilityLabel)
     }
 }
 
@@ -735,7 +766,7 @@ enum ChatSessionDiffPlacement {
         guard let finalIndex = blocks.firstIndex(where: { $0.kind == .finalAnswer }) else { return [] }
         var seen = Set<String>()
         return blocks[..<finalIndex].filter { block in
-            guard block.kind == .sessionDiff, let diff = block.sessionDiff, diff.isEligibleForViewer, (diff.fileCount > 0 || diff.captureUnavailable) else { return false }
+            guard block.kind == .sessionDiff, let diff = block.sessionDiff, diff.isEligibleForViewer, TurnCapturePresentation(saved: diff).showsCard else { return false }
             return seen.insert(diff.id).inserted
         }
     }
