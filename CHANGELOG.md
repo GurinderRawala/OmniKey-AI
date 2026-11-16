@@ -1,5 +1,14 @@
 # Changelog
 
+## macOS 1.9.24 (build 86) — 2026-11-16
+
+### Fixed
+- Associate GitHub PRs only from user input and agent final answers. Terminal logs, shell commands, reasoning and system context no longer attach unrelated PRs.
+- Revalidate existing session PR caches once history is fully loaded, preserve older PR metadata during pagination, and refresh when eligible message content changes.
+
+### Release
+- Signed, notarized universal macOS patch. CLI/API package versions and Windows unchanged.
+
 ## macOS 1.9.23 (build 85) · CLI/API 1.8.24 — 2026-11-16
 
 ### Fixed
