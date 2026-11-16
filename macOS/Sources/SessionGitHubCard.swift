@@ -34,6 +34,19 @@ enum SessionGitHubDiscovery {
         return path
     }
 
+    /// Association evidence comes only from visible user input and final answers.
+    /// Terminal output, commands, progress, reasoning and system context can
+    /// mention unrelated PRs (for example a release queue) and are never evidence.
+    static func associationTexts(in messages: [ChatMessage]) -> [String] {
+        messages.flatMap { message in
+            switch message.role {
+            case .user: return [message.text]
+            case .assistant: return message.blocks.filter { $0.kind == .finalAnswer }.map(\.text)
+            case .system: return []
+            }
+        }
+    }
+
     static func linkedPRs(in texts: [String], repository: String) -> Set<Int> {
         let pattern = "https://github\\.com/" + NSRegularExpression.escapedPattern(for: repository) + "/pull/([0-9]+)(?![0-9])"
         guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else { return [] }
@@ -187,6 +200,16 @@ final class SessionGitHubCardModel: ObservableObject {
     func refresh(session: String, path: String?, texts: [String], paths: [String] = []) async {
         Logger(subsystem: "com.omnikeyai", category: "SessionGitHub").notice("Refreshing repository card; candidate count: \(paths.count)")
         load(session: session)
+        // Migrate legacy caches before filesystem/network discovery, even when
+        // the checkout is gone or GitHub is unavailable.
+        if let cached = info {
+            let scoped = SessionGitHubDiscovery.scoped(cached,
+                linked: SessionGitHubDiscovery.linkedPRs(in: texts, repository: cached.repository))
+            info = scoped
+            if let data = try? JSONEncoder().encode(scoped) {
+                defaults.set(data, forKey: "sessionGitHub:\(session)")
+            }
+        }
         var seen = Set<String>()
         let candidates = ([path].compactMap { $0 } + paths + [info?.root].compactMap { $0 })
             .filter { seen.insert($0).inserted }
@@ -231,11 +254,17 @@ struct SessionGitHubCard: View {
         _card = StateObject(wrappedValue: card)
     }
     @State private var showingDetails = false
-    private var texts: [String] { model.messages.flatMap { [$0.text] + $0.blocks.map(\.text) } }
+    private var texts: [String] { SessionGitHubDiscovery.associationTexts(in: model.messages) }
     private var session: String { model.activeSessionId ?? "" }
     private var paths: [String] { SessionGitHubDiscovery.startingPaths(in: model.messages) }
-    private var refreshKey: String {
-        "\(session):\(paths.joined(separator: "|")):\(model.isRunning):\(model.messages.flatMap(\.blocks).filter { $0.kind == .terminalOutput || $0.kind == .finalAnswer }.count)"
+    private struct RefreshKey: Hashable {
+        let session: String
+        let paths: [String]
+        let running: Bool
+        let evidence: [String]
+    }
+    private var refreshKey: RefreshKey {
+        RefreshKey(session: session, paths: paths, running: model.isRunning, evidence: texts)
     }
     var body: some View {
         VStack(spacing: 0) {
@@ -265,7 +294,7 @@ struct SessionGitHubCard: View {
         .onChange(of: session) { _, value in showingDetails = false; card.load(session: value) }
         .task(id: refreshKey) {
             guard !session.isEmpty else { card.load(session: ""); return }
-            let texts = model.messages.flatMap { [$0.text] + $0.blocks.map(\.text) }
+            let texts = SessionGitHubDiscovery.associationTexts(in: model.messages)
             repeat {
                 await card.refresh(session: session, path: paths.first, texts: texts, paths: paths)
                 guard model.isRunning, !Task.isCancelled else { break }

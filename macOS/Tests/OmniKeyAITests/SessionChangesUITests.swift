@@ -116,3 +116,55 @@ extension SessionChangesUITests {
         XCTAssertNil(model.info)
     }
 }
+
+extension SessionChangesUITests {
+    func testOnlyUserInputAndFinalAnswersAssociatePRs() {
+        let url = "https://github.com/owner/repo/pull/"
+        var user = ChatMessage.user("Review [PR](\(url)1)")
+        user.blocks = [ChatBlock(kind: .terminalOutput, text: url + "99")]
+        var assistant = ChatMessage.assistant()
+        assistant.text = url + "98"
+        assistant.blocks = [
+            ChatBlock(kind: .terminalOutput, text: (10...64).map { url + String($0) }.joined(separator: "\n")),
+            ChatBlock(kind: .shellCommand, text: "gh pr view " + url + "97"),
+            ChatBlock(kind: .agentReasoning, text: url + "96"),
+            ChatBlock(kind: .finalAnswer, text: "Created \(url)2; also \(url)1."),
+        ]
+        let system = ChatMessage(id: "system", role: .system, text: url + "95", blocks: [ChatBlock(kind: .finalAnswer, text: url + "94")])
+        let messages = [user, assistant, system, ChatMessage.user("Also check \(url)3", steeringState: .pending)]
+        let texts = SessionGitHubDiscovery.associationTexts(in: messages)
+        XCTAssertEqual(SessionGitHubDiscovery.linkedPRs(in: texts, repository: "owner/repo"), [1, 2, 3])
+        let cached = SessionGitHubInfo(root: "/missing", repository: "owner/repo", branch: "main", pullRequests: (1...64).map {
+            SessionPullRequest(number: $0, title: "PR", url: url + String($0), state: "OPEN", isDraft: false)
+        }, pullRequestsLoaded: true)
+        XCTAssertEqual(SessionGitHubDiscovery.scoped(cached, linked: SessionGitHubDiscovery.linkedPRs(in: texts, repository: cached.repository)).pullRequests.map(\.number), [1, 2, 3])
+    }
+
+    @MainActor
+    func testLegacyPRCacheIsPrunedBeforeOfflineDiscovery() async throws {
+        let suite = "PRCacheMigration.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let cached = SessionGitHubInfo(root: "/missing", repository: "owner/repo", branch: "main", pullRequests: [1, 47].map {
+            SessionPullRequest(number: $0, title: "PR", url: "https://github.com/owner/repo/pull/\($0)", state: "OPEN", isDraft: false)
+        }, pullRequestsLoaded: true)
+        defaults.set(try JSONEncoder().encode(cached), forKey: "sessionGitHub:session")
+        let model = SessionGitHubCardModel(defaults: defaults, discovery: { _, old, _, _ in
+            XCTAssertEqual(old?.pullRequests.map(\.number), [1])
+            return old
+        })
+        await model.refresh(session: "session", path: nil, texts: ["https://github.com/owner/repo/pull/1"])
+        XCTAssertEqual(model.info?.pullRequests.map(\.number), [1])
+        let persisted = try JSONDecoder().decode(SessionGitHubInfo.self, from: XCTUnwrap(defaults.data(forKey: "sessionGitHub:session")))
+        XCTAssertEqual(persisted.pullRequests.map(\.number), [1])
+    }
+}
+
+extension SessionChangesUITests {
+    func testHydratedTranscriptUsesTheSamePRPolicy() throws {
+        let json = #"[{"id":"user","role":"user","text":"Review https://github.com/owner/repo/pull/7"},{"id":"agent","role":"assistant","text":"https://github.com/owner/repo/pull/99","blocks":[{"id":"terminal","kind":"terminalOutput","text":"Queue: https://github.com/owner/repo/pull/47"},{"id":"final","kind":"finalAnswer","text":"Updated https://github.com/owner/repo/pull/8"}]}]"#
+        let entries = try JSONDecoder().decode([SessionHistoryEntry].self, from: Data(json.utf8))
+        let messages = ChatModel.hydrateTranscript(from: entries)
+        XCTAssertEqual(SessionGitHubDiscovery.linkedPRs(in: SessionGitHubDiscovery.associationTexts(in: messages), repository: "owner/repo"), [7, 8])
+    }
+}
