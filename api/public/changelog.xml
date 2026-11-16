@@ -13,6 +13,13 @@
       <description>Five example workflows using OmniAgent with terminal access, authenticated browser sessions, and MCP integrations, plus permission and safety guidance.</description>
     </item>
     <item>
+      <title>OmniKey v1.8.24</title>
+      <link>https://omnikeyai.ca/changelog#v1.8.24</link>
+      <guid isPermaLink="false">omnikey-v1.8.24</guid>
+      <pubDate>Mon, 16 Nov 2026 00:00:00 +0000</pubDate>
+      <description><![CDATA[<ul><li>Fix worktree discovery, capture limits, and cleanup-safe turn diffs (#87)</li></ul>]]></description>
+    </item>
+    <item>
       <title>OmniKey v1.8.23</title>
       <link>https://omnikeyai.ca/changelog#v1.8.23</link>
       <guid isPermaLink="false">omnikey-v1.8.23</guid>
@@ -144,13 +151,6 @@
       <guid isPermaLink="false">omnikey-v1.8.4</guid>
       <pubDate>Tue, 22 Sep 2026 00:00:00 +0000</pubDate>
       <description><![CDATA[<ul><li>Ship CLI 1.8.4 with agent token budgets</li></ul>]]></description>
-    </item>
-    <item>
-      <title>OmniKey v1.8.3</title>
-      <link>https://omnikeyai.ca/changelog#v1.8.3</link>
-      <guid isPermaLink="false">omnikey-v1.8.3</guid>
-      <pubDate>Tue, 22 Sep 2026 00:00:00 +0000</pubDate>
-      <description><![CDATA[<ul><li>Ship CLI 1.8.3 and macOS 1.9.4</li><li>Expose interrupted timeline steps</li><li>Preserve interrupted agent chat history</li><li>Ship blue milestone markers in 1.9.3</li></ul>]]></description>
     </item>
   </channel>
 </rss>
