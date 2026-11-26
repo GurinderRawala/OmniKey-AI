@@ -9,10 +9,12 @@ do not change the developer's active account/project.
 
 1. Map getomnikey.com to the existing service and configure all Google-assigned
    A/AAAA records. Preserve verification TXT, email security, and Domain Connect.
-2. Wait for DomainMapping Ready=True and validate HTTPS without disabling TLS checks.
+2. Wait for both apex and www DomainMapping Ready=True and validate HTTPS without
+   disabling TLS checks. Verify the API, installer, download, and update endpoints
+   before merging or publishing anything that changes their default URLs.
 3. Deploy the canonical URLs and redirect middleware with
-   `OMNIKEY_WEBSITE_REDIRECT_ENABLED=false` (default). This can safely happen before
-   certificate provisioning completes.
+   `OMNIKEY_WEBSITE_REDIRECT_ENABLED=false` (default), only AFTER HTTPS validation.
+   The new installer and client URLs are not protected by the redirect flag.
 4. Validate the homepage, blog, docs, downloads, installers, and both update feeds
    on the new domain. Check download headers with HEAD rather than fetching binaries.
 5. Enable `OMNIKEY_WEBSITE_REDIRECT_ENABLED=true` on the Cloud Run service only.
@@ -33,8 +35,11 @@ No desktop binary rebuild is needed just to keep old clients working.
 
 ## Rollback
 
-Set OMNIKEY_WEBSITE_REDIRECT_ENABLED=false (or route traffic back to the preceding
-Cloud Run revision). Do not delete the old domain mapping. Permanent redirects
+For redirect-only problems, set OMNIKEY_WEBSITE_REDIRECT_ENABLED=false. For a
+new-domain outage, route traffic back to a revision from BEFORE the URL migration
+(the captured baseline is omnikeyai-saas-00179-zs9), not merely the preceding
+flag-disabled revision: migrated pages and installers still use the new domain.
+Do not delete the old domain mapping. Permanent redirects
 may be cached by browsers, which is why HTTPS and compatibility checks precede
 activation. Leave the new domain mapped when rolling back app behavior.
 
