@@ -1,5 +1,13 @@
 # Changelog
 
+## CLI/API 1.8.25 — Domain migration
+
+### Changed
+- Move canonical website, documentation, blog, installer, and future Windows update links to https://getomnikey.com.
+- Preserve legacy download, update-feed, installer, API, and direct Cloud Run endpoints for existing installations.
+- Add an opt-in, host-scoped permanent redirect for old website URLs; activate only after new-domain HTTPS is ready.
+
+
 ## macOS 1.9.24 (build 86) — 2026-11-16
 
 ### Fixed

@@ -72,6 +72,6 @@ GETTING STARTED
 
 Or `npm install -g omnikey-cli` on any platform. Then download the macOS menu bar app or the Windows tray app, select some text, and press Command-E.
 
-Free, open source, macOS and Windows. https://omnikeyai.ca
+Free, open source, macOS and Windows. https://getomnikey.com
 
 If you try it and it doesn't fit your workflow, I'd genuinely like to hear why — that's more useful feedback than a star. Issues and Discussions are both open.

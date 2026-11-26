@@ -16,7 +16,7 @@ describe('static blog pages', () => {
   });
 
   it('has canonical and social metadata on the article', () => {
-    const canonical = 'https://omnikeyai.ca/blog/your-ai-assistant-lives-in-the-wrong-place';
+    const canonical = 'https://getomnikey.com/blog/your-ai-assistant-lives-in-the-wrong-place';
     expect(article).toContain(`<link rel="canonical" href="${canonical}"`);
     expect(article).toContain(`<meta property="og:url" content="${canonical}"`);
     expect(article).toContain('"@type":"BlogPosting"');
@@ -30,9 +30,9 @@ describe('static blog pages', () => {
 
   it('includes the blog and article in the sitemap', () => {
     const sitemap = fs.readFileSync(path.join(publicDir, 'sitemap.xml'), 'utf8');
-    expect(sitemap).toContain('<loc>https://omnikeyai.ca/blog</loc>');
+    expect(sitemap).toContain('<loc>https://getomnikey.com/blog</loc>');
     expect(sitemap).toContain(
-      `<loc>${'https://omnikeyai.ca/blog/your-ai-assistant-lives-in-the-wrong-place'}</loc>`,
+      `<loc>${'https://getomnikey.com/blog/your-ai-assistant-lives-in-the-wrong-place'}</loc>`,
     );
   });
 
@@ -40,7 +40,7 @@ describe('static blog pages', () => {
     const slug = 'i-gave-my-keyboard-shortcut-a-terminal-and-a-browser';
     const page = fs.readFileSync(path.join(publicDir, 'blog', `${slug}.html`), 'utf8');
     expect(blogIndex).toContain(`href="/blog/${slug}"`);
-    expect(page).toContain(`<link rel="canonical" href="https://omnikeyai.ca/blog/${slug}"`);
+    expect(page).toContain(`<link rel="canonical" href="https://getomnikey.com/blog/${slug}"`);
     expect(page).toContain('I Gave My Keyboard Shortcut a Terminal and a Browser');
     for (const heading of [
       'Audit your own codebase',
@@ -58,12 +58,12 @@ describe('static blog pages', () => {
   it('includes the OmniAgent article in discovery and changelog surfaces', () => {
     const url = '/blog/i-gave-my-keyboard-shortcut-a-terminal-and-a-browser';
     const sitemap = fs.readFileSync(path.join(publicDir, 'sitemap.xml'), 'utf8');
-    expect(sitemap).toContain(`<loc>https://omnikeyai.ca${url}</loc>`);
+    expect(sitemap).toContain(`<loc>https://getomnikey.com${url}</loc>`);
     expect(fs.readFileSync(path.join(publicDir, 'changelog.html'), 'utf8')).toContain(
       `href="${url}"`,
     );
     expect(fs.readFileSync(path.join(publicDir, 'changelog.xml'), 'utf8')).toContain(
-      `<link>https://omnikeyai.ca${url}</link>`,
+      `<link>https://getomnikey.com${url}</link>`,
     );
   });
 });

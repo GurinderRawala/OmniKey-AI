@@ -1,21 +1,21 @@
 # OmniKey AI - One-line installer for Windows (PowerShell)
 #
 # Usage:
-#   iwr -useb https://omnikeyai.ca/install.ps1 | iex
+#   iwr -useb https://getomnikey.com/install.ps1 | iex
 #
 # This script will:
 #   1. Verify Node.js (>= 18) is installed (offers a winget install if missing).
 #   2. Install the `omnikey-cli` npm package globally.
 #   3. Run `omnikey onboard` interactively to configure credentials.
 #   4. Start the OmniKey AI daemon in the background (logs to ~/.omnikey/logs).
-#   5. Download the Windows desktop app ZIP from https://omnikeyai.ca/windows/download
+#   5. Download the Windows desktop app ZIP from https://getomnikey.com/windows/download
 #      and open it so the user can run the installer.
 #
 $ErrorActionPreference = 'Stop'
 
 # ---------- Configuration ----------
 $NpmPackage     = 'omnikey-cli'
-$WindowsAppUrl  = if ($env:OMNIKEY_WINDOWS_URL) { $env:OMNIKEY_WINDOWS_URL } else { 'https://omnikeyai.ca/windows/download' }
+$WindowsAppUrl  = if ($env:OMNIKEY_WINDOWS_URL) { $env:OMNIKEY_WINDOWS_URL } else { 'https://getomnikey.com/windows/download' }
 $OmniKeyDir     = Join-Path $env:USERPROFILE '.omnikey'
 $LogDir         = Join-Path $OmniKeyDir 'logs'
 $DaemonLog      = Join-Path $LogDir 'daemon.log'

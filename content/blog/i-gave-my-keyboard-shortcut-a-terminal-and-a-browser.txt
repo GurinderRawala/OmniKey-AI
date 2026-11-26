@@ -104,4 +104,4 @@ We're collecting recipes people have actually run, with exact commands. There's 
   omnikey onboard
   omnikey mcp add
 
-https://omnikeyai.ca
+https://getomnikey.com

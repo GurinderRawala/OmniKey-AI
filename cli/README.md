@@ -6,10 +6,10 @@ A command-line tool for onboarding users to the Omnikey open-source app, configu
 
 OmnikeyAI is a productivity tool that helps you quickly rewrite selected text using your preferred LLM provider. The CLI allows you to configure and run the backend daemon on your local machine, manage your API keys, choose your LLM provider (OpenAI, Anthropic, Gemini, or an OpenAI-compatible open model), and optionally configure the web search tool.
 
-- Website: [omnikeyai.ca](https://omnikeyai.ca)
+- Website: [getomnikey.com](https://getomnikey.com)
 - For more details about the app and its features, see the [main README](https://github.com/GurinderRawala/OmniKey-AI).
-- Download the latest macOS app here: [Download OmniKeyAI for macOS](https://omnikeyai-saas-fmytqc3dra-uc.a.run.app/macos/download)
-- Download the latest Windows app here: [Download OmniKeyAI for Windows](https://omnikeyai-saas-fmytqc3dra-uc.a.run.app/windows/download)
+- Download the latest macOS app here: [Download OmniKeyAI for macOS](https://getomnikey.com/macos/download)
+- Download the latest Windows app here: [Download OmniKeyAI for Windows](https://getomnikey.com/windows/download)
 
 ## Features
 

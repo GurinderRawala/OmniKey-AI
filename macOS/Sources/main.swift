@@ -667,7 +667,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
 
             let response = alert.runModal()
             if response == .alertFirstButtonReturn {
-                if let url = URL(string: "https://omnikey.ai") {
+                if let url = URL(string: "https://getomnikey.com") {
                     NSWorkspace.shared.open(url)
                 }
             }

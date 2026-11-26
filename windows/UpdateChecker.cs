@@ -16,7 +16,7 @@ namespace OmniKey.Windows
     {
         // Updates always come from the official cloud backend, regardless of
         // which backend the user has configured for AI features.
-        private const string CloudBaseUrl = "https://omnikeyai-saas-fmytqc3dra-uc.a.run.app";
+        private const string CloudBaseUrl = "https://getomnikey.com";
 
         private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(15) };
 

@@ -1,0 +1,4 @@
+title: New home: getomnikey.com
+date: 2026-11-26
+url: /
+description: OmniKey has a new website domain. Existing download links and app update endpoints remain supported.
