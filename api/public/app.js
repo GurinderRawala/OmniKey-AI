@@ -2,7 +2,7 @@ document.getElementById('year').textContent = new Date().getFullYear();
 
 // Fetch total download count and display above download buttons
 (function () {
-  fetch('https://omnikeyai.ca/downloads/stats')
+  fetch('https://getomnikey.com/downloads/stats')
     .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
     .then((data) => {
       const total = (data.macos || 0) + (data.windows || 0);

@@ -179,7 +179,7 @@ The production backend URL must be present **before** running the build. This va
 
 ```bash
 cd macOS
-export OMNIKEY_BACKEND_URL='https://omnikeyai.ca'
+export OMNIKEY_BACKEND_URL='https://getomnikey.com'
 bash build_release_dmg.sh
 cd ..
 ```
@@ -202,8 +202,8 @@ shasum -a 256 macOS/OmniKeyAI.dmg macOS/OmniKeyAI.zip
 
 Expected production values include:
 
-- backend: `https://omnikeyai.ca`
-- Sparkle feed: `https://omnikeyai.ca/macos/appcast`
+- backend: `https://getomnikey.com`
+- Sparkle feed: `https://getomnikey.com/macos/appcast`
 - architectures: `arm64` and `x86_64`
 - Gatekeeper source: `Notarized Developer ID`
 
@@ -216,7 +216,7 @@ Open the packaged app—not a raw SwiftPM executable—and smoke-test the change
 Set the public backend before packaging:
 
 ```bash
-export OMNIKEY_BACKEND_URL='https://omnikeyai.ca'
+export OMNIKEY_BACKEND_URL='https://getomnikey.com'
 pwsh -NoProfile -File windows/build_release_zip.ps1
 ```
 
@@ -327,10 +327,10 @@ Deploy from the final release commit using the project's normal production deplo
 After deployment, verify public behavior:
 
 ```bash
-curl -fsSL https://omnikeyai.ca/macos/appcast
-curl -I https://omnikeyai.ca/macos/download
-curl -fsSL https://omnikeyai.ca/windows/update
-curl -I https://omnikeyai.ca/windows/download
+curl -fsSL https://getomnikey.com/macos/appcast
+curl -I https://getomnikey.com/macos/download
+curl -fsSL https://getomnikey.com/windows/update
+curl -I https://getomnikey.com/windows/download
 ```
 
 Check that the appcast reports the new macOS short/build versions and that the Windows endpoint reports the new Windows version. Test update notifications from an older installed macOS and Windows build.
@@ -361,7 +361,7 @@ https://github.com/GurinderRawala/OmniKey-AI/compare/v<PREVIOUS_VERSION>...v<CLI
 - [ ] `pnpm test`, `pnpm lint`, and `pnpm build` passed.
 - [ ] `pnpm build:cli` passed and `omnikey --version` is correct.
 - [ ] macOS clean Xcode build passed.
-- [ ] macOS production bundle was built with `OMNIKEY_BACKEND_URL=https://omnikeyai.ca`.
+- [ ] macOS production bundle was built with `OMNIKEY_BACKEND_URL=https://getomnikey.com`.
 - [ ] macOS app is universal, signed, notarized, stapled, and Gatekeeper accepted.
 - [ ] Windows ZIP was rebuilt and tested on Windows.
 - [ ] New DMG and Windows ZIP are committed, not stale artifacts.

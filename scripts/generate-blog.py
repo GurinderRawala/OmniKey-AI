@@ -11,7 +11,7 @@ import re
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 PUB = ROOT / 'api' / 'public'
 BLOG = ROOT / 'content' / 'blog'
-SITE = 'https://omnikeyai.ca'
+SITE = 'https://getomnikey.com'
 
 
 def read_chrome():

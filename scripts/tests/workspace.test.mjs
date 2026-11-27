@@ -107,6 +107,13 @@ test('CI and release installs are frozen, portable staging is verified', () => {
   assert.match(read('Dockerfile'), /CMD \["node", "api\/dist\/index.js"\]/);
 });
 
+test('npm publishing excludes CLI README-only changes without excluding runtime changes', () => {
+  const workflow = read('.github/workflows/publish-cli.yaml');
+  assert.match(workflow, /paths:\s*\n\s*- 'cli\/\*\*'[\s\S]*?- '!cli\/README\.md'/);
+  assert.match(workflow, /workflow_dispatch:/);
+  assert.doesNotMatch(workflow, /- '!cli\/\*\*'/);
+});
+
 test('Telegram uses the Cypress request client after removing the obsolete request peer', async () => {
   const require = createRequire(path.join(root, 'telegram/package.json'));
   const TelegramBot = require('node-telegram-bot-api');
