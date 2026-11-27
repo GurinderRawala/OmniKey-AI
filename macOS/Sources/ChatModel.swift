@@ -331,6 +331,12 @@ final class ChatSessionState: @unchecked Sendable {
     var nextSteeringRedirectSequence: Int = 0
 }
 
+/// Only the composer observes keystrokes; transcript observers stay quiet.
+@MainActor
+final class ChatComposerState: ObservableObject {
+    @Published fileprivate(set) var text = ""
+}
+
 // MARK: - Chat model
 
 @MainActor
@@ -374,6 +380,7 @@ final class ChatModel: ObservableObject {
     @Published var activeSessionId: String? = nil {
         didSet {
             guard oldValue != activeSessionId else { return }
+            readingStore.flushDrafts()
             sentMessageID = nil
             showsLiveChanges = false
             inspectedCapturedDiff = nil
@@ -453,12 +460,18 @@ final class ChatModel: ObservableObject {
     /// per-turn assistant flow (e.g. session list refresh failure).
     @Published var lastErrorMessage: String? = nil
 
-    /// The text in the bottom input box. Bound from the view.
-    @Published var inputText: String = "" {
-        didSet {
+    let composerState = ChatComposerState()
+
+    /// Keep programmatic sends, recall, and session restoration on the same path
+    /// as editor changes without publishing to the entire conversation.
+    var inputText: String {
+        get { composerState.text }
+        set {
+            guard composerState.text != newValue else { return }
+            composerState.text = newValue
             var draft = readingStore.draft(for: activeStateKey)
-            draft.text = inputText
-            readingStore.save(draft, for: activeStateKey)
+            draft.text = newValue
+            readingStore.scheduleDraftSave(draft, for: activeStateKey)
         }
     }
 
@@ -1557,6 +1570,7 @@ final class ChatModel: ObservableObject {
     }
 
     func sendCurrentInput() {
+        defer { readingStore.flushDrafts() }
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         // The backend chooses the saved default when creating the session.
