@@ -6,8 +6,8 @@ Disallow: /downloads/stats
 Disallow: /macos/appcast
 Disallow: /windows/update
 
-Sitemap: https://omnikeyai.ca/sitemap.xml
+Sitemap: https://getomnikey.com/sitemap.xml
 
 # AI assistants / LLM crawlers
-# Structured project summary: https://omnikeyai.ca/llms.txt
-# Release feed: https://omnikeyai.ca/changelog.xml
+# Structured project summary: https://getomnikey.com/llms.txt
+# Release feed: https://getomnikey.com/changelog.xml

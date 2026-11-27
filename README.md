@@ -19,16 +19,16 @@
 </p>
 
 <p align="center">
-  <a href="https://omnikeyai.ca">Website</a> &nbsp;·&nbsp;
-  <a href="https://omnikeyai.ca/docs">Docs</a> &nbsp;·&nbsp;
-  <a href="https://omnikeyai.ca/changelog">Changelog</a> &nbsp;·&nbsp;
+  <a href="https://getomnikey.com">Website</a> &nbsp;·&nbsp;
+  <a href="https://getomnikey.com/docs">Docs</a> &nbsp;·&nbsp;
+  <a href="https://getomnikey.com/changelog">Changelog</a> &nbsp;·&nbsp;
   <a href="https://github.com/GurinderRawala/OmniKey-AI/discussions">Discussions</a> &nbsp;·&nbsp;
   <a href="https://bsky.app/profile/omnikeyai.bsky.social">Bluesky</a>
 </p>
 
 > Available on **macOS** (menu bar app) and **Windows** (system tray app).
 
-> 🌐 **Full documentation, downloads, and product details live at [omnikeyai.ca](https://omnikeyai.ca).** This README only covers the essentials.
+> 🌐 **Full documentation, downloads, and product details live at [getomnikey.com](https://getomnikey.com).** This README only covers the essentials.
 
 ## Getting Started
 
@@ -55,11 +55,11 @@
    omnikey daemon
    ```
 
-4. **Download the desktop app** — [macOS](https://omnikeyai-saas-fmytqc3dra-uc.a.run.app/macos/download) · [Windows](https://omnikeyai-saas-fmytqc3dra-uc.a.run.app/windows/download).
+4. **Download the desktop app** — [macOS](https://getomnikey.com/macos/download) · [Windows](https://getomnikey.com/windows/download).
 
 ## Features
 
-A quick reference of the core capabilities and the commands or shortcuts that drive them. Full details live on the [website](https://omnikeyai.ca).
+A quick reference of the core capabilities and the commands or shortcuts that drive them. Full details live on the [website](https://getomnikey.com).
 
 - **Prompt Enhancement** — `⌘E` / `Ctrl+E` rewrites the selected text into a stronger prompt.
 - **Grammar & Clarity Fix** — `⌘G` / `Ctrl+G` cleans up grammar without changing meaning.
@@ -98,7 +98,7 @@ Select text starting with `@omniAgent` and press `⌘T` / `Ctrl+T` to hand off t
 - **Use any MCP server** you have registered (databases, APIs, custom tools).
 - **Combine your saved task instructions** automatically when relevant.
 
-Use `@omnikeyai` (without the agent prefix) for plain Q&A in the context of your selected text. For the full agent design and tool list, see [omnikeyai.ca](https://omnikeyai.ca).
+Use `@omnikeyai` (without the agent prefix) for plain Q&A in the context of your selected text. For the full agent design and tool list, see [getomnikey.com](https://getomnikey.com).
 
 ---
 

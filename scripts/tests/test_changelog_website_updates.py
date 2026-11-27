@@ -36,7 +36,7 @@ class WebsiteUpdatesTests(unittest.TestCase):
                 self.assertIn('href="/blog/example"', first)
                 item = feed.find('./channel/item')
                 self.assertEqual(item.findtext('title'), 'Tools & workflows')
-                self.assertEqual(item.findtext('link'), 'https://omnikeyai.ca/blog/example')
+                self.assertEqual(item.findtext('link'), 'https://getomnikey.com/blog/example')
                 self.assertEqual(item.findtext('description'), 'MCP <examples> & safety.')
                 changelog.build()
                 self.assertEqual(first, (public / 'changelog.html').read_text())

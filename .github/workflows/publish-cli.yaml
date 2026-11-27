@@ -7,6 +7,8 @@ on:
       - main
     paths:
       - 'cli/**'
+      # Documentation updates must not republish an existing npm version.
+      - '!cli/README.md'
 
 # Build tooling must not send anonymous usage telemetry.
 env:

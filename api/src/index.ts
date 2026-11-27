@@ -1,4 +1,5 @@
 import express from 'express';
+import { canonicalDomainRedirect } from './canonicalDomain';
 import cors from 'cors';
 import compression from 'compression';
 import path from 'path';
@@ -37,6 +38,7 @@ const app = express();
 const PORT = Number(config.port);
 
 app.set('trust proxy', 1);
+app.use(canonicalDomainRedirect);
 app.use(cors());
 app.use(compression({ threshold: 1_024 }) as unknown as express.RequestHandler);
 // Skills authenticates before parsing and owns its JSON limit/error envelope,

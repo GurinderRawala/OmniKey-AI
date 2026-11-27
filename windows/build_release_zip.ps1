@@ -12,14 +12,14 @@
 # three-level precedence as ApiClient.cs:
 #   1. ~/.omnikey/config.json  (OMNIKEY_PORT key)
 #   2. OMNIKEY_BACKEND_URL environment variable
-#   3. Fallback: https://omnikeyai.ca (production)
+#   3. Fallback: https://getomnikey.com (production)
 #
 # Requirements:
 #   - .NET SDK 10 (net10.0-windows)  – https://dotnet.microsoft.com/download
 #   - PowerShell 7+ (pwsh)           – https://github.com/PowerShell/PowerShell
 
 param(
-    [string]$BackendBaseUrl = ($env:OMNIKEY_BACKEND_URL ?? "https://omnikeyai.ca"),
+    [string]$BackendBaseUrl = ($env:OMNIKEY_BACKEND_URL ?? "https://getomnikey.com"),
     [string]$Runtime        = "win-x64"
 )
 

@@ -8,7 +8,7 @@ import html, re, subprocess, datetime, pathlib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 PUB = ROOT / "api" / "public"
-SITE = "https://omnikeyai.ca"
+SITE = "https://getomnikey.com"
 REPO = "https://github.com/GurinderRawala/OmniKey-AI"
 MAX_RELEASES = 25
 

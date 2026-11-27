@@ -23,7 +23,7 @@ namespace OmniKey.Windows
 **Effective date:** 2026-01-01
 **Publisher:** Gurinder Singh (""OmniKey"", ""we"", ""us"")
 **Contact:** gurinderrawala@gmail.com
-**Website:** https://omnikeyai.ca
+**Website:** https://getomnikey.com
 **Source code:** https://github.com/GurinderRawala/OmniKey-AI
 
 By downloading, installing, launching, or using the OmniKey AI desktop

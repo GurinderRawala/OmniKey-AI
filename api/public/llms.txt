@@ -25,8 +25,8 @@ No copy-paste, no separate chat tab, no subscription.
 
 - macOS (Homebrew): `brew tap GurinderRawala/omnikey-ai https://github.com/GurinderRawala/OmniKey-AI.git && brew install omnikey-cli`
 - Cross-platform (npm): `npm install -g omnikey-cli`
-- One-line macOS: `curl -fsSL https://omnikeyai.ca/install.sh | bash`
-- One-line Windows: `iwr -useb https://omnikeyai.ca/install.ps1 | iex`
+- One-line macOS: `curl -fsSL https://getomnikey.com/install.sh | bash`
+- One-line Windows: `iwr -useb https://getomnikey.com/install.ps1 | iex`
 
 Then: `omnikey onboard` to configure a provider, `omnikey daemon` to run it persistently.
 
@@ -49,10 +49,10 @@ Then: `omnikey onboard` to configure a provider, `omnikey daemon` to run it pers
 
 ## Links
 
-- Website: https://omnikeyai.ca
-- Documentation: https://omnikeyai.ca/docs
-- Blog: https://omnikeyai.ca/blog
-- Changelog: https://omnikeyai.ca/changelog
+- Website: https://getomnikey.com
+- Documentation: https://getomnikey.com/docs
+- Blog: https://getomnikey.com/blog
+- Changelog: https://getomnikey.com/changelog
 - Source: https://github.com/GurinderRawala/OmniKey-AI
 - npm: https://www.npmjs.com/package/omnikey-cli
 - License: MIT

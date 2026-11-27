@@ -8,13 +8,13 @@
 # drag it into /Applications.
 #
 # Usage (one-liner):
-#   curl -fsSL https://omnikeyai.ca/install.sh | bash
+#   curl -fsSL https://getomnikey.com/install.sh | bash
 #
 set -euo pipefail
 
 # ---------- Configuration ----------
 # macOS download URL is taken from README.md (Getting Started → step 4).
-MACOS_DOWNLOAD_URL="${OMNIKEY_MACOS_URL:-https://omnikeyai.ca/macos/download}"
+MACOS_DOWNLOAD_URL="${OMNIKEY_MACOS_URL:-https://getomnikey.com/macos/download}"
 BREW_TAP="GurinderRawala/omnikey-ai"
 BREW_TAP_URL="https://github.com/GurinderRawala/OmniKey-AI.git"
 BREW_FORMULA="omnikey-cli"
