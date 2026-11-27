@@ -1,6 +1,6 @@
 # Changelog
 
-## CLI/API 1.8.25 — Domain migration
+## Unreleased — Domain migration
 
 ### Changed
 - Move canonical website, documentation, blog, installer, and future Windows update links to https://getomnikey.com.

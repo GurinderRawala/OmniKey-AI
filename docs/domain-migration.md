@@ -43,7 +43,11 @@ Do not delete the old domain mapping. Permanent redirects
 may be cached by browsers, which is why HTTPS and compatibility checks precede
 activation. Leave the new domain mapped when rolling back app behavior.
 
-The `release` branch triggers the existing Cloud Build deployment. The main branch
-publishes npm only when cli/** changes; API/CLI versions must be bumped together.
-After npm publication, push the matching v* tag to build Homebrew artifacts and
-open the formula-update PRs. Do not overwrite historical release versions.
+The `release` branch triggers the existing Cloud Build website deployment.
+This migration does not bump CLI/API, macOS, or Windows versions and must not
+publish npm packages, create release tags, or rebuild desktop distributions.
+Desktop source changes are retained for the next normal app release.
+
+The main-branch npm workflow excludes CLI README-only edits. Runtime CLI changes
+still trigger the normal publishing workflow and require normal release versioning;
+manual workflow dispatch remains available for intentional releases.
