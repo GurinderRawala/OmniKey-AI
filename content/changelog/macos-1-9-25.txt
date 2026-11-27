@@ -1,0 +1,5 @@
+title: macOS 1.9.25: smoother chat typing
+date: 2026-11-27
+url: /macos/download
+description: Typing stays responsive during running sessions, draft saving preserves text and caret selection across chats, and window resizing avoids redundant layout work.
+label: macOS 1.9.25

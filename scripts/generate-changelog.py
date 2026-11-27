@@ -115,7 +115,7 @@ def build():
           </div>
         </article>""")
 
-    # Website updates are independent of versioned CLI releases. Keep their
+    # Product and website updates are independent of versioned CLI releases. Keep their
     # sources so release-time regeneration does not erase published updates.
     updates = []
     for source in (ROOT / "content" / "changelog").glob("*.txt"):
@@ -126,11 +126,11 @@ def build():
     update_rows = []
     for update in updates:
         update_rows.append(f"""        <article class="chg-release" id="{html.escape(update['id'])}">
-          <div class="chg-meta"><span class="chg-version">Website</span><time datetime="{update['date']}">{update['date']}</time></div>
+          <div class="chg-meta"><span class="chg-version">{html.escape(update.get("label", "Website"))}</span><time datetime="{update['date']}">{update['date']}</time></div>
           <div class="chg-body"><h3><a href="{html.escape(update['url'], quote=True)}">{html.escape(update['title'])}</a></h3><p>{html.escape(update['description'])}</p></div>
         </article>""")
     website_section = (
-        '<section class="docs-section" id="website-updates"><h2>Website updates</h2>'
+        '<section class="docs-section" id="website-updates"><h2>Product and website updates</h2>'
         + "\n".join(update_rows) + '</section>'
     ) if updates else ""
 

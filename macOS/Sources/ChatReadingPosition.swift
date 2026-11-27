@@ -26,11 +26,39 @@ struct ChatDraft: Codable, Equatable {
 }
 
 @MainActor
-final class ChatReadingStore {
+final class ChatReadingStore: NSObject {
     static let shared = ChatReadingStore()
     private let defaults: UserDefaults
 
-    init(defaults: UserDefaults = .standard) { self.defaults = defaults }
+    private var pendingDrafts: [String: ChatDraft] = [:]
+    private var draftSaveWork: DispatchWorkItem?
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        super.init()
+        NotificationCenter.default.addObserver(self, selector: #selector(flushDrafts),
+            name: NSApplication.willTerminateNotification, object: nil)
+    }
+
+    /// Reads see edits immediately, while serialization waits for a typing pause.
+    func scheduleDraftSave(_ draft: ChatDraft, for session: String) {
+        guard self.draft(for: session) != draft else { return }
+        pendingDrafts[session] = draft
+        draftSaveWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated { self?.flushDrafts() }
+        }
+        draftSaveWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+    }
+
+    @objc func flushDrafts() {
+        draftSaveWork?.cancel()
+        draftSaveWork = nil
+        let drafts = pendingDrafts
+        pendingDrafts.removeAll()
+        for (session, draft) in drafts { save(draft, for: session) }
+    }
 
     func position(for session: String) -> ChatReadingPosition? {
         decode(ChatReadingPosition.self, key: "chatReadingPosition.\(session)")
@@ -42,15 +70,17 @@ final class ChatReadingStore {
     }
 
     func removeSession(_ session: String) {
+        pendingDrafts.removeValue(forKey: session)
         defaults.removeObject(forKey: "chatDraft.\(session)")
         defaults.removeObject(forKey: "chatReadingPosition.\(session)")
     }
 
     func draft(for session: String) -> ChatDraft {
-        decode(ChatDraft.self, key: "chatDraft.\(session)") ?? ChatDraft()
+        pendingDrafts[session] ?? decode(ChatDraft.self, key: "chatDraft.\(session)") ?? ChatDraft()
     }
 
     func save(_ draft: ChatDraft, for session: String) {
+        pendingDrafts.removeValue(forKey: session)
         defaults.set(try? JSONEncoder().encode(draft), forKey: "chatDraft.\(session)")
     }
 
@@ -323,13 +353,13 @@ final class ChatDraftSelectionTracker: ObservableObject {
     private var observers: [NSObjectProtocol] = []
     private var restoring = false
 
-    func attach(_ textView: NSTextView, session: String) {
+    func attach(_ textView: NSTextView, session: String, store: ChatReadingStore = .shared) {
         guard self.textView !== textView || self.session != session else { return }
         observers.forEach(NotificationCenter.default.removeObserver)
         observers.removeAll()
         self.textView = textView
         self.session = session
-        let draft = ChatReadingStore.shared.draft(for: session)
+        let draft = store.draft(for: session)
         DispatchQueue.main.async { [weak self, weak textView] in
             guard let self, let textView, self.session == session, textView.string == draft.text else { return }
             self.restoring = true
@@ -342,9 +372,9 @@ final class ChatDraftSelectionTracker: ObservableObject {
             MainActor.assumeIsolated {
                 guard let self, !self.restoring, let view = self.textView,
                       view.window?.firstResponder === view, let session = self.session,
-                      view.string == ChatReadingStore.shared.draft(for: session).text else { return }
+                      view.string == store.draft(for: session).text else { return }
                 let range = view.selectedRange()
-                ChatReadingStore.shared.save(
+                store.scheduleDraftSave(
                     ChatDraft(text: view.string, location: range.location, length: range.length), for: session)
             }
         })
@@ -353,7 +383,7 @@ final class ChatDraftSelectionTracker: ObservableObject {
         ) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self, let view = self.textView, let session = self.session else { return }
-                let draft = ChatReadingStore.shared.draft(for: session)
+                let draft = store.draft(for: session)
                 guard view.string == draft.text else { return }
                 self.restoring = true
                 view.setSelectedRange(draft.selection)
