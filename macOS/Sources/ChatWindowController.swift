@@ -62,6 +62,8 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
     /// the first time the SwiftUI hierarchy is mounted — subsequent reopens
     /// (window closed then shown again, or backgrounded then refocused) keep
     /// the same hosting controller alive, so we drive the refresh from AppKit.
+    private var isClampingWindow = false
+    private var isTransitioningFullScreen = false
     private let model: ChatModel
 
     convenience init() {
@@ -169,27 +171,28 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
         clampWindowToScreen()
     }
 
+    func windowWillEnterFullScreen(_: Notification) { isTransitioningFullScreen = true }
+    func windowWillExitFullScreen(_: Notification) { isTransitioningFullScreen = true }
+    func windowDidEnterFullScreen(_: Notification) { isTransitioningFullScreen = false }
+    func windowDidExitFullScreen(_: Notification) {
+        isTransitioningFullScreen = false
+        clampWindowToScreen()
+    }
+    func windowDidFailToEnterFullScreen(_ window: NSWindow) { isTransitioningFullScreen = false }
+    func windowDidFailToExitFullScreen(_ window: NSWindow) { isTransitioningFullScreen = false }
+
     private func clampWindowToScreen() {
-        guard let window, let screen = window.screen ?? NSScreen.main else { return }
+        guard let window, !isClampingWindow, !isTransitioningFullScreen,
+              !window.styleMask.contains(.fullScreen),
+              let screen = window.screen ?? NSScreen.main else { return }
+        isClampingWindow = true
+        defer { isClampingWindow = false }
         let visible = screen.visibleFrame
-        var frame = window.frame
-
-        // Adapt the minimum as displays change so AppKit never has to choose
-        // between our minimum and keeping the title bar reachable.
-        window.minSize = NSSize(
-            width: min(960, visible.width),
-            height: min(660, visible.height)
-        )
-        frame.size.width = min(frame.size.width, visible.width)
-        frame.size.height = min(frame.size.height, visible.height)
-
-        if frame.maxX > visible.maxX { frame.origin.x = visible.maxX - frame.size.width }
-        if frame.minX < visible.minX { frame.origin.x = visible.minX }
-        if frame.maxY > visible.maxY { frame.origin.y = visible.maxY - frame.size.height }
-        if frame.minY < visible.minY { frame.origin.y = visible.minY }
-
+        let minimum = NSSize(width: min(960, visible.width), height: min(660, visible.height))
+        if window.minSize != minimum { window.minSize = minimum }
+        let frame = ChatWindowSizing.fittedFrame(window.frame, in: visible)
         if frame != window.frame {
-            window.setFrame(frame, display: true, animate: false)
+            window.setFrame(frame, display: false, animate: false)
         }
     }
 
@@ -201,6 +204,16 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
 
 enum ChatWindowSizing {
     static let preferredContentSize = NSSize(width: 1320, height: 888)
+
+    /// Screen notifications also occur during Spaces transitions and display
+    /// straddling. Only resize an oversized window; do not snap normal windows.
+    static func fittedFrame(_ frame: NSRect, in visible: NSRect) -> NSRect {
+        guard frame.width > visible.width || frame.height > visible.height else { return frame }
+        let size = NSSize(width: min(frame.width, visible.width), height: min(frame.height, visible.height))
+        return NSRect(x: min(max(frame.minX, visible.minX), visible.maxX - size.width),
+                      y: min(max(frame.minY, visible.minY), visible.maxY - size.height),
+                      width: size.width, height: size.height)
+    }
 
     static func initialContentSize(visibleSize: NSSize?) -> NSSize {
         guard let visibleSize else { return preferredContentSize }

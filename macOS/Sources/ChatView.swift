@@ -2353,6 +2353,13 @@ struct ComposerSelectionToolbar<SendButton: View>: View {
 }
 struct LandingInputComposer: View {
     @ObservedObject var model: ChatModel
+    @ObservedObject private var composerState: ChatComposerState
+
+    init(model: ChatModel) {
+        self.model = model
+        self.composerState = model.composerState
+    }
+
     @Environment(\.colorScheme) private var colorScheme
     @State private var isFocused = false
     @State private var inputHeight: CGFloat = ChatComposerMetrics.minimumHeight
@@ -2397,7 +2404,8 @@ struct LandingInputComposer: View {
                         .allowsHitTesting(false)
                 }
                 MarkdownTextEditor(
-                    text: $model.inputText,
+                    text: Binding(get: { composerState.text }, set: { model.inputText = $0 }),
+                    draftStore: model.readingStore,
                     sessionKey: model.activeSessionId ?? "__pending_new__",
                     isFocused: $isFocused,
                     colorScheme: colorScheme,

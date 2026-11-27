@@ -48,6 +48,7 @@ private enum ComposerMarkdownPalette {
 /// blocks directly in the editable surface.
 struct MarkdownTextEditor: View {
     @Binding var text: String
+    let draftStore: ChatReadingStore
     let sessionKey: String
     @Binding var isFocused: Bool
     var colorScheme: ColorScheme
@@ -57,6 +58,7 @@ struct MarkdownTextEditor: View {
 
     init(
         text: Binding<String>,
+        draftStore: ChatReadingStore = .shared,
         sessionKey: String,
         isFocused: Binding<Bool> = .constant(false),
         colorScheme: ColorScheme,
@@ -65,6 +67,7 @@ struct MarkdownTextEditor: View {
         onRecallHistory: @escaping () -> Bool = { false }
     ) {
         _text = text
+        self.draftStore = draftStore
         self.sessionKey = sessionKey
         _isFocused = isFocused
         self.colorScheme = colorScheme
@@ -135,7 +138,7 @@ struct MarkdownTextEditor: View {
         )
         .background(
             MarkdownEditorIntrospector { resolvedTextView in
-                if onSend != nil { draftSelection.attach(resolvedTextView, session: sessionKey) }
+                if onSend != nil { draftSelection.attach(resolvedTextView, session: sessionKey, store: draftStore) }
                 guard textView !== resolvedTextView else { return }
                 configure(resolvedTextView)
                 renderedBlockStyler.attach(to: resolvedTextView)
@@ -144,7 +147,7 @@ struct MarkdownTextEditor: View {
             }
         )
         .onChange(of: sessionKey) { _, session in
-            if onSend != nil, let textView { draftSelection.attach(textView, session: session) }
+            if onSend != nil, let textView { draftSelection.attach(textView, session: session, store: draftStore) }
         }
         .onChange(of: colorScheme) { _, _ in
             if let textView { configure(textView) }

@@ -1,5 +1,15 @@
 # Changelog
 
+## macOS 1.9.25 (build 87) — 2026-11-27
+
+### Fixed
+- Keep chat typing responsive during running sessions by isolating composer updates from transcript and sidebar refreshes.
+- Debounce draft persistence while preserving text and caret selection across chat switches, sends, and normal app exit.
+- Avoid redundant window resizing during screen changes and fullscreen transitions.
+
+### Release
+- Signed, notarized universal macOS patch with matching update-feed metadata. CLI/API package versions and Windows unchanged.
+
 ## Unreleased — Domain migration
 
 ### Changed

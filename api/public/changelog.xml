@@ -6,6 +6,13 @@
     <description>New features, fixes, and improvements in OmniKey AI.</description>
     <language>en</language>
     <item>
+      <title>macOS 1.9.25: smoother chat typing</title>
+      <link>https://getomnikey.com/macos/download</link>
+      <guid isPermaLink="false">omnikey-website-macos-1-9-25</guid>
+      <pubDate>Fri, 27 Nov 2026 00:00:00 +0000</pubDate>
+      <description>Typing stays responsive during running sessions, draft saving preserves text and caret selection across chats, and window resizing avoids redundant layout work.</description>
+    </item>
+    <item>
       <title>New home: getomnikey.com</title>
       <link>https://getomnikey.com/</link>
       <guid isPermaLink="false">omnikey-website-getomnikey-domain</guid>
